@@ -1,16 +1,31 @@
 //! Equivalence checker implementation.
 
+use crate::convert::CoordinateMapper;
 use crate::error::FerroError;
+use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, RepeatCount};
+use crate::hgvs::interval::{GenomeInterval, UncertainBoundary};
+use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{AllelePhase, HgvsVariant};
 use crate::normalize::{NormalizeConfig, Normalizer};
+use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
+use crate::sequence::reverse_complement;
 use crate::spdi::{hgvs_to_spdi, SpdiVariant};
 
-/// Largest reference window (in bases) the sequence-level equivalence rung will
-/// reconstruct. Two variants whose edited spans are farther apart than this
-/// cannot describe the same local edit, so declining beyond the cap only ever
-/// leaves the pre-existing `NotEquivalent` verdict in place while bounding the
-/// cost of a reference fetch.
+/// Largest reference window (in bases) a sequence-level equivalence rung will
+/// reconstruct, bounding the cost of a reference fetch.
+///
+/// **Declining past this leaves [`EquivalenceLevel::Indeterminate`], not
+/// `NotEquivalent`.** This comment used to argue the opposite — that two
+/// variants whose edited spans are farther apart than the cap "cannot describe
+/// the same local edit", so the decline "only ever leaves the pre-existing
+/// `NotEquivalent` verdict in place". That reasoning holds for two *single*
+/// edits and fails for the shape this crate constructs on purpose: a cis allele
+/// whose members are 150 kb apart has a union window past the cap, and two
+/// spellings of it really can be one variant. Reporting a decided negative
+/// there is exactly the conflation [`EquivalenceLevel::Indeterminate`] exists
+/// to remove, so the wide case is now reported as undecided rather than argued
+/// away.
 const MAX_SEQUENCE_COMPARE_WINDOW: u64 = 100_000;
 
 /// Level of equivalence between two variants.
@@ -28,21 +43,154 @@ pub enum EquivalenceLevel {
     Identical,
     /// Equivalent after normalization (e.g., shifted to same position).
     NormalizedMatch,
-    /// Equivalent by resulting reference sequence: the two variants normalize
-    /// to different HGVS strings but, when applied to the reference, produce the
-    /// same edited sequence (e.g. a length-changing `delins` vs a decomposed
-    /// cis allele of the same edit). See issue #1158.
+    /// Equivalent by apply-equality on **every determined axis**: the strongest
+    /// denotational rung, and the one that establishes variant identity.
+    ///
+    /// An axis is *determined* when the description's coordinates can be carried
+    /// to it by a mapping that is a function of **reference data alone** — exon
+    /// alignments and CDS offsets — and never of normalization. A `c.`/`n.`/`r.`
+    /// description on a transcript determines two: the transcript itself, and
+    /// the genome its exon alignment carries it to. A `g.`/`m.` description
+    /// determines only the genome (a genomic description does not determine a
+    /// transcript — many overlap it). Protein is excluded: translation is
+    /// many-to-one, and `p.` states a consequence, not a denotation.
+    ///
+    /// This is the rung a confluence gate should require; see
+    /// [`EquivalenceLevel::is_at_least`].
+    CrossAxisSequenceMatch,
+    /// Equivalent by resulting reference sequence **on the description's own
+    /// axis**: the two variants normalize to different HGVS strings but, when
+    /// applied to that one reference, produce the same edited sequence (e.g. a
+    /// length-changing `delins` vs a decomposed cis allele of the same edit).
+    /// See issue #1158.
+    ///
+    /// **True, and insufficient for identity.** Single-axis apply-equality does
+    /// not establish that two descriptions denote the same variant, because a
+    /// transcript description also determines a genomic denotation and the two
+    /// can disagree. The spec's own worked counterexample:
+    /// `LRG_199t1:c.3921dup` and `LRG_199t1:c.3922dup` denote the *same
+    /// transcript sequence* — both positions carry `T` — yet project to
+    /// `NC_000023.11:g.32441180dup` and `g.32438390dup`, ~2,790 bp apart in
+    /// different exons (exon 27 ends at 32441180, exon 28 begins at 32438390 on
+    /// the minus-strand `NM_004006.2`). `DNA/duplication.md:148` calls the
+    /// second "the wrong nucleotide, in the wrong exon".
+    ///
+    /// So this rung reports a real relationship and must **not** be used as a
+    /// confluence gate. Require [`Self::CrossAxisSequenceMatch`] instead.
     SequenceMatch,
     /// Same variant but different accession versions (e.g., NM_000088.3 vs NM_000088.4).
+    ///
+    /// **Deliberately off the denotational order** (see
+    /// [`EquivalenceLevel::is_at_least`]): it is a claim about two *different*
+    /// reference sequences, and the relation's first conjunct is "same
+    /// accession". Apply-equality is not defined between two versions — the
+    /// bases at a coordinate may themselves differ — so this rung is orthogonal
+    /// to the sequence rungs rather than stronger or weaker than them. It stays
+    /// a positive, decided verdict; it simply never satisfies a gate.
     AccessionVersionDifference,
     /// Not equivalent - represent different changes.
+    ///
+    /// A **positive claim**, sound only when some rung above actually examined
+    /// the two descriptions. Where nothing could examine them, the verdict is
+    /// [`Self::Indeterminate`].
     NotEquivalent,
+    /// Neither equivalent nor distinguishable: at least one side has no
+    /// computable denotation on some determined axis.
+    ///
+    /// **Not a negative verdict.** Before this rung, `NotEquivalent` did double
+    /// duty — "these denote different sequences" *and* "I could not compute a
+    /// denotation" — and [`Self::is_equivalent`] answered `false` to both, so an
+    /// undecidable pair was reported as a decided negative. Use
+    /// [`Self::is_decided`] to tell the two apart; `is_equivalent` stays `false`
+    /// here, because undecidable is not a positive either.
+    ///
+    /// What lands here is a **closed list**, deliberately, and it is a floor
+    /// that grows as shapes are measured rather than a claim of completeness:
+    ///
+    /// * a non-literal inserted payload (`ins6`, `insN[33]`, `delins(?)`) —
+    ///   the description denotes no sequence for `apply` to produce;
+    /// * a null or unknown allele (`0`, `?`), and a multi-molecule allele
+    ///   (trans / mosaic / chimeric / and-or / products / unknown phase), which
+    ///   denotes no *single* sequence;
+    /// * a span wider than [`MAX_SEQUENCE_COMPARE_WINDOW`] **on the
+    ///   description's own axis**, where the checker declined to reconstruct
+    ///   the reference at all. The same cap struck on a *second* determined
+    ///   axis does **not** land here: the own-axis comparison ran and agreed,
+    ///   so the verdict is [`Self::SequenceMatch`] — see the note on that arm
+    ///   in `strengthen_across_axes`.
+    ///
+    /// **Not** here: two descriptions on different accessions. That fails the
+    /// relation's first conjunct outright, which is a decided negative.
+    /// **Not yet** here: an uncertain position range (`g.(100_150)del`), which
+    /// would need a location accessor generic over every variant kind that this
+    /// crate does not currently expose. Add it when a wrong answer is measured,
+    /// with the pair that measures it.
+    Indeterminate,
 }
 
 impl EquivalenceLevel {
     /// Returns true if the variants are considered equivalent.
+    ///
+    /// [`Self::Indeterminate`] answers `false` — undecidable is not a positive
+    /// verdict — so a caller that needs to separate "no" from "cannot tell"
+    /// must also consult [`Self::is_decided`].
     pub fn is_equivalent(&self) -> bool {
-        !matches!(self, EquivalenceLevel::NotEquivalent)
+        !matches!(
+            self,
+            EquivalenceLevel::NotEquivalent | EquivalenceLevel::Indeterminate
+        )
+    }
+
+    /// Returns true unless the checker could not decide — i.e. false **only**
+    /// for [`Self::Indeterminate`].
+    ///
+    /// This is the predicate a census wants: a confluence measurement asserts
+    /// over the *decided* pairs and reports the undecidable count alongside,
+    /// rather than folding it into either side.
+    pub fn is_decided(&self) -> bool {
+        !matches!(self, EquivalenceLevel::Indeterminate)
+    }
+
+    /// Whether this verdict is at least as strong as `floor` on the
+    /// **denotational order**.
+    ///
+    /// The order is
+    /// [`Identical`](Self::Identical) ⊐
+    /// [`CrossAxisSequenceMatch`](Self::CrossAxisSequenceMatch) ⊐
+    /// [`SequenceMatch`](Self::SequenceMatch), and nothing else is on it. A
+    /// confluence gate is written `level.is_at_least(CrossAxisSequenceMatch)`.
+    ///
+    /// **[`NormalizedMatch`](Self::NormalizedMatch) is off the order in both
+    /// directions, and that is the point.** That rung consults the normalizer,
+    /// so gating on it would define the equivalence relation in terms of the
+    /// very function the gate is about — the circularity this whole ladder
+    /// exists to remove. Making it unusable as a floor means the circular gate
+    /// cannot be written by accident.
+    /// [`AccessionVersionDifference`](Self::AccessionVersionDifference) is off
+    /// the order for a different reason, given on that variant.
+    ///
+    /// A `floor` that is not on the order therefore answers `false` for every
+    /// verdict, including itself.
+    pub fn is_at_least(&self, floor: EquivalenceLevel) -> bool {
+        match (self.denotational_rank(), floor.denotational_rank()) {
+            (Some(here), Some(want)) => here >= want,
+            _ => false,
+        }
+    }
+
+    /// Position on the denotational order, or `None` for a rung that is not on
+    /// it. Private: the order is expressed to callers through
+    /// [`Self::is_at_least`], so the numbers never become API.
+    fn denotational_rank(&self) -> Option<u8> {
+        match self {
+            EquivalenceLevel::Identical => Some(3),
+            EquivalenceLevel::CrossAxisSequenceMatch => Some(2),
+            EquivalenceLevel::SequenceMatch => Some(1),
+            EquivalenceLevel::NormalizedMatch
+            | EquivalenceLevel::AccessionVersionDifference
+            | EquivalenceLevel::NotEquivalent
+            | EquivalenceLevel::Indeterminate => None,
+        }
     }
 
     /// Returns a human-readable description of the equivalence level.
@@ -50,11 +198,15 @@ impl EquivalenceLevel {
         match self {
             EquivalenceLevel::Identical => "Identical representation",
             EquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
+            EquivalenceLevel::CrossAxisSequenceMatch => {
+                "Equivalent by resulting sequence on every determined axis"
+            }
             EquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
             EquivalenceLevel::AccessionVersionDifference => {
                 "Same variant, different accession versions"
             }
             EquivalenceLevel::NotEquivalent => "Not equivalent",
+            EquivalenceLevel::Indeterminate => "Undecidable: no computable denotation",
         }
     }
 }
@@ -229,6 +381,31 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 return Ok(result.with_note("Equivalent after normalization, different versions"));
             }
 
+            // A description that names no definite bases denotes no sequence,
+            // so no rung below may report a positive denotational verdict about
+            // it. The check runs here rather than only on the fall-through path
+            // because normalization *expands* `insN[10]` into a literal run of
+            // `N`s: by the time the sequence rung compares two reconstructed
+            // windows, two indeterminate payloads can be byte-equal, and the
+            // rung would report agreement on a pair where neither side denotes
+            // anything to agree about.
+            //
+            // No input reaching `SequenceVerdict::Same` this way has been
+            // measured — every constructed candidate either converges at
+            // `NormalizedMatch` above or is caught by the identical check on
+            // the fall-through path below. This is therefore stated as an
+            // invariant rather than as a fix for an observed wrong answer, and
+            // `an_indeterminate_input_never_wins_a_decided_denotational_rung`
+            // pins it as one: the rule is a property of `check`, not of
+            // whichever path a given pair happens to take.
+            for side in [v1, v2] {
+                if let Some(reason) = indeterminate_reason(side) {
+                    return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                        .with_normalized(norm_str1, norm_str2)
+                        .with_note(reason));
+                }
+            }
+
             // Sequence-level equivalence (issue #1158): two variants may
             // normalize to different HGVS strings yet produce the same edited
             // reference sequence — e.g. a length-changing `delins` vs a
@@ -238,10 +415,25 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
             // that cannot be projected (unsupported edit, missing reference,
             // mixed accessions, or a multi-molecule allele) simply declines, so
             // the rung only ever upgrades a `NotEquivalent` verdict.
-            if self.same_resulting_sequence(&norm1, &norm2) {
-                return Ok(EquivalenceResult::new(EquivalenceLevel::SequenceMatch)
-                    .with_normalized(norm_str1, norm_str2)
-                    .with_note("Variants produce the same resulting sequence"));
+            match self.same_resulting_sequence(&norm1, &norm2) {
+                SequenceVerdict::Same => {
+                    let (level, note) = self.strengthen_across_axes(&norm1, &norm2);
+                    return Ok(EquivalenceResult::new(level)
+                        .with_normalized(norm_str1, norm_str2)
+                        .with_note(note));
+                }
+                // The reference window needed to compare them is wider than the
+                // cap, so nothing was reconstructed and nothing was compared.
+                SequenceVerdict::WindowTooWide => {
+                    return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                        .with_normalized(norm_str1, norm_str2)
+                        .with_note(format!(
+                            "The reference window covering both variants exceeds \
+                             {MAX_SEQUENCE_COMPARE_WINDOW} bases, so neither resulting \
+                             sequence was reconstructed"
+                        )));
+                }
+                SequenceVerdict::Different | SequenceVerdict::Declined => {}
             }
 
             // #1578 follow-up: `NotEquivalent` is a *positive claim* that two
@@ -252,6 +444,14 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
             // question nobody asked. Decline instead, which is what the other
             // three modules that hand-roll `Allele` recursion already do with a
             // ring (`spdi::apply`, `vcf::from_hgvs`, `project::projector`).
+            //
+            // `Indeterminate` below says the same thing as a *verdict* rather
+            // than as an error. The two are kept apart deliberately: the error
+            // is the shipped contract for a ring and a `sup` marker (pinned by
+            // `issue_1578_followup_equivalence_rungs`), and turning it into a
+            // verdict would be a silent API change for every caller that
+            // matches on the `Err`. A future change may fold them together;
+            // until then, read them as one idea with two spellings.
             for side in [&norm1, &norm2] {
                 if let Some(reason) = self.undecidable_reason(side) {
                     return Err(FerroError::UnsupportedVariant {
@@ -260,10 +460,255 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 }
             }
 
+            // Nothing above could compute a denotation for one of the sides, so
+            // there is no negative to report either.
+            //
+            // Only the **normalized** forms are examined here. The inputs were
+            // already cleared above the sequence rung — re-checking them would
+            // be dead work, and worse, would read as though this were the only
+            // place the rule is applied. The normalized forms still have to be
+            // checked on their own account, in the other direction from the
+            // hoisted check: normalization can *introduce* an indeterminate
+            // payload that the input did not name, by resolving a shape into a
+            // literal run of `N`s.
+            for side in [&norm1, &norm2] {
+                if let Some(reason) = indeterminate_reason(side) {
+                    return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                        .with_normalized(norm_str1, norm_str2)
+                        .with_note(reason));
+                }
+            }
+
             Ok(EquivalenceResult::new(EquivalenceLevel::NotEquivalent)
                 .with_normalized(norm_str1, norm_str2)
                 .with_note("Variants do not normalize to the same form"))
         }
+    }
+
+    /// Given that the two variants agree on the axis their descriptions are
+    /// written in, decide whether they agree on **every** determined axis.
+    ///
+    /// Returns the rung to report and the note to attach. A transcript
+    /// description determines a second axis — the genome its exon alignment
+    /// carries it to — so agreement there is what separates
+    /// [`EquivalenceLevel::CrossAxisSequenceMatch`] from
+    /// [`EquivalenceLevel::SequenceMatch`]. A genomic description determines
+    /// only the one axis already compared, so it reaches the stronger rung
+    /// directly; without that, a gate stated as "at least
+    /// `CrossAxisSequenceMatch`" would reject every `g.` pair.
+    ///
+    /// **Never consults the normalizer.** The second axis is derived from
+    /// [`CoordinateMapper`], which holds nothing but a `&Transcript` and does
+    /// exon arithmetic over `exon.genomic_start`/`genomic_end` and
+    /// `transcript.strand` — reference data, by construction. The one
+    /// whole-variant API that *would* reintroduce the circularity,
+    /// `VariantProjector::project_to_genomic_normalized`, is deliberately not
+    /// used here.
+    fn strengthen_across_axes(
+        &self,
+        v1: &HgvsVariant,
+        v2: &HgvsVariant,
+    ) -> (EquivalenceLevel, String) {
+        match (self.second_axis(v1), self.second_axis(v2)) {
+            (SecondAxis::None, SecondAxis::None) => (
+                EquivalenceLevel::CrossAxisSequenceMatch,
+                "Variants produce the same resulting sequence on the one axis they determine"
+                    .to_string(),
+            ),
+            (SecondAxis::Genomic(acc1, t1), SecondAxis::Genomic(acc2, t2)) if acc1 == acc2 => {
+                match compare_triples(|start, end| self.fetch_window(&acc1, start, end), &t1, &t2) {
+                    SequenceVerdict::Same => (
+                        EquivalenceLevel::CrossAxisSequenceMatch,
+                        "Variants produce the same resulting sequence on every determined axis"
+                            .to_string(),
+                    ),
+                    SequenceVerdict::Different => (
+                        EquivalenceLevel::SequenceMatch,
+                        format!(
+                            "Variants produce the same resulting sequence on their own axis but \
+                             not on {acc1}, so they are not the same variant"
+                        ),
+                    ),
+                    // **Not `Indeterminate`, deliberately.** That rung means no
+                    // denotation could be computed for a side; here both sides
+                    // denote, the own-axis comparison ran, and it agreed. What
+                    // is missing is corroboration, not a denotation, and
+                    // reporting "cannot tell" would discard a measured fact.
+                    // Nothing is over-claimed by staying decided, because a
+                    // gate reads the *level*: `is_at_least(
+                    // CrossAxisSequenceMatch)` rejects `SequenceMatch` either
+                    // way. The distinction between "the second axis disagreed"
+                    // and "it could not be asked" survives in the note below and
+                    // nowhere else; carrying it in the level needs a rung of its
+                    // own rather than a reuse of `Indeterminate`. Pinned by
+                    // `a_second_axis_that_cannot_be_computed_stops_at_the_single_axis_rung`.
+                    SequenceVerdict::WindowTooWide | SequenceVerdict::Declined => (
+                        EquivalenceLevel::SequenceMatch,
+                        format!(
+                            "Variants produce the same resulting sequence on their own axis; the \
+                             {acc1} axis they also determine could not be compared"
+                        ),
+                    ),
+                }
+            }
+            // Two different contigs is a real disagreement, not a decline.
+            (SecondAxis::Genomic(acc1, _), SecondAxis::Genomic(acc2, _)) => (
+                EquivalenceLevel::SequenceMatch,
+                format!(
+                    "Variants produce the same resulting sequence on their own axis but sit on \
+                     different genomic contigs ({acc1} and {acc2})"
+                ),
+            ),
+            _ => (
+                EquivalenceLevel::SequenceMatch,
+                "Variants produce the same resulting sequence on their own axis; a determined \
+                 axis could not be computed"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// The axis a description determines *in addition to* the one it is written
+    /// in.
+    ///
+    /// Keyed on the variant kind rather than on whether the provider happens to
+    /// hold a transcript under the accession, because that is what
+    /// "determined" means: the mapping exists as a fact about the reference,
+    /// whether or not this provider can serve it.
+    fn second_axis(&self, v: &HgvsVariant) -> SecondAxis {
+        match v {
+            // A genomic description determines only the genome. It does not
+            // determine a transcript — many transcripts overlap one locus, and
+            // picking one would be a choice, not a mapping.
+            HgvsVariant::Genome(_) | HgvsVariant::Mt(_) | HgvsVariant::Circular(_) => {
+                SecondAxis::None
+            }
+            // `p.` never gets here: translation is many-to-one, `p.` states a
+            // consequence rather than a denotation, and `hgvs_to_spdi` refuses
+            // it — so `edit_triples` already declined upstream.
+            HgvsVariant::Cds(_) | HgvsVariant::Tx(_) | HgvsVariant::Rna(_) => {
+                match self.edit_triples(v) {
+                    Some((accession, triples)) => {
+                        match self.transcript_triples_to_genomic(&accession, &triples) {
+                            Some((contig, mapped)) => SecondAxis::Genomic(contig, mapped),
+                            None => SecondAxis::NotComputed,
+                        }
+                    }
+                    None => SecondAxis::NotComputed,
+                }
+            }
+            // `edit_triples` has already established that a cis allele's
+            // members share one accession, so the first member fixes the axis.
+            HgvsVariant::Allele(allele) => match allele.variants.first() {
+                Some(_) if allele.phase != AllelePhase::Cis => SecondAxis::NotComputed,
+                Some(first) => match self.second_axis(first) {
+                    SecondAxis::None => SecondAxis::None,
+                    SecondAxis::NotComputed => SecondAxis::NotComputed,
+                    // Re-derive from the whole allele so every member is mapped
+                    // together, rather than reporting only the first member's
+                    // triples.
+                    SecondAxis::Genomic(..) => match self.edit_triples(v) {
+                        Some((accession, triples)) => {
+                            match self.transcript_triples_to_genomic(&accession, &triples) {
+                                Some((contig, mapped)) => SecondAxis::Genomic(contig, mapped),
+                                None => SecondAxis::NotComputed,
+                            }
+                        }
+                        None => SecondAxis::NotComputed,
+                    },
+                },
+                None => SecondAxis::NotComputed,
+            },
+            _ => SecondAxis::NotComputed,
+        }
+    }
+
+    /// Re-express transcript-axis SPDI triples on the genomic axis, using the
+    /// transcript's exon alignment and nothing else.
+    ///
+    /// Declines (returns `None`) whenever the genomic counterpart is not one
+    /// contiguous triple:
+    ///
+    /// * a deleted span that crosses an intron — the genomic edit is then two
+    ///   or more disjoint pieces, which one SPDI triple cannot hold;
+    /// * a pure insertion whose two transcript anchors are not adjacent on the
+    ///   genome, i.e. the insertion point *is* an exon junction. This is the
+    ///   `c.3921dup` half of the spec's own worked case
+    ///   (`DNA/duplication.md:148`): the junction-side spelling has no single
+    ///   genomic interbase counterpart, while the far-side spelling has one, so
+    ///   the pair cannot reach cross-axis agreement.
+    fn transcript_triples_to_genomic(
+        &self,
+        tx_accession: &str,
+        triples: &[SpdiVariant],
+    ) -> Option<(String, Vec<SpdiVariant>)> {
+        let transcript = self
+            .normalizer
+            .provider()
+            .get_transcript(tx_accession)
+            .ok()?;
+        let contig = transcript.chromosome.clone()?;
+        let strand = transcript.strand;
+        let mapper = CoordinateMapper::new(&transcript);
+        let to_genomic = |base: u64| -> Option<u64> {
+            mapper
+                .tx_to_genomic(&crate::hgvs::location::TxPos::new(
+                    i64::try_from(base).ok()?,
+                ))
+                .ok()
+                .flatten()
+        };
+
+        let mut mapped = Vec::with_capacity(triples.len());
+        for triple in triples {
+            let (start, deletion, insertion) = if triple.deletion.is_empty() {
+                // A pure insertion sits at interbase `position`, between
+                // transcript bases `position` and `position + 1` (1-based).
+                if triple.position == 0 {
+                    return None;
+                }
+                let left = to_genomic(triple.position)?;
+                let right = to_genomic(triple.position + 1)?;
+                match strand {
+                    Strand::Plus if right == left + 1 => {
+                        (left, String::new(), triple.insertion.clone())
+                    }
+                    Strand::Minus if left == right + 1 => {
+                        (right, String::new(), reverse_complement(&triple.insertion))
+                    }
+                    _ => return None,
+                }
+            } else {
+                let length = triple.deletion.len() as u64;
+                let first = to_genomic(triple.position + 1)?;
+                let last = to_genomic(triple.position + length)?;
+                // `checked_sub` turns the 1-based genomic position into SPDI's
+                // 0-based interbase one, and declines rather than underflowing
+                // if the span's low end is genomic 0. Nothing between a
+                // provider and here asserts `Exon::genomic_start >= 1` — the
+                // cdot path takes `e[0]` verbatim and the JSON loader takes
+                // whatever the file holds — so a 0-based placement reaches this
+                // arithmetic, where on `u64` it panics under debug assertions
+                // and wraps to `u64::MAX` in release. There is no interbase
+                // point to the left of genomic 0, so declining is the same
+                // answer the insertion arm above gives `triple.position == 0`.
+                match strand {
+                    Strand::Plus if last >= first && last - first + 1 == length => (
+                        first.checked_sub(1)?,
+                        triple.deletion.clone(),
+                        triple.insertion.clone(),
+                    ),
+                    Strand::Minus if first >= last && first - last + 1 == length => (
+                        last.checked_sub(1)?,
+                        reverse_complement(&triple.deletion),
+                        reverse_complement(&triple.insertion),
+                    ),
+                    _ => return None,
+                }
+            };
+            mapped.push(SpdiVariant::new(contig.clone(), start, deletion, insertion));
+        }
+        Some((contig, mapped))
     }
 
     /// Check if two variants represent the same change but on different accession versions.
@@ -321,55 +766,31 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     }
 
     /// Decide whether two variants, applied to their (shared) reference, produce
-    /// the same edited sequence.
+    /// the same edited sequence on the axis their descriptions are written in.
     ///
-    /// Best-effort and side-effect free: returns `false` (declines) for any
-    /// variant that cannot be projected to SPDI triples on a single shared
-    /// accession, or when the reference window needed to compare them exceeds
-    /// [`MAX_SEQUENCE_COMPARE_WINDOW`]. Callers use this only to *upgrade* a
-    /// `NotEquivalent` verdict, so a decline is always safe.
-    fn same_resulting_sequence(&self, v1: &HgvsVariant, v2: &HgvsVariant) -> bool {
-        let (acc1, triples1) = match self.edit_triples(v1) {
-            Some(t) => t,
-            None => return false,
+    /// Best-effort and side-effect free. [`SequenceVerdict::Declined`] covers
+    /// every variant that cannot be projected to SPDI triples on a single
+    /// shared accession; [`SequenceVerdict::WindowTooWide`] is split out from it
+    /// because it is the one decline that must not be read as a negative — see
+    /// [`MAX_SEQUENCE_COMPARE_WINDOW`].
+    fn same_resulting_sequence(&self, v1: &HgvsVariant, v2: &HgvsVariant) -> SequenceVerdict {
+        let Some((acc1, triples1)) = self.edit_triples(v1) else {
+            return SequenceVerdict::Declined;
         };
-        let (acc2, triples2) = match self.edit_triples(v2) {
-            Some(t) => t,
-            None => return false,
+        let Some((acc2, triples2)) = self.edit_triples(v2) else {
+            return SequenceVerdict::Declined;
         };
-        // A resulting sequence is only comparable on the same reference.
+        // A resulting sequence is only comparable on the same reference. Two
+        // different accessions fail the relation's first conjunct outright,
+        // which is a decided negative rather than something undecidable.
         if acc1 != acc2 {
-            return false;
+            return SequenceVerdict::Declined;
         }
-
-        // The union window covering every edit of both variants. SPDI positions
-        // are 0-based interbase; a triple spans `[position, position + del_len)`.
-        let all = triples1.iter().chain(triples2.iter());
-        let (mut win_start, mut win_end) = (u64::MAX, u64::MIN);
-        for t in all {
-            win_start = win_start.min(t.position);
-            win_end = win_end.max(t.position + t.deletion.len() as u64);
-        }
-        if win_start > win_end || win_end - win_start > MAX_SEQUENCE_COMPARE_WINDOW {
-            return false;
-        }
-
-        let reference = match self.fetch_window(&acc1, win_start, win_end) {
-            Some(r) => r,
-            None => return false,
-        };
-
-        match (
-            crate::spdi::apply::apply_triples(&reference, win_start, &triples1),
-            crate::spdi::apply::apply_triples(&reference, win_start, &triples2),
-        ) {
-            // Case-insensitive, like the deletion check in `apply_triples`:
-            // reference FASTAs are often soft-masked (repeats lower-cased), so
-            // case carries no biological meaning here and must not split two
-            // otherwise-identical resulting sequences.
-            (Some(a), Some(b)) => a.eq_ignore_ascii_case(&b),
-            _ => false,
-        }
+        compare_triples(
+            |start, end| self.fetch_window(&acc1, start, end),
+            &triples1,
+            &triples2,
+        )
     }
 
     /// Why no rung can decide equivalence for `variant`, or `None` if some rung
@@ -634,6 +1055,268 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
         Ok(groups)
     }
+}
+
+/// What a sequence-level comparison concluded.
+///
+/// `Declined` and `WindowTooWide` are both "nothing was compared", and they are
+/// separate because only one of them is safe to read as a negative: a decline
+/// is usually a provider or representation limit that leaves the pre-existing
+/// verdict alone, while a window overrun is the case that would otherwise be
+/// argued into a decided negative it has not earned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SequenceVerdict {
+    /// Both sides were reconstructed and the resulting sequences are equal.
+    Same,
+    /// Both sides were reconstructed and the resulting sequences differ.
+    Different,
+    /// Nothing was reconstructed: the union window exceeds
+    /// [`MAX_SEQUENCE_COMPARE_WINDOW`].
+    WindowTooWide,
+    /// Nothing was reconstructed, for any other reason.
+    Declined,
+}
+
+/// The axis a description determines beyond the one it is written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SecondAxis {
+    /// There is none — the description already names its only axis.
+    None,
+    /// The genome, as `(contig, triples re-expressed on it)`.
+    Genomic(String, Vec<SpdiVariant>),
+    /// One is determined but could not be computed from what is available.
+    NotComputed,
+}
+
+/// Apply two triple sets to a common reference window and compare the results.
+///
+/// `fetch` reads `[start, end)` on the shared accession, 0-based, returning
+/// `None` on any provider error or short read.
+fn compare_triples<F>(
+    fetch: F,
+    triples1: &[SpdiVariant],
+    triples2: &[SpdiVariant],
+) -> SequenceVerdict
+where
+    F: FnOnce(u64, u64) -> Option<String>,
+{
+    // The union window covering every edit of both variants. SPDI positions
+    // are 0-based interbase; a triple spans `[position, position + del_len)`.
+    let all = triples1.iter().chain(triples2.iter());
+    let (mut win_start, mut win_end) = (u64::MAX, u64::MIN);
+    for t in all {
+        win_start = win_start.min(t.position);
+        win_end = win_end.max(t.position + t.deletion.len() as u64);
+    }
+    if win_start > win_end {
+        return SequenceVerdict::Declined;
+    }
+    if win_end - win_start > MAX_SEQUENCE_COMPARE_WINDOW {
+        return SequenceVerdict::WindowTooWide;
+    }
+
+    let Some(reference) = fetch(win_start, win_end) else {
+        return SequenceVerdict::Declined;
+    };
+
+    match (
+        crate::spdi::apply::apply_triples(&reference, win_start, triples1),
+        crate::spdi::apply::apply_triples(&reference, win_start, triples2),
+    ) {
+        // Case-insensitive, like the deletion check in `apply_triples`:
+        // reference FASTAs are often soft-masked (repeats lower-cased), so
+        // case carries no biological meaning here and must not split two
+        // otherwise-identical resulting sequences.
+        (Some(a), Some(b)) if a.eq_ignore_ascii_case(&b) => SequenceVerdict::Same,
+        (Some(_), Some(_)) => SequenceVerdict::Different,
+        _ => SequenceVerdict::Declined,
+    }
+}
+
+/// Why `variant` has no computable denotation, or `None` when it has one.
+///
+/// **A closed list, keyed on the description alone** — never on what the
+/// provider happens to hold. That distinction is the whole design: a missing
+/// transcript is a gap in the *data*, and reporting it as "undecidable" would
+/// turn every provider gap into a non-verdict and make the rung useless as a
+/// census. What lands here is a description that denotes no sequence to anyone,
+/// with any reference.
+///
+/// The list is a floor and is expected to grow as shapes are measured. It
+/// currently covers:
+///
+/// * a **non-literal inserted payload** — `ins6`, `insN[33]`, `ins(10_20)`,
+///   `insAluYb8`, `delins(?)`;
+/// * `NaEdit::Unknown` — `c.?`, which asserts a change without naming one;
+/// * the **null and unknown alleles** (`0`, `?`), and a **multi-molecule
+///   allele** (trans / mosaic / chimeric / and-or / products / unknown phase),
+///   which denotes no *single* sequence;
+/// * a genomic position carrying an **offset** (`g.10+2del`) or a **special
+///   marker** (`pter`, `qter`, `cen`), and an **uncertain or unknown position**
+///   (`g.(100_150)del`, `g.?_100del`). The first two are the live holes
+///   recorded as #1641 and #1643: `hgvs_to_spdi`'s position helpers read
+///   `GenomePos::base` and drop both fields, so `g.10+2delC` and `g.10delC`
+///   produce the *same* triple. Catching them here means the checker reports
+///   "cannot tell" rather than a confident wrong answer, whichever way that
+///   defect is fixed at the conversion.
+///
+/// Not covered yet: uncertain positions on the `c.`/`n.`/`r.` axes, which need
+/// a location accessor generic over every variant kind that this crate does not
+/// expose. Add them when a wrong answer is measured, with the pair that
+/// measures it.
+fn indeterminate_reason(variant: &HgvsVariant) -> Option<String> {
+    match variant {
+        HgvsVariant::NullAllele => {
+            Some("`0` denotes no sequence: it asserts the absence of a product".to_string())
+        }
+        HgvsVariant::UnknownAllele => {
+            Some("`?` denotes no sequence: it asserts that the variant is unknown".to_string())
+        }
+        HgvsVariant::Allele(allele) => {
+            if allele.phase != AllelePhase::Cis {
+                return Some(format!(
+                    "{variant}: a {} allele names more than one molecule, so it denotes no \
+                     single sequence to compare",
+                    allele.phase
+                ));
+            }
+            allele.variants.iter().find_map(indeterminate_reason)
+        }
+        HgvsVariant::Genome(g) => genome_indeterminate_reason(variant, &g.loc_edit.location)
+            .or_else(|| edit_indeterminate_reason(variant, &g.loc_edit.edit)),
+        HgvsVariant::Mt(m) => genome_indeterminate_reason(variant, &m.loc_edit.location)
+            .or_else(|| edit_indeterminate_reason(variant, &m.loc_edit.edit)),
+        HgvsVariant::Circular(o) => genome_indeterminate_reason(variant, &o.loc_edit.location)
+            .or_else(|| edit_indeterminate_reason(variant, &o.loc_edit.edit)),
+        HgvsVariant::Cds(c) => edit_indeterminate_reason(variant, &c.loc_edit.edit),
+        HgvsVariant::Tx(n) => edit_indeterminate_reason(variant, &n.loc_edit.edit),
+        HgvsVariant::Rna(r) => edit_indeterminate_reason(variant, &r.loc_edit.edit),
+        _ => None,
+    }
+}
+
+/// The genomic-position half of [`indeterminate_reason`].
+fn genome_indeterminate_reason(variant: &HgvsVariant, loc: &GenomeInterval) -> Option<String> {
+    let describe = |what: &str| format!("{variant}: {what}, so it denotes no definite sequence");
+    for boundary in [&loc.start, &loc.end] {
+        let mu = match boundary {
+            UncertainBoundary::Single(mu) => mu,
+            UncertainBoundary::Range { .. } => {
+                return Some(describe("a boundary is an uncertain range"))
+            }
+        };
+        {
+            match mu {
+                Mu::Unknown => return Some(describe("a position is unknown (`?`)")),
+                Mu::Uncertain(_) => return Some(describe("a position is uncertain")),
+                Mu::Certain(pos) => {
+                    if pos.special.is_some() {
+                        return Some(describe(
+                            "a position is a chromosome landmark (`pter`/`qter`/`cen`) with no \
+                             base coordinate",
+                        ));
+                    }
+                    if pos.offset.is_some() {
+                        return Some(describe(
+                            "a genomic position carries an intronic offset, which has no meaning \
+                             on a genomic reference",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The edit half of [`indeterminate_reason`].
+///
+/// The edit itself is a [`Mu`]: an uncertain edit (`g.(100del)`) states a
+/// *predicted* change rather than an observed one, so it denotes no sequence
+/// either.
+fn edit_indeterminate_reason(variant: &HgvsVariant, edit: &Mu<NaEdit>) -> Option<String> {
+    let edit = match edit {
+        Mu::Certain(edit) => edit,
+        Mu::Uncertain(_) => {
+            return Some(format!(
+                "{variant}: the edit is uncertain, so it states a predicted change rather than \
+                 one that denotes a sequence"
+            ))
+        }
+        Mu::Unknown => {
+            return Some(format!(
+                "{variant}: the edit is unknown, so it denotes no sequence"
+            ))
+        }
+    };
+    let payload = match edit {
+        NaEdit::Unknown { .. } => {
+            return Some(format!(
+                "{variant}: `?` asserts a change without naming one, so it denotes no sequence"
+            ))
+        }
+        NaEdit::Insertion { sequence }
+        | NaEdit::BreakpointInsertion { sequence }
+        | NaEdit::Delins { sequence, .. } => sequence,
+        _ => return None,
+    };
+    inserted_is_indeterminate(payload).then(|| {
+        format!(
+            "{variant}: the inserted payload names no definite bases, so it denotes no sequence"
+        )
+    })
+}
+
+/// Whether an inserted payload names no definite bases.
+///
+/// Stated as a closed *positive* list of the non-literal shapes rather than as
+/// "anything that is not a literal", because several of the remaining shapes —
+/// a position range, an external reference — are perfectly resolvable against a
+/// provider and must keep their existing verdicts.
+fn inserted_is_indeterminate(inserted: &InsertedSequence) -> bool {
+    match inserted {
+        // A literal built from IUPAC ambiguity codes names a *family* of
+        // sequences, not one. It reaches here because normalization expands
+        // `insN[10]` into exactly that, so leaving it out would let the
+        // expansion launder an indeterminate payload into a definite-looking
+        // one.
+        InsertedSequence::Literal(sequence) => {
+            !sequence.bases().iter().all(|b| base_is_definite(*b))
+        }
+        InsertedSequence::Count(_)
+        | InsertedSequence::Range(_, _)
+        | InsertedSequence::Named(_)
+        | InsertedSequence::Uncertain => true,
+        InsertedSequence::Repeat { base, count } => {
+            !matches!(count, RepeatCount::Exact(_)) || !base_is_definite(*base)
+        }
+        InsertedSequence::SequenceRepeat { count, .. } => !matches!(count, RepeatCount::Exact(_)),
+        // A bracket is indeterminate exactly when one of its parts is. The
+        // `Literal` arm is not optional: `ins[NN;A]` names the same family of
+        // sequences as the bare `insNN` the arm above refuses, so omitting it
+        // would let a bracket launder an indeterminate payload into a
+        // definite-looking one. The remaining parts — a position range, a CDS
+        // position range, an external reference — are resolvable against a
+        // provider and keep their existing verdicts.
+        InsertedSequence::Complex(parts) => parts.iter().any(|part| match part {
+            InsertedPart::Literal(sequence) => {
+                !sequence.bases().iter().all(|b| base_is_definite(*b))
+            }
+            InsertedPart::Repeat { base, count } => {
+                !matches!(count, RepeatCount::Exact(_)) || !base_is_definite(*base)
+            }
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+/// Whether `base` names exactly one nucleotide. An IUPAC ambiguity code
+/// (`N`, `R`, `Y`, …) does not, so a payload built from one denotes a family of
+/// sequences rather than a sequence.
+fn base_is_definite(base: crate::hgvs::edit::Base) -> bool {
+    use crate::hgvs::edit::Base;
+    matches!(base, Base::A | Base::C | Base::G | Base::T | Base::U)
 }
 
 /// Extract the variant part from an HGVS string (everything after the colon).
@@ -1324,5 +2007,87 @@ mod tests {
         for v in &groups[0] {
             assert_eq!(v.to_string(), "NM_000088.3:c.10A>G");
         }
+    }
+
+    /// A bracketed payload must not launder what a bare literal refuses.
+    /// `insNN` is indeterminate because the literal names a family of sequences
+    /// rather than one; `ins[NN;A]` names exactly the same family, and
+    /// `InsertedSequence::Complex` must say so.
+    ///
+    /// Asserted on the **raw** parsed description on purpose. The checker asks
+    /// this question of `v1`/`v2` as well as of their normalized forms,
+    /// precisely so that a verdict about what the user wrote can see what the
+    /// user wrote — and the normalizer happens to flatten a bracket of literals
+    /// into one `Literal` (`ins[NN;A]` -> `insNNA`), so the normalized side
+    /// masks this at the end-to-end level. The mask is incidental to how
+    /// bracketed payloads are expanded today and is not a property this
+    /// predicate may lean on.
+    #[test]
+    fn a_bracketed_payload_cannot_launder_an_ambiguity_code() {
+        for description in [
+            "NC_000001.11:g.1001_1002ins[NN;A]",
+            "NC_000001.11:g.1001_1002ins[AA;N]",
+            "NC_000001.11:g.1001_1002ins[R;A]",
+            "NC_000001.11:g.1001_1002delins[NN;A]",
+        ] {
+            let variant = parse_hgvs(description).unwrap();
+            assert!(
+                indeterminate_reason(&variant).is_some(),
+                "{description}: an ambiguity code inside a bracket names no definite bases"
+            );
+        }
+
+        // The negative control: a bracket of definite literals still denotes
+        // exactly one sequence, so it must keep its existing verdict.
+        let definite = parse_hgvs("NC_000001.11:g.1001_1002ins[AA;C]").unwrap();
+        assert!(indeterminate_reason(&definite).is_none());
+    }
+
+    /// `transcript_triples_to_genomic` turns a 1-based genomic position into
+    /// SPDI's 0-based interbase one by subtracting 1. Nothing between a
+    /// provider and that arithmetic asserts `Exon::genomic_start >= 1` — the
+    /// cdot path takes `e[0]` verbatim and the JSON loader takes whatever the
+    /// file holds — so a transcript whose exon is placed at genomic 0 reaches
+    /// it. On `u64` that subtraction panics under `debug-assertions` and wraps
+    /// to `u64::MAX` in a release build, which is the worse of the two. The
+    /// deleted-span arm must decline the way the insertion arm above it
+    /// declines `triple.position == 0`.
+    #[test]
+    fn a_transcript_placed_at_genomic_zero_is_declined_rather_than_underflowed() {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Transcript};
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NM_ZEROBASED.1".to_string(),
+            Some("ZERO".to_string()),
+            Strand::Plus,
+            "ACGTACGTAC".to_string(),
+            Some(1),
+            Some(9),
+            // A 0-based placement: transcript base 1 sits at genomic 0.
+            vec![Exon::with_genomic(1, 1, 10, 0, 9)],
+            Some("chr_zero".to_string()),
+            Some(0),
+            Some(9),
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        let checker = EquivalenceChecker::new(provider);
+
+        // A one-base deletion at transcript base 1: `first == last == 0`.
+        let triples = vec![SpdiVariant::new(
+            "NM_ZEROBASED.1".to_string(),
+            0,
+            "A".to_string(),
+            String::new(),
+        )];
+        assert!(
+            checker
+                .transcript_triples_to_genomic("NM_ZEROBASED.1", &triples)
+                .is_none(),
+            "a genomic position with no interbase point to its left must be declined"
+        );
     }
 }

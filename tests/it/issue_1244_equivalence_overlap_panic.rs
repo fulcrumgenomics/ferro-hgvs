@@ -223,11 +223,20 @@ fn three_insertions_at_one_position_are_still_not_overlapping() {
 /// How many of `spellings` the checker settles against `allele` at the
 /// *resulting-sequence* rung.
 ///
-/// The rung matters here, unlike in the disjoint-allele tests above: it is the
-/// only rung that runs `apply_triples`, so `SequenceMatch` is direct evidence
-/// the overlap guard let the triples through. Coincident insertions cannot
-/// short-circuit at `NormalizedMatch` — a two-member allele and a single `ins`
-/// do not normalize to the same string — so nothing weaker would prove it.
+/// The rung matters here, unlike in the disjoint-allele tests above: only a
+/// sequence rung runs `apply_triples`, so reaching one is direct evidence the
+/// overlap guard let the triples through. Coincident insertions cannot
+/// short-circuit at `NormalizedMatch` or `Identical` — a two-member allele and
+/// a single `ins` are neither the same string nor normalize to one — so nothing
+/// weaker would prove it, and neither of the two textual rungs can satisfy the
+/// floor below by accident.
+///
+/// These are genomic descriptions, which determine exactly one axis, so
+/// apply-equality on it is the whole equivalence relation and the verdict is
+/// `CrossAxisSequenceMatch`. Written as a floor on the denotational order
+/// rather than as an equality: what this helper is counting is "a sequence rung
+/// fired", and pinning the exact rung would make it fail again the next time
+/// the ladder gains one.
 fn sequence_rung_matches(
     checker: &EquivalenceChecker<ferro_hgvs::JsonProvider>,
     allele: &ferro_hgvs::HgvsVariant,
@@ -240,7 +249,7 @@ fn sequence_rung_matches(
                 .check(allele, &parse_hgvs(spelling).unwrap())
                 .expect("check must return a verdict")
                 .level
-                == EquivalenceLevel::SequenceMatch
+                .is_at_least(EquivalenceLevel::SequenceMatch)
         })
         .count()
 }

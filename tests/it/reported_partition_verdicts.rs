@@ -1112,10 +1112,18 @@ fn every_gap_row_is_returned_exactly_as_authored() {
 ///
 /// The exact level, not merely `is_equivalent()`, and it is **not one level for
 /// every pair**: a pair whose two spellings normalize to one string is
-/// `NormalizedMatch`, and a pair whose spellings still differ is
-/// `SequenceMatch`. Pinning the stronger level where it holds is what stops a
-/// convergence from being lost, and pinning the weaker one where it holds is
-/// what stops a convergence from being claimed.
+/// `NormalizedMatch`, and a pair whose spellings still differ stops at a
+/// **denotational** rung. Pinning the stronger level where it holds is what
+/// stops a convergence from being lost, and pinning the weaker one where it
+/// holds is what stops a convergence from being claimed.
+///
+/// The denotational rung is `CrossAxisSequenceMatch` rather than
+/// `SequenceMatch` because these are genomic descriptions, which determine
+/// exactly one axis — the genome — so apply-equality on it *is* the whole
+/// equivalence relation and there is no second axis left to disagree. (A `c.`
+/// pair also determines the genome through its exon alignment, and there the
+/// two rungs come apart: `LRG_199t1:c.3921dup` and `c.3922dup` agree on the
+/// transcript and not on the genome, so they stop at `SequenceMatch`.)
 #[test]
 fn every_reported_pair_is_still_one_variant_by_equivalence() {
     let checker = EquivalenceChecker::new(provider(TEMPLATE));
@@ -1130,10 +1138,15 @@ fn every_reported_pair_is_still_one_variant_by_equivalence() {
         // reach its `/cis` sibling's form. They stay in
         // `PAIRS_NO_SPELLING_REACHES`: converging on one string is not reaching
         // `wanted`, and that constant tracks the target.
+        //
+        // Every other pair — including the rest of `PAIRS_NO_SPELLING_REACHES`
+        // — takes the denotational rung. That constant says neither spelling
+        // reaches `wanted`, which is a claim about the target and not about
+        // convergence, so there is no exemption to take here either.
         let expected = if a.output == b.output {
             EquivalenceLevel::NormalizedMatch
         } else {
-            EquivalenceLevel::SequenceMatch
+            EquivalenceLevel::CrossAxisSequenceMatch
         };
         let left = parse_hgvs(a.input).unwrap_or_else(|e| panic!("{}: {e}", a.label));
         let right = parse_hgvs(b.input).unwrap_or_else(|e| panic!("{}: {e}", b.label));

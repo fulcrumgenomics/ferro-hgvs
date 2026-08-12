@@ -96,6 +96,7 @@ mod delins_equal_vs_unequal_length_discriminator;
 mod delins_equal_vs_unequal_length_hermetic;
 mod dup_shift_matrix;
 mod edge_case_notation_tests;
+mod equivalence_cross_axis_rung;
 mod error_code_audit;
 mod error_mode_tests;
 mod exac_validation;

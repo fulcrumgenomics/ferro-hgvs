@@ -1148,9 +1148,33 @@ class EquivalenceLevel(_NativeEnum):
     AccessionVersionDifference: EquivalenceLevel  # 2
     NotEquivalent: EquivalenceLevel  # 3
     SequenceMatch: EquivalenceLevel  # 4
+    CrossAxisSequenceMatch: EquivalenceLevel  # 5
+    Indeterminate: EquivalenceLevel  # 6
 
     def is_equivalent(self) -> bool:
-        """Returns true if the variants are considered equivalent."""
+        """Returns true if the variants are considered equivalent.
+
+        False for ``Indeterminate`` too: undecidable is not a positive verdict.
+        Use ``is_decided()`` to tell "no" from "cannot tell".
+        """
+        ...
+
+    def is_decided(self) -> bool:
+        """Returns true unless the checker could not decide.
+
+        False only for ``Indeterminate``.
+        """
+        ...
+
+    def is_at_least(self, floor: EquivalenceLevel) -> bool:
+        """Whether this verdict is at least as strong as ``floor``.
+
+        The denotational order is ``Identical`` > ``CrossAxisSequenceMatch`` >
+        ``SequenceMatch``. ``NormalizedMatch`` and
+        ``AccessionVersionDifference`` are off it and answer false in both
+        directions — gating on ``NormalizedMatch`` would define the equivalence
+        relation in terms of the normalizer the gate is about.
+        """
         ...
 
     def description(self) -> str:

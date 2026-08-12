@@ -3421,9 +3421,18 @@ pub enum PyEquivalenceLevel {
     AccessionVersionDifference = 2,
     /// Not equivalent - represent different changes
     NotEquivalent = 3,
-    /// Equivalent by resulting reference sequence (different normalized strings,
-    /// same edited sequence)
+    /// Equivalent by resulting reference sequence on the description's own axis
+    /// (different normalized strings, same edited sequence). True, and
+    /// insufficient for identity — see `CrossAxisSequenceMatch`.
     SequenceMatch = 4,
+    /// Equivalent by resulting sequence on **every determined axis**: the rung
+    /// that establishes variant identity, and the one a confluence gate
+    /// requires.
+    CrossAxisSequenceMatch = 5,
+    /// Neither equivalent nor distinguishable: at least one side has no
+    /// computable denotation. `is_equivalent()` is false, and so is
+    /// `is_decided()`.
+    Indeterminate = 6,
 }
 
 impl From<EquivalenceLevel> for PyEquivalenceLevel {
@@ -3436,6 +3445,30 @@ impl From<EquivalenceLevel> for PyEquivalenceLevel {
                 PyEquivalenceLevel::AccessionVersionDifference
             }
             EquivalenceLevel::NotEquivalent => PyEquivalenceLevel::NotEquivalent,
+            EquivalenceLevel::CrossAxisSequenceMatch => PyEquivalenceLevel::CrossAxisSequenceMatch,
+            EquivalenceLevel::Indeterminate => PyEquivalenceLevel::Indeterminate,
+            // No wildcard arm on purpose. `EquivalenceLevel` is
+            // `#[non_exhaustive]`, but that only binds *other* crates — inside
+            // this one the match is exhaustive, so adding a rung is a compile
+            // error here rather than a level that silently maps to a wrong one.
+        }
+    }
+}
+
+impl PyEquivalenceLevel {
+    /// The Rust rung this mirrors, so the ordering and predicates are defined in
+    /// exactly one place.
+    fn native(self) -> EquivalenceLevel {
+        match self {
+            PyEquivalenceLevel::Identical => EquivalenceLevel::Identical,
+            PyEquivalenceLevel::NormalizedMatch => EquivalenceLevel::NormalizedMatch,
+            PyEquivalenceLevel::SequenceMatch => EquivalenceLevel::SequenceMatch,
+            PyEquivalenceLevel::CrossAxisSequenceMatch => EquivalenceLevel::CrossAxisSequenceMatch,
+            PyEquivalenceLevel::AccessionVersionDifference => {
+                EquivalenceLevel::AccessionVersionDifference
+            }
+            PyEquivalenceLevel::NotEquivalent => EquivalenceLevel::NotEquivalent,
+            PyEquivalenceLevel::Indeterminate => EquivalenceLevel::Indeterminate,
         }
     }
 }
@@ -3448,6 +3481,8 @@ native_enum_pymethods! {
         2 => AccessionVersionDifference,
         3 => NotEquivalent,
         4 => SequenceMatch,
+        5 => CrossAxisSequenceMatch,
+        6 => Indeterminate,
     },
     methods {
         fn __str__(&self) -> &'static str {
@@ -3455,14 +3490,35 @@ native_enum_pymethods! {
                 PyEquivalenceLevel::Identical => "Identical",
                 PyEquivalenceLevel::NormalizedMatch => "NormalizedMatch",
                 PyEquivalenceLevel::SequenceMatch => "SequenceMatch",
+                PyEquivalenceLevel::CrossAxisSequenceMatch => "CrossAxisSequenceMatch",
                 PyEquivalenceLevel::AccessionVersionDifference => "AccessionVersionDifference",
                 PyEquivalenceLevel::NotEquivalent => "NotEquivalent",
+                PyEquivalenceLevel::Indeterminate => "Indeterminate",
             }
         }
 
-        /// Returns true if the variants are considered equivalent
+        /// Returns true if the variants are considered equivalent.
+        ///
+        /// False for `Indeterminate` too: undecidable is not a positive verdict.
+        /// Use `is_decided()` to tell "no" from "cannot tell".
         fn is_equivalent(&self) -> bool {
-            !matches!(self, PyEquivalenceLevel::NotEquivalent)
+            self.native().is_equivalent()
+        }
+
+        /// Returns true unless the checker could not decide — false only for
+        /// `Indeterminate`.
+        fn is_decided(&self) -> bool {
+            self.native().is_decided()
+        }
+
+        /// Whether this verdict is at least as strong as `floor` on the
+        /// denotational order Identical > CrossAxisSequenceMatch > SequenceMatch.
+        ///
+        /// `NormalizedMatch` and `AccessionVersionDifference` are off that order
+        /// and answer false in both directions; gating on `NormalizedMatch`
+        /// would reintroduce the circularity the ladder exists to remove.
+        fn is_at_least(&self, floor: PyEquivalenceLevel) -> bool {
+            self.native().is_at_least(floor.native())
         }
 
         /// Get a human-readable description
@@ -3471,10 +3527,14 @@ native_enum_pymethods! {
                 PyEquivalenceLevel::Identical => "Identical representation",
                 PyEquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
                 PyEquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
+                PyEquivalenceLevel::CrossAxisSequenceMatch => {
+                    "Equivalent by resulting sequence on every determined axis"
+                }
                 PyEquivalenceLevel::AccessionVersionDifference => {
                     "Same variant, different accession versions"
                 }
                 PyEquivalenceLevel::NotEquivalent => "Not equivalent",
+                PyEquivalenceLevel::Indeterminate => "Undecidable: no computable denotation",
             }
         }
     }
