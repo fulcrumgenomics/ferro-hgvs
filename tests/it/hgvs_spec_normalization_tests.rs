@@ -1069,6 +1069,22 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "confluence-gate-is-apply-equality-on-every-determined-axis",
         "decided",
     ),
+    // Whether `standards.md`'s **RNA** symbol table (`:47`–`:61`) plus
+    // `general.md:50`'s lower-case bullet exclude an `x` from an `r.`
+    // description, the way `:39`'s dagger plus `general.md:48`'s CAPITALS
+    // exclude an `X` from a DNA one. **Operator ruling (2026-08-12): REFUSE**,
+    // with `standards.md:47-61` governing — the RNA table publishes fifteen
+    // symbols and stops, `general.md:50` names that tabulation as the source of
+    // an `r.` description's legal symbols, so `x` is not one of them. The
+    // jurisdiction objection is met on its own terms: `background/standards.md`
+    // carries both tables, so its RNA half is an RNA-jurisdiction citation
+    // rather than a DNA clause stretched across axes. #1684 measured the gap
+    // (`r.10delinsacgux` parsed to `Named("acgux")` and was re-emitted in all
+    // three modes) and left the adjudication to the operator; #1715 carries it.
+    // The neighbouring records are untouched: an uppercase `X` may not appear
+    // in any description, and `absolute-prohibition-enforcement-stage` fixes
+    // the stage.
+    ("rna-axis-alignment-only-symbol-reach", "decided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

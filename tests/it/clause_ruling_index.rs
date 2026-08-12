@@ -78,13 +78,15 @@
 //! `absolute-prohibition-enforcement-stage`) and went stale anyway, because all
 //! four have since landed on `main` and are now in the base rather than in the
 //! delta. A delta does not go stale when the base moves *underneath* it; it goes
-//! stale when the base moves *past* it. Measured against the merge base, what
-//! this branch adds is two records:
+//! stale when the base moves *past* it. Both records that paragraph then named
+//! as this branch's delta — `contiguous-insertion-split-by-a-blocked-derivation`
+//! and `delins-recommendation-reach-when-the-input-arrives-split` — have landed
+//! on `main` in their turn and are now base as well, which is the same rot a
+//! second time. Measured against the merge base, what this branch adds is one
+//! record:
 //!
-//! - `contiguous-insertion-split-by-a-blocked-derivation` — decided
-//! - `delins-recommendation-reach-when-the-input-arrives-split` — undecided
-//!
-//! Both are the branch's own.
+//! - `rna-axis-alignment-only-symbol-reach` — ruled 2026-08-12 (#1715), with
+//!   `docs/background/standards.md:47-61` governing
 //!
 //! This paragraph used to predict that the pins below "will move once more on
 //! the next rebase", naming `codon-carve-out-shape-restriction` and
@@ -102,20 +104,52 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 21 records, 18 decided / 3 undecided
-//! 81 clause lines, of which 19 are named by more than one record
+//! 22 records, 19 decided / 3 undecided
+//! 97 clause lines, of which 22 are named by more than one record
 //!
 //! == every clause line ==
 //!
 //! docs/background/basics.md:38  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
-//! docs/background/standards.md:36
+//! docs/background/standards.md:36  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
 //! docs/background/standards.md:37
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
-//! docs/background/standards.md:39
+//! docs/background/standards.md:39  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (governing)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
+//! docs/background/standards.md:47
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:48
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:49
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:50
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:51
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:52
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:53
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:54
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:55
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:56
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:57
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:58
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:59
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:60
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
+//! docs/background/standards.md:61
+//!     `rna-axis-alignment-only-symbol-reach` — decided (governing, via docs/background/standards.md:47-61)
 //! docs/consultation/SVD-WG010.md:5  [MULTI]
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -289,8 +323,11 @@
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:48
+//! docs/recommendations/general.md:48  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
+//! docs/recommendations/general.md:50
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
 //! docs/recommendations/general.md:56  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -358,6 +395,12 @@
 //! docs/background/basics.md:38
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
+//! docs/background/standards.md:36
+//!     `alignment-only-symbol-in-a-description` — decided (cited)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
+//! docs/background/standards.md:39
+//!     `alignment-only-symbol-in-a-description` — decided (governing)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
 //! docs/consultation/SVD-WG010.md:5
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -387,6 +430,9 @@
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/general.md:48
+//!     `alignment-only-symbol-in-a-description` — decided (cited)
+//!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
 //! docs/recommendations/general.md:56
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -710,7 +756,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (21, 18, 3),
+        (22, 19, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -874,7 +920,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        19,
+        22,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

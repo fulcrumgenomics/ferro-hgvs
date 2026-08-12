@@ -120,11 +120,23 @@ env:
   # whether ferro refuses a shape, decided by an assertion about idempotency at
   # a seam the module is not measuring. Excluded so the two instruments stay
   # separate, in the same spirit; it still runs in full in the plain `test` job.
+  #
+  # `issue_1715_rna_alignment_symbol_reach` is here for a THIRD reason, weaker
+  # than either of the two above, and it is listed rather than argued away
+  # because `oracle_exclude_invariant` scans imports and cannot tell the
+  # difference. That module touches the corpus exactly once — to assert that the
+  # generator builds no `r.` row at all, so its zero for this axis is STRUCTURAL
+  # — and it never normalizes a corpus row, so it cannot flatter or redden a
+  # confluence figure. It is excluded to keep the invariant's rule simple ("a
+  # module that reads the corpus is not run with the oracles armed") rather than
+  # to protect a measurement; it runs in full in the plain `test` job, where its
+  # own refusal assertions are the coverage that matters.
   ORACLE_EXCLUDE: >-
     test(spec_conformance_axis) + test(spec_corpus_regressions)
     + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
     + test(lenient_overlap_and_projection_split)
     + test(defect_non_idempotent_outputs)
+    + test(issue_1715_rna_alignment_symbol_reach)
 
 jobs:
   abi3-floor-consistency:

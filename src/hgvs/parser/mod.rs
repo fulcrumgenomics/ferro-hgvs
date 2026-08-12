@@ -284,14 +284,16 @@ fn apply_alignment_only_symbol_rule(
             pos: 0,
             msg: format!(
                 "[{}] `{}` states `{}` ({}), which {} lists as used in alignment only: \
-                 it is not one of the IUPAC-IUBMB nucleotide symbols `general.md:48` admits, \
+                 it is not one of the IUPAC-IUBMB nucleotide symbols `{}` admits, \
                  so the description denotes no sequence. State the resolved bases instead \
-                 (`N` is the IUPAC symbol for an unknown base).",
+                 (`{}` is the IUPAC symbol for an unknown base).",
                 ErrorType::AlignmentOnlySymbolInDescription.code(),
                 found.stated,
                 found.symbol,
                 found.meaning(),
                 found.clause(),
+                found.alphabet_clause(),
+                found.unknown_base(),
             ),
             diagnostic: None,
         }),
