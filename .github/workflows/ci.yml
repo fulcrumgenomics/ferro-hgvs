@@ -859,13 +859,18 @@ jobs:
         # gates only 2 of its ~360 modules on the feature and neither the soak
         # nor the sweeps selects one, so the selections are unchanged: verified
         # by listing both under each feature set, `test(proptest)` resolves to
-        # 15 tests either way and the sweep filter to 44.
+        # 20 tests either way and the sweep filter to 44.
         #
-        # Both counts were stale (10 and 29) and both are re-measured above.
+        # Both numbers have been stale before, in opposite directions and for
+        # different reasons, which is why the re-measure commands are published
+        # rather than the totals trusted. The proptest count moves whenever a
+        # `*proptest*` module is added — it was 15 until `from_sequences_proptest.rs`
+        # added five properties the `test(proptest)` filter picks up by name. The
+        # sweep-filter count was recorded as 29 long after it had reached 44.
+        #
         # The claim this comment exists to make is the *feature-independence* —
-        # "either way" — which held and still holds; the totals are incidental
-        # to it and drift whenever a matching module is added. Re-measure rather
-        # than trust them:
+        # "either way" — which held through both drifts and still holds; the
+        # totals are incidental to it. Re-measure rather than trust them:
         #
         #   cargo nextest list --test it -E 'test(proptest)' | wc -l
         #   cargo nextest list --test it -E "$SWEEP_FILTER" | wc -l
@@ -1091,10 +1096,19 @@ jobs:
     name: Idempotency soak (${{ matrix.shard }}/8)
     # Only the optimized archive, NOT `test-build`. Every test the selection
     # below reaches lives in `tests/it/{cis_allele_confluence,
-    # normalize_idempotency}_proptest.rs`, and neither reads the generated spec
-    # fixture or shells out to the staged generators — so the shards need
-    # neither of those artifacts, and waiting on the job that produces them
-    # would put the dev-profile compile back on the soak's critical path.
+    # from_sequences, normalize_idempotency}_proptest.rs`, and none reads the
+    # generated spec fixture or shells out to the staged generators — so the
+    # shards need neither of those artifacts, and waiting on the job that
+    # produces them would put the dev-profile compile back on the soak's
+    # critical path.
+    #
+    # `from_sequences_proptest.rs` joined this selection by being named
+    # `*proptest*`, which is worth stating because the filter is by name: a new
+    # module lands in a 1M-case job without anyone choosing that. Its five
+    # properties are pure functions of a generated triple — no provider, no
+    # fixture — so the two claims above still hold, and it earns its place here
+    # (`the_direction_does_not_decide_describability` held for 256 cases and
+    # failed at 20,000). Re-check both claims when adding another.
     needs: test-build-soak
     runs-on: ubuntu-latest
     strategy:

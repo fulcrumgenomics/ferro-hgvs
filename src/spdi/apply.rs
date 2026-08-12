@@ -147,7 +147,7 @@ pub fn apply_to_reference<P: ReferenceProvider + ?Sized>(
 /// could not otherwise tell "the change stops here" from "I could not read far
 /// enough to find out", and would key off a window that may have cut the roll
 /// short.
-fn apply_to_reference_padded<P: ReferenceProvider + ?Sized>(
+pub(crate) fn apply_to_reference_padded<P: ReferenceProvider + ?Sized>(
     variant: &HgvsVariant,
     provider: &P,
     pad_3prime: u64,

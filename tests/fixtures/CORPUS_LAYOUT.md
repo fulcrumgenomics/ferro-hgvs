@@ -288,6 +288,53 @@ change. The harness for each corpus knows its own pin format. Mutalyzer's
 corpus assumes a single fixed config (mutalyzer's own defaults) and
 therefore uses the simpler `<input>\t<ferro_output_or_error>` shape.
 
+## Committed fixtures outside a `<upstream>-normalize/` corpus
+
+`tests/**/*.rs` policy is **generate test data programmatically; do not add a new
+committed fixture**, with three long-standing exceptions (the
+`tests/fixtures/validation/` oracle snapshots, the expected-FAIL ledgers, and the
+`.count` baselines). One more is deliberate and is recorded here so a reader of
+`tests/fixtures/` finds the reason at the file rather than in a commit message.
+
+### `cis/multi_member_sequence_pairs.json.gz`
+
+Reference/alternate **windows** for the 592 real-world multi-member cis alleles
+in `cis/multi_member_cis_alleles.json`, plus each row's `canonical_spdi` key.
+
+| | |
+|---|---|
+| generator | `cargo run --features dev --example capture_multi_member_pairs -- --manifest <manifest.json>` |
+| consumer | `tests/it/from_sequences_multi_member_axis.rs` |
+| size | ~113 KB gzipped (~740 KB raw, past the 500 KB pre-commit limit) |
+
+**Why it is committed rather than generated at test time.** The source rows name
+real accessions (`LRG_`, `NC_`, `NM_`), so deriving their windows needs a
+prepared reference — which PR CI does not provision. The axis was therefore
+manifest-gated and **skipped on every PR**, leaving the only real-world evidence
+for `from_sequences` invisible exactly where it mattered. It did not have to be:
+`from_sequences` reads no reference, so a provider was only ever supplying the
+*window*, and a window is a value that can be committed.
+
+The captured `canonical_spdi` is computed from the **input** description at
+capture time and serves as the axis's independent oracle, so the test is not
+reduced to checking `from_sequences` against itself. The consuming test keys the
+*derived* side through `spdi::canonical_spdi` over a window-only provider, which
+reaches the bases via `hgvs_to_spdi` and an SPDI splice rather than through
+`apply_edits_to_window` — the applier the derivation and its own internal round
+trip both use.
+
+That last sentence is load-bearing and was not true when this section was
+written: the consumer gated its comparison on a condition that was constantly
+false, so the field described here as the oracle was read only for emptiness and
+the assertion behind it could not fire. Independence is a property of the
+comparison, not of the field, and both halves have to be present for this
+paragraph to mean anything.
+
+Regenerate whenever `cis/multi_member_cis_alleles.json` is re-harvested, or when
+`to_sequences`' window or padding changes. It is **not** LFS, on purpose: an
+absent LFS fixture makes its suite skip green, which is the failure this file
+exists to remove.
+
 ## Consumers
 
 | Corpus | Path | Per-case config? | Tracking issue |

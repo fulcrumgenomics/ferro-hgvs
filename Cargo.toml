@@ -267,6 +267,11 @@ required-features = ["dev"]
 test = true
 
 [[example]]
+name = "capture_multi_member_pairs"
+required-features = ["dev"]
+test = true
+
+[[example]]
 name = "generate_cis_confluence_corpus"
 required-features = ["dev"]
 test = true

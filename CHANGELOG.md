@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`from_sequences` — derive an HGVS description from a reference/alternate pair.** For callers
+  whose input is bases rather than a description: a window out of a BAM, a VCF row, an aligner's
+  output. It reads no reference sequence, so the output is a pure function of its arguments,
+  and it delivers the two normalization rules that are always achievable — **conformant** and
+  **deterministic** — leaving **recommended form** and **confluent** to `normalize`, which holds
+  the reference. Available as `ferro_hgvs::from_sequences` / `from_sequences_detailed` in Rust and
+  `ferro_hgvs.from_sequences` / `from_sequences_detailed` in Python.
+
+  It derives `g.` descriptions, and `m.` on the two rCRS mitochondrial accessions
+  (`NC_012920`, `NC_001807`), which HGVS requires the `m.` axis for. Every other accession class is
+  refused with a message naming the class.
+
+  Because the derivation never sees a spelling, two spellings of one variant reach one
+  description: 5 636 cis confluence corpus classes with no divergence — the corpus's **genomic
+  half**, which is all a `g.`-only surface can reach, its 5 636 `c.` classes being drawn against a
+  transcript accession this refuses by design — and nine of the nine externally-reported
+  #1419 / #1420 / #1421 confluence pairs in both shuffle directions.
+
+  Nothing here changes any existing output — `normalize` is untouched, and a caller who has a
+  description and wants it normalized still needs it to converge. This is a new entry point for a
+  different input.
+
+- **`Normalizer::to_sequences`** — the inverse, turning any HGVS description into that pair, so a
+  caller already holding descriptions needs no new plumbing to reach the derivation. Pads **both**
+  sides by `pad` — so the window is `span + 2 * pad` — because `dup` typing reads the reference
+  bases immediately 5' of an insertion point (`DNA/duplication.md:18`). The window is returned
+  upper-cased, so a soft-masked region does not come back as a mixed-case pair.
+
+- **`Normalizer::from_sequences`** — the same derivation against a held reference, which lets it
+  additionally range-check the interval and optionally `normalize` the result.
+
+- **`SequencePair::new`**, so a caller holding bases and no description can build one. The type is
+  `#[non_exhaustive]` and was previously only ever returned, which put the type out of reach of
+  exactly the caller it is for. It validates through the same check
+  `from_sequences` uses rather than a second copy, so a pair that constructs is a pair that
+  derives.
+
+- Both sequences are **case-folded** and the alphabet is DNA. A soft-masked (lower-case) window
+  derives exactly as its upper-case twin does, which keeps `to_sequences` -> `from_sequences` an
+  inverse over a masked region; `U` is refused on either side rather than admitted into a `g.`/`m.`
+  description.
+
+- `FromSequencesOptions::with_direction` and `with_max_grid_cells`. The struct is
+  `#[non_exhaustive]`, so a struct expression is forbidden outside the crate and
+  `Default::default()` was the only reachable constructor — the two documented knobs could not be
+  set by any downstream caller.
+
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
 ### Representation changes

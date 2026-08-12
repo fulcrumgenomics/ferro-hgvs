@@ -74,6 +74,10 @@ pub use error::FerroError;
 pub use hgvs::location::{AaCode, ProteinRenderStyle, TerStyle};
 pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
 pub use hgvs::variant::{CoordinateAxis, HgvsVariant};
+pub use normalize::from_sequences::{
+    from_sequences, from_sequences_detailed, DerivedDescription, FromSequencesOptions,
+};
+pub use normalize::sequence_pair::SequencePair;
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
 pub use project::{VariantProjection, VariantProjector};
 pub use reference::{JsonProvider, MockProvider, MultiFastaProvider, ReferenceProvider};
