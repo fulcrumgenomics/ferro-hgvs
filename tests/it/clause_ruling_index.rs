@@ -86,7 +86,7 @@
 //! ```text
 //! CLAUSE -> RECORD INDEX
 //! 16 records, 14 decided / 2 undecided
-//! 62 clause lines, of which 13 are named by more than one record
+//! 72 clause lines, of which 14 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -99,8 +99,11 @@
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //! docs/background/standards.md:39
 //!     `alignment-only-symbol-in-a-description` — decided (governing)
-//! docs/consultation/SVD-WG010.md:5
+//! docs/consultation/SVD-WG010.md:5  [MULTI]
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/consultation/SVD-WG010.md:16
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/consultation/open-issues.md:77
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/consultation/open-issues.md:78  [MULTI]
@@ -165,6 +168,12 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:84
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
+//! docs/recommendations/DNA/delins.md:86
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/DNA/delins.md:88
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/DNA/delins.md:89
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
@@ -172,6 +181,12 @@
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:60
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:90
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:91
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:92
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:148
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/DNA/inversion.md:5
@@ -182,8 +197,12 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
+//! docs/recommendations/DNA/substitution.md:95
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:41
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//! docs/recommendations/RNA/delins.md:70
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/repeated.md:22
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/RNA/repeated.md:27
@@ -228,6 +247,8 @@
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:157
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
+//! docs/recommendations/protein/delins.md:50
+//!     `canonical-form-choice-when-both-legal` — decided (cited)
 //! docs/recommendations/style.md:9  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
@@ -252,6 +273,9 @@
 //! docs/background/basics.md:38
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
+//! docs/consultation/SVD-WG010.md:5
+//!     `delins-codon-carve-out-gap-one` — decided (cited)
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/consultation/open-issues.md:78
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
@@ -749,7 +773,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        13,
+        14,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
