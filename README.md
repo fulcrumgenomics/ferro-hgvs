@@ -181,10 +181,13 @@ ferro's normalizer follows four rules about its output, and three about how it h
 2. **Recommended form.** Where the spec prefers among conformant forms, ferro produces it.
    *Best effort.*
    Scope: "recommended", "preferred", lowercase "should", the 3' rule. A preference clause outranks
-   maintainer judgment.
+   maintainer judgment, but not rule 3: where it is not evaluable on what a normalizer holds, rule 3
+   governs.
 
 3. **Confluent.** Inputs denoting one variant produce one output. *Best effort.*
-   Every rule is evaluated over the **resulting sequence**, never over the input's spelling.
+   Every rule — rule 2 included — is evaluated over the **resulting sequence**, never over the
+   input's spelling. Reference context counts as sequence: transcript model, exon boundaries,
+   reading frame, strand and topology are functions of the accession, not of the description.
 
 4. **Deterministic.** Same input, same output. *Absolute.*
    Note that 4 does not imply 3 — a deterministic normalizer can be arbitrarily non-confluent.
@@ -200,7 +203,9 @@ ferro's normalizer follows four rules about its output, and three about how it h
       feature request, worth making but never a reason to hold a release.
 
 6. **Among multiple conformant forms:** the maintainers choose. **There are no user options for
-   normalization form.** Options remain available for orthogonal axes — error mode, 3'/5' direction.
+   normalization form.** Error mode is an orthogonal axis and stays available. The 3'/5' knob is
+   **not** orthogonal — it selects the frame every rule is evaluated in, so rules 2 and 3 are
+   claimed *per direction* rather than across the two.
 
 7. **Disclosure.** Any change to these rules, and any different choice made under 5 or 6, is
    disclosed: in the changelog before v1, by a major version bump after. Output that *violates*
@@ -223,10 +228,37 @@ Rules 2 and 3 depend on the spec **determining an answer**, and sometimes it doe
   correspondence is unique, so "two variants separated by N nucleotides" is a fact about the
   variant. For an unequal-length block there is no correspondence — recovering one means *choosing*
   an alignment, and the spec does not say which. There is no derivable form to converge on.
+- **The preference keys on information a normalizer does not hold.** A "frequently occurring
+  variant" (`RNA/delins.md:41`); a repeat "variable in the population" (`RNA/repeated.md:33`,
+  `protein/repeated.md:22`); two variants "reported (or might occur) individually" (`DNA/delins.md:83`).
+  The spec determines an answer; ferro cannot see what it keys on.
 
-**"Best effort" is bounded by the spec's determinacy, not by ferro's implementation quality.** A
-failure of rule 2 or 3 caused by ferro's code is a **bug** under rule 7. Only a failure caused by
-the spec not determining an answer falls under best effort — and that triggers rule 5.
+**"Best effort" is bounded by the spec's determinacy and by what a normalizer's inputs can decide —
+not by ferro's implementation quality.** A failure of rule 2 or 3 caused by ferro's code is a
+**bug** under rule 7; one caused by the spec not determining an answer triggers rule 5; one caused
+by a clause keying on provenance or population data is a **declared deviation**, and a permanent
+one — no upstream answer can put that information into a normalizer's hands.
+
+Permanent is the only thing the last case adds, and it does **not** exempt the question from rule
+5. The grain matters, because the two grains give opposite answers. Read **on its own**, such a
+clause is not silent, ambiguous or self-contradictory — it determines an answer perfectly well, and
+ferro is the one that cannot see what the answer keys on. Read **against the spec's own
+re-derivation mandate** — `general.md:157-160`, which has a protein description derived by
+comparing the variant and reference protein sequences and says knowledge of the underlying DNA
+change "should not be used", with `general.md:13` extending the method to RNA — it is one half of a
+pair that cannot both hold. That is rule 5's self-contradiction limb exactly, and the ruling ledger
+says so in those words. What the carve-out states is that rule 5's escalation cannot *end*
+the matter here: a choice made under rule 5 is provisional pending an upstream ruling, and no
+ruling upstream makes provenance visible, so the deviation outlives the filing.
+
+Where it is recorded is worth stating precisely, because the obvious pointer does not resolve.
+`canonical-form-choice-when-both-legal` has **no `deviates_from` field**: it carries all four
+clauses in its rationale as the recorded counter-evidence to re-derivation, opens that paragraph
+with "The spec contradicts itself here", and adopts re-derivation over them deliberately. The one
+of the four that is recorded *as* a deviation is `DNA/delins.md:83`, through the
+`deviates_from: ["docs/recommendations/DNA/delins.md:79-84"]` on
+`separation-is-a-property-of-the-spelling-not-of-the-variant` — the record whose ruling the rule 3
+example below turns on.
 
 ### A worked example of reading force from prose
 
@@ -235,6 +267,39 @@ the spec not determining an answer falls under best effort — and that triggers
 only when the additional copy is directly 3'-flanking the original. So the rule ranks the *label*
 for one span; it does not require that a partition be chosen so as to produce a duplication.
 Reading the force without the scope inverts the rule.
+
+### What rule 3 excludes
+
+"Never over the input's spelling" is narrower than it sounds. Most of a description is context.
+
+| Carried by the description | Treatment |
+|---|---|
+| Accession, axis (`g.`/`c.`/`n.`), version | **Used** — it *is* the reference context |
+| Which bases end up different | **Used** — this is the variant |
+| Cis against trans (`[a;b]` against `[a];[b]`) | **Used** — different variants, not two spellings of one |
+| Type label (`dup` against `ins`, `inv` against `delins`) | **Re-derived**, then ranked by `general.md` |
+| How the edit set is cut into members | **Excluded** — a property of who wrote the string |
+| Which copy in a run of identical residues a member names | **Excluded** — the 3' rule assigns this *"arbitrarily"* (`general.md:41`) |
+| Repeat unit and phase, where several are equivalent | **Excluded** |
+
+So three rows read **Excluded**, and they are three spellings of the one thing the input does not
+get to decide: the **partition**, the run-position choice that feeds it, and — where several
+unit-and-phase pairs describe one tract equally well — which pair a repeat member names.
+
+`NC_000001.11:g.1001002_1001016` reads `ATGAGGGGCCACTGT`: a `GGGG` run at `1001006-1001009`, a `CC`
+run at `1001010-1001011`, a lone `C` at `1001013`. Two spellings, one denoted sequence
+(`ATGAGGGCATGT`), because `1001010` and `1001011` are both `C`:
+
+```
+g.[1001009del;1001010del;1001013del]     written gaps of 0 and 2
+g.[1001009del;1001011del;1001013del]     written gaps of 1 and 1
+```
+
+`general.md:34`'s "two variants separated by one or more nucleotides should be described individually"
+reads those gaps, so it answers twice for one variant. Rule 3 reads them off the partition ferro
+derives instead: both give `g.[1001009_1001010del;1001013del]`. Rule 2 then keeps that over the
+spanning `g.1001009_1001013delinsCA`, which merges across two unchanged nucleotides. Pinned in
+[`tests/it/cis_confluence_adjudication.rs`](tests/it/cis_confluence_adjudication.rs).
 
 ### Known limitation
 

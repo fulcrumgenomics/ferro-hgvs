@@ -17,12 +17,17 @@
 //! that classifies it — enough that an edit to the ruleset has to be deliberate, and
 //! little enough that rewording the body of a rule does not fail the build.
 //!
-//! Every assertion is scoped to the section it is about ([`section`]) rather than
-//! to the whole file, and the two cross-links are matched as whole Markdown tokens
-//! rather than as bare `#anchor` fragments. Both are the difference between "this
-//! string exists in a long document" and "the ruleset states this" — a guard
-//! satisfiable from a code block or an unrelated section is one that passes while
-//! the thing it guards is broken.
+//! Every assertion is scoped to the section it is about rather than to the whole
+//! file — [`section`] for Markdown, [`banner_block`] for the `// Record N —`
+//! blocks of an adjudication test module — and the two cross-links are matched as
+//! whole Markdown tokens rather than as bare `#anchor` fragments. Both are the
+//! difference between "this string exists in a long document" and "the ruleset
+//! states this" — a guard satisfiable from a code block or an unrelated section is
+//! one that passes while the thing it guards is broken.
+//!
+//! That applies to the *pinned* side of a cross-claim as much as to the README
+//! side, which is why [`banner_block`] exists: a whole-file `contains` over a
+//! 500-line Rust module is the same weak question in a different language.
 //!
 //! Scoping is applied on **both** sides of each claim, which is a strictly stronger
 //! test than scoping one side. Pinning the rules' order without binding each rule to
@@ -87,6 +92,67 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
     &text[start..end]
 }
 
+/// The body of a `// Record N — …` banner block in an adjudication test module,
+/// up to the next banner rule (or end of input).
+///
+/// The Rust counterpart of [`section`], and it exists for the same reason: the
+/// pinned side of a cross-claim has to be scoped too, or the claim degrades to
+/// "this token appears somewhere in a 500-line file". `cis_confluence_adjudication.rs`
+/// carries four records separated by
+///
+/// ```text
+/// // ---------------------------------------------------------------------------
+/// // Record 1 — settled: separation is a property of the spelling
+/// // ---------------------------------------------------------------------------
+/// ```
+///
+/// so the banner is the structure to key on. `title` is matched line-anchored,
+/// exactly as `section` matches a heading, and the block ends at the next rule
+/// line — which is the *opening* rule of the following record, since a title's
+/// own closing rule is consumed first.
+///
+/// **What this does not buy**, stated because overclaiming a guard is worse than
+/// not having one: it scopes to the record, not to an executed assertion. A
+/// token sitting only in a doc comment inside the right record still passes.
+/// What it rules out is the failure that actually happens here — the case
+/// migrating to a different record, or surviving only as commented-out text
+/// elsewhere in the file — while the README goes on citing it.
+fn banner_block<'a>(text: &'a str, title: &str) -> &'a str {
+    /// The prefix a banner rule line starts with; long enough not to match an
+    /// ordinary `// --` comment.
+    const RULE: &str = "// -----";
+
+    // `(offset, line)` pairs, so a slice can be taken from any line boundary.
+    let lines: Vec<(usize, &str)> = {
+        let mut offset = 0usize;
+        text.split_inclusive('\n')
+            .map(|line| {
+                let at = offset;
+                offset += line.len();
+                (at, line)
+            })
+            .collect()
+    };
+
+    let title_index = lines
+        .iter()
+        .position(|(_, line)| line.trim_end() == title)
+        .unwrap_or_else(|| panic!("no `{title}` banner found"));
+
+    // The title's own closing rule is the first rule at or after it; the block
+    // is everything from just past that rule to the next rule line.
+    let is_rule = |index: usize| lines[index].1.trim_start().starts_with(RULE);
+    let closing = (title_index + 1..lines.len())
+        .find(|index| is_rule(*index))
+        .unwrap_or_else(|| panic!("the `{title}` banner has no closing rule line"));
+    let start = lines[closing].0 + lines[closing].1.len();
+    let end = (closing + 1..lines.len())
+        .find(|index| is_rule(*index))
+        .map_or(text.len(), |index| lines[index].0);
+
+    &text[start..end]
+}
+
 /// The section heading, and the subsection headings that organise it.
 ///
 /// Listed in the order they must appear: the two halves of the ruleset first
@@ -98,8 +164,29 @@ const HEADINGS: &[&str] = &[
     "### The procedure",
     "### Why 2 and 3 are best effort, and 1 and 4 are not",
     "### A worked example of reading force from prose",
+    "### What rule 3 excludes",
     "### Known limitation",
 ];
+
+/// The coordinates the README's rule 3 example is stated on.
+///
+/// The example exists in two places by necessity — the README states the rule and
+/// `cis_confluence_adjudication.rs` pins the behaviour — so it is exactly the shape
+/// this repository drifts on. Neither copy is the authority for the other's *prose*;
+/// what must not diverge is the case itself, since a README example on coordinates
+/// no test covers is a claim nothing checks.
+const RULE_3_EXAMPLE_TOKENS: &[&str] = &[
+    "NC_000001.11",
+    "ATGAGGGGCCACTGT",
+    "g.[1001009del;1001010del;1001013del]",
+    "g.[1001009del;1001011del;1001013del]",
+    "g.[1001009_1001010del;1001013del]",
+];
+
+/// The banner block of `cis_confluence_adjudication.rs` that owns the rule 3
+/// example, so the pinned side of the cross-claim is scoped like the README side.
+const RULE_3_PINNED_RECORD: &str =
+    "// Record 1 — settled: separation is a property of the spelling";
 
 /// The seven rules, by number and name, exactly as the README opens each one.
 ///
@@ -324,5 +411,60 @@ fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
         restated.is_empty(),
         "`adjudication-precedence-order` has started restating the ruleset it is supposed to \
          point at ({restated:?}). The ruling is that the rules are stated in exactly one place"
+    );
+}
+
+/// The README's rule 3 example must still be the case the adjudication test pins.
+///
+/// [`the_ruleset_and_its_disclosure_mechanism_point_at_each_other`] guards a
+/// cross-*link*; this guards a cross-*claim*, which is the weaker link of the two.
+/// A link breaks loudly when its anchor moves. An example does not: the README can
+/// go on quoting coordinates long after the test stopped covering them, or the test
+/// can be re-pinned onto a different run, and both documents still read as though
+/// they agree. That is the failure this repository has recorded against itself
+/// repeatedly — one fact in several places, drifting apart quietly.
+///
+/// Deliberately token-based rather than a diff. The two texts *should* differ: one
+/// states a rule to a reader, the other exercises a normalizer. Only the case they
+/// are both about — the reference window, the two spellings, and the decided output
+/// — has to stay shared.
+///
+/// **Both sides are scoped**, which is what the module doc above claims of every
+/// assertion here and what this test would otherwise have been the one exception
+/// to. The README side is bound to `### What rule 3 excludes` by [`section`]; the
+/// pinned side is bound to record 1's banner block by [`banner_block`], since a
+/// whole-file `contains` over a 500-line module answers the weaker question
+/// [`section`]'s own doc argues against — it would stay green with the case moved
+/// into an unrelated record, or left behind as commented-out text.
+#[test]
+fn the_rule_3_example_is_the_case_the_adjudication_test_pins() {
+    let readme = read("README.md");
+    let rules = section(&readme, "## Normalization rules");
+    let example = section(rules, "### What rule 3 excludes");
+    let pinned_file = read("tests/it/cis_confluence_adjudication.rs");
+    let pinned = banner_block(&pinned_file, RULE_3_PINNED_RECORD);
+
+    for token in RULE_3_EXAMPLE_TOKENS {
+        assert!(
+            example.contains(token),
+            "the README's rule 3 example no longer states `{token}`; if the example moved to \
+             different coordinates, move `RULE_3_EXAMPLE_TOKENS` and the pinned test with it"
+        );
+        assert!(
+            pinned.contains(token),
+            "the README's rule 3 example states `{token}`, which \
+             `tests/it/cis_confluence_adjudication.rs` no longer covers under \
+             `{RULE_3_PINNED_RECORD}`. The README would be quoting a case nothing checks — or \
+             the case moved to another record, in which case move `RULE_3_PINNED_RECORD` too"
+        );
+    }
+
+    // The link is what sends a reader from the claim to its evidence, so it is
+    // part of the claim rather than a courtesy.
+    assert!(
+        example.contains(
+            "[`tests/it/cis_confluence_adjudication.rs`](tests/it/cis_confluence_adjudication.rs)"
+        ),
+        "the rule 3 example must link to the test that pins it"
     );
 }
