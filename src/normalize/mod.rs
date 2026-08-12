@@ -3032,12 +3032,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     "[{}] cannot normalize `{}`: it states `{}` ({}), which {} lists as used \
                      in alignment only. A masked base names no nucleotide, so the description \
                      denotes no sequence and there is nothing to normalize. State the resolved \
-                     bases instead (`N` is the IUPAC symbol for an unknown base).",
+                     bases instead (`{}` is the IUPAC symbol for an unknown base).",
                     crate::error_handling::ErrorType::AlignmentOnlySymbolInDescription.code(),
                     found.stated,
                     found.symbol,
                     found.meaning(),
                     found.clause(),
+                    found.unknown_base(),
                 ),
             });
         }
