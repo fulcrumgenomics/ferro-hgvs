@@ -40,9 +40,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Normalizer::from_sequences`** — the same derivation against a held reference, which lets it
   additionally range-check the interval and optionally `normalize` the result.
 
+- **Re-anchoring, for callers whose variant must stay inside a region.** `SequencePair::trim_to`
+  narrows a window to given bounds, trimming matching bases only and needing no reference;
+  `Normalizer::reanchor` moves both edges, padding from the reference where it must widen. Bounds
+  are 1-based inclusive and optional per edge. Both refuse rather than clamp — including a bound
+  outside the sequence, since a window silently pulled back to the contig would hide a bug upstream
+  of the call.
+
+  **`reanchor` moves a window's edges; it does not relocate the window.** The window asked for must
+  overlap the pair's own, because the changed bases exist only in the pair — a disjoint request is
+  refused, with a message naming `reanchor` and both windows. Its bases come back upper-cased, as
+  `to_sequences`' do, so widening a soft-masked window cannot splice provider bases onto caller
+  bases and return a mixed-case pair; `trim_to` fetches nothing and leaves case alone. Case is not
+  a disagreement in either: a soft-masked reference against an upper-case alternate trims normally.
+
+  This is for a bound that is a *requirement* (a target region, an amplicon, a tiling window). It
+  is not the way to make heterogeneous raw pairs agree in general: `normalize = true` and a
+  `to_sequences` round trip both already do that and reach the reference-anchored placement, which
+  can shift further than any fixed window allows.
+
 - **`SequencePair::new`**, so a caller holding bases and no description can build one. The type is
-  `#[non_exhaustive]` and was previously only ever returned, which put the type out of reach of
-  exactly the caller it is for. It validates through the same check
+  `#[non_exhaustive]` and was previously only ever returned, which put both re-anchoring entry
+  points out of reach of exactly the caller they are for. It validates through the same check
   `from_sequences` uses rather than a second copy, so a pair that constructs is a pair that
   derives.
 

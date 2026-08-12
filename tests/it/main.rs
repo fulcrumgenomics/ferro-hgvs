@@ -108,6 +108,7 @@ mod fast_path_flip_bench;
 mod from_sequences_corpus;
 mod from_sequences_multi_member_axis;
 mod from_sequences_proptest;
+mod from_sequences_reanchor;
 mod from_sequences_reported_pairs;
 mod from_sequences_roundtrip;
 mod from_sequences_window_condition;

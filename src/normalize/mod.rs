@@ -1878,6 +1878,188 @@ impl<P: ReferenceProvider> Normalizer<P> {
         })
     }
 
+    /// Move a window to `[start, end]`, padding from the reference or trimming,
+    /// whichever each side needs.
+    ///
+    /// The reference-holding half of re-anchoring;
+    /// [`crate::SequencePair::trim_to`] is the pure half and can only narrow.
+    /// `None` leaves that edge where it is. Both bounds are **1-based
+    /// inclusive**.
+    ///
+    /// # It moves a window's edges; it does not relocate the window
+    ///
+    /// The requested window must **overlap the pair's own**, and the overlap
+    /// must still hold the bases the two sequences disagree on. Each edge may
+    /// move outwards (padded from the reference) or inwards (trimmed), in either
+    /// combination — but a window disjoint from the pair's is refused, not
+    /// fetched. The changed bases exist only in the pair, so there is nothing to
+    /// carry to a region the pair does not cover; a caller who wants the
+    /// reference over some other interval wants `get_sequence`, not this.
+    ///
+    /// The bases come back **upper-cased**, for the reason
+    /// [`Self::to_sequences`] folds its window: the flank is read from the
+    /// provider and the rest is the caller's, so a soft-masked region would
+    /// otherwise return a mixed-case pair that no caller wrote. `trim_to`, which
+    /// fetches nothing and so cannot mix, leaves case alone.
+    ///
+    /// # What this is for
+    ///
+    /// Holding a derivation inside a region it must not leave — a target region,
+    /// an amplicon, a tiling window — and doing so from whatever raw window each
+    /// caller happens to have, **provided every such window overlaps the
+    /// region**. Anchoring every input to one window makes them agree, because
+    /// `from_sequences` is a pure function of the window it is given.
+    ///
+    /// # What this is NOT for
+    ///
+    /// Making heterogeneous raw pairs agree *in general*. That is already
+    /// available, twice, and both are better answers:
+    /// [`Self::from_sequences`] with `normalize = true`, or a round trip through
+    /// [`Self::to_sequences`]. Both reach the **reference-anchored** placement,
+    /// which can shift as far as the sequence allows rather than as far as a
+    /// chosen window allows. Measured on three reads over one homopolymer
+    /// deletion, both converge where the raw derivations do not.
+    ///
+    /// So reach for this when the bound is a *requirement*, not when it is a
+    /// convenience. Anchoring to a window that cuts an ambiguous run makes every
+    /// caller using that window agree with each other and disagree with the
+    /// reference — legitimate as a stated contract, misleading as a default. The
+    /// derivation reports it as `placement_bounded_by_window`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses rather than clamping, always:
+    ///
+    /// * a bound outside the sequence — `start` of 0, or `end` past the last
+    ///   base. A window is not silently pulled back to the contig, because a
+    ///   caller who asked for bases that do not exist has a bug upstream and a
+    ///   clamped window would hide it;
+    /// * a **requested window disjoint from the pair's own** — see the section
+    ///   above. This is the refusal a caller is most likely to meet, because
+    ///   "re-anchor to my target region" reads like it should work from any
+    ///   pair, and it works only from one the region overlaps;
+    /// * a bound the provider cannot serve;
+    /// * anything [`crate::SequencePair::trim_to`] refuses, for the narrowing
+    ///   side — a cut through a base the two sequences disagree on, an emptied
+    ///   reference, `start` past `end`.
+    pub fn reanchor(
+        &self,
+        pair: &crate::normalize::sequence_pair::SequencePair,
+        start: Option<u64>,
+        end: Option<u64>,
+    ) -> Result<crate::normalize::sequence_pair::SequencePair, FerroError> {
+        let start = start.unwrap_or(pair.position);
+        let end = end.unwrap_or(pair.end());
+        let invalid = |msg: String| FerroError::InvalidCoordinates { msg };
+        if start == 0 {
+            return Err(invalid(
+                "reanchor: start is 1-based; 0 does not name a base".to_string(),
+            ));
+        }
+        if start > end {
+            return Err(invalid(format!(
+                "reanchor({start}, {end}) on {}: start is past end",
+                pair.accession
+            )));
+        }
+
+        let length = self.provider.get_sequence_length(&pair.accession)?;
+        if end > length {
+            return Err(FerroError::VariantExceedsReference {
+                accession: pair.accession.clone(),
+                hgvs_start: start,
+                hgvs_end: end,
+                expected_span: end - start + 1,
+                actual_bytes: length,
+            });
+        }
+
+        // Narrow first, then widen. Doing it in this order means the trim is
+        // always over the caller's own bases — bases they observed — rather than
+        // over bases this method just fetched, so a disagreement between the
+        // supplied window and the reference cannot be trimmed away silently.
+        //
+        // Which makes the narrowing target the *intersection* of the requested
+        // window and the pair's, and an empty intersection is a refusal this
+        // method owes its own message. Delegating it to `trim_to` produced
+        // `trim_to(1000, 16) on chr1: start is past end` — a sibling method's
+        // name and two coordinates the caller never passed, for the mistake
+        // callers make most often here.
+        let (overlap_start, overlap_end) = (start.max(pair.position), end.min(pair.end()));
+        if overlap_start > overlap_end {
+            return Err(invalid(format!(
+                "reanchor({start}, {end}) on {}: the requested window does not overlap the \
+                 pair's own [{}, {}]. `reanchor` moves a window's edges over the reference; \
+                 the changed bases exist only in the pair, so there is nothing to carry to a \
+                 region the pair does not cover",
+                pair.accession,
+                pair.position,
+                pair.end()
+            )));
+        }
+        let narrowed = pair.trim_to(Some(overlap_start), Some(overlap_end))?;
+
+        // Both edges are read before either string moves — `end()` is derived
+        // from `reference`, so consuming it first would make the 3' test consult
+        // a value that no longer exists.
+        let (narrowed_start, narrowed_end) = (narrowed.position, narrowed.end());
+        let mut reference = narrowed.reference;
+        let mut alternate = narrowed.alternate;
+        if start < narrowed_start {
+            let flank = self.fetch_flank(&pair.accession, start, narrowed_start)?;
+            reference.insert_str(0, &flank);
+            alternate.insert_str(0, &flank);
+        }
+        if end > narrowed_end {
+            let flank = self.fetch_flank(&pair.accession, narrowed_end + 1, end + 1)?;
+            reference.push_str(&flank);
+            alternate.push_str(&flank);
+        }
+
+        Ok(crate::normalize::sequence_pair::SequencePair {
+            accession: pair.accession.clone(),
+            position: start,
+            // Folded for the same reason `to_sequences` folds: `fetch_flank`
+            // upper-cases what it reads from the provider and the middle is
+            // whatever the caller supplied, so a soft-masked window widened here
+            // would come back mixed-case — a pair nobody wrote, and one that
+            // compares unequal to both of its own halves.
+            reference: reference.to_ascii_uppercase(),
+            alternate: alternate.to_ascii_uppercase(),
+            // Reaching the sequence's own end settles the 3' edge. So does
+            // *leaving the pair's 3' edge where it was*, when that edge was
+            // already settled — which is the only way a `true` ever enters this
+            // method, since `to_sequences` is what produces one. Recomputing
+            // `end == length` unconditionally threw that away, so an identity
+            // `reanchor(pair, None, None)` and a 5'-only widen both downgraded a
+            // settled window to `false`. The carry-through is `trim_to`'s
+            // (`self.window_is_final && tail == 0`), stated over coordinates
+            // because this method can widen as well as narrow.
+            window_is_final: end == length || (end == pair.end() && pair.window_is_final),
+        })
+    }
+
+    /// Reference bases over the half-open range `[from, to)`, 1-based.
+    ///
+    /// Refuses when the provider cannot serve them or serves the wrong number,
+    /// because [`Self::reanchor`] promises an exact window and a short read here
+    /// would silently produce a different one.
+    fn fetch_flank(&self, accession: &str, from: u64, to: u64) -> Result<String, FerroError> {
+        let wanted = (to - from) as usize;
+        let bases = self.provider.get_sequence(accession, from - 1, to - 1)?;
+        if bases.len() != wanted {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "reanchor: the provider served {} of the {wanted} bases requested over \
+                     {accession}:{from}-{}",
+                    bases.len(),
+                    to - 1
+                ),
+            });
+        }
+        Ok(bases.to_ascii_uppercase())
+    }
+
     /// Widen a window 5' by `pad` bases, returning the two strings and the new
     /// 0-based start.
     ///
