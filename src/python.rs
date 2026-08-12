@@ -4859,6 +4859,20 @@ pub enum PyErrorType {
     // deliberately does not, since making the output depend on the input's
     // spelling is the non-confluence #1235 removes.
     MembersCoalescedFromReportedForm = 46,
+    // 48 is W4008 NonCodingPositionOutsideTranscript — an `n.`-axis description
+    // states a `-N` position, a zone `background/numbering.md:52` does not put
+    // on the non-coding DNA axis (it numbers that axis from the first to the
+    // last nucleotide of the reference sequence, and `:53` grants intronic
+    // offsets as its only other zone). Strict rejects at parse; lenient warns
+    // and silent is quiet — the mode gate is kept because five real ClinVar
+    // rows are `n.-N`. Its `*N` sibling has none (0 of 103,762 corpus rows) and
+    // is refused in every mode as E1003, so it never reaches this enum. The
+    // coding axis keeps both zones — they are CDS-anchored and inside the
+    // transcript — and the `r.` axis is untouched because `numbering.md:58`
+    // makes its zone set a property of the underlying reference, which the
+    // parser cannot resolve (#1748). Numbered after 47 so the existing
+    // discriminants are unchanged.
+    NonCodingPositionOutsideTranscript = 48,
 }
 
 native_enum_pymethods! {
@@ -4911,6 +4925,7 @@ native_enum_pymethods! {
         45 => InsertionWithoutInsertedSequence,
         46 => MembersCoalescedFromReportedForm,
         47 => AlignmentOnlySymbolInDescription,
+        48 => NonCodingPositionOutsideTranscript,
     },
 }
 
@@ -4971,6 +4986,9 @@ impl From<ErrorType> for PyErrorType {
             }
             ErrorType::AlignmentOnlySymbolInDescription => {
                 PyErrorType::AlignmentOnlySymbolInDescription
+            }
+            ErrorType::NonCodingPositionOutsideTranscript => {
+                PyErrorType::NonCodingPositionOutsideTranscript
             }
         }
     }
@@ -5033,6 +5051,9 @@ impl From<PyErrorType> for ErrorType {
             }
             PyErrorType::AlignmentOnlySymbolInDescription => {
                 ErrorType::AlignmentOnlySymbolInDescription
+            }
+            PyErrorType::NonCodingPositionOutsideTranscript => {
+                ErrorType::NonCodingPositionOutsideTranscript
             }
         }
     }

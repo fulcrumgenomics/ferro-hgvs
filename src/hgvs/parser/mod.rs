@@ -27,6 +27,7 @@ use crate::error_handling::{
     ResolvedAction,
 };
 use crate::hgvs::alignment_symbols::alignment_only_symbol;
+use crate::hgvs::noncoding_zones::{noncoding_zone_marker, NonCodingZone};
 use crate::hgvs::HgvsVariant;
 
 /// Parse an HGVS string into a variant
@@ -173,6 +174,9 @@ pub fn parse_hgvs_with_config(
     let cardinality_action = config.action_for(ErrorType::NonConformantBracketCardinality);
     // Same, for the alignment-only-symbol rule (#1627).
     let alignment_symbol_action = config.action_for(ErrorType::AlignmentOnlySymbolInDescription);
+    // Same, for the `n.-N` numbering-zone rule (#1748). Its `n.*N` sibling is
+    // NOT here: that one is refused unconditionally, from `parse_variant`.
+    let noncoding_zone_action = config.action_for(ErrorType::NonCodingPositionOutsideTranscript);
 
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
@@ -219,6 +223,19 @@ pub fn parse_hgvs_with_config(
         &mut warnings,
     )?;
 
+    // Apply the `n.-N` numbering-zone conformance rule on the parsed AST
+    // (#1748). Structural and axis-keyed like the two above, and mode-gated for
+    // the reason `rulings[absolute-prohibition-enforcement-stage]` gives: five
+    // real ClinVar rows are `n.-N`, so lenient and silent must keep accepting
+    // them. `n.*N` is the other half and is already gone by this point —
+    // `parse_variant` refused it in every mode, on zero measured corpus cost.
+    apply_noncoding_zone_rule(
+        &variant,
+        noncoding_zone_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
     // Return result with warnings
     Ok(ParseResultWithWarnings::new(
         variant,
@@ -226,6 +243,85 @@ pub fn parse_hgvs_with_config(
         preprocess_result.original,
         preprocess_result.preprocessed,
     ))
+}
+
+/// Enforce `background/numbering.md:52` on a parsed `n.-N` description (#1748).
+///
+/// `numbering.md:50`–`:54` enumerates the non-coding DNA axis in full: `:52`
+/// numbers it from the first nucleotide to the last, `:53` grants intronic
+/// offsets *explicitly*, and `:54` forbids describing "variants in nucleotides
+/// beyond the boundaries of a transcript reference sequence". `:53` is what
+/// makes `:52`'s silence about `*` and `-` an exclusion rather than terseness —
+/// the spec knew how to add a zone here and added exactly one — and
+/// `numbering.md:45` records that the proposal to mark non-transcribed
+/// nucleotides was rejected.
+///
+/// **Scoped to `n.` and nothing else.** `c.-1`/`c.*1` are anchored to the CDS
+/// and are still inside the transcript, so `:54` does not reach them; and
+/// `numbering.md:58` makes an `r.` description's zone set a property of the
+/// underlying coding *or* non-coding reference, which this entry holds no
+/// provider to resolve. See [`crate::hgvs::noncoding_zones`] for the reasoning.
+///
+/// # `-N` only. The `*N` half is refused before this runs.
+///
+/// This is the **mode-gated** arm, per the decided
+/// `rulings[absolute-prohibition-enforcement-stage]`: strict validates input
+/// conformance and so fails here, at parse; lenient and silent do not, and
+/// accept — lenient with a `W4008` warning, silent with none. It stays that way
+/// because the shape has measured real-world users: five ClinVar rows across
+/// ferro's committed corpora are `n.-N`, three of them RMRP promoter variants.
+///
+/// `n.*N` has **none** (0 of 103,762 `n.`-axis rows), and is refused
+/// unconditionally by `validate_noncoding_downstream_zone` in
+/// [`variant::parse_variant`] — which runs inside the `?` on the line that
+/// produced this function's `variant`, so a `Downstream` marker can never reach
+/// here. The two are deliberately not symmetric; the measurement that split them
+/// is on [`crate::hgvs::noncoding_zones`].
+///
+/// There is no repair arm, so this returns `Result<(), _>` rather than a
+/// rewritten variant: re-expressing `n.-5` as an in-transcript coordinate needs
+/// the transcript's length, which the parser does not hold, and `:52` denies the
+/// zone rather than the spelling — so there is no conformant coordinate on this
+/// reference to correct to.
+///
+/// Both messages come from [`crate::hgvs::noncoding_zones::NonCodingZoneMarker`]
+/// so that `:54`'s scoping — it is conditioned on the transcript *being* the
+/// reference sequence, which the selector form `NG_…(NR_…)` is not — cannot be
+/// right in one and wrong in the other.
+fn apply_noncoding_zone_rule(
+    variant: &HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<(), FerroError> {
+    let Some(found) = noncoding_zone_marker(variant, NonCodingZone::Upstream) else {
+        return Ok(());
+    };
+
+    match action {
+        ResolvedAction::Accept | ResolvedAction::SilentCorrect => Ok(()),
+        ResolvedAction::WarnCorrect => {
+            warnings.push(CorrectionWarning::new(
+                ErrorType::NonCodingPositionOutsideTranscript,
+                found.warning(),
+                None,
+                source.to_string(),
+                // No correction is derivable without the transcript's length,
+                // and `:52` denies the zone rather than the spelling.
+                source.to_string(),
+            ));
+            Ok(())
+        }
+        ResolvedAction::Reject => Err(FerroError::Parse {
+            pos: 0,
+            msg: format!(
+                "[{}] {}",
+                ErrorType::NonCodingPositionOutsideTranscript.code(),
+                found.refusal()
+            ),
+            diagnostic: None,
+        }),
+    }
 }
 
 /// Enforce `background/standards.md:39` on a parsed variant (#1627).

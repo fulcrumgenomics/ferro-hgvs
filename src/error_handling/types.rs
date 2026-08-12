@@ -575,6 +575,54 @@ pub enum ErrorType {
     /// which is the intended asymmetry, not a gap: rule 1 of the README ruleset
     /// is about *output* conformance, and no per-code override may trade it.
     AlignmentOnlySymbolInDescription,
+
+    /// An `n.`-axis description states a `-N` position — a zone
+    /// `background/numbering.md:52` does not put on the non-coding DNA axis.
+    ///
+    /// `:50`–`:54` enumerates that axis in full: `:52` numbers it "`n.1`,
+    /// `n.2`, `n.3`, ..., etc., from the first to the last nucleotide of the
+    /// reference sequence", `:53` grants introns explicitly, and `:54` states
+    /// that "it is **not** allowed to describe variants in nucleotides beyond
+    /// the boundaries of a transcript reference sequence". `:53` is what makes
+    /// `:52`'s silence about `*`/`-` an exclusion rather than terseness — the
+    /// spec knew how to add a zone here and added exactly one — and
+    /// `numbering.md:45` records that the proposal to mark non-transcribed
+    /// nucleotides was rejected.
+    ///
+    /// # `-N` only. Its `*N` sibling is `E1003`, and unconditional.
+    ///
+    /// One clause reading covers both markers; they are enforced at different
+    /// **stages**, on measured evidence rather than on argument. Over ferro's
+    /// four committed corpora, **0 of 103,762 `n.`-axis rows** state `*N` while
+    /// **5** state `-N` — `NR_003051.3:n.-57T>C`, `NR_003051.3:n.-30_-7dup` and
+    /// `LRG_163t1:n.-5delins17` (RMRP promoter), `NR_029595.1:n.-4771G>T` and
+    /// `NR_033294.1:n.-6G>A` — descriptions NCBI publishes today. So `n.*N` is
+    /// refused in **every** mode as `E1003 InvalidPosition`, from
+    /// `parse_variant`, and never carries this code; `n.-N` keeps the mode gate
+    /// so those five keep parsing on every permissive path. See
+    /// [`crate::hgvs::noncoding_zones`] for the full record, including the
+    /// departure from `rulings[absolute-prohibition-enforcement-stage]` that the
+    /// unconditional arm represents.
+    ///
+    /// **The coding axis is untouched.** `c.-1` and `c.*1` are anchored to the
+    /// CDS and are still inside the transcript, so `:54` does not reach them.
+    /// **The `r.` axis is untouched too**, and deliberately: `numbering.md:58`
+    /// makes an `r.` description's zone set a property of the underlying coding
+    /// or non-coding reference, which the parser holds no provider to resolve.
+    ///
+    /// Enforcement of this half follows the decided
+    /// `rulings[absolute-prohibition-enforcement-stage]`: **strict rejects at
+    /// parse**; lenient and silent accept — lenient with this warning, silent
+    /// without. There is no auto-correction: re-expressing `n.-5` as an
+    /// in-transcript coordinate needs the transcript's length, which the parser
+    /// does not have.
+    ///
+    /// The check is AST-keyed, on a negative [`TxPos`](crate::hgvs::location::TxPos)
+    /// `base`, never a scan of the rendered text — an accession contains `-`,
+    /// and so does `:53`'s intronic offset. `n.0` is **not** this code either;
+    /// it is `E1003 InvalidPosition`, refused at the grammar in every mode.
+    /// See #1748.
+    NonCodingPositionOutsideTranscript,
 }
 
 impl ErrorType {
@@ -627,6 +675,7 @@ impl ErrorType {
             ErrorType::IncompleteCdsStartReference => "W5004",
             ErrorType::InsertionWithoutInsertedSequence => "W3027",
             ErrorType::AlignmentOnlySymbolInDescription => "W3028",
+            ErrorType::NonCodingPositionOutsideTranscript => "W4008",
             ErrorType::MembersCoalescedFromReportedForm => "W5005",
         }
     }
@@ -685,6 +734,7 @@ impl ErrorType {
         ErrorType::UnresolvableCentromere,
         ErrorType::TranscriptFlankNotDescribable,
         ErrorType::IntronicOnBareTranscript,
+        ErrorType::NonCodingPositionOutsideTranscript,
         ErrorType::IncompleteCdsStartReference,
         ErrorType::MembersCoalescedFromReportedForm,
     ];
@@ -793,6 +843,11 @@ impl ErrorType {
                 "description states an alignment-only symbol (`X` or `-`), which is not an \
                  IUPAC-IUBMB nucleotide"
             }
+            ErrorType::NonCodingPositionOutsideTranscript => {
+                "n.-axis `-N` position, before the first nucleotide of the reference sequence \
+                 (numbering.md:52 numbers this axis from the first to the last nucleotide only; \
+                 the `*N` sibling is E1003, refused in every mode)"
+            }
             ErrorType::MembersCoalescedFromReportedForm => {
                 "separately-reported variants were coalesced into fewer members"
             }
@@ -900,6 +955,11 @@ impl ErrorType {
             // indeterminate length; neither names bases ferro could substitute,
             // so there is nothing to correct to.
             ErrorType::AlignmentOnlySymbolInDescription => false,
+            // Re-expressing `n.-5` as an in-transcript coordinate needs the
+            // transcript's length, which the parser does not hold; and
+            // `numbering.md:52` denies the zone rather than the spelling, so
+            // there is no conformant coordinate to correct to.
+            ErrorType::NonCodingPositionOutsideTranscript => false,
             // Nothing to correct: the coalesced form is the canonical one. This
             // records provenance the string deliberately does not carry.
             ErrorType::MembersCoalescedFromReportedForm => false,
@@ -994,6 +1054,7 @@ impl ErrorType {
             | ErrorType::IncompleteCdsStartReference
             | ErrorType::InsertionWithoutInsertedSequence
             | ErrorType::AlignmentOnlySymbolInDescription
+            | ErrorType::NonCodingPositionOutsideTranscript
             | ErrorType::MembersCoalescedFromReportedForm => true,
         }
     }
@@ -1097,6 +1158,10 @@ impl ErrorType {
             ErrorType::AlignmentOnlySymbolInDescription => (
                 "NC_000001.11:g.10delinsACGTX (X is alignment-only, standards.md:39)",
                 "(no auto-correct; state the resolved bases)",
+            ),
+            ErrorType::NonCodingPositionOutsideTranscript => (
+                "NR_037639.1:n.-5A>G (numbering.md:52 numbers n. from 1 to the last base)",
+                "(no auto-correct; name the nucleotide on a reference that contains it)",
             ),
         }
     }
@@ -1558,6 +1623,7 @@ mod tests {
             ErrorType::IncompleteCdsStartReference,
             ErrorType::InsertionWithoutInsertedSequence,
             ErrorType::AlignmentOnlySymbolInDescription,
+            ErrorType::NonCodingPositionOutsideTranscript,
             ErrorType::MembersCoalescedFromReportedForm,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1612,6 +1678,7 @@ mod tests {
                 | ErrorType::IncompleteCdsStartReference
                 | ErrorType::InsertionWithoutInsertedSequence
                 | ErrorType::AlignmentOnlySymbolInDescription
+                | ErrorType::NonCodingPositionOutsideTranscript
                 | ErrorType::MembersCoalescedFromReportedForm => {}
             }
             assert!(

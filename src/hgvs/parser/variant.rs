@@ -7297,6 +7297,10 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
         // RNA (NR_/XR_) reference (#486, ECOORDINATESYSTEMMISMATCH).
         validate_coordinate_system(leaf)?;
 
+        // Reject an `n.*N` position — a `*` zone `background/numbering.md:52`
+        // does not put on the non-coding DNA axis (#1748).
+        validate_noncoding_downstream_zone(leaf)?;
+
         // Reject the RNA base `U`/`u` in a DNA-context edit (DNA is
         // A/C/G/T; mutalyzer's `ENODNA`; #486).
         validate_no_u_in_dna(leaf)?;
@@ -7353,6 +7357,57 @@ fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
         _ => {}
     }
     Ok(())
+}
+
+/// Reject an `n.*N` position — the `*` zone `numbering.md:52` does not define
+/// on the non-coding DNA axis (#1748).
+///
+/// # Why this is here and not on the mode-gated seam
+///
+/// Its sibling, the `n.-N` rule, lives in
+/// [`parse_hgvs_with_config`](super::parse_hgvs_with_config) keyed on
+/// `ErrorConfig::action_for`, so lenient and silent accept it. This one is here,
+/// in the single generic entry both [`parse_hgvs`](crate::parse_hgvs) and
+/// `parse_hgvs_with_config` funnel through, so it fires in **every** mode and on
+/// the bare entry too — which is the maintainer's decision, not a consequence of
+/// the clause reading. The clause reading is identical for both markers; what
+/// differs is measured cost, and it is quantified on
+/// [`crate::hgvs::noncoding_zones`], which also records the departure from
+/// `rulings[absolute-prohibition-enforcement-stage]` that the unconditional arm
+/// represents. **Read that module before moving this call.**
+///
+/// The fast path never reaches an `n.` description (`try_fast_path` defers on
+/// `:n.` and `:r.` by type char), so this is the only door.
+///
+/// # `E1003`, not `W4008`
+///
+/// One input must not carry two diagnoses. `n.0` — the other position this axis
+/// spells but does not have — is already `E1003 InvalidPosition` in every mode,
+/// and an unconditional refusal is an error rather than a mode-dependent
+/// warning, so `n.*5` joins it there. `W4008` stays what it now solely is: the
+/// strict-only `n.-N` diagnosis.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure — and is AST-keyed on `TxPos.downstream`, never a text scan.
+fn validate_noncoding_downstream_zone(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::noncoding_zones::{noncoding_zone_marker, NonCodingZone};
+
+    let Some(found) = noncoding_zone_marker(variant, NonCodingZone::Downstream) else {
+        return Ok(());
+    };
+    Err(FerroError::parse_with_diagnostic(
+        0,
+        // The `[E1003]` prefix matches the `[W3019 …]` convention so downstream
+        // tooling can grep one token; the diagnostic carries the code too.
+        format!("[E1003] {}", found.refusal()),
+        Diagnostic::new()
+            .with_code(ErrorCode::InvalidPosition)
+            .with_hint(
+                "the non-coding axis is numbered `n.1` to the last nucleotide of the reference \
+                 sequence; `*N` belongs to the coding axis, where it is anchored to the stop codon",
+            ),
+    ))
 }
 
 /// Reject the RNA base `U`/`u` when it appears in a DNA-context edit.
@@ -10302,13 +10357,27 @@ mod tests {
 
     #[test]
     fn test_parse_tx_downstream_positions() {
-        // Feature 16: n.* downstream positions (after transcript end)
-        let variant = parse_variant("NR_033294.1:n.*5C>G").expect("should parse");
-        assert_eq!(variant.to_string(), "NR_033294.1:n.*5C>G");
+        // Feature 16 REVERSED by #1748: `n.*N` is refused at parse in every
+        // mode. `background/numbering.md:52` numbers the non-coding axis from
+        // the first to the last nucleotide of the reference sequence, with
+        // `:53`'s intronic offsets as its only other zone, so `*5` has nothing
+        // to be numbered from. `parse_tx_pos` still *builds* the position — the
+        // refusal is a post-parse leaf rule, so the grammar's own unit tests
+        // above are unchanged — and `validate_noncoding_downstream_zone`
+        // rejects the assembled variant.
+        for input in ["NR_033294.1:n.*5C>G", "NR_033294.1:n.*5+10C>G"] {
+            let err = parse_variant(input)
+                .map(|v| v.to_string())
+                .expect_err("`n.*N` is refused in every mode (#1748)");
+            let msg = err.to_string();
+            assert!(msg.contains("E1003"), "{input}: {msg}");
+            assert!(msg.contains("numbering.md:52"), "{input}: {msg}");
+        }
 
-        // With offset
-        let variant = parse_variant("NR_033294.1:n.*5+10C>G").expect("should parse");
-        assert_eq!(variant.to_string(), "NR_033294.1:n.*5+10C>G");
+        // The coding axis keeps the zone, where it is anchored to the stop
+        // codon and is still inside the transcript.
+        let variant = parse_variant("NM_033517.1:c.*5C>G").expect("should parse");
+        assert_eq!(variant.to_string(), "NM_033517.1:c.*5C>G");
     }
 
     #[test]

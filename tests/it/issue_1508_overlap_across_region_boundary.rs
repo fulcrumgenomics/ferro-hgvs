@@ -221,11 +221,16 @@ fn the_transcript_axis_boundaries_are_covered() {
         None,
         None,
     ));
-    for input in [
-        "NR_TEST.1:n.[19_20dup;20_*1inv]",
-        "NR_TEST.1:n.[20_*1del;20_*1inv]",
-        "NR_TEST.1:n.[-1_1del;-1_1inv]",
-    ] {
+    // The 3' rows here were `n.[19_20dup;20_*1inv]` and `n.[20_*1del;20_*1inv]`
+    // until #1748 refused `n.*N` at parse in every mode — `numbering.md:52`
+    // puts no `*` zone on this axis, so a member cannot be authored into it and
+    // the boundary those rows crossed is not reachable from a parsed
+    // description. `Region::TxDownstream` survives in the detector because
+    // `TxPos::downstream` is public API and an AST can still be built with one;
+    // what is gone is the ability to express it as HGVS. Do not re-add a `*`
+    // row on this axis. The 5' row stays: `n.-N` is refused in strict mode only
+    // and the parse here is the mode-less entry, so it still arrives.
+    for input in ["NR_TEST.1:n.[-1_1del;-1_1inv]"] {
         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
             assert!(
                 !strict_accepts(&provider, input, direction),

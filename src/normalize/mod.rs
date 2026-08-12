@@ -2519,14 +2519,41 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   one HGVS admits, so the projector withholds the *reported* genomic
         //   axis (see `non_flanking_genomic_insertion_anchor`). Normalizing the pivot
         //   is deliberate; reporting it is what would be wrong.
+        // * A **non-coding downstream position** (`n.*N`), which #1748 refuses at
+        //   parse in every mode — `background/numbering.md:52` numbers that axis
+        //   from the first nucleotide to the last and puts no `*` zone on it —
+        //   while `TxPos::downstream` stays public API. So the spelling is gone
+        //   and the AST is not, and a Rust library caller can still build one and
+        //   hand it here. Normalization does not *produce* the shape: the two
+        //   sites that can emit it — the `is_downstream` short-circuit below,
+        //   which returns the input through `canonicalize_tx_variant` (it clones
+        //   the location, edit only), and `build_tx_merged`'s `Region::TxDownstream`
+        //   arm, whose region is minted at exactly one place gated on
+        //   `pos.is_downstream()` — are both strictly flag-preserving, and no
+        //   string entry point (parser, CLI, Python, VCF, SPDI, projector) can
+        //   reach them. What arrives is the caller's own construction, so ferro
+        //   does not claim it is renderable and the oracle has nothing to say
+        //   about it.
         //
         // Anything else that arrives unparseable is now a failure, which is the
         // point.
+        //
+        // Note the third entry is keyed on the AST, via the same predicate the
+        // parser refuses on, and never on the rendered string. That matters for
+        // one specific reason: `noncoding_zone_marker` matches `HgvsVariant::Tx`
+        // exhaustively and yields `None` for `Cds`, so `c.*N` — anchored to the
+        // CDS, still legal, still parsing — cannot be swept in by it. A string
+        // test for `*` would not have that property.
         let input_is_a_deliberate_non_renderable = matches!(
             variant,
             HgvsVariant::Allele(allele) if allele.variants.is_empty()
         )
-            || crate::hgvs::variant::non_flanking_genomic_insertion_anchor(variant).is_some();
+            || crate::hgvs::variant::non_flanking_genomic_insertion_anchor(variant).is_some()
+            || crate::hgvs::noncoding_zones::noncoding_zone_marker(
+                variant,
+                crate::hgvs::noncoding_zones::NonCodingZone::Downstream,
+            )
+            .is_some();
         if input_is_a_deliberate_non_renderable {
             return;
         }

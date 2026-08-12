@@ -346,12 +346,14 @@ fn n_axis_members_outside_the_transcript_stay_visible_to_siblings() {
             normalize(&provider, "NR_TEST.1:n.[-5=;-5del]", direction),
             "NR_TEST.1:n.-5del"
         );
-        // The 3' side of the transcript, whose offset is the length rather than
-        // a constant.
-        assert_eq!(
-            normalize(&provider, "NR_TEST.1:n.[*5=;*4_*6del]", direction),
-            "NR_TEST.1:n.*4_*6del"
-        );
+        // The 3' side of the transcript used to be spelled `n.[*5=;*4_*6del]`
+        // here. #1748 refuses `n.*N` at parse in every mode, so that shape can
+        // no longer be authored and the assertion has nothing to read. The
+        // property it pinned — a member outside the transcript stays visible to
+        // its siblings — is carried by the 5' cases above, which are the half
+        // that survives (`n.-N` is refused in strict mode only, precisely
+        // because five real ClinVar rows use it). Do not re-add a `*` case on
+        // this axis; it cannot parse.
         // In-transcript control.
         assert_eq!(
             normalize(&provider, "NR_TEST.1:n.[5=;4_6del]", direction),

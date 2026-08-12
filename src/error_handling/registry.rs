@@ -73,10 +73,23 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 numbering starts at 1. Negative positions indicate upstream of the start codon, \
                 and *N positions indicate downstream of the stop codon. The protein axis is the \
                 deliberate exception — `p.0` (\"no protein product\") and `p.0?` (\"possibly no \
-                protein product\") are spec-defined and accepted.",
+                protein product\") are spec-defined and accepted. The NON-CODING axis is the \
+                other special case: background/numbering.md:52 numbers `n.` from the first to \
+                the last nucleotide of the reference sequence, with :53's intronic offsets as \
+                its only other zone, so `n.*N` names no position and is refused here in every \
+                mode — the same class as `n.0`, and deliberately not the mode-gated `W4008` \
+                that its `n.-N` sibling carries (#1748).",
             category: CodeCategory::Parse,
-            bad_examples: &["NM_000088.3:c.0A>G", "NM_000088.3:c.A>G"],
-            good_examples: &["NM_000088.3:c.1A>G", "NM_000088.3:c.-10A>G"],
+            bad_examples: &[
+                "NM_000088.3:c.0A>G",
+                "NM_000088.3:c.A>G",
+                "NR_037639.1:n.*5A>G",
+            ],
+            good_examples: &[
+                "NM_000088.3:c.1A>G",
+                "NM_000088.3:c.-10A>G",
+                "NM_000088.3:c.*5A>G",
+            ],
             mode_behavior: None,
             hgvs_spec_url: Some(
                 "https://hgvs-nomenclature.org/stable/recommendations/DNA/numbering/",
@@ -1544,6 +1557,60 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/refseq/"),
             related_codes: &["W4004", "E4001"],
+        },
+    );
+
+    map.insert(
+        "W4008",
+        CodeInfo {
+            code: "W4008",
+            name: "NonCodingPositionOutsideTranscript",
+            summary: "`n.-N` position before the first nucleotide of the reference sequence.",
+            explanation: "background/numbering.md:50-54 enumerates the non-coding DNA axis \
+                in full. :52 numbers it \"n.1, n.2, n.3, ..., etc., from the first to the \
+                last nucleotide of the reference sequence\", :53 grants intronic offsets \
+                explicitly (\"numbered as for coding DNA reference sequences ... although \
+                proceeded by n. (not c.)\"), and :54 states that \"it is not allowed to \
+                describe variants in nucleotides beyond the boundaries of a transcript \
+                reference sequence, using that transcript reference sequence\". :53 is what \
+                makes :52's silence about * and - an exclusion rather than terseness \u{2014} the \
+                spec knew how to add a zone to this axis and added exactly one \u{2014} and \
+                numbering.md:45 records that the proposal to mark non-transcribed \
+                nucleotides was rejected. THIS CODE IS THE -N HALF ONLY. n.*N is refused in \
+                every mode as E1003 InvalidPosition and never carries this code. One clause \
+                reading covers both markers; the stages differ on measurement: over ferro's \
+                four committed corpora 0 of 103,762 n.-axis rows state *N while 5 state -N \
+                (NR_003051.3:n.-57T>C, NR_003051.3:n.-30_-7dup and LRG_163t1:n.-5delins17, \
+                all RMRP promoter; NR_029595.1:n.-4771G>T; NR_033294.1:n.-6G>A), which are \
+                descriptions NCBI publishes today \u{2014} so the permissive modes keep accepting \
+                them. The coding axis is untouched: c.-1 and c.*1 are anchored to the CDS \
+                and are still inside the transcript, so :54 does not reach them. The r. axis \
+                is untouched too, deliberately: numbering.md:58 makes an r. description's \
+                zone set a property of the underlying coding or non-coding reference, which \
+                a parser holding no provider cannot resolve. Strict rejects at parse; \
+                lenient warns and accepts; silent accepts. There is no auto-correction \u{2014} \
+                re-expressing n.-5 as an in-transcript coordinate needs the transcript's \
+                length, and :52 denies the zone rather than the spelling. Note :54's own \
+                clause is conditioned on the transcript BEING the reference sequence, so it \
+                is not quoted for the selector form NG_007485.1(NR_003529.3):n.-40000del, \
+                where the reference is the genomic parent and the refusal stands on :52 \
+                alone. n.0 is not this code: it is E1003 InvalidPosition, refused at the \
+                grammar in every mode. An intronic offset is never this code either, \
+                whatever its sign \u{2014} the -3 in n.6-3 is a distance from position 6, not a zone.",
+            category: CodeCategory::Position,
+            bad_examples: &[
+                "NR_037639.1:n.-5A>G",
+                "NR_037639.1:n.-100_-50del",
+                "NR_037639.1:n.-3_5del",
+            ],
+            good_examples: &[
+                "NR_037639.1:n.100A>G",
+                "NG_012337.1(NR_037639.1):n.5+3A>G",
+                "NM_000492.4:c.-1A>G",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
+            related_codes: &["W4004", "W4007", "E1003"],
         },
     );
 

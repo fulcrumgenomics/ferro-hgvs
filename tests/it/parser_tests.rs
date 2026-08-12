@@ -498,7 +498,10 @@ fn test_expected_parse_errors(#[case] input: &str, #[case] _description: &str) {
 #[case("NM_000492.4:c.1585-1G>A", "NM_000492.4:c.1585-1G>A")]
 #[case("NM_020732.3:c.-3A>G", "NM_020732.3:c.-3A>G")]
 #[case("NM_001351733.2:c.-91+8701C>T", "NM_001351733.2:c.-91+8701C>T")]
-#[case("NR_033294.1:n.*5C>G", "NR_033294.1:n.*5C>G")]
+// `NR_033294.1:n.*5C>G` was here until #1748 refused `n.*N` at parse in every
+// mode. Replaced by the same accession's real ClinVar row, which is `n.-N` —
+// still accepted on this (mode-less) entry, and a description NCBI publishes.
+#[case("NR_033294.1:n.-6G>A", "NR_033294.1:n.-6G>A")]
 // UniProt protein variants
 #[case("P04181:p.Tyr245Cys", "P04181:p.Tyr245Cys")]
 #[case("P04181:p.Arg250Pro", "P04181:p.Arg250Pro")]

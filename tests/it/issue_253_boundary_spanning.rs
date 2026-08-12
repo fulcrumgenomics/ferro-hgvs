@@ -108,9 +108,29 @@ mod nx_boundaries {
         assert_round_trips("NR_037639.1:n.-3_5del");
     }
 
+    /// The 3' half of this boundary was pinned here as a round-trip
+    /// (`NR_037639.1:n.40_*3del`) until #1748 refused `n.*N` at parse in every
+    /// mode. `background/numbering.md:52` numbers this axis from the first to
+    /// the last nucleotide of the reference sequence and `:53` grants intronic
+    /// offsets as its only other zone, so there is no `*` region for a range to
+    /// span *into* — the boundary this row was auditing does not exist on `n.`.
+    ///
+    /// Kept as a refusal rather than deleted, because that is the audit finding.
+    /// The `c.` equivalent (`c.-3_*3del`, §3) is unaffected: the coding `*`
+    /// zone is anchored to the stop codon and is still inside the transcript.
+    /// The 5' half above is also unaffected — `n.-N` is refused in strict mode
+    /// only, and this entry applies no mode (#1632).
     #[test]
-    fn n_body_to_downstream_del_round_trips() {
-        assert_round_trips("NR_037639.1:n.40_*3del");
+    fn n_body_to_downstream_del_is_refused() {
+        let err = parse_hgvs("NR_037639.1:n.40_*3del")
+            .map(|v| v.to_string())
+            .expect_err("`n.*N` is refused at parse in every mode (#1748)")
+            .to_string();
+        assert!(err.contains("E1003"), "expected the position code: {err}");
+        assert!(
+            err.contains("numbering.md:52"),
+            "expected the clause: {err}"
+        );
     }
 }
 
