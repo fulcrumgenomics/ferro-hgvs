@@ -5977,6 +5977,27 @@ const COALESCE_MISMATCH_BUDGET: usize = 1;
 /// and separation is what separates them.
 const COALESCE_MAX_SEPARATION: usize = 8;
 
+/// The separation at which no exception to `general.md:34` can reach any more.
+///
+/// **Two**, and it is read off an exception's own stated conjunct rather than
+/// tuned. `general.md:35` and `DNA/delins.md:18` carve out "two variants
+/// separated by **one** nucleotide, together affecting one amino acid", and that
+/// is the only exception to `:34` the recommendations state. At two or more the
+/// antecedent is unsatisfiable whatever anyone decides about how it applies at
+/// one, so `:34` governs unopposed and a merge there needs a licence of its own.
+///
+/// Unlike [`COALESCE_MAX_SEPARATION`] this is not an empirical cap and must not
+/// be tuned: moving it would extend or withdraw the codon exception's textual
+/// scope, which is an adjudication and not a calibration. #1710's coding-axis
+/// merge counter derives its floor from the same clause and for the same reason.
+///
+/// It scopes [`split_leaves_a_delins_member`] rather than the pass. Below it the
+/// pass is unchanged — a merge at a separation of one is `general.md:35`'s
+/// register, and whether this pass rather than
+/// [`apply_coding_codon_exception`] should be making it is a separate question
+/// with its own decided records.
+const SEPARATION_BEYOND_THE_CODON_EXCEPTION: usize = 2;
+
 /// Whether `payload` can be read out of `span` by deleting bases and
 /// substituting at most `budget` of them.
 ///
@@ -6405,12 +6426,27 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     }
     payload.extend_from_slice(&reference[cursor..end]);
 
+    let widest_separation = pieces
+        .windows(2)
+        .map(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end))
+        .max()
+        .unwrap_or(0);
+
     // Refuse to merge across a wide run of unchanged bases: that is a genuine
     // multi-member allele, not one variant split by coincidence. See
     // `COALESCE_MAX_SEPARATION`.
-    if pieces
-        .windows(2)
-        .any(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) > COALESCE_MAX_SEPARATION)
+    if widest_separation > COALESCE_MAX_SEPARATION {
+        return;
+    }
+
+    // Past the codon exception's own stated separation, the split must still be
+    // `delins.md:46`'s *alternative description* rather than one that has
+    // described the change as separate variants. See
+    // `split_leaves_a_delins_member` for why that is the causal test the ruling
+    // names, and `SEPARATION_BEYOND_THE_CODON_EXCEPTION` for why the extra
+    // condition starts at two.
+    if widest_separation >= SEPARATION_BEYOND_THE_CODON_EXCEPTION
+        && !split_leaves_a_delins_member(pieces, reference)
     {
         return;
     }
@@ -6721,15 +6757,120 @@ fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
 /// `inv` and self-repeat cases would collapse 694 of 1 094 firings (`AT`, ≤7 nt)
 /// and 2 592 of 26 244 (`ACGT`, ≤5 nt) — so both are load-bearing, not defensive.
 fn split_buys_no_higher_priority_type(pieces: &[Piece], reference: &[u8]) -> bool {
-    pieces.iter().all(|piece| {
-        let span = piece.ref_end - piece.ref_start;
-        span > 0
-            && !piece.alt.is_empty()
-            && !(span == 1 && piece.alt.len() == 1)
-            && !is_inversion(piece, reference)
-            && !is_tandem_duplication(piece, reference)
-            && !alt_repeats_its_own_span(piece, reference)
-    })
+    pieces
+        .iter()
+        .all(|piece| piece_renders_as_a_delins(piece, reference))
+}
+
+/// Whether one member would render as a `delins` rather than as a named edit
+/// type — a substitution, deletion, insertion, duplication, inversion or repeat.
+///
+/// Split out of [`split_buys_no_higher_priority_type`] so the two callers ask
+/// the same question of one member and cannot drift apart; the typing argument,
+/// including why `inv` and the two repeat spellings have to be excluded by hand,
+/// is on that function and is not restated here.
+///
+/// `delins.md:5` is the definition being applied: a `delins` is a replacement
+/// "which is not a substitution or inversion", so a member is a `delins` exactly
+/// when it both consumes reference and inserts bases and is none of the shapes
+/// the renderer would name.
+fn piece_renders_as_a_delins(piece: &Piece, reference: &[u8]) -> bool {
+    let span = piece.ref_end - piece.ref_start;
+    span > 0
+        && !piece.alt.is_empty()
+        && !(span == 1 && piece.alt.len() == 1)
+        && !is_inversion(piece, reference)
+        && !is_tandem_duplication(piece, reference)
+        && !alt_repeats_its_own_span(piece, reference)
+}
+
+/// Whether the split still leaves a `delins` of its own — the property that
+/// tells `delins.md:46`'s *alternative description* from a split that has
+/// genuinely described the change as separate variants.
+///
+/// # The question this replaces, and why the old one could not answer it
+///
+/// [`coalesce_payload_alignment_split`] used to decide entirely on whether a
+/// payload-coincidence *reading exists*. For a net deletion one always does —
+/// the payload is the span with bases removed, so it embeds as a subsequence by
+/// definition — so that test never declined and the merge was carried by
+/// [`COALESCE_MAX_SEPARATION`] alone. Measured over the blocks the suite pins,
+/// the embedding test returns `true` at every separation from 0 to 12.
+///
+/// The ruling the pass implements is narrower than that, and says so in its own
+/// words: `delins-merge-vs-individual-gap-two-or-more` settles "ONLY the case
+/// `:44-47` describes: a MINIMAL single `delins` that would be split **because**
+/// payload bases coincide with reference bases", and adds that it "is NOT a
+/// general licence to merge changes separated by two or more nucleotides. Where
+/// a separation of two or more arises from anything other than that coincidence,
+/// `general.md:34` still governs." That is a **causal** scope — the split exists
+/// *only because* of the coincidence — where the embedding test is merely
+/// **existential**. The second is implied by the first and does not imply it.
+///
+/// # Why a leftover `delins` is the causal test
+///
+/// `general.md:34` and `DNA/delins.md:17` are stated over "two **variants**
+/// separated by one or more nucleotides". When every member of a split is itself
+/// a named edit type, the split has isolated the changes: each member is a
+/// variant in the clause's own vocabulary, nothing about the cut depends on
+/// payload bases coinciding with reference bases, and `:34` reaches it by its
+/// own terms. When a member is still a `delins`, the split has isolated nothing
+/// — it has cut one `delins` into smaller `delins` pieces at columns where
+/// payload bases happen to match reference bases, which is exactly the
+/// "alternative description" `:46` constructs and `:47` declines.
+///
+/// The spec's own worked example is the discriminating case rather than a happy
+/// one: the canonical partition of `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` is
+/// four pure deletions **and one two-base-for-one-base `delins`**, so a leftover
+/// `delins` is present and the merge `:47` recommends is licensed. The blocks
+/// this pass was over-merging are `del`+`del`, `sub`+`del` and `del`+`sub`, and
+/// carry none.
+///
+/// # This test is ferro policy inside the ruling's scope, not a spec rule
+///
+/// Stated as plainly as [`split_buys_no_higher_priority_type`] states its own,
+/// and for the same reason. What the spec supplies is the *scope* — `:46`'s
+/// alternative description, `:47`'s recommendation, and the ruling's causal
+/// reading of both. Which sequence-local test stands in for "the split exists
+/// only because of the coincidence" is ferro's judgement, on
+/// `adjudication-precedence-order`'s third rung, and a later reader must not
+/// cite it as conformance. In particular **do not cite `general.md:56` for it**:
+/// that list ranks the type of one description of one change and does not
+/// contain `delins` at all, and an earlier revision of the neighbouring doc made
+/// exactly that citation and had to withdraw it.
+///
+/// Its nearest decided precedent is `inversion-vs-two-delins-76-83`, which
+/// prefers a single spanning form over a split *whose members are `delins`* and
+/// leaves #1230's substitution case split. That is this shape, one type further
+/// up.
+///
+/// # It carries no constant, deliberately
+///
+/// [`COALESCE_MAX_SEPARATION`]'s own doc records that the two rows it cannot
+/// separate "are genuinely distinct variants that happen to sit as close
+/// together as a coincidental split. Distinguishing them needs something this
+/// pass does not look at." This is that something, and it is *in addition to*
+/// the cap rather than instead of it: the cap still excludes the wide
+/// separations that doc measures (9 to 1,562 over the 592 real multi-member cis
+/// alleles), which this test says nothing about.
+///
+/// # Not the same question as [`split_buys_no_higher_priority_type`]
+///
+/// That predicate asks whether a proposed cut buys *anything* — every member a
+/// `delins` — and it gates [`partition_block`], on the shipping arm, at a
+/// separation of exactly one. This asks whether an already-derived cut has
+/// *finished*, and gates a terminal re-spelling. They are not each other's
+/// negation and they disagree on a mixed split; the shapes that reach them do
+/// not overlap, and neither is offered as the general rule.
+///
+/// # Confluence
+///
+/// A function of the derived pieces and the reference only, so two spellings
+/// that reached one piece list still reach one answer.
+fn split_leaves_a_delins_member(pieces: &[Piece], reference: &[u8]) -> bool {
+    pieces
+        .iter()
+        .any(|piece| piece_renders_as_a_delins(piece, reference))
 }
 
 /// A member whose payload is its own reference span repeated, which renders as
@@ -14478,6 +14619,124 @@ mod tests {
                 denotation(reference, &canonical),
                 "re-spelling must not change what the pieces denote"
             );
+        }
+
+        /// A split whose members are each already a spec-typed variant is not
+        /// the alternative description `delins.md:46` constructs, so it is not
+        /// re-spelled — whatever the separation.
+        ///
+        /// Each row is a case pinned elsewhere in the suite, reduced to the
+        /// block the pass actually receives. The blocks were read off the
+        /// canonical partition each test produces, not invented here:
+        ///
+        /// | shape | block | pinned by |
+        /// |---|---|---|
+        /// | `del` + `del`, gap 2 | `TAATA -> AT` | `cis_confluence_adjudication::the_separation_two_members_present_is_not_a_property_of_the_variant` |
+        /// | `sub` + `del`, gap 2 | `ATGC -> CTG` | `issue_275_codon_frame_extensions::no_codon_frame_sub_then_del_gap_of_two` |
+        /// | `del` + `sub`, gap 5 | `AGGGCCC -> GGGCCT` | `normalize_tests::…::test_allele_each_variant_normalized` |
+        /// | `del` + `del`, gap 4 | `GATTATTGCT -> TATT` | `project::projector::tests::project_cis_separated_inframe_deletions_stay_individual` |
+        ///
+        /// Every one of them is a net deletion whose payload embeds inside
+        /// `COALESCE_MISMATCH_BUDGET`, at a separation inside
+        /// `COALESCE_MAX_SEPARATION` — so the two conditions that were the whole
+        /// decision admit all four, and only the member types tell them from
+        /// the spec's own case.
+        #[test]
+        fn a_split_of_typed_variants_is_not_the_alternative_description() {
+            // `del` + `del` two unchanged bases apart.
+            let two_deletions = (
+                b"TAATA".as_slice(),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 2,
+                        alt: Vec::new(),
+                    },
+                    Piece {
+                        ref_start: 4,
+                        ref_end: 5,
+                        alt: Vec::new(),
+                    },
+                ],
+            );
+            // `sub` + `del` two unchanged bases apart.
+            let substitution_then_deletion = (
+                b"ATGC".as_slice(),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 1,
+                        alt: b"C".to_vec(),
+                    },
+                    Piece {
+                        ref_start: 3,
+                        ref_end: 4,
+                        alt: Vec::new(),
+                    },
+                ],
+            );
+            // `del` + `sub` five unchanged bases apart.
+            let deletion_then_substitution = (
+                b"AGGGCCC".as_slice(),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 1,
+                        alt: Vec::new(),
+                    },
+                    Piece {
+                        ref_start: 6,
+                        ref_end: 7,
+                        alt: b"T".to_vec(),
+                    },
+                ],
+            );
+            // Two three-base deletions four unchanged bases apart.
+            let separated_deletions = (
+                b"GATTATTGCT".as_slice(),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 3,
+                        alt: Vec::new(),
+                    },
+                    Piece {
+                        ref_start: 7,
+                        ref_end: 10,
+                        alt: Vec::new(),
+                    },
+                ],
+            );
+
+            for (reference, pieces) in [
+                two_deletions,
+                substitution_then_deletion,
+                deletion_then_substitution,
+                separated_deletions,
+            ] {
+                let span = &reference[pieces[0].ref_start..pieces[pieces.len() - 1].ref_end];
+                let payload = denotation(reference, &pieces);
+                // The preconditions this case is interesting for: both of the
+                // pass's original conditions admit it.
+                assert!(
+                    payload.len() < span.len(),
+                    "precondition: {} is not a net deletion",
+                    String::from_utf8_lossy(reference)
+                );
+                assert!(
+                    payload_embeds_within_budget(span, &payload, COALESCE_MISMATCH_BUDGET),
+                    "precondition: {} does not embed inside the budget",
+                    String::from_utf8_lossy(reference)
+                );
+                assert_eq!(
+                    coalesced(reference, &pieces),
+                    pieces,
+                    "{} was re-spelled as one delins, but every member is already \
+                     a substitution or a deletion — `general.md:34` and \
+                     `delins.md:17` reach it by their own terms",
+                    String::from_utf8_lossy(reference)
+                );
+            }
         }
 
         /// The budget is one substituted position, and the value is what keeps
