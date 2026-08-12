@@ -5874,10 +5874,28 @@ fn payload_embeds_as_subsequence(reference: &[u8], result: &[u8]) -> bool {
 /// **One**, and the value is measured rather than chosen. The spec's own worked
 /// example, `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, needs exactly one: its
 /// minimal split is four coincidental deletions plus a single substitution, so a
-/// pure-subsequence test cannot see it. The dominant churn class needs zero. Two
-/// substitutions six bases apart — the case `delins.md:17` requires to stay
-/// individual — needs two, and also fails the net-deletion condition, so it is
-/// excluded twice over.
+/// pure-subsequence test cannot see it. That is the only one of this doc's
+/// original three justifications that still reaches the constant.
+///
+/// **Two justifications are withdrawn, and recorded rather than deleted so they
+/// are not re-offered.** "The dominant churn class needs zero" and "two
+/// substitutions six bases apart need two, and also fail the net-deletion
+/// condition" were both arguments about blocks that
+/// [`split_carries_a_gap_bearing_insert`] now refuses **before** this budget is
+/// consulted: the churn class re-derives to pure deletions, which supply
+/// nothing, and a substitution consumes exactly what it supplies. Neither block
+/// evaluates this constant any more, so neither is evidence for its value. (The
+/// second is still excluded, just earlier —
+/// `the_net_deletion_condition_keeps_two_substitutions_split` says so on itself.)
+///
+/// **What does reach it.** Of the merges that survive the gap-bearing condition,
+/// 637 of 659 need a budget of 1 rather than 0 — so in proportion the budget is
+/// *more* load-bearing than before, because a supplied base that cannot be read
+/// off the span in order is exactly a mismatch. Measured over 21,931 coalesce
+/// invocations across the four bulk corpora at base `5f22abed`; it needs
+/// per-condition instrumentation to take, so it is quoted with its base rather
+/// than re-measured. The row-level figures over those same corpora do reproduce
+/// exactly on the rebased base — see [`COALESCE_MAX_SEPARATION`].
 ///
 /// Raising this is a representation change: it merges blocks that are currently
 /// spelled as separate members. Measure before moving it.
@@ -5898,10 +5916,57 @@ const COALESCE_MISMATCH_BUDGET: usize = 1;
 /// merge sit at `[1, 4, 9, 21, 26, 58, 166, 234, 604, 973, 1562]`. Eight is the
 /// widest value that admits every correct rejoin, and it excludes 9 of those 11.
 ///
-/// **The two at 1 and 4 are not separable by separation** and are a known gap:
-/// they are genuinely distinct variants that happen to sit as close together as
-/// a coincidental split. Distinguishing them needs something this pass does not
-/// look at.
+/// **The two at 1 and 4 are not separable by separation.** They are genuinely
+/// distinct variants that happen to sit as close together as a coincidental
+/// split, so no value of this constant can exclude them — distinguishing them
+/// needs something this cap does not look at.
+///
+/// **`split_carries_a_gap_bearing_insert` is that something, and it closes them**
+/// — re-measured 2026-08-12 over the committed 592-allele fixture
+/// (`tests/fixtures/cis/multi_member_cis_alleles.json`, of which 481 normalize
+/// `ok` against the prepared reference). *This pass* collapsed **6** of those
+/// alleles to a single member before that condition and **0** after. (24 alleles
+/// still collapse; those are the flush-adjacent merges that
+/// `delins-adjacent-members-when-both-consume-reference` governs, and they never
+/// reached this pass.) So the residue this paragraph describes has no instance
+/// left in the harvested corpus.
+///
+/// **What the six actually were, stated from the piece lists rather than from
+/// their rendered members.** An earlier revision of this paragraph said all six
+/// were the one-for-one-substitution shape. That is wrong for two of them, and
+/// wrong in the direction that matters — it names a *weaker* mechanism than the
+/// predicate has:
+///
+/// * **Four** supply their novel base from a member that consumes exactly one
+///   reference base to place one — a substitution, which stands on its own:
+///   `NM_000260.4:c.[3256del;3260T>C]`, `NM_001291867.2:c.[107C>G;111del]`,
+///   `NM_014251.3:c.[1956C>A;1962del]`, `NM_000046.5:c.[215T>A;219_230delinsG]`.
+/// * **Two** supply nothing at all — every member of the canonical split is a
+///   pure deletion, so every base of the merged payload is a survivor:
+///   `NM_005144.5:c.[1258del;1263_1283del]` (pieces `[128,129)/‑`,
+///   `[133,154)/‑`; payload `AGGG`, 4 survivors) and
+///   `NM_001243279.3:c.[1385A>C;1394_1411del]` (pieces `[18,25)/‑`, `[26,33)/‑`,
+///   `[37,41)/‑`; payload `CGGAT`, 5 survivors). Their **input** spellings carry
+///   a substitution; their **canonical re-derivations** do not, which is exactly
+///   the "read the PIECES, not the rendered members" trap recorded below, hit
+///   from the input side.
+///
+/// So the true common mechanism is the predicate itself, both halves of it: none
+/// of the six carries a gap-bearing insert, two because nothing is supplied and
+/// four because what is supplied is a substitution. Only the second half is the
+/// part that is stronger than "at least one supplied base"; quoting it for all
+/// six understates the first half and overstates the second.
+///
+/// That does **not** make this cap redundant, and the two questions are separate:
+/// measured over 21,931 coalesce invocations across the four bulk corpora, the
+/// cap still blocks **2** merges that every other condition would admit (down
+/// from 245). That pair needs per-condition instrumentation to measure and was
+/// taken at base `5f22abed`; it is quoted with its base for that reason. The
+/// row-level figures around it — 5,275 rows moved before this condition and 655
+/// after, over the same four corpora — were re-measured on the rebased base and
+/// reproduce exactly, so there is no reason to think the pair has drifted, and
+/// no measurement saying it has not. Neither figure is licence to delete a
+/// constant — see the note on `split_carries_a_gap_bearing_insert`.
 ///
 /// Without this cap the pass merges genuinely separate members of a multi-member
 /// cis allele, which `delins.md:17` and `general.md:34` require to stay
@@ -5962,6 +6027,216 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
         best = next;
     }
     best[0] as usize <= budget
+}
+
+/// Whether any member of the split carries content that only the alignment's own
+/// gap could have placed there — as opposed to the payload being nothing but
+/// reference bases the split declined to delete, or bases a self-standing
+/// substitution puts there.
+///
+/// The predicate is *"some member supplies bases **and** consumes a different
+/// number of reference bases than it supplies"*:
+///
+/// ```text
+/// pieces.iter().any(|p| !p.alt.is_empty() && p.alt.len() != p.ref_end - p.ref_start)
+/// ```
+///
+/// # INTERIM: the ledger record this answers is `undecided`
+///
+/// **Read this before citing anything below as settled law.** The question this
+/// predicate decides is the one
+/// `rulings[delins-recommendation-reach-when-the-input-arrives-split]` (in
+/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`) holds open:
+/// *"`:47` recommends the span; `:17` and `general.md:34` describe separated
+/// variants individually. … WHAT REMAINS OPEN IS WHICH CLAUSE THE RE-DERIVATION
+/// LANDS ON."* That record's status is `undecided`, and this code does not
+/// change it — no ruling record is added or edited alongside this predicate.
+///
+/// So what follows is **ferro's provisional answer under README rule 6**
+/// (*"among multiple conformant forms: the maintainers choose"*), disclosed
+/// under rule 7, and it sits on `adjudication-precedence-order`'s third rung —
+/// our own judgement. It is argued from `:46`'s stated mechanism, which is the
+/// best ground available, but it is not conformance and a later reader must not
+/// cite it as such.
+///
+/// **Expect this to be superseded rather than refined.** An operator ruling on
+/// that record decides the whole population, and this predicate reads only the
+/// derived members of one block; the two need not agree outside the three worked
+/// cases below. The concrete consequence is named on
+/// `an_all_survivor_payload_is_not_an_alignment_artifact`, which is the guard a
+/// ruling is most likely to flip.
+///
+/// **The population is the whole re-derived one, not the already-split subset.**
+/// The record's rationale rules that framing out by name — the already-split
+/// question is *"ANSWERED, and not here"*, by `canonical-form-choice-when-both-
+/// legal` — so "how many rows arrived spelled as a split" measures precisely
+/// what the record says is closed. What this predicate partitions is every block
+/// the pass is handed: on the `canonical-coalesced` arm across the four bulk
+/// corpora that was 5,275 rows, of which 4,620 merges are withdrawn onto `:17` /
+/// `general.md:34` and 655 stay on `:47`. That is the number a ruling would
+/// re-decide.
+///
+/// # The spec ground
+///
+/// `DNA/delins.md:46` states the mechanism the whole carve-out rests on: *"parts
+/// of the **inserted sequence** 'align' with the reference sequence, giving an
+/// alternative description like `c.[850_869del;874_881del;887_897del;901_902insG]`"*.
+/// The split `:47` advises against is manufactured by an **inserted sequence**
+/// re-aligning. Where nothing was inserted, `:46`'s mechanism cannot have
+/// occurred, so `:47` has nothing to say and `general.md:34` governs unqualified
+/// — *"two variants separated by one or more nucleotides should be described
+/// individually and **not** as a 'delins'"*.
+///
+/// Two provenances partition the merged payload. A **surviving** base is one
+/// inside the block's span that no member deletes, spliced back in between the
+/// members; a **supplied** base is one a member's `alt` puts there. But
+/// "supplied" alone is not enough, and the second half of the predicate is what
+/// separates a fragment the alignment manufactured from a variant that stands on
+/// its own:
+///
+/// * A member that supplies bases while consuming a **different** number of
+///   reference bases is *gap-bearing*. The aligner had to open a gap inside it,
+///   so its boundaries are an artefact of the alignment — it cannot be stated
+///   without the alignment that produced it. That is exactly `:46`'s shape.
+/// * A member that supplies **exactly as many** bases as it consumes is a
+///   substitution (or a length-neutral `delins`): a pure mismatch run, with no
+///   gap anywhere in it. It names its own reference bases and its own
+///   replacement, owes nothing to the alignment, and is a complete variant in
+///   `:17`'s ordinary sense. Novel content sitting only in members of that shape
+///   is a **feature of the variant**, not an artefact of the alignment.
+///
+/// The common case collapses to one sentence: **a split whose members are all
+/// pure deletions inserts nothing, so nothing re-aligned.**
+///
+/// # The three worked cases, which do not all want the same answer
+///
+/// | case | span → payload | novel content sits in | verdict |
+/// |---|---|---|---|
+/// | `delins.md:44-47` | 52 → 14 | `c.895_896delinsC` — 2 ref bases for 1 supplied | **merge** |
+/// | `general.md:34` (W58) | 13 → 2 | nowhere; three pure deletions | **refuse** |
+/// | `general.md:34` (codon-straddling) | 3 → 2 | `c.16G>T` — 1 ref base for 1 supplied | **refuse** |
+///
+/// * **`delins.md:44-47`**, `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`. Canonically
+///   `c.[850_866del;870_880del;887_892del;895_896delinsC;899_901del]`: 13 of the
+///   14 payload bases survived and the `C` is supplied by a member that consumes
+///   two reference bases to place one. Gap-bearing, so **merge** — which is what
+///   `:47` recommends by name.
+/// * **W58**, `LRG_199t1:c.[992_1002del;1004T>C]`. Canonically
+///   `c.[992_993del;995_997del;999_1004del]`: three pure deletions over a 13-base
+///   span for a 2-base payload, whose bases (`A` at 994, `C` at 998) both
+///   survived. Nothing supplied at all, so **refuse** and the three-member form
+///   stands.
+/// * **The codon-straddling pair**, `NM_CODON.1:c.[14del;16G>T]` (see
+///   `one_base_gap_across_a_codon_boundary_stays_split`). Canonically a 1-base
+///   deletion and a substitution over a 3-base span for a 2-base payload. The `T`
+///   *is* supplied — but by a member consuming one reference base to place one,
+///   i.e. a substitution, which `:17` calls a variant to be described
+///   individually. **Refuse.**
+///
+/// The third row is why the predicate is not simply "at least one supplied base".
+/// That weaker form merges it, because 1 of its 2 payload bases is novel — and
+/// then `c.[14del;16G>T]` and `c.[10del;12G>T]` give the same answer, which
+/// destroys the one pair in the suite whose two halves differ in **nothing but
+/// codon phase**. This pass is codon-blind and must refuse both; the within-codon
+/// half is merged afterwards by [`apply_coding_codon_exception`], on
+/// `delins.md:18`'s authority and not on `:47`'s.
+///
+/// # Two shapes of test that were tried and rejected
+///
+/// **A count or ratio of novel bases.** 1-of-14 merges and 1-of-2 does not, so a
+/// count needs a threshold — and a tuned constant is the class this whole rule
+/// was chosen to avoid.
+///
+/// **Be exact about what the spec does and does not supply here, because an
+/// earlier revision of this comment was not.** `delins.md:79` asks "are there
+/// specific recommendations regarding the maximum number of unchanged
+/// nucleotides between two single nucleotide variants…?" and `:81` **answers**
+/// it: *"Yes, two variants separated by one or more nucleotides should
+/// preferably be described individually and not as a 'delins' (unless they
+/// together affect one amino acid)."* That is a threshold, and it is at **one**.
+/// So the spec is not silent on separation — it states the strictest possible
+/// cap, with a single exception, the codon one that
+/// [`apply_coding_codon_exception`] implements on `delins.md:18`'s authority.
+///
+/// Two things follow, and both are about the constants rather than about this
+/// predicate. [`COALESCE_MAX_SEPARATION`] = 8 does not merely lack a source; it
+/// merges across separations `:81` asks to keep individual, and what licenses
+/// that is `delins.md:44-47`'s alignment-coincidence carve-out — scoped by
+/// `delins-merge-vs-individual-gap-two-or-more` — not any silence in the text.
+/// [`COALESCE_MISMATCH_BUDGET`] has no counterpart in the spec at all: no clause
+/// states a tolerance for substituted positions inside a coincidental split.
+///
+/// A novel-base count would be the third constant, and it is the one with the
+/// least behind it — the spec states a threshold on separation and none on novel
+/// content — which is why this pass asks the yes/no question `:46` actually
+/// poses instead.
+///
+/// **"The novel content must sit in a pure `ins` member."** This reads directly
+/// off `:46`, whose published alternative ends in `901_902insG` — a base with no
+/// reference position of its own. It is nonetheless **wrong here, and measurably
+/// so**: ferro does not cut that block where `:46` cuts it. Its canonical split
+/// carries `895_896delinsC`, which consumes two reference bases to place one, so
+/// a pure-`ins` test refuses the one row `:47` names by name. `:46`'s `insG` and
+/// ferro's `delinsC` are two renderings of the same gap; the predicate keys on
+/// the gap, which both have, rather than on the rendering, which only one has.
+///
+/// # Provenance, not letter identity — and why that choice
+///
+/// A member whose `alt` happens to spell the same letters as the reference bases
+/// it replaces still counts as supplying them. The question is structural: did
+/// the description put material there, or did the material survive? Letter
+/// identity is the wrong test twice over. It is the very coincidence `:46`
+/// describes and `:47` overrides, so keying on it would re-import into the
+/// predicate the reasoning the predicate exists to stop; and it is not well
+/// defined for a payload that is a permutation of its span (`ref = AC`,
+/// `alt = CA` — both letters occur, neither survived).
+///
+/// The degenerate case cannot reach here anyway, which is why this choice costs
+/// nothing measurable: `shrink_pieces_to_differences` runs first and trims each
+/// piece's common flanks, so a member whose `alt` equals its span in full is
+/// reduced to a zero-width no-op rather than arriving as an identity `delins`.
+/// The decision is recorded because it is the question a reader will have, not
+/// because a corpus row turns on it.
+///
+/// # Read the PIECES, not the rendered members
+///
+/// The description this pass declines to merge is **not** what the pieces here
+/// look like. [`coalesce_compensating_gap_split`], [`coalesce_whole_block_inversion`]
+/// and [`apply_coding_codon_exception`] all run *after* this one and can join two
+/// pure-deletion pieces across a survivor into a rendered `delins` member whose
+/// payload base is that survivor. Measured over the four bulk corpora, 63 of the
+/// rows this predicate declines render with a `delins` member in the final
+/// output while every piece it was asked about had an empty `alt`. Reading the
+/// rendered string as evidence about this predicate will produce confident
+/// counterexamples that are not counterexamples.
+///
+/// # What this does *not* do
+///
+/// It does not subsume [`COALESCE_MAX_SEPARATION`] or [`COALESCE_MISMATCH_BUDGET`].
+/// Whether those became inert under this condition is a measurement, and it is
+/// deliberately not acted on here.
+///
+/// # It runs before the caller's geometry check, so it must not trust the geometry
+///
+/// [`coalesce_payload_alignment_split`] consults this **first**, above the loop
+/// that refuses a malformed piece list, so `ref_end - ref_start` here would be a
+/// bare `usize` subtraction on a piece whose ends the caller has not yet
+/// validated: a reversed piece would debug-panic where the old code merely
+/// declined. `checked_sub` keeps the old behaviour — a piece with reversed ends
+/// contributes nothing, so a list containing only such pieces is not gap-bearing
+/// and the pass declines, which is exactly what the caller's own guard does with
+/// it two statements later. A reversed piece must not *mask* a gap-bearing
+/// sibling either, so `any` is the right combinator and an early `return false`
+/// would not be. Both directions are pinned by
+/// `the_gap_bearing_insert_predicate_discriminates`.
+fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
+    pieces.iter().any(|piece| {
+        !piece.alt.is_empty()
+            && piece
+                .ref_end
+                .checked_sub(piece.ref_start)
+                .is_some_and(|consumed| piece.alt.len() != consumed)
+    })
 }
 
 /// Whether the `delins.md:44-47` re-spelling applies, given the arm and the axis
@@ -6036,14 +6311,20 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// is a step-2 constraint — an illegal merge destroys a member boundary — but
 /// this one destroys nothing and re-spells only.)
 ///
-/// # The two conditions
+/// # The three conditions
 ///
-/// **1. The payload embeds as an ordered subsequence of the span.** Then every
+/// **1. The split must carry a gap-bearing insert** — some member that supplies
+/// bases while consuming a different number of reference bases. See
+/// [`split_carries_a_gap_bearing_insert`] for the predicate and
+/// [the section below](#why-no-alignment-score-can-decide-this) for why the
+/// decision has to be a rule of this shape rather than a metric.
+///
+/// **2. The payload embeds as an ordered subsequence of the span.** Then every
 /// base of the merged payload can be read off the reference in order, so the
 /// members exist only through coincidence. See
 /// [`payload_embeds_as_subsequence`].
 ///
-/// **2. The span must lose length** (`payload.len() < span.len()`). Two
+/// **3. The span must lose length** (`payload.len() < span.len()`). Two
 /// independent lines of evidence require this and neither is optional:
 ///
 /// * Two plain substitutions six bases apart embed trivially with no deletion,
@@ -6052,9 +6333,30 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 ///   a **net insertion** the split form is the canonical one, not the span form.
 ///   A blanket "prefer fewer members" gets that third of the family backwards.
 ///
-/// Condition 1 already implies `payload.len() <= span.len()`, and equality means
+/// Condition 2 already implies `payload.len() <= span.len()`, and equality means
 /// the payload *is* the span (an unchanged block), so the strict `<` both
 /// enforces net deletion and excludes the degenerate case.
+///
+/// # Why no alignment score can decide this
+///
+/// This is the reason the pass exists at all, and it is worth stating because
+/// the obvious alternative looks so much more principled than a rule.
+///
+/// Score a `delins` as one gap of the length difference plus its residual
+/// mismatches, and the 1-member and N-member forms of one block have **identical
+/// alignment cost** — 39 for `:44-47`, 11 for W58. They are two renderings of
+/// *one* alignment at different granularity: cutting the rendering at an interior
+/// matched column is free, and not cutting it is free. So no cost function over
+/// the alignment can rank them, and gap-affinity does not rescue it. That was
+/// measured directly: `O = 0..4` crossed with 5'/3' tie-breaking at `M = E = 1`,
+/// plus bwa (`A1 B4 O6 E1`) and minimap2 (`A2 B4 O4/24 E2/1`) as controls, over
+/// 27,153 blocks. `O = 1` fixes W58 but **no** `O` reaches `:44-47`'s 1-member
+/// form; `O = 1` with 5' tie-breaking diverges from canonical on 47.3% of blocks;
+/// `O >= 2` runs 9.9–19.5% non-minimal; and bwa's `M = 4, E = 1` manufactures
+/// merges `general.md:34` forbids.
+///
+/// The decision is therefore **cut-or-don't-cut**, not a metric, and conditions
+/// 1–3 above are that rule. Do not re-open the scoring route.
 ///
 /// # Confluence
 ///
@@ -6066,6 +6368,20 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// measurement above records.
 fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if pieces.len() < 2 {
+        return;
+    }
+    // `delins.md:46`'s mechanism is an *inserted sequence* re-aligning, and the
+    // members it manufactures are the alignment's own gaps. A split that inserts
+    // nothing, or whose novel bases sit only in a self-standing substitution,
+    // cannot be that artefact — so `:47` does not reach it and `general.md:34`
+    // governs. See `split_carries_a_gap_bearing_insert`.
+    //
+    // INTERIM, and not a settled reading: the ruling record whose question this
+    // answers — `delins-recommendation-reach-when-the-input-arrives-split` — is
+    // `undecided`, and nothing here decides it. This is ferro's provisional
+    // choice under README rule 6, on `adjudication-precedence-order`'s third
+    // rung. The predicate's own doc comment carries the full statement.
+    if !split_carries_a_gap_bearing_insert(pieces) {
         return;
     }
     let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
@@ -13799,14 +14115,47 @@ mod tests {
         }
 
         /// The real block behind `NC_000001.10:g.240370952_240370985delinsT`
-        /// (GRCh37), the largest single class of representation churn the
-        /// canonical arm introduces: 121 of the moved rows are this shape.
+        /// (GRCh37), and the largest single class this pass **stops** merging.
+        ///
+        /// **121 rows, and the arm matters more than the number.** That count is
+        /// of rows this pass moved on the unstable `FERRO_PARTITION=canonical-
+        /// coalesced` evaluation arm; the class is `g.`-axis, and
+        /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` already
+        /// gates the whole pass out on `g.` at the call site
+        /// ([`payload_coalesce_applies`]). So on the shipped arm this predicate
+        /// withdraws **zero** of the 121: they were never merged there. The two
+        /// facts read as contradictory only if "moves" is left unqualified, so it
+        /// is qualified here rather than in a PR description GitHub discards.
         ///
         /// The block holds four `T`s, so the single payload base can align to
-        /// any of them — the split is coincidence, and `delins.md:44-47`
-        /// recommends the `delins`.
+        /// any of them — and that is the whole point. Every base of the merged
+        /// payload is a *survivor*: the derivation deletes two runs and keeps
+        /// one reference `T` between them. Nothing was inserted, so `:46`'s
+        /// mechanism ("parts of the **inserted sequence** align with the
+        /// reference sequence") did not occur, `:47` does not reach the block,
+        /// and `general.md:34` governs. See
+        /// [`split_carries_a_gap_bearing_insert`].
+        ///
+        /// This test previously asserted the opposite. It is re-blessed rather
+        /// than deleted because the block is real and the class is large: a
+        /// future change that starts merging it again should have to come
+        /// through here.
+        ///
+        /// **INTERIM — this is the assertion most likely to be flipped back.**
+        /// It pins ferro's provisional answer to a question the ledger record
+        /// `delins-recommendation-reach-when-the-input-arrives-split` records as
+        /// `undecided` (see [`split_carries_a_gap_bearing_insert`]'s own
+        /// INTERIM section). A ruling that decides the merge direction on
+        /// grounds other than the derived members — anything keyed on the
+        /// block, on the uniqueness of its minimal split, or on the number of
+        /// distinct minimal splits it admits — can land this block back on
+        /// **merge**, because its payload base can sit at any of four `T`s. If
+        /// you arrive here holding such a ruling, the reversal is the ruling
+        /// superseding this predicate and is not a regression. Nothing in this
+        /// repository has ruled that yet; do not read this paragraph as saying
+        /// one exists.
         #[test]
-        fn the_coalesce_pass_merges_a_payload_alignment_split() {
+        fn an_all_survivor_payload_is_not_an_alignment_artifact() {
             let reference = b"CTCTACCCGGAGCGGCAATACCCCCTCCGCCCCC";
             let result = b"T";
 
@@ -13817,19 +14166,204 @@ mod tests {
                 2,
                 "precondition: canonical splits this block ({canonical:?})"
             );
-
-            let merged = coalesced(reference, &canonical);
-            assert_eq!(
-                merged.len(),
-                1,
-                "must restore the single delins ({merged:?})"
+            assert!(
+                canonical.iter().all(|piece| piece.alt.is_empty()),
+                "precondition: every member is a pure deletion, so the payload is \
+                 all survivors ({canonical:?})"
             );
-            assert_eq!(merged[0].ref_start, 0);
-            assert_eq!(merged[0].ref_end, reference.len());
+            assert!(
+                !split_carries_a_gap_bearing_insert(&canonical),
+                "no member supplies a base, so there is no realignment to undo"
+            );
+
             assert_eq!(
-                denotation(reference, &merged),
-                denotation(reference, &canonical),
-                "re-spelling must not change what the pieces denote"
+                coalesced(reference, &canonical),
+                canonical,
+                "a split that inserts nothing cannot be an artefact of an \
+                 inserted sequence realigning"
+            );
+        }
+
+        /// **W58**, the spec's own worked example on the other side of the line:
+        /// `LRG_199t1:c.[992_1002del;1004T>C]`, whose block is
+        /// `LRG_199t1:1235:GCAGTTCATTGAT:AC` — 13 reference bases for a 2-base
+        /// payload.
+        ///
+        /// `general.md:34` governs — *"two variants separated by one or more
+        /// nucleotides should be described individually and **not** as a
+        /// 'delins'"* — and `general.md:35`'s exception cannot rescue the merge,
+        /// because it needs the two variants "together affecting one amino
+        /// acid" and an 11-base deletion is a frameshift.
+        ///
+        /// Both payload bases are survivors: `A` at `c.994` and `C` at `c.998`,
+        /// the two positions the three-member derivation declines to delete.
+        /// 0 of 2 supplied, so the merge is refused.
+        #[test]
+        fn the_w58_block_stays_split_because_every_payload_base_survived() {
+            let reference = b"GCAGTTCATTGAT";
+            let result = b"AC";
+
+            let canonical =
+                partition_block_canonical(reference, result).expect("grid is below the bound");
+            assert_eq!(
+                canonical.len(),
+                3,
+                "precondition: canonical derives the three-member form \
+                 `c.[992_993del;995_997del;999_1004del]` ({canonical:?})"
+            );
+            assert!(
+                !split_carries_a_gap_bearing_insert(&canonical),
+                "precondition: three pure deletions supply nothing ({canonical:?})"
+            );
+
+            assert_eq!(
+                coalesced(reference, &canonical),
+                canonical,
+                "W58 must not be re-spelled as `c.992_1004delinsAC`"
+            );
+        }
+
+        /// The third worked case, and the one that says *"at least one supplied
+        /// base"* is too weak: `NM_CODON.1:c.[14del;16G>T]`, whose block is
+        /// `ACG` -> `CT` (see `one_base_gap_across_a_codon_boundary_stays_split`
+        /// in `tests/it/merge_consecutive_edits_tests.rs`).
+        ///
+        /// One of the two payload bases *is* supplied — the `T` at `c.16`. But
+        /// it is supplied by a member consuming exactly one reference base to
+        /// place one: a substitution, which `delins.md:17` calls a variant to be
+        /// described individually. No gap was opened, so no realignment
+        /// manufactured this boundary, and `:47` has nothing to license.
+        ///
+        /// The pass is codon-blind and must refuse this block **and** its
+        /// within-codon sibling `c.[10del;12G>T]`, which is the byte-identical
+        /// block one codon phase over. The sibling is merged afterwards by
+        /// [`apply_coding_codon_exception`] on `delins.md:18`'s authority. If
+        /// this pass answered either of them, the only pair in the suite whose
+        /// halves differ in nothing but codon phase would stop discriminating.
+        #[test]
+        fn a_substitution_supplying_the_novel_base_is_not_an_alignment_artifact() {
+            let reference = b"ACG";
+            let result = b"CT";
+
+            let canonical =
+                partition_block_canonical(reference, result).expect("grid is below the bound");
+            assert_eq!(
+                canonical.len(),
+                2,
+                "precondition: a deletion and a substitution ({canonical:?})"
+            );
+            assert!(
+                canonical.iter().any(|piece| !piece.alt.is_empty()),
+                "precondition: a base IS supplied, which is what makes the weaker \
+                 predicate wrong here ({canonical:?})"
+            );
+            assert!(
+                !split_carries_a_gap_bearing_insert(&canonical),
+                "the supplying member consumes one reference base to place one, \
+                 so it opened no gap ({canonical:?})"
+            );
+
+            assert_eq!(
+                coalesced(reference, &canonical),
+                canonical,
+                "`c.[14del;16G>T]` must not become `c.14_16delinsCT`"
+            );
+        }
+
+        /// The predicate itself, on hand-built piece lists, and the guard
+        /// against it degenerating.
+        ///
+        /// A rule of this shape can rot in two directions, and both are silent:
+        /// widened to "always merge" it swallows every `general.md:34` row, and
+        /// narrowed to "never merge" it makes the pass dead code while every
+        /// negative test above still passes. The two assertions at the end pin
+        /// both sides against the same three worked blocks.
+        ///
+        /// It also carries the only coverage of the `checked_sub` in the
+        /// implementation — the reversed-piece pair below. Without it that
+        /// branch is documented at length and executed by nothing, and reverting
+        /// it to a bare subtraction passes the rest of the suite.
+        #[test]
+        fn the_gap_bearing_insert_predicate_discriminates() {
+            let piece = |ref_start: usize, ref_end: usize, alt: &str| Piece {
+                ref_start,
+                ref_end,
+                alt: alt.as_bytes().to_vec(),
+            };
+
+            // Nothing supplied at all.
+            assert!(!split_carries_a_gap_bearing_insert(&[
+                piece(0, 2, ""),
+                piece(4, 6, "")
+            ]));
+            // Supplied, but one reference base for one supplied base: a
+            // substitution, which stands on its own.
+            assert!(!split_carries_a_gap_bearing_insert(&[
+                piece(0, 2, ""),
+                piece(4, 5, "T")
+            ]));
+            // Length-neutral over more than one base is still no gap.
+            assert!(!split_carries_a_gap_bearing_insert(&[
+                piece(0, 2, ""),
+                piece(4, 7, "TTT")
+            ]));
+            // Two reference bases for one supplied base: the alignment had to
+            // open a gap inside the member. This is `:44-47`'s own shape.
+            assert!(split_carries_a_gap_bearing_insert(&[
+                piece(0, 2, ""),
+                piece(4, 6, "C")
+            ]));
+            // A pure insertion — `:46`'s `901_902insG` — is gap-bearing too.
+            assert!(split_carries_a_gap_bearing_insert(&[
+                piece(0, 2, ""),
+                piece(4, 4, "G")
+            ]));
+
+            // A REVERSED piece, which is the whole reason the implementation
+            // uses `checked_sub`. This predicate runs *above* the caller's
+            // `start >= end` guard, so it is the first thing a malformed piece
+            // list reaches; a bare `ref_end - ref_start` debug-panics here where
+            // the old code merely declined. Reversed pieces contribute nothing,
+            // so a list of only such pieces is not gap-bearing and the pass
+            // declines — the same answer the caller's own guard gives it two
+            // statements later. Without this case the `checked_sub` branch is
+            // documented at length and executed by nothing: reverting it to bare
+            // subtraction passes the rest of the suite.
+            assert!(!split_carries_a_gap_bearing_insert(&[
+                piece(6, 2, "AC"),
+                piece(9, 8, "T")
+            ]));
+            // …and a reversed piece must not *mask* a genuine gap-bearing one
+            // sitting beside it, which an early `return false` would do.
+            assert!(split_carries_a_gap_bearing_insert(&[
+                piece(6, 2, "AC"),
+                piece(9, 11, "T")
+            ]));
+
+            // Not always-merge, and not never-merge: over the three worked
+            // blocks exactly one is re-spelled.
+            let blocks: [(&[u8], &[u8]); 3] = [
+                (
+                    b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT",
+                    b"TTCCTCGATGCCTG",
+                ),
+                (b"GCAGTTCATTGAT", b"AC"),
+                (b"ACG", b"CT"),
+            ];
+            let merged: Vec<bool> = blocks
+                .iter()
+                .map(|(reference, result)| {
+                    let canonical = partition_block_canonical(reference, result)
+                        .expect("grid is below the bound");
+                    assert!(canonical.len() > 1, "precondition: {canonical:?}");
+                    coalesced(reference, &canonical).len() == 1
+                })
+                .collect();
+            assert_eq!(
+                merged,
+                vec![true, false, false],
+                "`delins.md:44-47` must merge and the two `general.md:34` blocks \
+                 must not — a predicate that degenerated either way fails here"
             );
         }
 
@@ -13837,6 +14371,16 @@ mod tests {
         /// `delins.md:17` requires these to stay individual, and the
         /// net-deletion condition is what enforces it: the payload embeds
         /// trivially, but the span loses no length.
+        ///
+        /// **It is now refused earlier than that, and the doc above describes a
+        /// condition this input no longer reaches.** A substitution consumes
+        /// exactly as many reference bases as it supplies, so
+        /// [`split_carries_a_gap_bearing_insert`] declines the block first and
+        /// `payload.len() < span.len()` is never evaluated for it. The net-deletion
+        /// condition is kept and is not dead — `a_net_insertion_is_never_merged`
+        /// still reaches it, and its evidence base (#1421's family) is not this
+        /// one's — but this test no longer exercises it, and saying otherwise
+        /// would advertise coverage that has moved.
         #[test]
         fn the_net_deletion_condition_keeps_two_substitutions_split() {
             let reference = b"ACCCCCCA";
@@ -13916,6 +14460,12 @@ mod tests {
                 "precondition: one substituted position puts it out of the exact test's reach"
             );
 
+            assert!(
+                split_carries_a_gap_bearing_insert(&canonical),
+                "precondition: one member (`c.895_896delinsC`) consumes two \
+                 reference bases to place one, so it bears a gap ({canonical:?})"
+            );
+
             let merged = coalesced(reference, &canonical);
             assert_eq!(
                 merged.len(),
@@ -13984,7 +14534,32 @@ mod tests {
             span: Vec<u8>,
             pieces: Vec<Piece>,
             gap: usize,
+            width: usize,
             shape: Shape,
+        }
+
+        impl Case {
+            /// Whether the generator built this case with **no** gap inside any
+            /// member — derived from the construction above, never from the
+            /// predicate under test.
+            ///
+            /// `Shape::Deletion` supplies nothing at all. `Shape::LengthNeutral`
+            /// replaces exactly what it consumes. `Shape::OneMismatch` supplies a
+            /// single `N`, which is a gap only when the member it sits in is
+            /// **wider than one base** — at `width == 1` it is a one-for-one
+            /// substitution, the `NM_CODON.1:c.[14del;16G>T]` shape.
+            ///
+            /// That last clause is the reason this is not keyed on `shape`
+            /// alone: `OneMismatch` straddles the boundary, so a shape-only rule
+            /// would be wrong in one direction and a predicate-derived rule
+            /// (which is what this replaced) could not be wrong in any.
+            fn opens_no_gap(&self) -> bool {
+                match self.shape {
+                    Shape::Deletion | Shape::LengthNeutral => true,
+                    Shape::OneMismatch => self.width == 1,
+                    Shape::NetInsertion => false,
+                }
+            }
         }
 
         impl Case {
@@ -14039,6 +14614,7 @@ mod tests {
                 span,
                 pieces,
                 gap,
+                width,
                 shape,
             }
         }
@@ -14123,13 +14699,30 @@ mod tests {
                     assert!(!merged, "merged a non-shortening block [{ctx}]");
                 }
 
-                // 4. It only ever reduces the member count.
+                // 4. It never merges a split that opened no gap:
+                //    `delins.md:46`'s mechanism is an *inserted sequence*
+                //    realigning, so a split with no gap in any member is not its
+                //    artefact.
+                //
+                //    Keyed on the generator's own construction via
+                //    `Case::opens_no_gap`, **not** on
+                //    `split_carries_a_gap_bearing_insert`. An earlier revision
+                //    called that predicate on the same pieces the pass calls it
+                //    on, which made this assertion unfalsifiable — it restated
+                //    the implementation and could not fail for any input, while
+                //    this test's own doc comment promises properties that "hold
+                //    for reasons outside it".
+                if case.opens_no_gap() {
+                    assert!(!merged, "merged a split that opened no gap [{ctx}]");
+                }
+
+                // 5. It only ever reduces the member count.
                 assert!(
                     pieces.len() <= case.pieces.len(),
                     "member count grew [{ctx}]"
                 );
 
-                // 5. Idempotent: a second application changes nothing, so the
+                // 6. Idempotent: a second application changes nothing, so the
                 //    output is a fixed point of the pass.
                 let mut again = pieces.clone();
                 coalesce_payload_alignment_split(&mut again, &case.span);
@@ -14143,18 +14736,51 @@ mod tests {
                 "only {merged_count} of {} cases merged -- the corpus is not exercising the pass",
                 cases.len()
             );
+
+            // …and invariant 4 must have a population to bind, on **both** sides.
+            // A one-sided count is how the assertion it replaced went unnoticed:
+            // "no case merged that opened no gap" is satisfied for free if no case
+            // opens no gap, and equally if none merges.
+            let no_gap = cases.iter().filter(|case| case.opens_no_gap()).count();
+            let gap_bearing = cases.len() - no_gap;
+            assert!(
+                no_gap > 100 && gap_bearing > 100,
+                "invariant 4 needs both populations: {no_gap} open no gap, \
+                 {gap_bearing} do, of {} cases",
+                cases.len()
+            );
         }
 
         /// Widening the separation can only ever *withdraw* a merge, never create
         /// one. Checked by holding everything else fixed and walking the gap up.
+        ///
+        /// **Two separate vacuity holes, and changing the shape only closed the
+        /// first.** Left on `Shape::Deletion` every case would refuse, so the
+        /// walk could not fail — that is what the shape change below addresses.
+        /// But "no merge reappeared after one stopped" is *also* satisfied for
+        /// free when **no merge ever happens**, which is precisely what a
+        /// never-merge mutation of the pass produces. The shape change does not
+        /// close that half; only counting the merges does. `merged_total` is
+        /// asserted non-zero at the end for that reason, and the assertion was
+        /// verified by mutating the pass to return immediately — with the count
+        /// this test fails, without it it passes.
         #[test]
         fn widening_the_separation_is_monotone() {
             let mut seed = 0x0DDB_1A5E_5BAD_5EEDu64;
-            for &width in &[1usize, 3, 8] {
+            // One entry per walk, holding how many separations merged in it.
+            let mut merges_per_walk: Vec<((usize, usize), usize)> = Vec::new();
+            // `Shape::OneMismatch` at width >= 2, not `Shape::Deletion`: an
+            // all-deletion split now never merges at any separation, so the walk
+            // would be vacuously monotone and could not fail. Width 1 is excluded
+            // for the same reason — a one-base member supplying one base is a
+            // substitution, not a gap.
+            for &width in &[2usize, 3, 8] {
                 for &members in &[2usize, 3] {
+                    let mut merged_in_walk = 0usize;
                     let mut still_merging = true;
                     for gap in 0..=(COALESCE_MAX_SEPARATION + 4) {
-                        let case = build(members, width, gap, Shape::Deletion, b"ACGT", &mut seed);
+                        let case =
+                            build(members, width, gap, Shape::OneMismatch, b"ACGT", &mut seed);
                         let mut pieces = case.pieces.clone();
                         coalesce_payload_alignment_split(&mut pieces, &case.span);
                         let merged = pieces.len() == 1;
@@ -14173,21 +14799,68 @@ mod tests {
                             "merge reappeared after it stopped [{}]",
                             case.describe()
                         );
-                        if !merged {
+                        if merged {
+                            merged_in_walk += 1;
+                        } else {
                             still_merging = false;
                         }
                     }
+                    merges_per_walk.push(((width, members), merged_in_walk));
                 }
             }
+
+            // The other half of the vacuity. Monotonicity over a walk in which
+            // nothing ever merges is not a property of this pass, and a
+            // never-merge mutation produces exactly that walk. Asserted **per
+            // walk** rather than as a total, because one merging walk would
+            // otherwise cover for every silent one.
+            let silent: Vec<(usize, usize)> = merges_per_walk
+                .iter()
+                .filter(|(_, merged)| *merged == 0)
+                .map(|(key, _)| *key)
+                .collect();
+            assert!(
+                silent.is_empty(),
+                "no separation merged in {} of {} walks (width, members) = {silent:?} \
+                 — the monotone assertion is vacuous there",
+                silent.len(),
+                merges_per_walk.len()
+            );
         }
 
-        /// **Known limit, pinned rather than fixed.**
+        /// **Known limit, pinned rather than fixed — and it now has no instance
+        /// in the real corpus.**
         ///
-        /// Three of the 592 real multi-member cis alleles are merged by this pass
-        /// when they should stay individual. They are genuine separate variants
-        /// that happen to sit as close together as a coincidental split — their
-        /// separations are 1 and 4 unchanged bases, inside the range where every
-        /// correct rejoin also lives (ClinVar's 78 correct rejoins run 1..8).
+        /// The limit is that two genuinely separate variants can sit as close
+        /// together as a coincidental split, inside the range where every correct
+        /// rejoin also lives (ClinVar's 78 correct rejoins run 1..8), so
+        /// separation cannot tell them apart.
+        ///
+        /// **Re-measured 2026-08-12 rather than restated.** This doc used to say
+        /// "three of the 592 real multi-member cis alleles are merged by this
+        /// pass when they should stay individual", a figure carried over from
+        /// before [`split_carries_a_gap_bearing_insert`]. Measured over the
+        /// committed fixture (`tests/fixtures/cis/multi_member_cis_alleles.json`,
+        /// 481 of 592 normalize `ok` against the prepared reference), the count
+        /// was **6** before that condition and is **0** after it.
+        ///
+        /// The six divide, and stating them as one shape was a real error that
+        /// review caught — see [`COALESCE_MAX_SEPARATION`] for the full list.
+        /// Four supply their novel base from a one-for-one substitution
+        /// (`NM_000260.4:c.[3256del;3260T>C]` is the clearest, and is the
+        /// `NM_CODON.1:c.[14del;16G>T]` shape at a real locus). The other two —
+        /// `NM_005144.5:c.[1258del;1263_1283del]` and
+        /// `NM_001243279.3:c.[1385A>C;1394_1411del]` — re-derive to splits whose
+        /// members are **all pure deletions**, so they supply nothing at all,
+        /// however their inputs are spelled.
+        ///
+        /// So the case below is now **synthetic and unrepresented**: it builds a
+        /// split that *does* carry a gap-bearing insert and whose members are
+        /// nonetheless two genuinely separate variants. That shape is still
+        /// merged, and the sequence still cannot rule on it — but no harvested
+        /// allele is currently of that shape. Pinned anyway, because the limit is
+        /// a property of the rule rather than of the corpus, and a corpus zero is
+        /// a claim about the corpus.
         ///
         /// **Separation cannot distinguish them, and neither can any other
         /// property of the sequence.** `delins.md:79-84` gives the spec's own
@@ -14209,7 +14882,7 @@ mod tests {
         fn close_separate_variants_are_a_known_limit_not_a_bug() {
             let mut seed = 0x5EED_1235_5EED_1235u64;
             for &gap in &[1usize, 4] {
-                let case = build(2, 3, gap, Shape::Deletion, b"ACGT", &mut seed);
+                let case = build(2, 3, gap, Shape::OneMismatch, b"ACGT", &mut seed);
                 let mut pieces = case.pieces.clone();
                 coalesce_payload_alignment_split(&mut pieces, &case.span);
                 assert_eq!(
