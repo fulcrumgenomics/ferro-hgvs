@@ -370,13 +370,15 @@
 //! rejected SVD-WG010 would have merged, so a violation there is a verdict.
 //! `coding_axis_separation_two_or_more_merges` is not that. It counts a
 //! population — coding-axis multi-member alleles whose members sit **two or
-//! more** unchanged nucleotides apart and which normalization merged into a
-//! single member — and makes no claim that merging them is wrong. `general.md:34`
-//! and `DNA/delins.md:17` are what make the population interesting ("two
-//! variants separated by one or more nucleotides should be described
-//! individually and **not** as a 'delins'"); which clause governs any particular
-//! merged row is an **open adjudication for the operator**, and nothing here
-//! settles it.
+//! more** unchanged nucleotides apart and which normalization merged into fewer
+//! members than were authored — and makes no claim that merging them is wrong.
+//!
+//! **Why that population is worth counting, and which records govern it, are
+//! stated once**, on `spec_corpus::is_coding_axis_separation_two_or_more_shape`,
+//! and are not repeated here. In short: `general.md:34` / `DNA/delins.md:17` are
+//! what make it interesting, and three ruling records — two `decided`, one not —
+//! govern different parts of it, so a rise is not one thing and neither is the
+//! zero. Do not argue from the two clauses without reading those records.
 //!
 //! **It exists because `guard_violations` provably cannot count these rows.**
 //! `is_svd_wg010_shape` admits `Genomic | NonCodingMultiExon` at a separation of
@@ -385,44 +387,58 @@
 //! members. The two domains are disjoint twice over, so a merge on the coding
 //! axis leaves `guard_violations` at zero however many rows it moves — which is
 //! why the guard is left exactly as it is and this is a second counter beside
-//! it, not a widening of it.
+//! it, not a widening of it. That disjointness is pinned as a property of the
+//! corpus by `the_coding_axis_merge_population_is_what_it_says_it_is`.
 //!
 //! **Pinned at 0 / 0, measured over 997 rows in each direction.** The zero is a
-//! real negative result, not an absence: the same corpus reads
+//! real negative result, not an absence. Re-measured on `origin/main`
+//! `e98fa77e`, which is **after #1698** — see the paragraph below. (The table
+//! was first derived at `1ea75334` and reproduced cell-for-cell after the
+//! rebase; `git diff 1ea75334 origin/main -- src/` is empty, so the arms could
+//! not have moved.)
 //!
 //! | evaluation arm (`FERRO_PARTITION`) | 3' | 5' |
 //! |---|---|---|
 //! | unset — the shipped rule | **0** of 997 | **0** of 997 |
 //! | `shadow` | 0 | 0 |
 //! | `canonical` | 1 | 1 |
-//! | `canonical-coalesced` | **122** | **122** |
+//! | `canonical-coalesced` | **3** | **3** |
 //!
-//! The 122 decompose by separation as 31 / 30 / 30 / 31 at gaps of 2 / 3 / 5 /
-//! 8, across both two- and three-member designs — every one of them a row
+//! The 3 are one row at a separation of 3 and two at a separation of 2, all of
+//! them two-member designs collapsing to one member — every one a row
 //! `guard_violations` cannot see. The `canonical` arm's single residual is
-//! `s01-c1-pair-inv-del-p4-sep3`, which is not the coalesce pass (it survives
-//! with that pass stubbed out).
+//! `s01-c1-pair-inv-del-p4-sep3` (`c.[9_12inv;16_19del]` -> `c.9_19delinsGTCAGTA`),
+//! which is not the coalesce pass and is also one of the coalesced arm's 3.
+//!
+//! **That table read 122 in the `canonical-coalesced` arm when this change was
+//! written, and #1698 took it to 3.** `fix(normalize): require a gap-bearing
+//! insert before the delins.md:44-47 merge` landed on `merge.rs` between the
+//! branch point and the rebase, removing 119 of the 122 — a 97.5% collapse in
+//! the figure this change was originally motivated by, with **no test failing**,
+//! because the figures live in prose. That is the hazard this module is supposed
+//! to be about, realised on the module itself; it is recorded here rather than
+//! quietly restated. Attribution was measured, not assumed: re-running all four
+//! arms with the corrected numerator (below) reproduces 0 / 0 / 1 / 3, so the
+//! movement is #1698's and none of it is the numerator's.
+//!
+//! **The scale argument this counter was introduced with does not survive that,
+//! and the disjointness argument does.** At 122 rows the case was "the canonical
+//! arm's largest blocking family is invisible to this axis". At 3 it is not a
+//! large family. What is unchanged is that `guard_violations` *cannot* count
+//! them at any size — a structural fact about `is_svd_wg010_shape`'s domain, not
+//! a claim about how many rows there happen to be — and that a counter is how
+//! that stays true after the next change to `merge.rs`, which is exactly what
+//! #1698 demonstrated.
 //!
 //! **The counter was watched moving, in both directions, before being trusted.**
 //! Stubbing `merge::coalesce_payload_alignment_split` to decline unconditionally
-//! takes the `canonical-coalesced` arm from 122 to 1 — the `canonical` figure,
-//! exactly. Removing the arm gate so the pass runs on the shipped rule takes the
-//! shipping arm from 0 to 110 (3') / 113 (5'); making the pass merge
-//! unconditionally on top of that takes it to 190. So the shipping zero is the
-//! pass not running, not the instrument failing to look.
-//!
-//! **Why the floor is two and not one.** `general.md:35` / `DNA/delins.md:18`
-//! carve out an exception on this same axis for two variants "separated by
-//! **one** nucleotide, together affecting one amino acid", and ferro implements
-//! it: measured, **16** rows of this corpus merge at a separation of exactly one
-//! on the shipping rule. A floor of one would sum that licensed merge with an
-//! unlicensed one into a single figure and would have to open at a non-zero pin.
-//! The floor is read off the exception's own stated conjunct, so it is a textual
-//! scope rather than a ruling. The cost is stated rather than hidden: a
-//! coding-axis merge at separation **one** is counted by neither this counter
-//! nor `guard_violations`, and closing that gap means deciding when
-//! `general.md:35` licenses a merge — the adjudication an instrument must not
-//! make.
+//! takes the `canonical-coalesced` arm to the `canonical` figure exactly.
+//! Removing the arm gate so the pass runs on the shipped rule takes the shipping
+//! arm off zero. (Both figures were measured pre-#1698 — 122 -> 1, and 0 -> 110
+//! (3') / 113 (5') — so quote the direction, not the numbers.) The shipped
+//! zero is the pass not running, not the instrument failing to look. Since
+//! neither mutation ships, `the_coding_axis_merge_counter_can_observe_a_merge`
+//! is the positive control that keeps a blinded numerator from passing CI.
 //!
 //! # The honest-zero discipline is enforced, not described
 //!
@@ -844,48 +860,43 @@ pub(crate) struct Census {
     /// with the generator-side denominator still healthy, which is the shape
     /// of vacuity this axis exists to refuse.
     pub(crate) coding_axis_separation_two_or_more_rows: usize,
-    /// Coding-axis multi-member alleles whose authored spelling normalized to a
-    /// **single member**, i.e. the members were merged across the two or more
-    /// unchanged nucleotides between them.
+    /// Coding-axis multi-member alleles whose authored spelling normalized to
+    /// **fewer members than were authored** — i.e. the members were merged
+    /// across the two or more unchanged nucleotides between them.
     ///
     /// # An instrument. It counts a population; it does not judge it
     ///
     /// This counter reports how often a merge of this shape happens. It does
-    /// **not** assert the merge is wrong — that adjudication is the operator's
-    /// and is open. What makes the population worth measuring is that
-    /// `general.md:34` / `DNA/delins.md:17` speak to it in as many words: "two
-    /// variants separated by one or more nucleotides should be described
-    /// individually and **not** as a 'delins'".
+    /// **not** assert the merge is wrong. Contrast [`Self::guard_violations`],
+    /// which counts a shape whose merge implements a **rejected** proposal and
+    /// is therefore a verdict. A count of `n` here is a measurement of how large
+    /// the merged population is, not a claim that `n` rows are defective.
     ///
-    /// So a count of `n` here is a measurement of how large the merged
-    /// population is, not a claim that `n` rows are defective. Contrast
-    /// [`Self::guard_violations`], which counts a shape whose merge implements
-    /// a **rejected** proposal and is therefore a verdict.
+    /// # Everything else about this population is stated ONCE, and not here
     ///
-    /// # The floor of two is what keeps the zero readable
+    /// Why the floor is two; what the sub-floor population contains and which
+    /// part of it is a known defect; which three ruling records govern which
+    /// part of it, and therefore what a rise and a zero each mean; and why this
+    /// is a second counter rather than a widened guard — all of that is on
+    /// `spec_corpus::is_coding_axis_separation_two_or_more_shape`.
     ///
-    /// `general.md:35` / `DNA/delins.md:18` carve out an exception on this same
-    /// axis, for two variants "separated by **one** nucleotide, together
-    /// affecting one amino acid". Ferro implements it and it fires: on the
-    /// shipping rule **16** rows of this corpus merge at a separation of
-    /// exactly one, and none at two or more. Counting from a floor of one would
-    /// sum a licensed merge and an unlicensed one into a figure no later reader
-    /// could take apart, and would open at a non-zero pin. The floor is read
-    /// off the exception's own stated conjunct, so it is a textual scope rather
-    /// than a ruling — see `spec_corpus::is_coding_axis_separation_two_or_more_shape`,
-    /// which also states what the choice costs.
+    /// It is deliberately not restated here. The first revision of this change
+    /// carried that argument in seven places, and two of the copies ended up
+    /// contradicting each other 406 lines apart in this file — one saying ferro
+    /// implements the codon exception and it accounts for the sub-floor merges,
+    /// the other retracting exactly that. A pointer cannot drift.
     ///
-    /// # Why it is a second counter rather than a widened guard
+    /// # The numerator, and what it can and cannot see
     ///
-    /// [`Self::guard_violations`]'s rows are chosen by `is_svd_wg010_shape`,
-    /// which admits only the two **frameless** shapes, at a separation of
-    /// exactly one, with exactly two members. That domain and this one are
-    /// disjoint twice over, so `guard_violations` cannot count a coding-axis
-    /// merge at any separation for any member count, and a zero there says
-    /// nothing about this population. Relaxing that guard to cover
-    /// coding rows would re-scope a negative result about a rejected proposal
-    /// into a different instrument wearing its name, so this is a new counter
-    /// beside it.
+    /// [`coding_axis_merge_observed`] is the test: `members_of(output).len() <
+    /// row.members`. It was `< 2`, which on the 313 of 997 flagged rows carrying
+    /// three or four members could only ever see a collapse **all the way** to
+    /// one member — a 4-member row merged to 2 counted as zero. Below the floor
+    /// that blindness is 25 of 41 merges.
+    ///
+    /// It still cannot see a merge whose output is unparseable, since the count
+    /// is taken on a parsed output; `unparseable_outputs` is the counter for
+    /// that and is pinned at 0.
     ///
     /// # Pinned at zero in both directions, and that zero is a measurement
     ///
@@ -893,7 +904,10 @@ pub(crate) struct Census {
     /// evaluation arm — `merge::coalesce_payload_alignment_split`, reached only
     /// when `payload_coalesce_applies` sees `PartitionRule::CanonicalCoalesced`
     /// — does not run on the shipped rule, so the shipping arm merges none of
-    /// these rows. Measured rather than assumed: see the module docs.
+    /// these rows. That is a mechanical reason rather than an empirical
+    /// coincidence, and the counter is separately shown able to move: see the
+    /// module docs' arm table and
+    /// [`the_coding_axis_merge_counter_can_observe_a_merge`].
     pub(crate) coding_axis_separation_two_or_more_merges: usize,
 }
 
@@ -937,6 +951,31 @@ fn members_of(variant: &HgvsVariant) -> Vec<HgvsVariant> {
         HgvsVariant::Allele(allele) => allele.variants.clone(),
         single => vec![single.clone()],
     }
+}
+
+/// The coding-axis merge instrument's **numerator**: did normalization collapse
+/// `row`'s authored members into fewer members?
+///
+/// # It is `< row.members`, not `< 2`, and the difference is 31.4% of the corpus
+///
+/// The sibling `guard_violations` test may write `< 2` because
+/// `is_svd_wg010_shape` pins `kinds.len() == 2`, so for its rows "fewer than two
+/// members" and "merged" are the same statement. This population is wider —
+/// `MEMBER_COUNTS = [2, 3, 4]` — and there `< 2` means "collapsed **all the way**
+/// to one member". A 4-member row merged to 2 is two merges across two or more
+/// unchanged nucleotides and would have been counted as **zero**. Measured over
+/// the flagged rows: `{2: 684, 3: 159, 4: 154}`, so **313 of 997 (31.4%)** were
+/// blind to a partial merge under the narrower test.
+///
+/// That is the property the doc comments claim ("the members were merged across
+/// the two or more unchanged nucleotides between them"), so measuring anything
+/// narrower would be an assertion weaker than the stated contract.
+///
+/// Extracted as a named function rather than inlined so
+/// `the_coding_axis_merge_counter_can_observe_a_merge` can exercise it directly
+/// — see that test for why a zero pin needs a positive control.
+fn coding_axis_merge_observed(row: &Row, output: &HgvsVariant) -> bool {
+    members_of(output).len() < row.members
 }
 
 /// Whether either endpoint of `interval` names an intronic offset.
@@ -1280,17 +1319,21 @@ fn measure(direction: ShuffleDirection) -> Measured {
             if row.coding_axis_separation_two_or_more && spelling == row.authored_spelling() {
                 census.coding_axis_separation_two_or_more_rows += 1;
                 if let Ok(parsed_output) = parse_hgvs(&output) {
-                    if members_of(&parsed_output).len() < 2 {
+                    if coding_axis_merge_observed(row, &parsed_output) {
                         census.coding_axis_separation_two_or_more_merges += 1;
                         findings.push(Finding {
                             id: row.id.clone(),
                             what: format!(
-                                "coding-axis allele merged across {} unchanged nucleotide(s) \
-                                 into one member (`general.md:34` / `DNA/delins.md:17` speak to \
-                                 this population; whether they govern each row is an OPEN \
-                                 adjudication — counted, not adjudicated): \
+                                "coding-axis allele merged across {} unchanged nucleotide(s), \
+                                 {} authored members -> {} (`general.md:34` / \
+                                 `DNA/delins.md:17` speak to this population, and the three \
+                                 ruling records named on \
+                                 `spec_corpus::is_coding_axis_separation_two_or_more_shape` \
+                                 govern parts of it — counted, not adjudicated): \
                                  {spelling} -> {output}",
-                                row.separation
+                                row.separation,
+                                row.members,
+                                members_of(&parsed_output).len()
                             ),
                         });
                     }
@@ -1345,7 +1388,8 @@ fn report(label: &str, measured: &Measured) -> String {
          {} conditional prohibitions accepted\n  \
          NEGATIVE GUARDS: {} outputs implement rejected SVD-WG010\n  \
          CODING-AXIS MERGE (an instrument, not a verdict): {} of {} coding-axis alleles \
-         separated by two or more unchanged nucleotides merged into a single member\n",
+         separated by two or more unchanged nucleotides normalized to fewer members than \
+         were authored (a full or a partial merge)\n",
         census.measured_under,
         census.outputs,
         census.declined,
@@ -1495,9 +1539,12 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
          from {} to {} (of {} evaluated). This counter is an INSTRUMENT, not a ruling: \
          `general.md:34` / `DNA/delins.md:17` say such members are described individually, and \
          `general.md:35`'s one-amino-acid exception cannot reach a separation of two by its own \
-         stated conjunct — but whether some other clause licenses these merges is an OPEN \
-         adjudication for the operator. So this is a population that grew, and it needs \
-         explaining and re-pinning rather than assuming either verdict.\n{}",
+         stated conjunct — but the ruling ledger governs part of this population and a rise is \
+         not automatically a defect. Read the three records named on \
+         `spec_corpus::is_coding_axis_separation_two_or_more_shape` BEFORE deciding what this \
+         means: within the payload-coincidence shape on this axis a rise is a decided ruling \
+         arriving, and outside it `general.md:34` still governs. So this is a population that \
+         grew, and it needs explaining and re-pinning rather than assuming either verdict.\n{}",
         pinned.coding_axis_separation_two_or_more_merges,
         census.coding_axis_separation_two_or_more_merges,
         census.coding_axis_separation_two_or_more_rows,
@@ -1562,6 +1609,102 @@ fn the_corpus_has_the_shape_its_censuses_are_measured_over() {
     assert!(
         share > 0.9,
         "multi-member share is {share:.4}; this corpus exists to invert the natural 0.00006"
+    );
+}
+
+/// A **positive control** for the coding-axis merge counter: it must be able to
+/// observe a merge.
+///
+/// # Why a zero pin needs one, and why nothing else supplies it
+///
+/// `coding_axis_separation_two_or_more_merges` is pinned at **0**, so every
+/// other test that mentions it is satisfied by a numerator that can never
+/// increment. Measured as a mutation matrix over the four tests that claim to
+/// cover the counter — the two censuses, the corpus-shape test and
+/// `spec_corpus`'s population test — hard-wiring
+/// [`coding_axis_merge_observed`] to `false` leaves **all four green**. "Pinned
+/// at 0" and "wired to 0" were the same observation, which is exactly what this
+/// module's own thesis says an instrument must not be: *a counter nobody has
+/// seen move is not an instrument*.
+///
+/// The other five mutations in that matrix are caught: predicate always-true,
+/// predicate always-false (as VACUOUS), the separation floor weakened to one,
+/// dropping the irreducibility conjunct, and the numerator forced always-true.
+/// Only the always-**false** direction was blind, because it is the direction a
+/// zero cannot distinguish.
+///
+/// # What it asserts
+///
+/// The predicate is exercised directly against real corpus rows and parsed
+/// outputs, so it covers `members_of`, the parse path and the member-count
+/// comparison — everything between normalization and the counter:
+///
+/// - an authored multi-member spelling is **not** a merge (no false positive);
+/// - a single-member output **is** (the plain merge);
+/// - a 3-or-more-member row collapsed to two members **is** — the partial merge
+///   the old `< 2` test could not see on 313 of the 997 flagged rows.
+#[test]
+fn the_coding_axis_merge_counter_can_observe_a_merge() {
+    let built = built();
+    let pair = built
+        .rows
+        .iter()
+        .find(|row| row.coding_axis_separation_two_or_more && row.members == 2)
+        .expect(
+            "VACUOUS: the corpus builds no two-member coding-axis row separated by two or more \
+             unchanged nucleotides, so this control controls nothing",
+        );
+
+    let authored = parse_hgvs(pair.authored_spelling()).expect("the authored spelling parses");
+    assert!(
+        !coding_axis_merge_observed(pair, &authored),
+        "{}: its own authored spelling ({}) counted as a merge, so the counter has a false \
+         positive and its zero would be unreadable in the other direction",
+        pair.id,
+        pair.authored_spelling()
+    );
+
+    // The merged form is the row's OWN spanning-`delins` respelling, not a
+    // hand-written literal: the corpus offers one for every family it builds,
+    // and it is a single member before normalization ever runs (which is why
+    // `measure` reads this counter on the authored spelling only). Deriving it
+    // from the row keeps the control anchored to the population it controls.
+    let (merged_spelling, merged) = pair
+        .spellings
+        .iter()
+        .filter_map(|spelling| Some((spelling, parse_hgvs(spelling).ok()?)))
+        .find(|(_, parsed)| members_of(parsed).len() == 1)
+        .expect("VACUOUS: the row offers no single-member respelling to merge INTO");
+    assert!(
+        coding_axis_merge_observed(pair, &merged),
+        "{}: its own single-member respelling ({merged_spelling}) was NOT counted as a merge. \
+         The counter is blind, and its pinned 0 is a property of this predicate rather than of \
+         the normalizer",
+        pair.id
+    );
+
+    // The partial half. `pair`'s two-member authored spelling stands in for a
+    // partial merge of `wide`, which authored three or more — 2 < wide.members
+    // is exactly the property, and both sides are corpus rows rather than
+    // literals. Re-spelling `wide` itself with a member dropped would mean
+    // reassembling an allele out of `Display` output, which is string surgery
+    // with its own failure mode and would not test anything further: the
+    // predicate reads member counts and nothing else.
+    let wide = built
+        .rows
+        .iter()
+        .find(|row| row.coding_axis_separation_two_or_more && row.members >= 3)
+        .expect(
+            "VACUOUS: the corpus builds no 3-or-more-member coding-axis row, so the partial-merge \
+             half of this control controls nothing",
+        );
+    assert!(
+        coding_axis_merge_observed(wide, &authored),
+        "{}: {} authored members collapsing to {} was NOT counted. That is the 313 of 997 rows \
+         (31.4%) `coding_axis_merge_observed` exists to stop losing",
+        wide.id,
+        wide.members,
+        members_of(&authored).len()
     );
 }
 
