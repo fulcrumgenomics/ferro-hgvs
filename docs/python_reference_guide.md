@@ -14,6 +14,7 @@ harness) before trusting a genome-aware result.
 | A **synthetic / local** construct (your own FASTA + annotation) and you need intronic / `g.` / exon-junction rules | `ferro_hgvs.convert_gff(...)` / `ferro_hgvs.build_transcript(...)` in-process (or the `ferro convert-gff` / `ferro build-transcript` CLIs, all with `emit_genomic_sequences=True` / `--emit-genomic-sequences`) → `Normalizer(reference_json="transcripts.json")` | ✅ yes |
 | Transcript-level normalization only (exonic SNV/indel shuffle; no introns, no `g.` axis) | a `transcripts.json` **without** `genomic_sequences` → `Normalizer(reference_json=...)` | ❌ by design (see the boundary below) |
 | Just trying the API | `Normalizer()` (built-in toy data) | ❌ toy data |
+| **Bases rather than a description** — a window out of a BAM, a VCF row, an aligner's output | `ferro_hgvs.from_sequences(...)` — no `Normalizer`, no reference, nothing to set up | n/a — reads no reference by design; see [below](#deriving-a-description-with-no-reference-at-all) |
 
 "Genome-aware rules" = intronic positions (`c.10+5del`), the cross-exon/intron
 3′-shift (#670), and the genomic (`g.`) axis / `project_to_genomic`. See
@@ -183,12 +184,89 @@ ferro check --reference construct.json
 #   Protein data: no
 ```
 
+## Deriving a description with no reference at all
+
+Everything above is about how much capability your reference buys you. There is
+one path where the question does not arise: if what you hold is **bases** rather
+than a description, `from_sequences` derives the description and reads no
+reference at all.
+
+```python
+import ferro_hgvs
+
+print(ferro_hgvs.from_sequences("NC_000001.11", 1000, "AGCG", "AG"))
+# NC_000001.11:g.1002_1003del
+```
+
+(`print`, or `str(...)`, rather than letting the REPL echo it — `HgvsVariant.__repr__` returns
+`HgvsVariant('NC_000001.11:g.1002_1003del')`, so the bare expression does not print the comment
+above.)
+
+No `Normalizer`, no `transcripts.json`, no manifest — so `has_genomic_data()`
+does not apply, and there is no reduced-capability mode to check for. The output
+is a pure function of the four arguments, which means the same bases give the
+same description on any machine and against any reference build.
+
+**What you get, and what you do not.** This delivers the two normalization rules
+that need nothing but your arguments — the output is conformant (rule 1) and
+deterministic (rule 4). It does **not** deliver the recommended form (rule 2) or
+agreement with a description derived from a different window (rule 3), because
+both of those are reference-anchored. If you want them, call `normalize`
+afterwards. The full statement, including how wide a window to supply and what
+each refusal means, is the
+[how-to in the README](../README.md#how-to-one-canonical-description-per-variant).
+
+`position` is 1-based, and `reference` is taken on trust: verifying it would need
+a provider, which would make the reference a hidden fifth input and cost exactly
+the determinism the function exists to provide. Pass bases that are not the
+reference and you get a faithful description of the pair you passed.
+
+### The three neighbours that *do* need a reference
+
+Same feature, opposite capability answer — these are `Normalizer` methods, so
+everything above about picking a reference applies to them normally:
+
+| Method | Needs | Why |
+|---|---|---|
+| `Normalizer.to_sequences(variant, pad=128)` | a reference | it reads the bases a description denotes, plus flank on both sides |
+| `Normalizer.from_sequences(..., normalize=True)` | a reference | the derivation itself does not, but range-checking the interval and the optional `normalize` pass do |
+| `Normalizer.reanchor(pair, start, end)` | a reference | widening a window means reading bases the caller never supplied |
+
+Note `normalize` defaults to **False**, and that is not the value most callers
+want. Prefer `normalize=True` unless you have a reason not to: over a
+6,000-shape sweep it moved 8.6% of derived descriptions. False is still a
+conformant, deterministic answer — the 8.6% is entirely rules 2 and 3, which the
+derivation never claimed — but if you are storing one canonical string per
+variant, that is the difference between the derived form and the recommended
+one.
+
+**That figure is a claim about that sweep, not about the world:** one synthetic
+contig, six shape generators, genomic axis only. It is a conformance-movement
+rate, not a benchmark, so no host or timing applies to it — but it is also a
+**one-off measurement with no committed harness that re-derives it**, so treat it
+as an order of magnitude rather than a number to quote. Your own rate depends
+entirely on which shapes your inputs are. The full statement of what was swept,
+and the three classes the movement falls into, is in the
+[README](../README.md#how-to-one-canonical-description-per-variant); this page
+does not restate it.
+
+`to_sequences` is the inverse direction, so a caller who already holds
+descriptions can reach the derivation without new plumbing:
+
+```python
+pair = normalizer.to_sequences(variant, pad=128)
+derived = normalizer.from_sequences(pair.accession, pair.position, pair.reference, pair.alternate)
+```
+
 ## The capability boundary in one line
 
+- **No reference needed at all:** `ferro_hgvs.from_sequences` — conformant and
+  deterministic output derived from the bases you supply.
 - **Any `transcripts.json`:** reference-allele checks, exonic 3′/5′ shuffle,
   dup/repeat canonicalization.
 - **Needs `genomic_sequences` (genome-capable) or a prepared manifest:** intronic
-  positions, cross-exon/intron 3′-shift, the `g.` axis / `project_to_genomic`.
+  positions, cross-exon/intron 3′-shift, the `g.` axis / `project_to_genomic`,
+  and the three reference-reading neighbours in the table above.
 
 Full details, the schema, and what the load-time validation does and does not
 guarantee are in [`transcripts_json_schema.md`](transcripts_json_schema.md).

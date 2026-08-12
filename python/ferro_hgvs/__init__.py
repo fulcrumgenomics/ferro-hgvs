@@ -97,6 +97,9 @@ __all__ = [
     "parse",
     "normalize",
     "normalize_with_warnings",
+    # Sequence-pair functions
+    "from_sequences",
+    "from_sequences_detailed",
     # SPDI functions
     "parse_spdi",
     "hgvs_to_spdi",
@@ -128,6 +131,8 @@ __all__ = [
     # SPDI classes
     "SpdiVariant",
     "AppliedVariant",
+    "SequencePair",
+    "DerivedDescription",
     # Coordinate classes
     "ZeroBasedPos",
     "OneBasedPos",
