@@ -2642,8 +2642,17 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
 
     // Window: the union of every member's footprint, padded for the 3'-shift.
     let (c_lo, c_hi) = edit_span_union(&edits)?;
-    let mut w_lo = (c_lo - CANONICAL_PAD).max(1);
-    let mut w_hi = c_hi + CANONICAL_PAD;
+    // Nothing upstream bounds the magnitude of an authored coordinate — the
+    // width test below is the bound, and it runs on the *padded* values — so
+    // the pad itself must not be able to wrap (#1487).
+    //
+    // Saturating is exact here, not merely safe: `w_lo` is clamped to `1` on
+    // the same line, and a saturated `w_hi` can only make the width larger, so
+    // both saturations land on the refusal the width test already gives an
+    // over-wide window. A debug build panicked; a release build wrapped `w_hi`
+    // negative and derived against a nonsense window, which is the worse half.
+    let mut w_lo = c_lo.saturating_sub(CANONICAL_PAD).max(1);
+    let mut w_hi = c_hi.saturating_add(CANONICAL_PAD);
     if w_hi - w_lo + 1 > MAX_CANONICAL_WINDOW {
         return None;
     }
@@ -2691,8 +2700,18 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         w_lo = w_lo.max(exon_lo);
         w_hi = w_hi.min(exon_hi);
     }
-    let start0 = w_lo + frame.delta - 1;
-    let end0 = w_hi + frame.delta;
+    // Checked for the same reason as the pad above, and not covered by it: the
+    // width test refuses a *wide* window, but a span sitting near `i64::MAX`
+    // while narrower than `MAX_CANONICAL_WINDOW` passes that test and then
+    // wraps against a positive `frame.delta`. Refusing takes the same exit as
+    // the `start0 < 0` guard immediately below, which is already the
+    // conservative answer for a window this axis cannot express (#1487).
+    let (Some(start0), Some(end0)) = (
+        w_lo.checked_add(frame.delta).and_then(|v| v.checked_sub(1)),
+        w_hi.checked_add(frame.delta),
+    ) else {
+        return None;
+    };
     if start0 < 0 {
         return None;
     }
@@ -3846,7 +3865,15 @@ fn enclosing_exon<P: ReferenceProvider>(
         return None;
     }
     let transcript = provider.get_transcript(accession).ok()?;
-    let (tx_lo, tx_hi) = (lo + frame.delta, hi + frame.delta);
+    // Checked, exactly as in `crosses_exon_junction` below — this is that
+    // predicate's sibling and took the same unchecked addition, on the *raw*
+    // member union rather than the padded window, so the pad's saturation does
+    // not cover it (#1487). `None` is the same exit an unservable transcript
+    // takes on the line above: no enclosing exon, hence no clamp.
+    let (Some(tx_lo), Some(tx_hi)) = (lo.checked_add(frame.delta), hi.checked_add(frame.delta))
+    else {
+        return None;
+    };
     // `Exon` stores 1-based INCLUSIVE bounds — `[(1, 15), (16, 30), (31, 44)]` on
     // `MockProvider`'s `NM_001234.1` — so `start` is already the exon's first
     // base. Adding one treats them as 0-based half-open and makes the enclosure
@@ -3893,10 +3920,30 @@ fn crosses_exon_junction<P: ReferenceProvider>(
     // #1450. Both failures take the same conservative exit as an unservable
     // transcript above.
     //
-    // Note this hardens the predicate, not the whole path: an extreme
-    // coordinate still panics upstream at `w_hi = c_hi + CANONICAL_PAD`, which
-    // runs before this is reached and is untouched by this change. Tracked
-    // separately.
+    // This hardened the predicate and not the whole path, and the rest of the
+    // path is hardened now (#1487): `w_hi = c_hi + CANONICAL_PAD` runs before
+    // this is reached and used to panic on an extreme coordinate — it saturates
+    // today — as did the axis conversion below the call site and
+    // `enclosing_exon`'s copy of this very addition, both of which are now
+    // checked. So the "tracked separately" this comment used to end on is
+    // closed.
+    //
+    // **Not because nothing upstream adds unchecked.** Two things still do, and
+    // an earlier revision of this comment claimed otherwise, which was a broader
+    // statement than anything measured. `collect_canonical_edits` tests an
+    // insertion anchor with `if e != s + 1`, and `edit_span_union` reads an
+    // `Ins` footprint as `(*gap, *gap + 1)`. Both take the same `s`, and both
+    // are closed by the PARSER rather than by arithmetic: a coordinate above
+    // `i64::MAX` does not parse, a reversed `<high>_<low>` anchor is refused,
+    // and an anchor whose two positions are equal is refused as a
+    // single-position insertion (`DNA/insertion.md:95-101`). Together those
+    // leave `s <= i64::MAX - 1` for every `Insertion` that reaches either line,
+    // so `s + 1` is in range. No other `GEdit` arm adds — the rest copy their
+    // endpoints through.
+    //
+    // Measured through `parse_hgvs` rather than reasoned about, and pinned:
+    // `the_parser_is_what_keeps_an_insertion_anchor_off_i64_max` in
+    // `tests/it/issue_1487_canonical_window_overflow.rs`.
     let (Some(tx_lo), Some(tx_hi)) = (lo.checked_add(frame.delta), hi.checked_add(frame.delta))
     else {
         return false;
