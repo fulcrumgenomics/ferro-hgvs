@@ -806,7 +806,7 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 /// named test. Six is the gross figure; five other families *gained*
 /// convergence in the same change, which is where the net -1 comes from.
 ///
-/// The six are three designs on each of the plus and minus coding multi-exon
+/// The six were three designs on each of the plus and minus coding multi-exon
 /// shapes, all on the `AT` core (`s00`):
 ///
 /// ```text
@@ -821,13 +821,30 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 /// on the merits: the exception simply does not reach the pair, and
 /// `general.md:34`'s plain rule governs it.
 ///
+/// **Four of those six have since re-converged and are no longer pinned here.**
+/// #1649 lets `merge`'s payload splitter express *deletion, retained reference,
+/// deletion* — the mirror of the two-insertion shape it already expressed — and
+/// with the finer partition available the spanning `delins` reaches its members'
+/// answer again on `m3-all-del-p1-sep3` and `pair-del-del-p1-sep8`, on both
+/// strands. That is a re-convergence rather than a competing answer: the two
+/// spellings now denote one sequence *and* produce one string, and
+/// `general.md:35` still does not reach either row — nothing was narrowed back to
+/// a shape test to get there. This test's own `assert_ne!` prescribed the
+/// remedy (lower `split_two`, raise `converged`, delete the row), and the
+/// `spec_conformance_axis` re-bless is in the same commit; see that module's
+/// third RE-BLESSED section for the row-id diff behind it.
+///
+/// **`s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and is what remains below.**
+/// Its spanning `delins` still stops where `general.md:34` puts it, so everything
+/// this test was promoted to say still holds for it.
+///
 /// What remains unanswered is whether the *members'* answer is reachable from the
 /// `delins` at all under the restored precondition. What is **not** unanswered is
 /// the neighbouring record: `codon-carve-out-shape-restriction` is `decided`, and
 /// it runs the same way — WIDEN, the exception applies wherever its precondition
 /// holds, regardless of edit type, because edit type is a property of the
 /// spelling. So the predicate may not be narrowed back to a shape test in order
-/// to recover these six rows.
+/// to recover the rows it still costs.
 ///
 /// **This is churn, not a rank-1 defect**, and that is asserted rather than
 /// claimed: both outputs are checked through `denotation_of` to denote the row's
@@ -837,39 +854,26 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 /// either previously-shipped string.
 ///
 /// Named rather than left in the corpus for the usual reason: a later generator
-/// edit could stop emitting `sep3`/`sep8` separations, or stop respelling a
-/// design as a spanning `delins` at all, and the regression would vanish with the
-/// rows (#1456/#1460/#1478).
+/// edit could stop emitting the `sep2` separation, or stop respelling a design as
+/// a spanning `delins` at all, and the regression would vanish with the rows
+/// (#1456/#1460/#1478).
 #[test]
 fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
     let core = at_core();
     // `(row id, the spanning-delins respelling, its output, the authored member
-    // spelling, the answer every member spelling reaches)`. On `main` the third
-    // column equalled the fifth in all three rows, which is what made them
+    // spelling, the answer every member spelling reaches)`. Before #1599 the
+    // third column equalled the fifth here, which is what made the family
     // converge.
-    let rows = [
-        (
-            "m3-all-del-p1-sep3",
-            "NM_TEST.1:c.24_32delinsAATTTT",
-            "NM_TEST.1:c.[24T>A;26_28del;32A>T]",
-            "NM_TEST.1:c.[24del;28del;32del]",
-            "NM_TEST.1:c.[24del;33_34del]",
-        ),
-        (
-            "m4-all-del-p1-sep2",
-            "NM_TEST.1:c.24_33delinsAATTTA",
-            "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
-            "NM_TEST.1:c.[24del;27del;30del;33del]",
-            "NM_TEST.1:c.[24del;30_33delinsA]",
-        ),
-        (
-            "pair-del-del-p1-sep8",
-            "NM_TEST.1:c.24_33delinsAATTTTTA",
-            "NM_TEST.1:c.[24_27delinsAA;32_33delinsTA]",
-            "NM_TEST.1:c.[24del;33del]",
-            "NM_TEST.1:c.[24del;33del]",
-        ),
-    ];
+    //
+    // `m3-all-del-p1-sep3` and `pair-del-del-p1-sep8` used to sit alongside this
+    // row and were removed by #1649, which re-converged them — see the doc above.
+    let rows = [(
+        "m4-all-del-p1-sep2",
+        "NM_TEST.1:c.24_33delinsAATTTA",
+        "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
+        "NM_TEST.1:c.[24del;27del;30del;33del]",
+        "NM_TEST.1:c.[24del;30_33delinsA]",
+    )];
 
     for strand in [Strand::Plus, Strand::Minus] {
         let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);

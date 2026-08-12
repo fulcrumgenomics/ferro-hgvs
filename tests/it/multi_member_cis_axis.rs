@@ -673,6 +673,33 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 /// So before raising it: name the classes that moved, and the clause that
 /// carried each. If they cannot be named individually, the rise is a
 /// re-derivation and the constant stays where it is while the cause is found.
+///
+/// # Raised 395 -> 401 by #1649, and this section's test applied
+///
+/// The rise has the exact signature the section above warns about — every other
+/// field is unchanged, `respellable` included — so it is discharged here rather
+/// than asserted. The six rows are named in [`CONVERGED_ROWS`]'s own history and
+/// **all six are two-deletion cis pairs**:
+///
+/// ```text
+/// NM_001110792.2:c.[1076_1102del;1124_1142del]   NM_001110792.2:c.[859_907del;934_941del]
+/// NM_001282426.2:c.[391_397del;456_468del]       NM_004992.3:c.[1155_1200del;987_988del]
+/// NM_005144.5:c.[1258del;1263_1283del]           NM_130838.2:c.[255_259del;269del]
+/// ```
+///
+/// That is the mechanism, not a coincidence to be waved at: #1649 lets `merge`'s
+/// payload splitter express *deletion, retained reference, deletion*, the mirror
+/// of the two-insertion shape it already expressed, and the rows that move are
+/// exactly the ones carrying that shape. **0 rows stopped converging**, so this
+/// is `+6 −0` rather than a net figure hiding a swap — which is the distinction
+/// [`CONVERGED_ROWS`] exists to make visible.
+///
+/// The clause is `general.md:34` read through `canonical-form-choice-when-both-legal`
+/// (`decided`): the partition is re-derived from the **resulting sequence** and
+/// what falls out is emitted. So the finer partition is not an extra liberty
+/// taken with the input's unchanged bases — it is what the sequence supports and
+/// what the splitter previously could not spell. `sequence_changed` staying **0**
+/// across all 592 rows is the check that no member was lost buying it.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
     declined: 0,
@@ -680,7 +707,7 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     unwindowed: 96,
     sequence_changed: 0,
     respellable: 461,
-    respelling_converged: 395,
+    respelling_converged: 401,
 };
 
 /// The rows behind `respelling_converged`, by input, sorted.
@@ -1025,6 +1052,8 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_001080463.1:c.[12602C>T;9865G>A]",
     "NM_001080467.3:c.[1135C>T;2470C>T]",
     "NM_001105537.3:c.[4183delC;4185G>A]",
+    "NM_001110792.2:c.[1076_1102del;1124_1142del]",
+    "NM_001110792.2:c.[859_907del;934_941del]",
     "NM_001127701.1:c.[187C>T;739C>T]",
     "NM_001127701.1:c.[227_229delTCT;514G>A]",
     "NM_001130004.1:c.[2156A>C;2157G>C]",
@@ -1038,6 +1067,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_001232.3:c.[730C>T;731A>G]",
     "NM_001243279.3:c.[1385A>C;1394_1411del]",
     "NM_001282225.2:c.[1196G>A;1367A>G]",
+    "NM_001282426.2:c.[391_397del;456_468del]",
     "NM_001288953.1:c.[1715A>G;1912T>C]",
     "NM_001289396.1:c.[3495G>C;3917G>A]",
     "NM_001289862.1:c.[1243C>G;1250A>G]",
@@ -1095,7 +1125,9 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_004771.4:c.[1046C>T;911C>G]",
     "NM_004826.3:c.[1252C>T;590G>A]",
     "NM_004959.4:c.[368G>C;386C>T]",
+    "NM_004992.3:c.[1155_1200del;987_988del]",
     "NM_005035.4:c.[1696C>T;3578C>T]",
+    "NM_005144.5:c.[1258del;1263_1283del]",
     "NM_005154.3:c.[2138T>G;2150A>G]",
     "NM_005157.6:c.[1516G>A;1531G>C]",
     "NM_005215.4:c.[4009C>T;4210G>A]",
@@ -1155,6 +1187,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_058004.4:c.[1414A>C;355C>T]",
     "NM_130466.4:c.[1445T>A;1616T>C]",
     "NM_130468.3:c.[403C>G;410T>A]",
+    "NM_130838.2:c.[255_259del;269del]",
     "NM_133378.4:c.[45418A>G;45419A>T]",
     "NM_138694.4:c.[2165C>T;7438A>T]",
     "NM_139025.3:c.[1342C>G;1523G>A]",

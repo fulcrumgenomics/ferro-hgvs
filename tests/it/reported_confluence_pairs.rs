@@ -142,7 +142,7 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// number. Not because sharing would *hide* a single-direction regression — it
 /// would not. [`the_reported_pair_census_is_unchanged`] asserts inside the
 /// per-direction loop, so each direction is already compared against the
-/// constant on its own and no sum is ever taken. Measured: both are currently 0.
+/// constant on its own and no sum is ever taken. Measured: both are currently 3.
 ///
 /// # A rise is not automatically progress — read this before raising either
 ///
@@ -160,14 +160,44 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 ///
 /// So a rise must name **which** pair moved and **which clause** carried it. A
 /// rise that cannot name a clause is a re-derivation, not a convergence fix.
-const CONVERGING_PAIRS_THREE_PRIME: usize = 0;
+///
+/// # 0 -> 3 (#1649), the pairs and the clause
+///
+/// The three that converged are **`1419-r1`, `1419-r2` and `1419-r3`**, in both
+/// directions — so `CONVERGING_PAIRS_FIVE_PRIME` moves by the same 3, and the
+/// hazard row `1420-v2` is **not** among them.
+///
+/// In each pair it is the `/span` spelling that moved, onto the two-deletion
+/// form its `/cis` sibling already printed; the `/cis` spellings are unchanged,
+/// which is checkable from `reported_partition_verdicts`' per-row pins rather
+/// than taken on trust. The clause is `general.md:34` read through
+/// `canonical-form-choice-when-both-legal` (`decided`): the partition is
+/// re-derived from the **resulting sequence** and what falls out is emitted.
+/// #1649 lets `merge`'s payload splitter express *deletion, retained reference,
+/// deletion* — the mirror of the two-insertion shape it already expressed — so
+/// the form the sequence supports is now spellable and both spellings reach it.
+///
+/// **This is a convergence, not a closure, and the distinction is the whole
+/// reason `PAIRS_NO_SPELLING_REACHES` is a separate constant.** The string the
+/// three pairs converge on is still not the spanning `delins` the decided chain
+/// wants, so all three stay listed there and `OPEN_GAPS` stays at twelve. What
+/// moved is that the family stopped having two canonical forms.
+const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
 
 /// How many reported pairs converge today under `ShuffleDirection::FivePrime`.
 ///
 /// See [`CONVERGING_PAIRS_THREE_PRIME`] for why this is tracked separately
 /// rather than shared, and for why a rise in either direction has to name the
-/// clause that carried it. Measured: currently 0, same as 3'.
-const CONVERGING_PAIRS_FIVE_PRIME: usize = 0;
+/// clause that carried it. Measured: currently 3, same as 3' — the same three
+/// `1419-r*` pairs, raised from 0 by #1649.
+///
+/// The two directions agreeing here is worth reading rather than skipping: the
+/// pairs converge under 5' on a *different* string in `1419-r3`'s case, because
+/// the 5' pass shifts that pair's leading deletion one base left. Convergence is
+/// a property of the partition the splitter can express, and that is what #1649
+/// changed; which end of the run the members then shuffle to is downstream of
+/// it and does not decide whether the two spellings meet.
+const CONVERGING_PAIRS_FIVE_PRIME: usize = 3;
 
 /// Both directions, because a rule that converges only under the default 3'
 /// direction has not solved the problem: 5' is a supported option and reaches

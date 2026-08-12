@@ -45,15 +45,17 @@
 //! `src/normalize/` change of its own — so the census records `main`'s
 //! behaviour, not that PR's. The corpus is new; the defects it counts are not.
 //!
-//! **That paragraph is the CORPUS branch speaking, and it no longer holds.** Two
-//! normalizer changes have re-blessed figures here since, and there are two
-//! RE-BLESSED sections below — one per change, in the order they landed. Read
-//! both before quoting any figure as a `main` baseline:
+//! **That paragraph is the CORPUS branch speaking, and it no longer holds.**
+//! Three normalizer changes have re-blessed figures here since, and there are
+//! three RE-BLESSED sections below — one per change, in the order they landed.
+//! Read all three before quoting any figure as a `main` baseline:
 //!
 //! 1. the amino-acid precondition on `coalesce_coding_frame_separation` (#1599),
 //!    which moved five figures, one of them a net regression in `converged`;
 //! 2. the span-preserving re-typing carve-out for a member that straddles a CDS
-//!    boundary (#1536), which moved seven and regressed none.
+//!    boundary (#1536), which moved seven and regressed none;
+//! 3. the two-deletion alignment in the payload splitter (#1649), which moved
+//!    eight and regressed none — the largest confluence move recorded here.
 //!
 //! **The second was measured on the first, not composed with it.** The two
 //! changes' affected row sets are disjoint — verified by diffing the row ids, not
@@ -80,7 +82,7 @@
 //! The 3'/5' asymmetry is itself a finding: the transcript-leaving class is
 //! **371 to 0**, and 3' is the default direction.
 //!
-//! # RE-BLESSED (1 of 2) — #1599, the amino-acid precondition
+//! # RE-BLESSED (1 of 3) — #1599, the amino-acid precondition
 //!
 //! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus
 //! PR, which touched no normalizer file. **That is no longer the base.** #1599
@@ -118,7 +120,7 @@
 //! either met or it is not. `outputs_leaving_the_transcript` stays **371**, which
 //! is the pre-existing baseline and not a regression of #1599's.
 //!
-//! # RE-BLESSED (2 of 2) — #1536, the cross-axis re-typing carve-out
+//! # RE-BLESSED (2 of 3) — #1536, the cross-axis re-typing carve-out
 //!
 //! This branch adds a third carve-out from the #350 cross-axis bail in
 //! `normalize_cds`, so a `delins`/`inv` whose span straddles a CDS boundary is
@@ -170,6 +172,59 @@
 //! recursion step in `normalize_cds` is what keeps it there; without that step it
 //! measures **6** at 3', the two extra rows being
 //! `s00-c3{p,m}-cds-end-del-del-p2-sep1`. Every rank-1 counter is unchanged.
+//!
+//! # RE-BLESSED (3 of 3) — #1649, the two-deletion alignment
+//!
+//! `merge`'s payload splitter could express *insertion, retained reference,
+//! insertion* but not *deletion, retained reference, deletion*, so a payload
+//! whose alignment against its span carries two gaps was forced onto a coarser
+//! partition than the sequence supports. Letting it express the second shape
+//! moves eight figures, all rank 2, and **none regresses**:
+//!
+//! | figure | was (post-#1536) | now | direction |
+//! |---|---|---|---|
+//! | 3' `converged` | 9,141 | **9,402** | improves by 261 |
+//! | 3' `split_two` | 2,440 | **2,225** | improves by 215 |
+//! | 3' `split_three` | 248 | **223** | improves by 25 |
+//! | 3' `split_more` | 53 | **32** | improves by 21 |
+//! | 5' `converged` | 8,944 | **9,228** | improves by 284 |
+//! | 5' `split_two` | 2,706 | **2,461** | improves by 245 |
+//! | 5' `split_three` | 200 | **167** | improves by 33 |
+//! | 5' `split_more` | 32 | **26** | improves by 6 |
+//!
+//! This is the largest confluence move recorded in this module, which is exactly
+//! why the net counters are not allowed to carry it. **A family entering
+//! `split_two` from `split_three` and a family leaving `converged` for
+//! `split_two` look identical in the totals** — so the full divergence row-id
+//! lists were dumped on `origin/main` and on this branch (the `divergences` cap
+//! in [`measure`] raised locally for the measurement, then restored) and the sets
+//! diffed:
+//!
+//! - **0 families lose convergence**, at 3' or at 5'.
+//! - **0 families rise in arity**, and **0** families become divergent that were
+//!   not divergent on `main` — the branch's divergent set is a strict *subset* of
+//!   `main`'s in both directions (3': 2,741 -> 2,480; 5': 2,938 -> 2,654).
+//! - **0 still-divergent families change arity at all.** Every one of the 261 /
+//!   284 moved families goes straight to `converged`, which is why the three
+//!   `split_*` deltas sum exactly to the `converged` delta in each direction
+//!   (215 + 25 + 21 = 261; 245 + 33 + 6 = 284). They come from arity 2 / 3 / 4 / 5
+//!   in the counts 215 / 25 / 16 / 5 at 3' and 245 / 33 / 6 / 0 at 5'.
+//!
+//! The moved set is broad rather than local — 16 corpus shapes at each direction,
+//! led by `pair-del-*` (134 at 3', 150 at 5'), `m3-all-*`, `m4-all-*` and
+//! `mid-cds-*` — which is what a partitioner change looks like as against
+//! #1536's, whose every moved row was `s00-c3{p,m}-cds-end-*`.
+//!
+//! **Every rank-1 counter is unchanged**, in both directions, as are
+//! `non_idempotent_outputs` (4 / 4), `sequence_changed` (4 / 0), all three
+//! refusal counters and `guard_violations`.
+//!
+//! **Two of the six rows #1599 promoted come back**, and they are removed from
+//! `spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`
+//! per that test's own instruction: `s00-c3{p,m}-m3-all-del-p1-sep3` (arity 2 at
+//! 3', 3 at 5') and `s00-c3{p,m}-pair-del-del-p1-sep8` (arity 2 at both) are now
+//! converged. `s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and stays pinned
+//! there — its spanning `delins` still stops where `general.md:34` puts it.
 //!
 //! # CORRECTED — what the transcript-leaving class actually violates
 //!
@@ -288,11 +343,11 @@ const SHAPE: CorpusShape = CorpusShape {
 /// fixed. Read the three asserted-zero counters before the headline, per the
 /// module docs.
 ///
-/// **The "measures `main`" heading above is now historical** — two normalizer
-/// changes have re-blessed figures here, #1599 and then #1536, and seven of these
-/// are measured against the second rather than against the corpus PR's `main`. The
-/// module docs carry a RE-BLESSED section per change, naming each figure, which way
-/// it moved, and the row ids behind it.
+/// **The "measures `main`" heading above is now historical** — three normalizer
+/// changes have re-blessed figures here (#1599, then #1536, then #1649), and the
+/// four confluence figures below are measured against the third rather than
+/// against the corpus PR's `main`. The module docs carry a RE-BLESSED section per
+/// change, naming each figure, which way it moved, and the row ids behind it.
 pub(crate) const THREE_PRIME: Census = Census {
     // -- provenance --
     //
@@ -312,20 +367,21 @@ pub(crate) const THREE_PRIME: Census = Census {
     prohibition_violating_outputs: 32,
     // -- confluence (rank 2) --
     //
-    // Re-blessed by #1536, on top of the amino-acid precondition's re-bless
-    // directly above in history — **measured on this branch rebased onto that**,
-    // not composed from the two changes' deltas. `converged` goes UP and no
-    // counter regresses; the row-level diff is in the module docs' second
-    // RE-BLESSED section.
+    // Re-blessed by #1649's two-deletion alignment, on top of #1536's re-bless
+    // and #1599's before it — **measured on this branch rebased onto both**, not
+    // composed from the three changes' deltas. The row-level diff is in the
+    // module docs' third RE-BLESSED section.
     //
-    // 2 families newly converge and 10 more drop to a lower split arity. Zero
-    // families lose convergence and zero rise in arity — that is a measured
-    // statement, from diffing the full divergence lists either side, not an
-    // inference from the net counters (which cannot tell net from gross).
-    converged: 9_141,
-    split_two: 2_440,
-    split_three: 248,
-    split_more: 53,
+    // 261 families newly converge and **zero** lose convergence, rise in arity,
+    // or become divergent that were not — measured by diffing the full
+    // divergence row-id lists either side, not inferred from the net counters
+    // (which cannot tell net from gross). Every moved family goes straight to
+    // `converged`, which is why the three deltas below sum exactly to
+    // `converged`'s: 215 + 25 + 21 = 261.
+    converged: 9_402,
+    split_two: 2_225,
+    split_three: 223,
+    split_more: 32,
     underdetermined: 0,
     // -- idempotency --
     //
@@ -350,8 +406,8 @@ pub(crate) const THREE_PRIME: Census = Census {
 /// would mean a fix was treating a symptom of the shuffle rather than the
 /// partitioner.
 ///
-/// Measured on the same base as [`THREE_PRIME`], and re-blessed by the same two
-/// changes — see the module docs' two RE-BLESSED sections.
+/// Measured on the same base as [`THREE_PRIME`], and re-blessed by the same
+/// three changes — see the module docs' three RE-BLESSED sections.
 ///
 /// The two directions agreeing on every rank-1 counter except
 /// `outputs_leaving_the_transcript` is itself the cross-check the two-direction
@@ -367,21 +423,24 @@ pub(crate) const FIVE_PRIME: Census = Census {
     outputs_denoting_no_sequence: 18,
     outputs_leaving_the_transcript: 0,
     prohibition_violating_outputs: 32,
-    // Unmoved by either re-bless: no 5' family changes which side of the
-    // converged/split line it sits on, in #1599 or in #1536.
-    converged: 8_944,
-    // Re-blessed by #1536, rank-2 only, same as [`THREE_PRIME`] — and measured on
-    // the rebased branch rather than composed. 14 families drop to a lower split
-    // arity; **none** newly converges and none regresses, so `converged` is
-    // untouched here while it rose by 2 at 3'.
+    // Unmoved by #1599 or by #1536 — no 5' family changed which side of the
+    // converged/split line it sat on in either. **#1649 moves it for the first
+    // time**, by 284, and the same three measured zeros hold as at 3': no family
+    // loses convergence, rises in arity, or becomes divergent that was not.
+    converged: 9_228,
+    // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
+    // the rebased branch rather than composed. Every moved family goes straight
+    // to `converged`, so these three deltas sum exactly to `converged`'s:
+    // 245 + 33 + 6 = 284.
     //
     // The two directions moving by different amounts is expected rather than
-    // suspicious: the re-typed member is pinned to its own span in both, but the
-    // *follow-on* shuffle the re-typing enables runs 3' or 5'. Measured: 10 of the
-    // 3' rows and 14 of the 5' rows moved, 10 of them the same row ids in both.
-    split_two: 2_706,
-    split_three: 200,
-    split_more: 32,
+    // suspicious, for the reason #1536's re-bless already recorded: the partition
+    // is decided the same way in both, but the *follow-on* shuffle it enables
+    // runs 3' or 5'. Here 5' moves the larger set (284 against 261), the reverse
+    // of #1536.
+    split_two: 2_461,
+    split_three: 167,
+    split_more: 26,
     underdetermined: 0,
     non_idempotent_outputs: 4,
     sequence_changed: 0,

@@ -833,8 +833,22 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
     // equally consistent with "only the coding axis splits at all", which would
     // point a fix at the splitter rather than at the second pass. It is also what
     // keeps the flipped sweep above from being satisfiable by a normalizer that
-    // simply stopped partitioning: both axes still split this block, into 8 and
-    // 39 members respectively.
+    // simply stopped partitioning: both axes still split this block.
+    //
+    // **The two arities used to differ — 8 members on `c.` and 39 on `n.` — and
+    // #1649 collapsed both to 2.** The assertion below was
+    // `n. members > c. members`, which said "the `n.` axis is not stable merely
+    // by doing less work". That phrasing cannot survive the two axes agreeing,
+    // and re-blessing it to `>=` would have quietly turned a real claim into one
+    // that also passes when neither axis splits at all — the exact failure the
+    // comment above is guarding against.
+    //
+    // So it is re-pointed rather than relaxed, and it now asserts MORE than it
+    // did: each axis splits this block (so neither is stable by declining), and
+    // the two reach the SAME arity. The second half is the class closing stated
+    // as an assertion — the coding axis used to under-split relative to `n.` and
+    // no longer does, which is what "a coding-axis repartition" being fixed
+    // means. A future change that makes them differ again reopens it.
     //
     // One geometry rather than the sweep, because it takes a block long enough
     // that both axes split it: `scale-c3p-sep136`'s core, anchored inside the
@@ -853,10 +867,19 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
     let input = spanning_delins(&noncoding, noncoding_shape, start, sep).expect("in range");
     let output = normalize(&noncoding, &input, ShuffleDirection::ThreePrime);
 
+    let noncoding_members = output.matches(';').count() + 1;
+    let coding_members = coding_output.matches(';').count() + 1;
     assert!(
-        output.matches(';').count() > coding_output.matches(';').count(),
-        "the `n.` axis must split this block FURTHER than the coding axis for the point to \
-         hold — it is not stable because it is doing less work:\n  n.: {output}\n  c.: {coding_output}"
+        noncoding_members > 1 && coding_members > 1,
+        "both axes must still SPLIT this block — an axis that returns it as one member is \
+         stable by declining to partition, which is what this assertion exists to rule \
+         out:\n  n.: {output}\n  c.: {coding_output}"
+    );
+    assert_eq!(
+        noncoding_members, coding_members,
+        "the two axes must reach the SAME arity now that #1649 closed the coding-axis \
+         under-split. `c.` reaching fewer members than `n.` is the repartition this file is \
+         named for coming back:\n  n.: {output}\n  c.: {coding_output}"
     );
     assert!(
         is_fixed_point(&noncoding, &input, ShuffleDirection::ThreePrime),
@@ -975,11 +998,25 @@ fn the_scale_onset_is_not_the_corpus_scale_band() {
 /// to do "something per-member normalization cannot" is precisely the pass that
 /// was merging across codon boundaries — a merge `general.md:35` never authorised.
 /// So the mechanism that made the two passes disagree was not member interaction
-/// at all, which is what the test said. The `matches_authored` column is the part
-/// worth keeping most: it is unchanged too, so **sep-136 still disagrees with its
-/// own authored design's output**, which is why that family remains non-confluent
-/// in `spec_conformance_axis`'s census even though it is now idempotent. Idempotent
-/// and confluent are different properties and this row is the demonstration.
+/// at all, which is what the test said.
+///
+/// **The `matches_authored` column has since closed too, and the distinction it
+/// was carrying is worth keeping even though the row that demonstrated it is
+/// gone.** It read `true, true, false`: sep-136 disagreed with its own authored
+/// design's output, so that family stayed non-confluent in
+/// `spec_conformance_axis`'s census *even though it was already idempotent* —
+/// idempotent and confluent being different properties, with this row as the
+/// demonstration that one can hold without the other.
+///
+/// #1649 closed the second half. The two-deletion alignment resolves sep-136's
+/// trailing `inv` — an artefact of the splitter having no way to express a
+/// second gap — into a plain deletion, and the row lands on its authored
+/// design's output like its two siblings, so the column now reads
+/// `true, true, true`. The demonstration is therefore historical, and it is
+/// recorded here rather than deleted because the *lesson* is what recurs: a
+/// class can be re-blessed out of `non_idempotent_outputs` while still costing
+/// `converged`, and reading only the first counter would have called this family
+/// fixed one change too early.
 #[test]
 fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
     // The spanning `delins` respelling, named the way the corpus names it rather
@@ -1027,9 +1064,15 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
         );
     }
 
-    // The exact answers, unchanged strings measured one pass earlier. Two of the
-    // three land on the authored design's own output and the third does not, which
-    // is why sep-136's family is still non-confluent.
+    // The exact answers. Two of the three are unchanged strings measured one pass
+    // earlier; sep-136's moved with #1649 and is annotated where it sits.
+    //
+    // **All three now land on the authored design's own output.** That was `2 of
+    // 3` until #1649, and the third was the argument that the class was still
+    // non-confluent about its authored design even after the idempotency half
+    // closed. It is not any more — which is why every `matches_authored` below
+    // reads `true`, and why a `false` reappearing here is the confluence half
+    // reopening rather than a new row.
     for (id, expected, matches_authored) in [
         (
             "scale-c3p-sep120-del-del",
@@ -1041,10 +1084,18 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
             "NM_TEST.1:c.[110_111del;240_241del]",
             true,
         ),
+        // Re-blessed by #1649. Was `[114_115del;250_251del;252_253inv]` with
+        // `matches_authored: false` — the odd one out of the three, and the
+        // reason the caveat below said the class was still non-confluent about
+        // its authored design. The two-deletion alignment lets the splitter
+        // express *deletion, retained reference, deletion*, so the trailing
+        // `inv` — which existed only because the second gap had no expression —
+        // resolves to a plain deletion and the row lands on the authored
+        // design's own output like its two siblings.
         (
             "scale-c3p-sep136-del-del",
-            "NM_TEST.1:c.[114_115del;250_251del;252_253inv]",
-            false,
+            "NM_TEST.1:c.[114_115del;253_254del]",
+            true,
         ),
     ] {
         let row = row(id);

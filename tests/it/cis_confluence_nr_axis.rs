@@ -139,14 +139,27 @@ const TX_CONTIG: &str = "chr_synth";
 /// zero, so every divergence is two well-formed, sequence-preserving outputs for
 /// one variant — the confluence defect itself, not a parse failure or a
 /// corrupted sequence wearing its clothes.
+/// **Re-blessed again by #1649's two-deletion alignment: 4 012 -> 4 179.**
+/// `merge`'s payload splitter gains the *deletion, retained reference, deletion*
+/// shape it was missing — the mirror of the two-insertion shape it already had —
+/// so a two-gap alignment no longer has to be flattened onto a coarser partition
+/// chosen by the input's spelling. `split_two` falls 138, `split_three` 24 and
+/// `split_more` 5, summing exactly to the 167 gained, so every moved class
+/// converged outright rather than dropping an arity. No divergence figure rises.
+///
+/// **That this fires on `n.` at all is the finding.** The pass is not
+/// coding-axis machinery, and the four censuses in this file move by 167/167/172/172
+/// against `cis_confluence_axis`'s 334/344 — the `n.` and `r.` axes gain in the
+/// same proportion as the `c.` one, which is what a partitioner change should
+/// look like and what an axis-scoped carve-out would not.
 const N_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_012,
-    split_two: 1_558,
-    split_three: 57,
-    split_more: 9,
+    converged: 4_179,
+    split_two: 1_420,
+    split_three: 33,
+    split_more: 4,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -160,14 +173,18 @@ const N_THREE_PRIME: Census = Census {
 /// is #1484, which changed the `n.`/`r.` axes with no test covering them — this
 /// file is the coverage, and the re-bless is the first measurement of what that
 /// PR did here.
+/// **Re-blessed again by #1649: 4 010 -> 4 177**, an identical +167 to its `n.`
+/// twin with identical `split_*` deltas. The `r.` and `n.` axes tracking each
+/// other exactly is the cross-check this pair of pins exists for: the alphabet
+/// differs and the partition does not.
 const R_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_010,
-    split_two: 1_560,
-    split_three: 57,
-    split_more: 9,
+    converged: 4_177,
+    split_two: 1_422,
+    split_three: 33,
+    split_more: 4,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -179,14 +196,19 @@ const R_THREE_PRIME: Census = Census {
 /// Re-blessed alongside [`N_THREE_PRIME`]: `converged` 2_625 -> 4_011,
 /// `split_two` 2_954 -> 1_569, `split_three` 53 -> 52, every other field
 /// unchanged. Its `r.` twin is [`R_FIVE_PRIME`].
+/// **Re-blessed again by #1649: 4 011 -> 4 183** (+172), `split_two` -154,
+/// `split_three` -16, `split_more` -2. The 5' direction gains five more classes
+/// than the 3' does, the same asymmetry [`N_THREE_PRIME`]'s history records: the
+/// finer partition is chosen before the shift, so the members are shuffled
+/// independently afterwards and only some of those landings coincide.
 const N_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_011,
-    split_two: 1_569,
-    split_three: 52,
-    split_more: 4,
+    converged: 4_183,
+    split_two: 1_415,
+    split_three: 36,
+    split_more: 2,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -198,14 +220,18 @@ const N_FIVE_PRIME: Census = Census {
 /// `split_three` 54 -> 52. That the two directions moved together (+1_383 and
 /// +1_385) is itself the evidence the change is a property of the normalizer
 /// rather than of one shuffle direction.
+/// **Re-blessed again by #1649: 4 009 -> 4 181**, again matching its `n.` twin
+/// exactly at +172. All four censuses in this file move monotonically — every
+/// `converged` up, every divergence figure down — so the ratchet is satisfied in
+/// the direction it was written for on both axes and both directions.
 const R_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_009,
-    split_two: 1_571,
-    split_three: 52,
-    split_more: 4,
+    converged: 4_181,
+    split_two: 1_417,
+    split_three: 36,
+    split_more: 2,
     underdetermined: 0,
     sequence_changed: 0,
 };
