@@ -847,6 +847,23 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // absent from its list, which is what separates this from #1230 — whose
     // competing members really are substitutions, and whose guard stays green.
     ("inversion-vs-two-delins-76-83", "decided"),
+    // The sibling question, one step wider: the competitor is neither all
+    // `delins` nor all substitutions but a MIX of lone substitutions and
+    // multi-column members. **Decided for the `inv` by operator ruling
+    // (2026-08-12)**, governing `inversion.md:5` as a PERMISSION — so it is a
+    // `README.md` rule 6 choice among conformant forms and must never be cited
+    // as conformance. It deliberately does NOT rest on `general.md:56`: every
+    // competitor contains a substitution, so `:56` read plainly argues against
+    // the `inv` on every row, and the only reading that saves either gate is
+    // the one `conflicting-member-geometry-refusal-scope` already decided —
+    // that `:56` does not reach a multi-member allele. `general.md:58` was
+    // considered and does not reach either, the competitors containing no
+    // `del`, `dup` or `ins` at all. The ground held is that notation must not
+    // turn on base coincidence (#1461's 457-base reverse complement, on which
+    // all four earlier routes return false). The margin is deliberately not
+    // quoted: the record carries it and records that it has already moved once
+    // as the partitioner changed, so the verdicts are the durable figure.
+    ("inversion-vs-a-mixed-member-competitor", "decided"),
     // Which authority ranks after the spec. Decided 2026-08-07: spec, then
     // confluence, then re-derivation from the sequence, then disclosure, with
     // stability only as a last-resort tiebreaker. Mutalyzer does not appear —

@@ -105,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 27 records, 24 decided / 3 undecided
-//! 111 clause lines, of which 28 are named by more than one record
+//! 28 records, 25 decided / 3 undecided
+//! 111 clause lines, of which 30 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -178,8 +178,9 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//! docs/recommendations/DNA/alleles.md:5
+//! docs/recommendations/DNA/alleles.md:5  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //! docs/recommendations/DNA/alleles.md:16
 //!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
 //! docs/recommendations/DNA/complex.md:5
@@ -291,7 +292,8 @@
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //! docs/recommendations/DNA/insertion.md:17
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
-//! docs/recommendations/DNA/inversion.md:5
+//! docs/recommendations/DNA/inversion.md:5  [MULTI]
+//!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
 //! docs/recommendations/DNA/inversion.md:33
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
@@ -375,6 +377,7 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:57
@@ -382,6 +385,7 @@
 //! docs/recommendations/general.md:58  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:157
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
@@ -433,6 +437,9 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/recommendations/DNA/alleles.md:5
+//!     `conflicting-member-geometry-refusal-scope` — decided (governing)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
@@ -476,6 +483,9 @@
 //! docs/recommendations/DNA/duplication.md:148
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//! docs/recommendations/DNA/inversion.md:5
+//!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
+//!     `inversion-vs-two-delins-76-83` — decided (governing)
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
@@ -509,11 +519,13 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:58
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -835,7 +847,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (27, 24, 3),
+        (28, 25, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -999,7 +1011,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        28,
+        30,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
