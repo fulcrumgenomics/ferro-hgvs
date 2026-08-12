@@ -2021,7 +2021,7 @@ const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
 /// too. That is a cost bound, not a policy — above it
 /// [`partition_block_sequence_first`] returns `None` and the caller keeps the
 /// per-member result, the same fallback every other bound here takes.
-const MAX_SEQFIRST_GRID_CELLS: usize =
+pub(crate) const MAX_SEQFIRST_GRID_CELLS: usize =
     (MAX_CANONICAL_WINDOW as usize + 1) * (MAX_CANONICAL_WINDOW as usize + 1);
 
 /// Largest **net length change**, in bases, for which one unchanged base counts
@@ -5708,6 +5708,24 @@ fn partition_block_sequence_first(
 /// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
 /// example; it does not decide any shipped result.
 fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+    partition_block_canonical_within(reference, result, MAX_SEQFIRST_GRID_CELLS)
+}
+
+/// [`partition_block_canonical`] under a caller-supplied grid budget.
+///
+/// The budget is a parameter rather than the constant because
+/// [`crate::normalize::from_sequences`] exposes it as
+/// `FromSequencesOptions::max_grid_cells` and documents raising it for a
+/// long-read haplotype. Gating only in the caller made that documentation false
+/// in the direction that matters: a budget *below* the default worked, and one
+/// *above* it was silently overridden here — and, because the caller's guard had
+/// already passed, the refusal came back as "could not render the derived
+/// partition", naming ferro rather than the knob the caller had just raised.
+fn partition_block_canonical_within(
+    reference: &[u8],
+    result: &[u8],
+    max_grid_cells: usize,
+) -> Option<Vec<Piece>> {
     use crate::normalize::seqfirst::align::AlignmentDag;
     use crate::normalize::seqfirst::partition::CanonicalAlignment;
 
@@ -5718,7 +5736,7 @@ fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piec
         .len()
         .checked_add(1)?
         .checked_mul(result.len().checked_add(1)?)?;
-    if cells > MAX_SEQFIRST_GRID_CELLS {
+    if cells > max_grid_cells {
         return None;
     }
 
@@ -7319,6 +7337,188 @@ fn rebuild_members(
         members.push(build_merged(template, anchor));
     }
     Some(members)
+}
+
+/// Why [`derive_block_members`] declined.
+///
+/// Typed rather than `Option`, because the caller renders these as two different
+/// messages and cannot tell them apart afterwards: recomputing the cell count to
+/// guess gets it wrong, since the callee measures the **trimmed block** while
+/// anything upstream can only see the untrimmed window. A wide window with a
+/// small change was reported as a `max_grid_cells` refusal naming a knob that
+/// had nothing to do with it.
+pub(crate) enum BlockDecline {
+    /// The alignment grid over the trimmed block exceeds the budget. Carries the
+    /// block's own dimensions, so the message quotes what was actually measured.
+    GridTooLarge { ref_len: usize, alt_len: usize },
+    /// The partition would not render as HGVS members.
+    WouldNotRender,
+}
+
+/// What [`derive_block_members`] found, beyond the members themselves.
+///
+/// Two facts a window-local derivation owes its caller, kept apart because they
+/// call for different responses: one is a caveat on a usable answer, the other
+/// makes the answer unusable.
+pub(crate) struct DerivedBlock {
+    /// The rendered members, in ascending order.
+    pub(crate) members: Vec<HgvsVariant>,
+    /// Whether any member rests on an edge of the window.
+    ///
+    /// Exactly when a wider window could move the answer, so it is reported to
+    /// the caller rather than absorbed.
+    pub(crate) placement_bounded_by_window: bool,
+    /// Whether a **pure insertion** rests on the window's 5' edge.
+    ///
+    /// HGVS anchors an insertion between two positions (`insertion.md`), so a
+    /// payload sitting before the window's first base can only be spelled
+    /// `(w_lo - 1)_(w_lo)ins…` — naming a position the caller supplied no bases
+    /// for. That is not merely impolite: with `SequenceEnds::INTERIOR` this path
+    /// has no way to know whether `w_lo - 1` exists at all, and when the window
+    /// starts at position 1 it does not, so the description would be invalid.
+    ///
+    /// Reported rather than rendered, so [`crate::normalize::from_sequences`]
+    /// can refuse with a message naming the remedy. The 3' edge needs no such
+    /// flag: there the payload's anchor is the window's own last base.
+    pub(crate) anchors_before_window: bool,
+}
+
+/// Derive the members of a genomic block from the bases alone.
+///
+/// The seam [`crate::normalize::from_sequences`] enters this module at. Given a
+/// reference window and the window the caller observed, it runs the same
+/// partition / shift / coalesce / render pipeline
+/// [`canonicalize_from_sequence`] runs — and **only** that, deliberately:
+///
+/// * no [`collect_canonical_edits`] and no [`apply_edits_to_window`], because
+///   there is no input description to collect edits from;
+/// * no weight bound, because that bound's threshold is
+///   [`changed_columns_of_edits`] over the *input's* edits and there are none.
+///   A sequence pair has no spelling for a bound to be relative to, which is why
+///   this entry point cannot inherit #1440;
+/// * no [`coalesce_compensating_gap_split`]. That pass judges a split's
+///   boundaries to be an alignment coincidence, and the boundaries here come
+///   from [`partition_block_canonical`], whose premise is that they are not.
+///
+/// Returns a [`DerivedBlock`], or a typed [`BlockDecline`] saying which of the
+/// two refusals fired.
+pub(crate) fn derive_block_members(
+    reference: &[u8],
+    observed: &[u8],
+    template: &HgvsVariant,
+    w_lo: i64,
+    direction: ShuffleDirection,
+    max_grid_cells: usize,
+) -> Result<DerivedBlock, BlockDecline> {
+    let (lo, hi_ref, hi_alt) = trim_common_flanks(reference, observed);
+    if lo == hi_ref && lo == hi_alt {
+        return Ok(DerivedBlock {
+            members: Vec::new(),
+            placement_bounded_by_window: false,
+            anchors_before_window: false,
+        });
+    }
+
+    let (block_ref, block_alt) = (&reference[lo..hi_ref], &observed[lo..hi_alt]);
+    let too_large = || BlockDecline::GridTooLarge {
+        ref_len: block_ref.len(),
+        alt_len: block_alt.len(),
+    };
+    // Checked before building, because `(n + 1) * (m + 1)` on two lengths is
+    // itself an overflow site — the same order `partition_block_sequence_first`
+    // uses, and for the same reason. An overflow is reported as an oversized
+    // grid, which is what it is.
+    let cells = block_ref
+        .len()
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(block_alt.len().checked_add(1)?))
+        .ok_or_else(too_large)?;
+    if cells > max_grid_cells {
+        return Err(too_large());
+    }
+
+    // The budget is threaded through rather than left to the callee's default:
+    // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
+    // silently overridden there, and the refusal surfaced as a render failure
+    // naming ferro rather than the knob the caller had just raised.
+    let mut pieces = partition_block_canonical_within(block_ref, block_alt, max_grid_cells)
+        .ok_or(BlockDecline::WouldNotRender)?;
+    for piece in &mut pieces {
+        piece.ref_start += lo;
+        piece.ref_end += lo;
+    }
+
+    // The 3' placement, bounded by the caller's window. NOT the
+    // reference-anchored shift `normalize` performs: `reference` is all the
+    // sequence this path has, so nothing may move outside it.
+    shift_pieces(&mut pieces, reference, direction);
+    coalesce_adjacent_pieces(&mut pieces);
+    shrink_pieces_to_differences(&mut pieces, reference);
+
+    // Read after the three passes above, not before: each can move a piece onto
+    // or off the edge, and the answer that matters is about what is emitted.
+    let placement_bounded_by_window = pieces
+        .iter()
+        .any(|piece| piece.ref_start == 0 || piece.ref_end == reference.len());
+
+    // A piece claiming no reference bases is a pure insertion; at offset 0 its
+    // only HGVS anchor lies before the window. See `DerivedBlock`.
+    let anchors_before_window = pieces
+        .iter()
+        .any(|piece| piece.ref_start == 0 && piece.ref_end == 0);
+
+    let members = rebuild_members(
+        &pieces,
+        template,
+        Region::Genome,
+        w_lo,
+        reference,
+        // The caller's window is a slice of somebody's reference and this path
+        // cannot know whether it abuts a sequence end. `INTERIOR` withholds the
+        // terminal-insertion clamp rather than claiming an end that may not be
+        // there; `placement_bounded_by_window` is what reports the uncertainty.
+        SequenceEnds::INTERIOR,
+        None,
+    )
+    .ok_or(BlockDecline::WouldNotRender)?;
+    Ok(DerivedBlock {
+        members,
+        placement_bounded_by_window,
+        anchors_before_window,
+    })
+}
+
+/// The bases a set of genomic members denotes over `reference`, or `None` if
+/// they cannot be applied.
+///
+/// Routed through [`collect_canonical_edits`] and [`apply_edits_to_window`] —
+/// the same applier [`canonicalize_from_sequence`] verifies itself with.
+///
+/// **That makes this a self-consistency check, not an independent one, and the
+/// doc here used to claim the opposite** — "so a derivation cannot agree with
+/// its own check merely by having produced it". Sharing the applier is exactly
+/// what allows such an agreement: a fault in `apply_edits_to_window` is applied
+/// identically on both sides and cancels. The claim is withdrawn.
+///
+/// What it does buy is still worth having, and is the reason it runs at
+/// runtime rather than as a `debug_assert`: it catches a *rendering* fault —
+/// members whose spelling does not re-apply to the window they were derived
+/// from — which is the failure mode a derivation actually has. The independent
+/// question ("does the output denote what the input denoted") is answered by
+/// [`crate::spdi::compare_denoted_sequences`], which reaches the bases through
+/// `hgvs_to_spdi` and an SPDI splice precisely so that it shares nothing with
+/// this path.
+pub(crate) fn denoted_bases(
+    members: &[HgvsVariant],
+    reference: &[u8],
+    w_lo: i64,
+) -> Option<Vec<u8>> {
+    let kind = cis_kind_of(members.first()?)?;
+    let (accession, _, _, _, _) = cis_axis_parts(members.first()?, kind)?;
+    // Borrowed: both this and `members` come immutably out of the same slice, so
+    // the clone satisfied no borrow and cost a `String` per derivation.
+    let edits = collect_canonical_edits(members, kind, body_region(kind), accession)?;
+    apply_edits_to_window(&edits, reference, w_lo)
 }
 
 /// Build the [`Anchor`] for one piece, typing it under the spec's rules.

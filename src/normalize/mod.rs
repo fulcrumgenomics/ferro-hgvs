@@ -38,10 +38,12 @@ pub mod rules;
 // What remains is promoting it from shadow to authoritative. (Same correction as
 // the module's own header — this comment is its sibling and said the same wrong
 // thing.)
+pub mod from_sequences;
 #[cfg(feature = "dev")]
 pub mod seqfirst;
 #[cfg(not(feature = "dev"))]
 pub(crate) mod seqfirst;
+pub mod sequence_pair;
 pub mod shuffle;
 pub mod validate;
 
@@ -1787,6 +1789,235 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &HgvsVariant,
     ) -> Result<crate::spdi::AppliedVariant, FerroError> {
         crate::spdi::apply_to_reference(variant, &self.provider)
+    }
+
+    /// The reference/alternate pair this variant denotes, in the shape
+    /// [`crate::from_sequences`] consumes.
+    ///
+    /// The inverse of [`Self::from_sequences`]. Where
+    /// [`Self::apply_to_reference`] answers "what bases does this describe", in
+    /// SPDI's 0-based frame, this answers the same question 1-based — the
+    /// convention `VcfRecord`, HGVS and `from_sequences` all use. The two are
+    /// otherwise the same computation.
+    ///
+    /// `pad` extra reference bases are fetched past the members' own span, to
+    /// give a subsequent derivation room for its 3' placement. **128 is the
+    /// value the normalizer's own derivation uses** (`merge::CANONICAL_PAD`);
+    /// with `pad = 0` you get the bare changed block, and every
+    /// `from_sequences` call on it will report `placement_bounded_by_window`, because
+    /// with no flank every member is against an edge.
+    ///
+    /// **Both sides are padded by `pad`**, so the window a caller sizes from
+    /// this doc is `span + 2 * pad`, not `span + pad`. This paragraph used to
+    /// say the opposite — "only the 3' side is padded, and that is deliberate
+    /// rather than an oversight" — four lines above a body that calls
+    /// [`Self::prepend_five_prime_flank`]. The 3'-only argument it was quoting
+    /// belongs to [`crate::spdi::apply_to_reference`] and is sound *there*:
+    /// prepending `n` bases of 5' flank adds exactly `n` to the common prefix,
+    /// so it cannot move an SPDI key. It does not carry to this method, whose
+    /// consumer is `dup` typing rather than a trim — see the comment in the body
+    /// for the ten corpus classes that measured the difference.
+    ///
+    /// The bases are returned **upper-cased**. `fetch_window` does not
+    /// case-fold, so a soft-masked region arrives lower-case while the
+    /// prepended flank was upper-cased — manufacturing a mixed-case pair that
+    /// no caller supplied. Folding the whole window keeps
+    /// `to_sequences` -> `from_sequences` an inverse on a masked region.
+    ///
+    /// Declines whatever [`Self::apply_to_reference`] declines: a
+    /// multi-molecule or null allele, members on different accessions, members
+    /// that overlap, an edit SPDI cannot represent, or a span wider than
+    /// [`crate::spdi::MAX_APPLY_WINDOW`].
+    pub fn to_sequences(
+        &self,
+        variant: &HgvsVariant,
+        pad: u64,
+    ) -> Result<crate::normalize::sequence_pair::SequencePair, FerroError> {
+        let (applied, window_is_final) =
+            crate::spdi::apply::apply_to_reference_padded(variant, &self.provider, pad)?;
+
+        // `apply_to_reference_padded` pads only the 3' side, on the argument
+        // that 5' flank adds equally to both strings' common prefix and so
+        // cannot change what a *trim-based* consumer sees. That argument is
+        // sound for the trim and wrong for the consumer this method serves:
+        // `dup` typing reads the reference bases immediately 5' of an
+        // insertion point (`duplication.md:18`), so a member flush with the
+        // window's 5' edge cannot be recognised as a duplication and comes back
+        // as an `ins` instead.
+        //
+        // Measured: over the cis confluence corpus, ten `all-dup` classes
+        // reached both `g.[10_17dup;…]` and `g.[17_18insAATATATT;…]` — one
+        // variant, two spellings — purely because the two inputs' member spans
+        // gave them different amounts of 5' flank. Padding both sides closes it.
+        //
+        // Prepending the same bases to both strings cannot change what the pair
+        // denotes, so this widens the window without touching the answer.
+        let (reference, resulting, start) = self.prepend_five_prime_flank(
+            &applied.accession,
+            applied.start,
+            applied.reference,
+            applied.resulting,
+            pad,
+        );
+
+        Ok(crate::normalize::sequence_pair::SequencePair {
+            accession: applied.accession,
+            // `AppliedVariant::start` is 0-based and every public surface here
+            // is 1-based. This `+ 1` is the entire reason `SequencePair` exists
+            // rather than handing `AppliedVariant` straight to `from_sequences`.
+            position: start + 1,
+            // Folded whole. `fetch_window` serves the provider's own case, so a
+            // soft-masked region comes back lower-case, while the flank above is
+            // upper-cased — the pair would otherwise be mixed-case in a way no
+            // caller wrote. `from_sequences` folds too, so this is belt and
+            // braces for the derivation; what it actually fixes is the *pair* a
+            // caller reads, stores and compares.
+            reference: reference.to_ascii_uppercase(),
+            alternate: resulting.to_ascii_uppercase(),
+            window_is_final,
+        })
+    }
+
+    /// Widen a window 5' by `pad` bases, returning the two strings and the new
+    /// 0-based start.
+    ///
+    /// Best effort by design: near a sequence start there are simply fewer bases
+    /// to prepend, and a short read there is not a failure — the window is still
+    /// a correct description of its own extent. Returns the inputs unchanged
+    /// when the provider cannot serve the flank, so a reduced-capability
+    /// provider degrades to today's 3'-only behaviour rather than erroring.
+    ///
+    /// **The flank must be served in full or not at all**, which is the same
+    /// discipline [`crate::spdi::apply::fetch_window`] applies and for the same
+    /// reason. `get_sequence` is asked for `[start - wanted, start)`; a provider
+    /// that serves fewer bases has served the **front** of that range, but the
+    /// only way to accept a short read is to re-label those bases as the *last*
+    /// `served` of it and report a new start of `start - served`. That silently
+    /// shifts every derived coordinate by `wanted - served`, and the pair still
+    /// looks well-formed, so nothing downstream can notice. Over-serving is the
+    /// same fault mirrored: `start - served` underflows, and `[profile.release]`
+    /// sets no `overflow-checks`, so a release build wraps to a colossal
+    /// position instead of panicking.
+    ///
+    /// Declining an inexact read costs only the 5' flank on a provider that
+    /// cannot serve it, which is precisely the degradation this function was
+    /// already written to accept.
+    fn prepend_five_prime_flank(
+        &self,
+        accession: &str,
+        start: u64,
+        reference: String,
+        resulting: String,
+        pad: u64,
+    ) -> (String, String, u64) {
+        let wanted = pad.min(start);
+        if wanted == 0 {
+            return (reference, resulting, start);
+        }
+        let flank_start = start - wanted;
+        match self.provider.get_sequence(accession, flank_start, start) {
+            Ok(flank) if flank.len() as u64 == wanted => {
+                let flank = flank.to_ascii_uppercase();
+                (
+                    format!("{flank}{reference}"),
+                    format!("{flank}{resulting}"),
+                    flank_start,
+                )
+            }
+            _ => (reference, resulting, start),
+        }
+    }
+
+    /// [`crate::from_sequences`], against this normalizer's reference.
+    ///
+    /// The free function is a pure function of its arguments and therefore
+    /// cannot range-check `position` — doing so needs the reference, which would
+    /// make the provider a hidden input. This one holds a provider, so it does
+    /// check, and refuses an interval running past the end of the sequence. It
+    /// also offers `normalize`, which the free function cannot: normalizing
+    /// needs the reference too.
+    ///
+    /// **Prefer `normalize = true` unless you have a reason not to.** Over a
+    /// 6,000-shape sweep `normalize` moved **8.6%** of derived descriptions:
+    /// repeat notation (`g.27_28insAAA` -> `g.27A[4]`), reference-anchored
+    /// member re-derivation, and an inversion spread across several members
+    /// (`g.[17C>A;19T>A;21T>G]` -> `g.17_21inv`, which the alignment DAG
+    /// partitions before anything can see it, since it minimises edit distance
+    /// and an inversion is not in that cost model).
+    ///
+    /// All three are rule 2 and rule 3 — the pair this design assigns to
+    /// `normalize` — so `false` still yields a conformant, deterministic
+    /// description. It is simply not the recommended form as often as one might
+    /// assume. This doc previously said the flag was "a no-op on measured
+    /// material"; that was measured on too narrow a corpus and is withdrawn.
+    ///
+    /// # Which seam oracles this reaches, stated because it is not all of them
+    ///
+    /// `normalize = true` routes the derived description through
+    /// [`Self::normalize`] and therefore through `normalize_core_checked`, the
+    /// single exit `assert_seam_oracles` runs from — so all four oracles
+    /// (`FERRO_ASSERT_IDEMPOTENT`, `_REPARSE`, `_IN_BOUNDS`, `_SEQUENCE`) fire
+    /// on it, and this is the **only** entry to the derivation that reaches
+    /// them.
+    ///
+    /// `normalize = false`, the free [`crate::from_sequences`] and
+    /// [`crate::SequencePair::derive`] reach none of them, and that is a
+    /// deliberate limit rather than an omission to be closed later:
+    ///
+    /// - The three form oracles compare an output against **its input
+    ///   description**. There is no input description here — the input is bases
+    ///   — so there is nothing to be idempotent with respect to, nothing to
+    ///   re-parse a "before" of, and no prior spelling whose coordinates could
+    ///   be re-checked. (`_IN_BOUNDS` is the one that could be asked
+    ///   independently, and this method answers it directly instead: the
+    ///   range check above refuses an interval past the sequence end **before**
+    ///   deriving, which the free function cannot do at all.)
+    /// - `_SEQUENCE` compares the bases an input and an output denote. The
+    ///   caller's `reference` is taken on trust and is explicitly not required
+    ///   to be the reference, so comparing the derived description against the
+    ///   held reference would report a caller's own choice as a fault.
+    ///
+    /// What the derivation has instead is `from_sequences`'
+    /// `verify_round_trip`, and its doc says plainly what that is worth: it
+    /// shares an applier with the derivation, so it is a self-consistency check.
+    /// The independent comparison is made in the corpus and multi-member axes,
+    /// both of which key the derived side through `hgvs_to_spdi`.
+    pub fn from_sequences(
+        &self,
+        accession: &str,
+        position: u64,
+        reference: &str,
+        alternate: &str,
+        options: &crate::normalize::from_sequences::FromSequencesOptions,
+        normalize: bool,
+    ) -> Result<HgvsVariant, FerroError> {
+        let length = self.provider.get_sequence_length(accession)?;
+        // Checked before the derivation, not after: a description of bases that
+        // are not in the sequence is invalid however well it is derived, and
+        // saying so up front names the real fault.
+        let end = position
+            .checked_add(reference.len() as u64)
+            .and_then(|end| end.checked_sub(1))
+            .ok_or_else(|| FerroError::InvalidCoordinates {
+                msg: format!("position {position} plus the reference length overflows"),
+            })?;
+        if position > length || end > length {
+            return Err(FerroError::VariantExceedsReference {
+                accession: accession.to_string(),
+                hgvs_start: position,
+                hgvs_end: end,
+                expected_span: reference.len() as u64,
+                actual_bytes: length,
+            });
+        }
+        let variant = crate::normalize::from_sequences::from_sequences(
+            accession, position, reference, alternate, options,
+        )?;
+        if normalize {
+            self.normalize(&variant)
+        } else {
+            Ok(variant)
+        }
     }
 
     /// An encoding-invariant SPDI key for this variant, derived from the bases it

@@ -369,26 +369,26 @@ const FIVE_PRIME: Census = Census {
 /// an integration test cannot import a type out of an example, so the two are
 /// kept in step by this file failing to deserialize if they drift.
 #[derive(Deserialize)]
-struct Class {
-    id: String,
-    axis: String,
-    core: String,
+pub(crate) struct Class {
+    pub(crate) id: String,
+    pub(crate) axis: String,
+    pub(crate) core: String,
     denoted: String,
     members: usize,
     separation: usize,
-    spellings: Vec<String>,
+    pub(crate) spellings: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct Corpus {
-    classes: Vec<Class>,
+pub(crate) struct Corpus {
+    pub(crate) classes: Vec<Class>,
 }
 
 fn corpus_path() -> PathBuf {
     fixture_gen::fixture_path(CORPUS_RELATIVE_PATH)
 }
 
-fn corpus() -> &'static Corpus {
+pub(crate) fn corpus() -> &'static Corpus {
     static CORPUS: OnceLock<Corpus> = OnceLock::new();
     CORPUS.get_or_init(|| {
         let path = corpus_path();
@@ -421,7 +421,7 @@ fn padded(core: &str) -> String {
 
 /// The provider a class is drawn against, and the full sequence its coordinates
 /// address.
-fn reference_for(class: &Class) -> (MockProvider, String) {
+pub(crate) fn reference_for(class: &Class) -> (MockProvider, String) {
     if class.axis == "g" {
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence(GENOMIC_CONTIG, padded(&class.core));
