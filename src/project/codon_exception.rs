@@ -68,7 +68,28 @@ pub(crate) fn member_count(variant: &HgvsVariant) -> usize {
 ///   merge.
 /// * **the normalization warnings**, which are the caller's input's (an
 ///   auto-corrected reference mismatch, say). Re-normalizing an
-///   already-corrected description does not re-emit them.
+///   already-corrected description does not re-emit them. **This carry is
+///   defensive today and moves nothing** — see below.
+///
+/// # The warnings carry is defensive, not live coverage
+///
+/// On every production path both sides are empty at this call site, so the
+/// third line of the body is a no-op. The warnings a projection reports are
+/// attached by the *outer* entry points — `project_bare_genomic_parent`,
+/// `project_variant`, and both arms of `project_variant_all` — and every one of
+/// them assigns after `project_variant_inner` (or `project_normalized_all_inner`)
+/// has already returned. `apply_codon_frame_exception` runs *inside*
+/// `project_variant_inner`, so nothing has written warnings onto either
+/// projection by the time it is reached, and the outer assignment overwrites
+/// whatever it did. `project_normalized` assigns none at all.
+///
+/// It is kept rather than deleted because the invariant it encodes — the
+/// warnings describe the **caller's input**, not the merged form the
+/// re-projection re-normalized — is the one a future pre-merge warning source
+/// would need, and the line is what makes this function's contract complete
+/// rather than accidentally correct. Its unit coverage is stated as defensive
+/// for the same reason: read that assertion as pinning the contract, not as
+/// evidence any shipped path exercises it.
 ///
 /// **A decline reason belongs to the axis whose value it explains.** Assigning
 /// the whole [`AxisDeclineReasons`] across — which is what this function
@@ -89,48 +110,177 @@ pub(crate) fn carry_pre_merge_state(
     reprojected.normalization_warnings = std::mem::take(&mut pre_merge.normalization_warnings);
 }
 
-/// The first adjacent member pair on `coding` that `delins.md:18` keeps
-/// together, as its two CDS positions.
+/// **Every** adjacent member pair on `coding` that `delins.md:18` keeps
+/// together, each as its two CDS positions, in member order.
 ///
-/// The shape is the one `merge::apply_coding_codon_exception` matches — two
-/// lone substitutions with exactly one unchanged base between them — with the
-/// codon test run on the CDS axis, where `same_codon` is meaningful. The
-/// `codon-carve-out-shape-restriction` ruling widens the exception past that
-/// shape in principle but records that the widening is *not implemented*; this
-/// predicate deliberately matches what ships rather than what is licensed, so
-/// the two halves of the rule cannot drift apart here.
+/// # This is the TRIGGER, not the authorization
 ///
-/// **The caller still has to check that the pair lies inside one exon.** A codon
-/// may be split across an exon/exon junction, and then the pair is "separated by
-/// one nucleotide" on the `c.` axis while being separated by a whole intron on
-/// the sequence. Merging those is a different question from the one
-/// `delins.md:18` settles, and the repository already answers it the other way
-/// for the same shape — `project_cis_intron_split_codon_combines_to_single_missense`
+/// A non-empty answer means the coding axis holds at least one partition the
+/// frame would not have chosen, so the re-normalization is worth attempting.
+/// It does **not** enumerate everything that re-normalization will merge, and
+/// nothing may treat it as if it did — see the section below, and
+/// [`merged_member_spans`], which is what actually authorizes the result.
+///
+/// The pairs are returned rather than a `bool` so the caller can run its exon
+/// test only when there is something to test: a transcript lookup on every
+/// projection is a cost this rule has no right to impose on descriptions it
+/// never touches.
+///
+/// # Why every pair, and not just the first
+///
+/// The merge this feeds is `merge::apply_coding_codon_exception`, and that
+/// function loops (`while index < pieces.len()`) — it merges *each* qualifying
+/// pair it walks past, with no exon awareness of its own, `same_codon` being
+/// pure CDS arithmetic. So a predicate that answered for the first pair alone
+/// would guard one pair while licensing the rest. Pinned by
+/// `a_second_candidate_pair_crossing_an_exon_junction_declines_the_whole_merge`.
+///
+/// # The shape, and where it is narrower than what the re-normalization merges
+///
+/// A pair here is two **lone single-base** `c.` substitutions with exactly one
+/// unchanged base between them, codon-tested on the CDS axis where `same_codon`
+/// is meaningful. What the re-normalization actually merges is wider in two
+/// separate ways, and **both were measured**, not inferred:
+///
+/// * `merge::apply_coding_codon_exception` is **asymmetric**: it requires the
+///   *left* piece to be a lone substitution and the *right* only to **begin**
+///   with one — its `starts_with_substitution` test is
+///   `ref_end - ref_start == alt.len()`, i.e. any same-length replacement block.
+///   Measured on `NM_SPLIT2.1`: `c.[4G>C;6_7delinsAG]` has **no** pair here and
+///   normalizes to `c.4_7delinsCAAG`.
+/// * The re-normalization is a whole `normalize` call, so **every** merge rule
+///   runs, not only this exception. `delins-adjacent-members-when-both-consume-reference`
+///   merges at separation **zero**, which this predicate does not look at at
+///   all.
+///
+/// **So a whole-allele `all()` over these pairs is not a safe authorization.**
+/// It reads as one — "every candidate cleared the exon test" — while saying
+/// nothing about the merges it never enumerated. Measured end-to-end through
+/// `project_variant` on `NM_SPLIT2.1`, same geometry, opposite answers:
+///
+/// ```text
+/// g.[1009G>C;1100_1103delinsCAAC]                  -> c.[10G>C;11_14delinsCAAC]
+/// g.[1003G>C;1005T>A;1009G>C;1100_1103delinsCAAC]  -> c.[4_6delinsCAA;10_14delinsCCAAC]
+/// ```
+///
+/// `c.10` ends exon 1 and `c.11` opens exon 2, so the second line merged across
+/// the junction — licensed only by an *unrelated* pair, `(4, 6)`, happening to
+/// be enumerable and to sit inside exon 1. The paragraph this replaces argued
+/// the narrowness was safe because "being narrower can only decline a merge the
+/// normalizer would have made". That holds for a **per-pair** gate; it is false
+/// for a whole-allele one, which is what this feeds. Pinned by
+/// `an_unenumerated_merge_crossing_an_exon_junction_declines_the_whole_merge`.
+///
+/// **The caller still has to check that each pair lies inside one exon.** A
+/// codon may be split across an exon/exon junction, and then the pair is
+/// "separated by one nucleotide" on the `c.` axis while being separated by a
+/// whole intron on the sequence. Merging those is a different question from the
+/// one `delins.md:18` settles, and the repository already answers it the other
+/// way for the same shape — `project_cis_intron_split_codon_combines_to_single_missense`
 /// pins `c.[4G>C;6T>A]` staying split across a ~100 bp intron and combining only
 /// at the protein level — so that decision is left where it already is.
 ///
-/// The pair is returned rather than a `bool` so the caller can run that test
-/// only when there is something to test: a transcript lookup on every projection
-/// is a cost this rule has no right to impose on descriptions it never touches.
-///
-/// Answering `Some` says only that the coding axis has a partition the frame
+/// A non-empty answer says only that the coding axis has a partition the frame
 /// would not have chosen. The projector re-normalizes the coding allele to get
 /// the merged form, so the merge itself stays in one place.
-pub(crate) fn coding_codon_pair(coding: &HgvsVariant) -> Option<(i64, i64)> {
+pub(crate) fn coding_codon_pairs(coding: &HgvsVariant) -> Vec<(i64, i64)> {
     let HgvsVariant::Allele(allele) = coding else {
-        return None;
+        return Vec::new();
     };
     if allele.uncertain || allele.phase != AllelePhase::Cis {
-        return None;
+        return Vec::new();
     }
-    allele.variants.windows(2).find_map(|pair| {
-        match (cds_substitution(&pair[0]), cds_substitution(&pair[1])) {
-            (Some((left, _)), Some((right, _))) if right == left + 2 && same_codon(left, right) => {
-                Some((left, right))
-            }
-            _ => None,
+    allele
+        .variants
+        .windows(2)
+        .filter_map(
+            |pair| match (cds_substitution(&pair[0]), cds_substitution(&pair[1])) {
+                (Some((left, _)), Some((right, _)))
+                    if right == left + 2 && same_codon(left, right) =>
+                {
+                    Some((left, right))
+                }
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// The CDS spans of the members the re-normalization **produced** — every
+/// member of `merged` that was not already a member of `coding`, as
+/// `(first, last)` CDS bases.
+///
+/// # Why the authorization is here and not on [`coding_codon_pairs`]
+///
+/// The caller has to answer "may this merge stand?", and the honest way to
+/// answer it is to look at what the merge did, not to predict it. Predicting
+/// requires re-deriving the normalizer's whole rule set — its piece
+/// decomposition, `apply_coding_codon_exception`'s asymmetric right-hand shape,
+/// the separation-zero adjacency merge, and whatever is added next — in a
+/// second place, and a prediction that falls behind by one rule silently
+/// becomes a licence. That is exactly how the junction-crossing merge recorded
+/// on [`coding_codon_pairs`] got through.
+///
+/// Reading the result costs one pass over the members and cannot fall behind,
+/// because it is stated over the output rather than over the rules.
+///
+/// # `None` means "cannot verify", and the caller must decline on it
+///
+/// A produced member whose span is not plainly on the positive CDS body — an
+/// intronic offset, a `*`-numbered or negative position, an uncertain endpoint,
+/// a non-`c.` member — cannot be exon-tested by
+/// `codon_pair_is_within_one_exon`, which is CDS arithmetic. There is then no
+/// basis to claim it stays inside one exon, which is the same direction
+/// `codon_pair_is_within_one_exon` already takes for an unservable transcript.
+///
+/// Members are compared by their rendered form. Two members that render
+/// identically denote the same thing on the same axis, which is the property
+/// this needs: anything the merge left untouched is not the merge's to justify.
+pub(crate) fn merged_member_spans(
+    coding: &HgvsVariant,
+    merged: &HgvsVariant,
+) -> Option<Vec<(i64, i64)>> {
+    let before: std::collections::BTreeSet<String> =
+        members(coding).map(ToString::to_string).collect();
+    members(merged)
+        .filter(|member| !before.contains(&member.to_string()))
+        .map(cds_span)
+        .collect()
+}
+
+/// The top-level members of a description: an allele's own, or the description
+/// itself when it is a lone variant. The iterator companion of
+/// [`member_count`].
+fn members(variant: &HgvsVariant) -> impl Iterator<Item = &HgvsVariant> {
+    match variant {
+        HgvsVariant::Allele(allele) => allele.variants.iter(),
+        single => std::slice::from_ref(single).iter(),
+    }
+}
+
+/// `(first, last)` CDS bases of a `c.` member sitting plainly in the CDS.
+///
+/// `None` on the same grounds as [`cds_substitution`]: an intronic offset, a
+/// `*`-numbered 3'UTR position, a `pter`-class marker or a 5'UTR (negative)
+/// base is not a position the exon arithmetic can place. Unlike
+/// `cds_substitution` this admits any edit and any span — it answers *where* a
+/// member sits, not *what shape* it is.
+fn cds_span(variant: &HgvsVariant) -> Option<(i64, i64)> {
+    let HgvsVariant::Cds(cds) = variant else {
+        return None;
+    };
+    let start = certain_boundary(&cds.loc_edit.location.start)?;
+    let end = certain_boundary(&cds.loc_edit.location.end)?;
+    for position in [start, end] {
+        if position.offset.is_some()
+            || position.utr3
+            || position.special.is_some()
+            || position.base < 1
+        {
+            return None;
         }
-    })
+    }
+    Some((start.base, end.base))
 }
 
 /// The position a boundary names, **only** when it is stated with certainty.
@@ -206,8 +356,14 @@ mod tests {
         variant
     }
 
-    fn pair(description: &str) -> Option<(i64, i64)> {
-        coding_codon_pair(&parse_hgvs(description).expect("parses"))
+    fn pairs(description: &str) -> Vec<(i64, i64)> {
+        coding_codon_pairs(&parse_hgvs(description).expect("parses"))
+    }
+
+    /// No pair matched, spelled once so the assertions below read as a claim
+    /// about the predicate rather than as a bare empty literal.
+    fn no_pairs() -> Vec<(i64, i64)> {
+        Vec::new()
     }
 
     #[test]
@@ -215,7 +371,76 @@ mod tests {
         // `c.4` and `c.6` are both codon 2, separated by the single unchanged
         // `c.5` — `DNA/delins.md:18`'s "two variants separated by one
         // nucleotide, together affecting one amino acid".
-        assert_eq!(pair("NM_000000.1:c.[4C>A;6G>A]"), Some((4, 6)));
+        assert_eq!(pairs("NM_000000.1:c.[4C>A;6G>A]"), vec![(4, 6)]);
+    }
+
+    #[test]
+    fn every_qualifying_pair_is_surfaced_not_only_the_first() {
+        // `merge::apply_coding_codon_exception` merges each qualifying pair it
+        // walks past, so the caller's exon test has to be able to see all of
+        // them. `c.4`/`c.6` are codon 2 and `c.10`/`c.12` are codon 4; answering
+        // with the first alone would leave the second merged unchecked.
+        assert_eq!(
+            pairs("NM_000000.1:c.[4C>A;6G>A;10C>A;12G>A]"),
+            vec![(4, 6), (10, 12)]
+        );
+    }
+
+    fn spans(coding: &str, merged: &str) -> Option<Vec<(i64, i64)>> {
+        merged_member_spans(
+            &parse_hgvs(coding).expect("parses"),
+            &parse_hgvs(merged).expect("parses"),
+        )
+    }
+
+    /// The authorization sees what the enumeration missed, which is the whole
+    /// reason it is stated over the result.
+    ///
+    /// The pair `(10, 12)` is invisible to [`coding_codon_pairs`] here —
+    /// `c.11_14delinsCAAC` is not a lone substitution — yet `c.10_14delinsCCAAC`
+    /// is a member the merge produced, and its span is exactly what the exon
+    /// test has to be handed. Measured on `NM_SPLIT2.1`, where `c.10` ends exon
+    /// 1 and `c.11` opens exon 2, so this span is the junction-crossing merge.
+    #[test]
+    fn the_result_check_reports_a_span_the_pair_enumeration_never_saw() {
+        let coding = "NM_SPLIT2.1:c.[4C>A;6G>A;10G>C;11_14delinsCAAC]";
+        assert_eq!(pairs(coding), vec![(4, 6)]);
+        assert_eq!(
+            spans(coding, "NM_SPLIT2.1:c.[4_6delinsCAA;10_14delinsCCAAC]"),
+            Some(vec![(4, 6), (10, 14)]),
+            "both produced members must be reported, including the one no pair \
+             enumerated"
+        );
+    }
+
+    /// A member the merge left alone is not the merge's to justify.
+    #[test]
+    fn an_untouched_member_is_not_reported_as_produced() {
+        assert_eq!(
+            spans(
+                "NM_SPLIT2.1:c.[4C>A;6G>A;20G>C]",
+                "NM_SPLIT2.1:c.[4_6delinsAGA;20G>C]"
+            ),
+            Some(vec![(4, 6)])
+        );
+    }
+
+    /// A produced member the CDS arithmetic cannot place refuses to answer, so
+    /// the caller declines rather than assuming it stays inside an exon.
+    #[test]
+    fn a_produced_member_off_the_cds_body_cannot_be_verified() {
+        for merged in [
+            "NM_SPLIT2.1:c.[*4_*6delinsAGA]",
+            "NM_SPLIT2.1:c.[-6_-4delinsAGA]",
+            "NM_SPLIT2.1:c.[4+1_4+3delinsAGA]",
+        ] {
+            assert_eq!(
+                spans("NM_SPLIT2.1:c.[4C>A;6G>A]", merged),
+                None,
+                "{merged} is not placeable on the CDS body, so it must not be \
+                 reported as verified"
+            );
+        }
     }
 
     #[test]
@@ -223,7 +448,7 @@ mod tests {
         // `general.md:34` — "two variants separated by one or more nucleotides
         // should be described individually" — governs everything the exception
         // does not carve out, and the carve-out is a gap of exactly one.
-        assert_eq!(pair("NM_000000.1:c.[4C>A;7G>A]"), None);
+        assert_eq!(pairs("NM_000000.1:c.[4C>A;7G>A]"), no_pairs());
     }
 
     #[test]
@@ -231,7 +456,7 @@ mod tests {
         // `c.5` and `c.7` are codon 2 and codon 3, so the pair affects two amino
         // acids and the exception's precondition fails even though the
         // separation is right.
-        assert_eq!(pair("NM_000000.1:c.[5C>A;7G>A]"), None);
+        assert_eq!(pairs("NM_000000.1:c.[5C>A;7G>A]"), no_pairs());
     }
 
     #[test]
@@ -239,16 +464,16 @@ mod tests {
         // `same_codon` is only meaningful on the positive CDS body, so an
         // intronic offset, a `*`-numbered 3'UTR position and a negative 5'UTR
         // position each decline rather than being counted into a codon.
-        assert_eq!(pair("NM_000000.1:c.[4+1C>A;6G>A]"), None);
-        assert_eq!(pair("NM_000000.1:c.[*4C>A;*6G>A]"), None);
-        assert_eq!(pair("NM_000000.1:c.[-6C>A;-4G>A]"), None);
+        assert_eq!(pairs("NM_000000.1:c.[4+1C>A;6G>A]"), no_pairs());
+        assert_eq!(pairs("NM_000000.1:c.[*4C>A;*6G>A]"), no_pairs());
+        assert_eq!(pairs("NM_000000.1:c.[-6C>A;-4G>A]"), no_pairs());
     }
 
     #[test]
     fn a_trans_allele_is_not_two_variants_on_one_sequence() {
         // The exception merges two changes that lie on the same molecule; `;`
         // in a trans allele asserts they do not.
-        assert_eq!(pair("NM_000000.1:c.[4C>A];[6G>A]"), None);
+        assert_eq!(pairs("NM_000000.1:c.[4C>A];[6G>A]"), no_pairs());
     }
 
     /// A projection whose every axis carries a decline reason naming `tag`, so
@@ -321,7 +546,13 @@ mod tests {
             ],
             "a re-derived axis must be explained by the re-projection that derived it"
         );
-        // The warnings are the caller's input's, not the merged form's.
+        // DEFENSIVE, not production coverage: on every shipped path both sides
+        // are empty here, because the warnings are attached by the outer entry
+        // points after `project_variant_inner` returns. This constructs the
+        // pre-merge warnings by hand to pin the contract — that they describe
+        // the caller's input and so must not be replaced by the merged form's —
+        // and cannot fail against any current caller. See the note on
+        // `carry_pre_merge_state`.
         assert!(
             format!("{:?}", reprojected.normalization_warnings).contains("pre-merge"),
             "the input's normalization warnings must survive the re-projection"
@@ -335,7 +566,10 @@ mod tests {
         // information the author supplied. `Mu::inner` answers for both, which
         // is why these predicates use `certain_edit` instead.
         let certain = parse_hgvs("NM_000000.1:c.[4C>A;6G>A]").expect("parses");
-        assert_eq!(coding_codon_pair(&certain), Some((4, 6)));
-        assert_eq!(coding_codon_pair(&make_edits_uncertain(&certain)), None);
+        assert_eq!(coding_codon_pairs(&certain), vec![(4, 6)]);
+        assert_eq!(
+            coding_codon_pairs(&make_edits_uncertain(&certain)),
+            no_pairs()
+        );
     }
 }

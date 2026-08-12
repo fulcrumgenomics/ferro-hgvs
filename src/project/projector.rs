@@ -3336,7 +3336,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// nothing here runs outside a projection, so plain `Normalizer::normalize`
     /// of a `g.` description is untouched, and the exception is applied only to
     /// axes that *have* a reading frame. There is deliberately no genomic half —
-    /// a derived `g.` axis is still a `g.` description, and `general.md:22-31`
+    /// a derived `g.` axis is still a `g.` description, and `general.md:23-31`
     /// makes the prefix a statement about the type of reference sequence used.
     /// See the comment at the end of this function for the full reasoning.
     fn apply_codon_frame_exception(
@@ -3355,25 +3355,57 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if let Some(coding) = projection.coding.clone() {
             // The transcript is fetched only once a candidate pair exists, so a
             // projection this rule never touches pays no extra lookup.
-            if let Some((left, right)) = codon::coding_codon_pair(&coding) {
-                if self.codon_pair_is_within_one_exon(original, transcript_id, left, right) {
-                    if let Ok(merged) = self.normalizer.normalize(&coding) {
-                        if codon::member_count(&merged) < codon::member_count(&coding) {
-                            // Terminates: `merged` has strictly fewer members,
-                            // so the re-projection's coding axis cannot re-enter
-                            // here.
-                            let mut reprojected =
-                                self.project_variant_inner(&merged, transcript_id)?;
-                            // The reported genomic axis is not re-derived from
-                            // the merged form: for a genomic input it is that
-                            // input's own normalization, which is #79's answer
-                            // and stays. Its decline reason travels with it and
-                            // the other four axes' do not — they explain values
-                            // the re-projection just derived. See
-                            // `carry_pre_merge_state`.
-                            codon::carry_pre_merge_state(&mut reprojected, &mut projection);
-                            projection = reprojected;
-                        }
+            let pairs = codon::coding_codon_pairs(&coding);
+            // EVERY candidate pair must clear the exon test, not just one. The
+            // merge is the normalizer's and it merges all of them, so a single
+            // junction-crossing pair anywhere in the allele makes the whole
+            // re-normalization unsafe to run — there is no way to ask it for a
+            // subset. Declining outright leaves the description exactly as the
+            // axis produced it, which is the conservative direction.
+            //
+            // This is the TRIGGER only. `coding_codon_pairs` enumerates a
+            // narrower shape than the re-normalization merges — see its docs for
+            // the two measured ways — so an `all()` over it authorizes nothing
+            // about the merges it never saw. The authorization is
+            // `merged_members_stay_within_one_exon` below, which reads the
+            // result instead of predicting it.
+            let all_within_one_exon = !pairs.is_empty()
+                && pairs.iter().all(|&(left, right)| {
+                    self.codon_pair_is_within_one_exon(original, transcript_id, left, right)
+                });
+            if all_within_one_exon {
+                if let Ok(merged) = self.normalizer.normalize(&coding) {
+                    if codon::member_count(&merged) < codon::member_count(&coding)
+                        && self.merged_members_stay_within_one_exon(
+                            original,
+                            transcript_id,
+                            &coding,
+                            &merged,
+                        )
+                    {
+                        // Terminates: `merged` has strictly fewer members, so
+                        // the re-projection's coding axis cannot re-enter here.
+                        //
+                        // A failed re-projection must not fail the projection.
+                        // This is a refinement of an answer that is already
+                        // valid — `projection` was built and is returnable — and
+                        // the merge attempt two lines up is deliberately
+                        // swallowed on failure for exactly that reason. A `?`
+                        // here would make the two failure modes disagree and let
+                        // the refinement destroy the result it was refining.
+                        let Ok(mut reprojected) =
+                            self.project_variant_inner(&merged, transcript_id)
+                        else {
+                            return Ok(projection);
+                        };
+                        // The reported genomic axis is not re-derived from the
+                        // merged form: for a genomic input it is that input's
+                        // own normalization, which is #79's answer and stays.
+                        // Its decline reason travels with it and the other four
+                        // axes' do not — they explain values the re-projection
+                        // just derived. See `carry_pre_merge_state`.
+                        codon::carry_pre_merge_state(&mut reprojected, &mut projection);
+                        projection = reprojected;
                     }
                 }
             }
@@ -3382,7 +3414,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // There is deliberately no second half re-merging the derived genomic
         // axis from the coding axis's answer.
         //
-        // `general.md:22-31` makes the prefix a statement about the **type of
+        // `general.md:23-31` makes the prefix a statement about the **type of
         // reference sequence used** — "`c` for a coding DNA reference sequence,
         // `g` for a linear genomic reference sequence" — and every frame-derived
         // rule in the recommendations is conditioned on that type, e.g.
@@ -3413,6 +3445,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // string it produces is a `g.` description either way.
 
         Ok(projection)
+    }
+
+    /// Does every member the re-normalization **produced** sit inside one exon?
+    ///
+    /// This is the authorization the codon-frame exception rests on, and it is
+    /// stated over the merge's result rather than over a prediction of it.
+    /// `codon_exception::coding_codon_pairs` enumerates a narrower shape than
+    /// `normalize` merges — measured two ways, both recorded on that function —
+    /// so an `all()` over its pairs licenses every merge it failed to
+    /// enumerate. Reading the members that came out cannot fall behind the
+    /// normalizer's rule set, because it never restates it.
+    ///
+    /// Declines when a produced member cannot be placed on the CDS body at all:
+    /// there is then no basis to claim it stays inside one exon, which is the
+    /// direction [`Self::codon_pair_is_within_one_exon`] already takes for an
+    /// unservable transcript.
+    fn merged_members_stay_within_one_exon(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+        coding: &HgvsVariant,
+        merged: &HgvsVariant,
+    ) -> bool {
+        let Some(spans) = crate::project::codon_exception::merged_member_spans(coding, merged)
+        else {
+            return false;
+        };
+        spans.iter().all(|&(first, last)| {
+            self.codon_pair_is_within_one_exon(variant, transcript_id, first, last)
+        })
     }
 
     /// Do CDS positions `left` and `right` sit inside one exon of
@@ -6757,6 +6819,81 @@ mod tests {
         genome.push_str("ATGG"); // exon 1, genome [1000,1004) = c.1-4
         genome.push_str(&"N".repeat(1100 - 1004)); // intron
         genome.push_str("ATTATTAA"); // exon 2, genome [1100,1108) = c.5-12
+        genome.push_str(&"N".repeat(100));
+        provider.add_genomic_sequence("chr1", genome);
+        (projector, provider)
+    }
+
+    /// Provider for the two-candidate-pair exon guard: `NM_SPLIT2.1`, a
+    /// two-exon plus-strand transcript whose CDS is
+    /// `ATGGATTATGATTATTATTAA` (Met-Asp-Tyr-Asp-Tyr-Tyr-Stop).
+    ///
+    /// Codon 2 (`c.4_6`) sits wholly inside exon 1, while codon 4 (`c.10_12`)
+    /// is split by the intron — `c.10` ends exon 1 and `c.11_12` open exon 2.
+    /// So a four-member allele can carry **two** gap-of-one same-codon pairs
+    /// whose exon verdicts differ, which is the shape
+    /// [`super::codon_exception::coding_codon_pairs`] has to surface in full:
+    /// answering only for the first pair guards one and leaves the other to be
+    /// merged unchecked by the normalizer, which merges every qualifying pair.
+    ///
+    /// cdot exons: exon 1 = genome `[1000,1010)` ↔ tx `[0,10)` (c.1-10); exon 2
+    /// = genome `[1100,1111)` ↔ tx `[10,21)` (c.11-21). Read the same way
+    /// [`make_intron_split_codon_provider_and_projector`] is — its `c.4` is
+    /// `g.1003` — so `c.4` is `g.1003`, `c.6` is `g.1005`, `c.10` is `g.1009`
+    /// (the last base of exon 1) and `c.12` is `g.1101`.
+    fn make_two_pair_split_codon_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_SPLIT2.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("SPLITGENE2".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1010, 0, 10], [1100, 1111, 10, 21]],
+                cds_start: Some(0),
+                cds_end: Some(21),
+                gene_id: None,
+                protein: Some("NP_SPLIT2.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "NM_SPLIT2.1".to_string(),
+            gene_symbol: Some("SPLITGENE2".to_string()),
+            strand: TxStrand::Plus,
+            // Spliced CDS (introns removed).
+            sequence: Some("ATGGATTATGATTATTATTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(21),
+            exons: vec![
+                Exon::with_genomic(1, 1, 10, 1000, 1009),
+                Exon::with_genomic(2, 11, 21, 1100, 1110),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1110),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // The exonic bases sit where the cdot entries above place them, so the
+        // genomic base at each exonic position equals the spliced transcript
+        // base and no alignment gap is inferred: exon 1 at `g.1000-1009`, exon 2
+        // at `g.1100-1110` (1-based).
+        let mut genome = String::new();
+        genome.push_str(&"N".repeat(999));
+        genome.push_str("ATGGATTATG"); // exon 1, g.1000-1009 = c.1-10
+        genome.push_str(&"N".repeat(1099 - 1009)); // intron
+        genome.push_str("ATTATTATTAA"); // exon 2, g.1100-1110 = c.11-21
         genome.push_str(&"N".repeat(100));
         provider.add_genomic_sequence("chr1", genome);
         (projector, provider)
@@ -13337,6 +13474,121 @@ mod tests {
         );
         let protein = proj.protein.expect("protein present").to_string();
         assert_eq!(protein, "NP_SPLIT.1:p.(Asp2Gln)");
+    }
+
+    /// The exon guard covers **every** candidate pair, not just the first one.
+    ///
+    /// `merge::apply_coding_codon_exception` walks the whole piece list and
+    /// merges each qualifying pair; the projector's guard is what decides
+    /// whether that merge may run at all. So a coding allele carrying two
+    /// gap-of-one same-codon pairs — the first inside exon 1, the second
+    /// straddling the intron — must be declined outright, or the second pair is
+    /// merged across the junction with nothing having checked it.
+    ///
+    /// That is the question `project_cis_intron_split_codon_combines_to_single_missense`
+    /// already answers the other way for a single pair: an intron-split codon
+    /// combines at the **protein** level and stays split on `c.`. Merging it on
+    /// `c.` here would contradict that pin for the same geometry, reached only
+    /// because a different pair happened to be first in the allele.
+    #[test]
+    fn a_second_candidate_pair_crossing_an_exon_junction_declines_the_whole_merge() {
+        let (projector, provider) = make_two_pair_split_codon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4 = g.1003 (ref G) and c.6 = g.1005 (ref T) are codon 2, both in
+        // exon 1. c.10 = g.1009 (ref G, last base of exon 1) and c.12 = g.1101
+        // (ref T, exon 2) are codon 4, split by the intron.
+        let members = [
+            "chr1:g.1003G>C",
+            "chr1:g.1005T>A",
+            "chr1:g.1009G>C",
+            "chr1:g.1101T>A",
+        ]
+        .iter()
+        .map(|s| crate::parse_hgvs(s).expect("member parses"))
+        .collect::<Vec<_>>();
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(members));
+        let proj = vp
+            .project_variant(&allele, "NM_SPLIT2.1")
+            .expect("projection should succeed");
+        let coding = proj.coding.as_ref().expect("coding present").to_string();
+        assert!(
+            coding.contains("c.[4G>C;6T>A;10G>C;12T>A]"),
+            "no pair may merge while one of them crosses the exon junction, got {coding}"
+        );
+    }
+
+    /// The enumeration is narrower than what the re-normalization merges, so an
+    /// `all()` over it cannot be the authorization.
+    ///
+    /// [`super::codon_exception::coding_codon_pairs`] enumerates only pairs of
+    /// **lone single-base** `c.` substitutions. The re-normalization is a whole
+    /// `normalize` call, so every merge rule in it runs — including the
+    /// separation-**zero** adjacency merge
+    /// (`delins-adjacent-members-when-both-consume-reference`), which that
+    /// predicate does not look at at all.
+    ///
+    /// Here `c.11_14delinsCAAC` sits flush against `c.10G>C` on the coding axis,
+    /// while `c.10` ends exon 1 and `c.11` opens exon 2 — the two are ~91 bases
+    /// apart on the genome and their genomic spelling stays split. The only
+    /// enumerated pair is `(4, 6)`, wholly inside exon 1, so the `all()` passed
+    /// and the merge ran unchecked. Measured either side, same geometry and
+    /// opposite answers:
+    ///
+    /// ```text
+    /// without the (4,6) pair  ->  c.[10G>C;11_14delinsCAAC]     (declined: no trigger)
+    /// with it                 ->  c.[4_6delinsCAA;10_14delinsCCAAC]
+    /// ```
+    ///
+    /// A junction-crossing merge decided by whether an *unrelated* pair
+    /// elsewhere in the allele happened to be enumerable is the same outcome
+    /// [`Self::a_second_candidate_pair_crossing_an_exon_junction_declines_the_whole_merge`]
+    /// exists to prevent, reached through a shape it does not cover. The whole
+    /// merge is therefore declined, which costs the legitimate `(4, 6)` merge —
+    /// the conservative direction this rule already takes.
+    #[test]
+    fn an_unenumerated_merge_crossing_an_exon_junction_declines_the_whole_merge() {
+        let (projector, provider) = make_two_pair_split_codon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4 = g.1003 (ref G) and c.6 = g.1005 (ref T) are codon 2, both in
+        // exon 1 — the pair the enumeration DOES see. c.10 = g.1009 is the last
+        // base of exon 1; c.11_14 = g.1100_1103 opens exon 2.
+        let members = [
+            "chr1:g.1003G>C",
+            "chr1:g.1005T>A",
+            "chr1:g.1009G>C",
+            "chr1:g.1100_1103delinsCAAC",
+        ]
+        .iter()
+        .map(|s| crate::parse_hgvs(s).expect("member parses"))
+        .collect::<Vec<_>>();
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(members));
+        let proj = vp
+            .project_variant(&allele, "NM_SPLIT2.1")
+            .expect("projection should succeed");
+        let coding = proj.coding.as_ref().expect("coding present").to_string();
+        assert!(
+            coding.contains("c.[4G>C;6T>A;10G>C;11_14delinsCAAC]"),
+            "a merge the enumeration cannot see must not cross the exon \
+             junction, got {coding}"
+        );
+
+        // The same allele without the enumerable pair takes no merge at all, so
+        // the geometry alone does not decide it — the trigger did.
+        let untriggered = [
+            crate::parse_hgvs("chr1:g.1009G>C").expect("member parses"),
+            crate::parse_hgvs("chr1:g.1100_1103delinsCAAC").expect("member parses"),
+        ];
+        let proj = vp
+            .project_variant(
+                &HgvsVariant::Allele(AlleleVariant::cis(untriggered.to_vec())),
+                "NM_SPLIT2.1",
+            )
+            .expect("projection should succeed");
+        let coding = proj.coding.as_ref().expect("coding present").to_string();
+        assert!(
+            coding.contains("c.[10G>C;11_14delinsCAAC]"),
+            "control: with no enumerable pair the merge never runs, got {coding}"
+        );
     }
 
     /// Build a bare plus-strand coding [`Transcript`] with the given CDS sequence
