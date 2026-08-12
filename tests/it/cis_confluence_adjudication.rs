@@ -13,8 +13,8 @@
 //! stale without anything noticing** — it read 4 643 divergent classes with a
 //! `3066 / 696 / 271 / 267 / 181 / 131 / 28 / 3` family split and "4 568 of the
 //! 4 643 (98.4 %)" for the disjoint-output mechanism, while the asserted
-//! constants next door had already moved past it. No replacement figures are
-//! given here, and that is the point: `cis_confluence_axis::THREE_PRIME` and
+//! constants next door had already moved past it. No divergent count is quoted
+//! as CURRENT anywhere below, and that is the point: `cis_confluence_axis::THREE_PRIME` and
 //! `cis_confluence_axis::FIVE_PRIME` carry a `converged` each, the two are
 //! **not** equal, and a direction's divergent count is that direction's own
 //! `classes - converged`. A single `converged` restated for both directions is
@@ -35,8 +35,11 @@
 //! cargo run --release --features dev --example dump_confluence_divergences -- --stats --direction 5prime
 //! ```
 //!
-//! Measured 2026-08-09 on `main` @35de96c8, recorded as a dated *measurement*
-//! and not as an invariant: 3 246 divergent at 3', over the eight families
+//! Measured 2026-08-09 on `main` @35de96c8 — a dated *measurement*, not an
+//! invariant, and already a base behind: it totals 3 246 divergent at 3' where
+//! this tree's constants give 3 245. It is kept only for the family SPLIT,
+//! which the constants cannot supply; take the total from them. Over the eight
+//! families:
 //! `spanning-vs-split/min-2+` 1 659, `split-vs-split/min-2+` 411,
 //! `spanning-vs-split/min-1` 404, `split-vs-split/min-1` 339,
 //! `same-arity/min-2+` 243, `same-arity/min-1` 154,

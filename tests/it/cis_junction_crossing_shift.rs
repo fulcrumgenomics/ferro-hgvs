@@ -385,6 +385,14 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
     // direction and required to be byte-identical. Without that, a
     // non-idempotent regression on either output keeps this row green while the
     // "two stable normalized strings" headline above becomes false.
+    //
+    // All SIX rows of the table above are here, including the two cross-direction
+    // ones — each one-member spelling read in the *other* direction's arm. Those
+    // two are not decoration: the divergence loop below compares against
+    // `ONE_MEMBER_FIVE_PRIME` in both directions, which is only the one-member
+    // answer under 3' because that spelling rolls onto `ONE_MEMBER_THREE_PRIME`
+    // there. An unasserted row that another assertion leans on is the shape this
+    // whole branch is about.
     for (input, expected, direction) in [
         (
             THREE_MEMBER,
@@ -397,12 +405,22 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
             ShuffleDirection::FivePrime,
         ),
         (
+            ONE_MEMBER_THREE_PRIME,
+            ONE_MEMBER_FIVE_PRIME,
+            ShuffleDirection::FivePrime,
+        ),
+        (
             THREE_MEMBER,
             "TEMPLATE:g.[4_5insC;9_10dup;15del]",
             ShuffleDirection::ThreePrime,
         ),
         (
             ONE_MEMBER_THREE_PRIME,
+            ONE_MEMBER_THREE_PRIME,
+            ShuffleDirection::ThreePrime,
+        ),
+        (
+            ONE_MEMBER_FIVE_PRIME,
             ONE_MEMBER_THREE_PRIME,
             ShuffleDirection::ThreePrime,
         ),
