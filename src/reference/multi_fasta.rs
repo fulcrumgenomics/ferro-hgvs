@@ -82,6 +82,62 @@ pub struct SupplementalTranscriptInfo {
     pub sequence_length: u64,
 }
 
+impl SupplementalTranscriptInfo {
+    /// Whether this record can stand in for a cdot exon table.
+    ///
+    /// The supplemental map exists to supply a **curated CDS** for transcripts cdot
+    /// lacks or gets wrong. That is the only thing it can authoritatively add: the
+    /// bases come from the FASTA index and the exon structure comes from cdot. So a
+    /// record with no CDS cannot replace a cdot table — diverting to it trades a
+    /// real exon list for nothing.
+    ///
+    /// This exists because the divert used to test the map for *presence*
+    /// (`contains_key`), which is not the same question. Measured against a prepared
+    /// reference, `patterns_transcripts.metadata.json` carries a CDS on **19** of its
+    /// 140,027 records, so presence was true almost everywhere and usability almost
+    /// nowhere: 50 accessions whose cdot tables were complete (10-28 exons) were
+    /// served with `exons: []` and `cds_start: None` (#1722).
+    pub fn can_replace_cdot_table(&self) -> bool {
+        self.cds_start.is_some() && self.cds_end.is_some()
+    }
+
+    /// Whether the record carries a CDS bound or a length — the two fields any
+    /// transcript *geometry* could be built from.
+    ///
+    /// Used at load to report how much of a supplemental artifact supplies neither,
+    /// rather than inserting such rows and letting `contains_key` imply they mean
+    /// something.
+    ///
+    /// **`gene_symbol` is deliberately excluded, which is why this is not named
+    /// "is informative".** It is not a dead field: [`Self::can_replace_cdot_table`]'s
+    /// sibling path copies it onto the served transcript
+    /// (`get_supplemental_cds_info`), and for an accession cdot does not hold it is
+    /// the only source of the symbol. Measured against the shipped
+    /// `patterns_transcripts.metadata.json`: **every one** of the 116,572 records
+    /// this returns `false` for carries a `gene_symbol` (116,572 of 116,572), so
+    /// calling that population "inert" would be the same presence-vs-usability
+    /// conflation this type exists to stop, run the other way.
+    pub fn carries_cds_or_length(&self) -> bool {
+        self.cds_start.is_some() || self.cds_end.is_some() || self.sequence_length > 0
+    }
+}
+
+/// A supplemental artifact is reported as largely CDS-free when fewer than one
+/// record in [`LARGELY_WITHOUT_CDS_RATIO`] carries a usable CDS.
+///
+/// Extracted so the threshold is testable without going through a manifest load:
+/// the branch it gates is a `warn!`, and a log line is not something a unit test
+/// can assert on.
+const LARGELY_WITHOUT_CDS_RATIO: usize = 10;
+
+/// Whether a supplemental artifact carries so few CDS records that relying on it
+/// for CDS metadata is a data defect rather than a normal state.
+///
+/// Returns `false` for an empty artifact — there is no population to describe.
+fn artifact_is_largely_without_cds(with_cds: usize, total: usize) -> bool {
+    total > 0 && with_cds.saturating_mul(LARGELY_WITHOUT_CDS_RATIO) < total
+}
+
 /// Supplemental transcript metadata for transcripts not in cdot.
 #[derive(Debug, Clone, Default)]
 pub struct SupplementalCdsInfo {
@@ -1161,6 +1217,8 @@ impl MultiFastaProvider {
                             if let Some(transcripts) =
                                 metadata.get("transcripts").and_then(|v| v.as_object())
                             {
+                                let mut without_cds_or_length = 0usize;
+                                let mut with_cds = 0usize;
                                 for (accession, info) in transcripts {
                                     let cds_start = info.get("cds_start").and_then(|v| v.as_u64());
                                     let cds_end = info.get("cds_end").and_then(|v| v.as_u64());
@@ -1172,20 +1230,50 @@ impl MultiFastaProvider {
                                         .get("sequence_length")
                                         .and_then(|v| v.as_u64())
                                         .unwrap_or(0);
-                                    provider.supplemental_cds.transcripts.insert(
-                                        accession.clone(),
-                                        SupplementalTranscriptInfo {
-                                            cds_start,
-                                            cds_end,
-                                            gene_symbol,
-                                            sequence_length,
-                                        },
+                                    let record = SupplementalTranscriptInfo {
+                                        cds_start,
+                                        cds_end,
+                                        gene_symbol,
+                                        sequence_length,
+                                    };
+                                    if !record.carries_cds_or_length() {
+                                        without_cds_or_length += 1;
+                                    }
+                                    if record.can_replace_cdot_table() {
+                                        with_cds += 1;
+                                    }
+                                    provider
+                                        .supplemental_cds
+                                        .transcripts
+                                        .insert(accession.clone(), record);
+                                }
+                                // `supplemental_fasta` is a scalar manifest key and the map
+                                // starts empty, so this is this artifact's own row count —
+                                // `serde_json::Map` has already de-duplicated accessions.
+                                let total = provider.supplemental_cds.transcripts.len();
+                                eprintln!(
+                                    "Loaded {} supplemental transcripts ({} with a CDS, {} with \
+                                     neither a CDS nor a length)",
+                                    total, with_cds, without_cds_or_length
+                                );
+                                // A supplemental artifact that carries almost no CDS is a
+                                // data defect, not a normal state, and it used to be
+                                // invisible: the old line reported the row count and called
+                                // them all "with CDS metadata". The shipped
+                                // `patterns_transcripts.metadata.json` carries a CDS on 19
+                                // of 140,027 rows (#1722).
+                                if artifact_is_largely_without_cds(with_cds, total) {
+                                    warn!(
+                                        "supplemental metadata {} carries almost no CDS: {} of \
+                                         {} records have one. A transcript relying on it to \
+                                         REPLACE a cdot exon table will keep cdot's table \
+                                         instead; one with no cdot entry at all is served \
+                                         from the FASTA index with no CDS.",
+                                        metadata_path.display(),
+                                        with_cds,
+                                        total
                                     );
                                 }
-                                eprintln!(
-                                    "Loaded {} supplemental transcripts with CDS metadata",
-                                    provider.supplemental_cds.transcripts.len()
-                                );
                             }
                         }
                         Err(e) => {
@@ -1748,20 +1836,59 @@ impl MultiFastaProvider {
             .map(str::to_string)
     }
 
-    /// Get CDS info from supplemental metadata for old/superseded transcripts.
-    /// Creates a synthetic single exon spanning the entire transcript since
-    /// mRNA transcripts are already spliced.
-    fn get_supplemental_cds_info(&self, accession: &str) -> TranscriptMetadata {
+    /// Report a fall-through to the supplemental map, saying what the record can
+    /// actually supply rather than asserting a CDS was applied.
+    ///
+    /// `presence` is the map lookup, deliberately passed rather than re-done: the
+    /// three states the caller cannot distinguish otherwise are "no record at all"
+    /// (silent — nothing to report), "a record with a curated CDS" and "a record
+    /// with none". Only the second is `using supplemental CDS metadata`.
+    fn warn_supplemental_fallback(
+        record: Option<&SupplementalTranscriptInfo>,
+        accession: &str,
+        why: &str,
+    ) {
+        match record {
+            None => {}
+            Some(info) if info.can_replace_cdot_table() => {
+                warn!("{accession} {why}, using supplemental CDS metadata");
+            }
+            Some(_) => {
+                warn!(
+                    "{accession} {why}, and its supplemental record carries no CDS: served \
+                     from the FASTA index as a single exon with no CDS"
+                );
+            }
+        }
+    }
+
+    /// Build transcript metadata from the supplemental CDS map, for old/superseded
+    /// transcripts.
+    ///
+    /// Creates a synthetic single exon spanning the entire transcript, since an
+    /// mRNA reference sequence is already spliced.
+    ///
+    /// `sequence_length` is the length from the **FASTA index**, which is
+    /// authoritative and always present. It used to be read from the supplemental
+    /// metadata, which is `0` on 83% of the shipped artifact's records — and since
+    /// the synthetic exon is keyed on it, a zero produced a transcript with no exons
+    /// at all (#1722). The metadata never needed to carry it: this exon spans the
+    /// whole transcript by construction.
+    fn get_supplemental_cds_info(
+        &self,
+        accession: &str,
+        sequence_length: u64,
+    ) -> TranscriptMetadata {
         use crate::reference::transcript::{Exon, Strand};
 
         if let Some(info) = self.supplemental_cds.transcripts.get(accession) {
             // Create a synthetic single exon spanning the entire transcript.
             // For mRNA transcripts, the entire sequence is exonic (already spliced).
-            let exons = if info.sequence_length > 0 {
+            let exons = if sequence_length > 0 {
                 vec![Exon {
                     number: 1,
                     start: 1,
-                    end: info.sequence_length,
+                    end: sequence_length,
                     genomic_start: None,
                     genomic_end: None,
                 }]
@@ -2587,14 +2714,24 @@ impl MultiFastaProvider {
                         // may be corrupted, so fall back to supplemental data.
                         let has_gaps = exons.windows(2).any(|w| w[1].start != w[0].end + 1);
 
-                        if has_gaps && self.supplemental_cds.transcripts.contains_key(&resolved) {
-                            // cdot has gaps, use supplemental data instead
+                        // A fallback must never be a downgrade. Divert only when the
+                        // supplemental record can actually replace the table — i.e. it
+                        // carries the curated CDS this map exists to supply. A gapped
+                        // cdot table is real annotation and is strictly more useful than
+                        // none; what to do about the gap itself is #1619's question, not
+                        // this one (#1722).
+                        let supplemental_replacement = self
+                            .supplemental_cds
+                            .transcripts
+                            .get(&resolved)
+                            .filter(|info| info.can_replace_cdot_table());
+                        if has_gaps && supplemental_replacement.is_some() {
                             warn!(
                                 "cdot exon data for {} has gaps in transcript coordinates, \
                                  using supplemental CDS metadata",
                                 resolved
                             );
-                            self.get_supplemental_cds_info(&resolved)
+                            self.get_supplemental_cds_info(&resolved, entry.length)
                         } else {
                             // Compute transcript genomic bounds from exons
                             let (genomic_start, genomic_end) = if !exons.is_empty() {
@@ -2653,24 +2790,31 @@ impl MultiFastaProvider {
                             cds_start_incomplete: tx.cds_start_incomplete,
                         }
                     } else {
-                        // Check supplemental CDS for old/superseded transcripts
-                        if self.supplemental_cds.transcripts.contains_key(&resolved) {
-                            warn!(
-                                "{} not in cdot data, using supplemental CDS metadata",
-                                resolved
-                            );
-                        }
-                        self.get_supplemental_cds_info(&resolved)
+                        // Check supplemental CDS for old/superseded transcripts.
+                        //
+                        // Unlike the gapped-cdot divert above, there is no exon table
+                        // to lose here, so the BRANCH is right whatever the record
+                        // carries. Only the message has to distinguish the two: on the
+                        // shipped artifact 140,008 of 140,027 records carry no CDS, so
+                        // an unconditional "using supplemental CDS metadata" would
+                        // claim a CDS was applied on essentially every superseded
+                        // accession and send an operator looking at cdot (#1722).
+                        Self::warn_supplemental_fallback(
+                            self.supplemental_cds.transcripts.get(&resolved),
+                            &resolved,
+                            "not in cdot data",
+                        );
+                        self.get_supplemental_cds_info(&resolved, entry.length)
                     }
                 } else {
-                    // Check supplemental CDS for old/superseded transcripts (no cdot mapper)
-                    if self.supplemental_cds.transcripts.contains_key(&resolved) {
-                        warn!(
-                            "{} not in cdot data (no cdot mapper), using supplemental CDS metadata",
-                            resolved
-                        );
-                    }
-                    self.get_supplemental_cds_info(&resolved)
+                    // Check supplemental CDS for old/superseded transcripts (no cdot
+                    // mapper). Same reasoning as the sibling site above.
+                    Self::warn_supplemental_fallback(
+                        self.supplemental_cds.transcripts.get(&resolved),
+                        &resolved,
+                        "not in cdot data (no cdot mapper)",
+                    );
+                    self.get_supplemental_cds_info(&resolved, entry.length)
                 };
 
                 return Ok(Transcript {
@@ -8684,5 +8828,222 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             format!("{err}").contains("overrides.json"),
             "the error must name the offending artifact, got: {err}"
         );
+    }
+
+    /// Build a cdot-backed provider whose transcript is present in the FASTA index
+    /// *and* carries a transcript-coordinate gap in its cdot exon table.
+    ///
+    /// The gap is what sends `get_transcript_on_build_inner` down the supplemental
+    /// divert; the FASTA entry is what makes this the *downgrade* site (there is a
+    /// real cdot table to lose) rather than the "no cdot at all" fallbacks.
+    fn provider_with_gapped_cdot_transcript() -> (MultiFastaProvider, tempfile::TempDir) {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+        use std::sync::OnceLock;
+
+        // 30 bases, so the FAI entry length is 30.
+        let (provider, dir) =
+            build_provider_with_transcripts(&[("NM_GAP.1", "ATGAAACCCGGGTTTAAACCCGGGTTTAAA")]);
+        let mut provider = provider;
+
+        // tx 1..=10 and tx 16..=30 — a five-base hole at 11..=15.
+        //
+        // The SHAPE is real: 58 of 474,818 GRCh38 multi-exon cdot builds carry a
+        // transcript-coordinate hole. The SIZE is synthetic — the smallest real gap
+        // measured is 23 bases and none is one base
+        // (`tests/it/normalization_transcripts_exon_contract.rs`). Five is chosen
+        // only to keep the fixture short; nothing on the path under test reads the
+        // gap's size, it reads whether one exists.
+        let tx = Transcript {
+            cds_start_incomplete: false,
+            id: "NM_GAP.1".to_string(),
+            gene_symbol: Some("GAPPY".to_string()),
+            strand: Strand::Plus,
+            sequence: None,
+            cds_start: Some(4),
+            cds_end: Some(27),
+            exons: vec![
+                Exon::with_genomic(1, 1, 10, 101, 110),
+                Exon::with_genomic(2, 16, 30, 201, 215),
+            ],
+            chromosome: Some("NC_TEST.1".to_string()),
+            genomic_start: Some(101),
+            genomic_end: Some(215),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+        provider.cdot_mapper = Some(CdotMapper::from_transcripts(std::iter::once(&tx)));
+        (provider, dir)
+    }
+
+    /// #1722 — a gapped cdot table must not be traded for a supplemental record
+    /// that carries nothing.
+    ///
+    /// Measured on a real prepared reference: **50** accessions whose cdot tables
+    /// are complete (10-28 exons) were served with `exons: []` and
+    /// `cds_start: None`, because the `has_gaps` divert tested the supplemental
+    /// record for *presence* rather than for whether it could replace the table.
+    /// `patterns_transcripts.metadata.json` carries a CDS on 19 of its 140,027
+    /// records, so presence is emphatically not usability.
+    ///
+    /// The control that identifies the cause: `NR_197427.1`, the one gapped record
+    /// with no supplemental entry at all, could not take the divert — and is the
+    /// one record that kept its exons.
+    #[test]
+    fn a_gapped_cdot_table_survives_a_supplemental_record_carrying_nothing() {
+        let (mut provider, _kept) = provider_with_gapped_cdot_transcript();
+
+        // Exactly the shape the shipped artifact has for NM_033517.1 (SHANK3):
+        // present, named, and empty of everything that matters.
+        provider.supplemental_cds.transcripts.insert(
+            "NM_GAP.1".to_string(),
+            SupplementalTranscriptInfo {
+                cds_start: None,
+                cds_end: None,
+                gene_symbol: Some("GAPPY".to_string()),
+                sequence_length: 0,
+            },
+        );
+
+        let served = provider.get_transcript("NM_GAP.1").expect("served");
+
+        assert_eq!(
+            served.exons.len(),
+            2,
+            "the cdot exon table must survive: a record with no CDS cannot replace it"
+        );
+        assert_eq!(served.cds_start, Some(4), "cdot CDS start must survive");
+        assert_eq!(served.cds_end, Some(27), "cdot CDS end must survive");
+    }
+
+    /// The other half of the contract: when the supplemental record *can* replace
+    /// the table — it carries the curated CDS this map exists to supply — the
+    /// divert still happens. #1722 narrows the guard; it does not remove it.
+    #[test]
+    fn a_supplemental_record_with_a_cds_still_replaces_a_gapped_cdot_table() {
+        let (mut provider, _kept) = provider_with_gapped_cdot_transcript();
+
+        provider.supplemental_cds.transcripts.insert(
+            "NM_GAP.1".to_string(),
+            SupplementalTranscriptInfo {
+                cds_start: Some(7),
+                cds_end: Some(24),
+                gene_symbol: Some("GAPPY".to_string()),
+                sequence_length: 0, // deliberately 0: the span comes from the index
+            },
+        );
+
+        let served = provider.get_transcript("NM_GAP.1").expect("served");
+
+        assert_eq!(served.cds_start, Some(7), "curated CDS must win");
+        assert_eq!(served.cds_end, Some(24));
+        // The synthetic exon spans the whole transcript, and its length must come
+        // from the FASTA index (30) rather than the metadata's zero — otherwise the
+        // divert produces a transcript with no exons at all.
+        assert_eq!(served.exons.len(), 1, "synthetic single exon");
+        assert_eq!(served.exons[0].start, 1);
+        assert_eq!(
+            served.exons[0].end, 30,
+            "span must come from the index, not the metadata"
+        );
+    }
+
+    /// `can_replace_cdot_table` requires **both** bounds, and this is the case that
+    /// separates `&&` from `||`. Without it, mutating the conjunction to a
+    /// disjunction survives the whole suite: the two tests above set both bounds
+    /// together, so neither can tell the operators apart.
+    ///
+    /// A half-CDS record cannot replace the table — the divert would answer
+    /// `cds_end: None` while discarding a real exon list, which is the #1722
+    /// downgrade with one bound instead of zero. Population on the shipped
+    /// `patterns_transcripts.metadata.json` is **0 of 140,027**, so this is a
+    /// defensive predicate rather than a live shape; it is pinned because the
+    /// artifact is not the only possible input.
+    #[test]
+    fn a_half_cds_supplemental_record_cannot_replace_a_gapped_cdot_table() {
+        for (cds_start, cds_end) in [(Some(7), None), (None, Some(24))] {
+            let (mut provider, _kept) = provider_with_gapped_cdot_transcript();
+            provider.supplemental_cds.transcripts.insert(
+                "NM_GAP.1".to_string(),
+                SupplementalTranscriptInfo {
+                    cds_start,
+                    cds_end,
+                    gene_symbol: Some("GAPPY".to_string()),
+                    sequence_length: 0,
+                },
+            );
+
+            let served = provider.get_transcript("NM_GAP.1").expect("served");
+
+            assert_eq!(
+                served.exons.len(),
+                2,
+                "half a CDS ({cds_start:?}, {cds_end:?}) must not buy the divert",
+            );
+            assert_eq!(served.cds_start, Some(4), "cdot CDS start must survive");
+            assert_eq!(served.cds_end, Some(27), "cdot CDS end must survive");
+        }
+    }
+
+    /// The load-time "carries almost no CDS" report is a `warn!`, which no unit
+    /// test can read, so the threshold it gates is pinned on its own predicate.
+    ///
+    /// The measured artifact is the anchor: 19 of 140,027 must trip it, and an
+    /// artifact where every record carries a CDS must not.
+    #[test]
+    fn the_largely_without_cds_threshold_fires_on_the_shipped_ratio() {
+        assert!(
+            artifact_is_largely_without_cds(19, 140_027),
+            "patterns_transcripts.metadata.json's measured 19/140,027 must be reported",
+        );
+        assert!(!artifact_is_largely_without_cds(140_027, 140_027));
+        // Exactly at the boundary: one in ten is not "almost none".
+        assert!(!artifact_is_largely_without_cds(10, 100));
+        assert!(artifact_is_largely_without_cds(9, 100));
+        // An empty artifact describes no population.
+        assert!(!artifact_is_largely_without_cds(0, 0));
+        // A record count that would overflow the multiply saturates rather than
+        // wrapping into a false "almost none".
+        assert!(!artifact_is_largely_without_cds(usize::MAX, usize::MAX));
+    }
+
+    /// `carries_cds_or_length` deliberately ignores `gene_symbol`, and the counter
+    /// it feeds is named for that. Pinned because the earlier spelling
+    /// (`is_informative`, "carries any information at all") was measurably false:
+    /// every one of the 116,572 records it returned `false` for on the shipped
+    /// artifact carries a gene symbol, and that symbol IS propagated onto the
+    /// served transcript.
+    #[test]
+    fn carries_cds_or_length_ignores_the_gene_symbol_it_still_propagates() {
+        let name_only = SupplementalTranscriptInfo {
+            cds_start: None,
+            cds_end: None,
+            gene_symbol: Some("SHANK3".to_string()),
+            sequence_length: 0,
+        };
+        assert!(!name_only.carries_cds_or_length());
+        assert!(!name_only.can_replace_cdot_table());
+
+        // …and the symbol still reaches the served transcript, which is why the
+        // predicate must not be read as "carries nothing".
+        let (provider, _kept) = build_provider_with_transcripts(&[("NM_NAMEONLY.1", "ACGTACGTAC")]);
+        let mut provider = provider;
+        provider
+            .supplemental_cds
+            .transcripts
+            .insert("NM_NAMEONLY.1".to_string(), name_only);
+        let served = provider.get_transcript("NM_NAMEONLY.1").expect("served");
+        assert_eq!(served.gene_symbol.as_deref(), Some("SHANK3"));
+        assert_eq!(
+            served.exons.len(),
+            1,
+            "the index length, not the metadata's zero, spans the exon"
+        );
+        assert_eq!(served.exons[0].end, 10);
+        assert_eq!(served.cds_start, None);
     }
 }
