@@ -3359,21 +3359,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 if self.codon_pair_is_within_one_exon(original, transcript_id, left, right) {
                     if let Ok(merged) = self.normalizer.normalize(&coding) {
                         if codon::member_count(&merged) < codon::member_count(&coding) {
-                            // The reported genomic axis is not re-derived from
-                            // the merged form: for a genomic input it is that
-                            // input's own normalization, which is #79's answer
-                            // and stays.
-                            let genomic = projection.genomic.clone();
-                            let decline_reasons = projection.axis_decline_reasons.clone();
-                            let warnings = std::mem::take(&mut projection.normalization_warnings);
                             // Terminates: `merged` has strictly fewer members,
                             // so the re-projection's coding axis cannot re-enter
                             // here.
                             let mut reprojected =
                                 self.project_variant_inner(&merged, transcript_id)?;
-                            reprojected.genomic = genomic;
-                            reprojected.axis_decline_reasons = decline_reasons;
-                            reprojected.normalization_warnings = warnings;
+                            // The reported genomic axis is not re-derived from
+                            // the merged form: for a genomic input it is that
+                            // input's own normalization, which is #79's answer
+                            // and stays. Its decline reason travels with it and
+                            // the other four axes' do not — they explain values
+                            // the re-projection just derived. See
+                            // `carry_pre_merge_state`.
+                            codon::carry_pre_merge_state(&mut reprojected, &mut projection);
                             projection = reprojected;
                         }
                     }

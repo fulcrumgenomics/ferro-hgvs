@@ -39,6 +39,7 @@ use crate::hgvs::interval::UncertainBoundary;
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{AllelePhase, HgvsVariant};
 use crate::normalize::merge::same_codon;
+use crate::project::VariantProjection;
 
 /// The number of top-level members a description carries: 1 for a single
 /// variant, the member count for an allele.
@@ -47,6 +48,42 @@ pub(crate) fn member_count(variant: &HgvsVariant) -> usize {
         HgvsVariant::Allele(allele) => allele.variants.len(),
         _ => 1,
     }
+}
+
+/// Carry the parts of the pre-merge projection that the re-projection must not
+/// re-derive onto `reprojected` — and **only** those parts.
+///
+/// The merge re-projects from the merged *coding* form, so every axis the
+/// re-projection derives (`c.`, `n.`, `r.`, `p.`) is the merged form's own
+/// answer and must be reported as such, decline reason included. Two things are
+/// not the merged form's to answer:
+///
+/// * **the genomic axis.** For a genomic input it is that input's own
+///   normalization — #79's answer, and the one
+///   `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`
+///   keeps — so both the axis and its decline reason come from before the
+///   merge.
+/// * **the normalization warnings**, which are the caller's input's (an
+///   auto-corrected reference mismatch, say). Re-normalizing an
+///   already-corrected description does not re-emit them.
+///
+/// **A decline reason belongs to the axis whose value it explains.** Assigning
+/// the whole [`AxisDeclineReasons`] across — which is what this function
+/// replaced — leaves `coding`/`noncoding`/`protein`/`rna` explaining values
+/// that no longer exist, so a caller can read "this axis declined because …"
+/// beside a rendered axis, or a stale reason beside a genuinely absent one.
+/// `AxisDeclineReasons` is per-axis precisely so the two halves cannot be
+/// swapped wholesale; pinned by
+/// `only_the_genomic_decline_reason_survives_the_re_projection`.
+///
+/// [`AxisDeclineReasons`]: crate::project::AxisDeclineReasons
+pub(crate) fn carry_pre_merge_state(
+    reprojected: &mut VariantProjection,
+    pre_merge: &mut VariantProjection,
+) {
+    reprojected.genomic = pre_merge.genomic.take();
+    reprojected.axis_decline_reasons.genomic = pre_merge.axis_decline_reasons.genomic.take();
+    reprojected.normalization_warnings = std::mem::take(&mut pre_merge.normalization_warnings);
 }
 
 /// The first adjacent member pair on `coding` that `delins.md:18` keeps
@@ -145,7 +182,9 @@ fn cds_substitution(variant: &HgvsVariant) -> Option<(i64, Base)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normalize::NormalizationWarning;
     use crate::parse_hgvs;
+    use crate::project::AxisDeclineReasons;
 
     /// Replace every member's edit `Mu` in an allele, so an uncertain spelling
     /// can be built without depending on the parser accepting one.
@@ -207,6 +246,83 @@ mod tests {
         // The exception merges two changes that lie on the same molecule; `;`
         // in a trans allele asserts they do not.
         assert_eq!(pair("NM_000000.1:c.[4C>A];[6G>A]"), None);
+    }
+
+    /// A projection whose every axis carries a decline reason naming `tag`, so
+    /// that "which side did this field come from" is answerable field by field
+    /// and no assertion below can pass by two sides happening to agree.
+    fn projection_tagged(tag: &str, genomic: Option<HgvsVariant>) -> VariantProjection {
+        VariantProjection {
+            genomic,
+            coding: None,
+            noncoding: None,
+            protein: None,
+            rna: None,
+            transcript_id: "LRG_199t1".to_string(),
+            gene_symbol: None,
+            is_frameshift: false,
+            is_intronic: false,
+            is_utr: false,
+            affects_init: false,
+            normalization_warnings: vec![NormalizationWarning::OverlapConflict {
+                accession: tag.to_string(),
+                coordinate_system: "c".to_string(),
+                location: "4_6".to_string(),
+                edit_kinds: vec!["sub".to_string(), "sub".to_string()],
+            }],
+            axis_decline_reasons: AxisDeclineReasons {
+                genomic: Some(format!("{tag} g.")),
+                coding: Some(format!("{tag} c.")),
+                noncoding: Some(format!("{tag} n.")),
+                protein: Some(format!("{tag} p.")),
+                rna: Some(format!("{tag} r.")),
+            },
+        }
+    }
+
+    /// A decline reason explains one axis's absence, so it may only travel with
+    /// that axis. The merge carries the genomic axis across from before the
+    /// merge and lets the re-projection answer for `c.`/`n.`/`r.`/`p.`; carrying
+    /// the whole `AxisDeclineReasons` across — which is what this pins against —
+    /// leaves those four explaining values that are no longer there.
+    #[test]
+    fn only_the_genomic_decline_reason_survives_the_re_projection() {
+        let genomic = parse_hgvs("LRG_199:g.[499798A>T;499800G>T]").expect("parses");
+        let mut pre_merge = projection_tagged("pre-merge", Some(genomic.clone()));
+        let mut reprojected = projection_tagged("re-projected", None);
+
+        carry_pre_merge_state(&mut reprojected, &mut pre_merge);
+
+        // The genomic axis is the pre-merge one, so its explanation is too.
+        assert_eq!(
+            reprojected.genomic.as_ref().map(HgvsVariant::to_string),
+            Some(genomic.to_string())
+        );
+        assert_eq!(
+            reprojected.axis_decline_reasons.genomic.as_deref(),
+            Some("pre-merge g.")
+        );
+        // The other four axes are the merged form's own, and so are theirs.
+        assert_eq!(
+            [
+                reprojected.axis_decline_reasons.coding.as_deref(),
+                reprojected.axis_decline_reasons.noncoding.as_deref(),
+                reprojected.axis_decline_reasons.protein.as_deref(),
+                reprojected.axis_decline_reasons.rna.as_deref(),
+            ],
+            [
+                Some("re-projected c."),
+                Some("re-projected n."),
+                Some("re-projected p."),
+                Some("re-projected r."),
+            ],
+            "a re-derived axis must be explained by the re-projection that derived it"
+        );
+        // The warnings are the caller's input's, not the merged form's.
+        assert!(
+            format!("{:?}", reprojected.normalization_warnings).contains("pre-merge"),
+            "the input's normalization warnings must survive the re-projection"
+        );
     }
 
     #[test]
