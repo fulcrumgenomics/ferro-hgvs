@@ -912,6 +912,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "separation-is-a-property-of-the-spelling-not-of-the-variant",
         "decided",
     ),
+    // The insertion-side instance of the record above. One contiguous 3 nt
+    // insertion inside an `AT` tract can be spelled as an `ins` at one junction
+    // plus a `dup` inserting at the next, with an unchanged base between them;
+    // `general.md:34` is stated over "two variants" and there is only one here,
+    // so it does not license the split. Decided as to that scope only — the
+    // direction (ship the re-derived one-member form) comes from
+    // `canonical-form-choice-when-both-legal`, not from this record. Ferro
+    // currently emits both forms as fixed points; pinned in
+    // `cis_junction_crossing_shift`.
+    (
+        "contiguous-insertion-split-by-a-blocked-derivation",
+        "decided",
+    ),
     // `general.md:58` (removing and replacing part of the same reference
     // sequence "are not allowed") against `DNA/complex.md:130` ("'::' is used to
     // indicate the join, instead of ';'") on whether the self-cancelling check
@@ -1001,6 +1014,20 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     (
         "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
         "decided",
+    ),
+    // `delins.md:47` recommends the span; `:17`/`general.md:34` describe
+    // separated variants individually. The provenance half of this — "does
+    // `:47` reach an input that arrives already split?" — is NOT open; it is
+    // excluded by `canonical-form-choice-when-both-legal`, which holds that the
+    // input's spelling does not decide. What is open is which of the two
+    // clauses a re-derivation should land on when the minimal edit set really
+    // does have two members separated by unchanged bases:
+    // `delins-merge-vs-individual-gap-two-or-more` decided for `:47` but scoped
+    // itself to a single spanning member. #1420's two `SpecExplicit` gap rows
+    // turn on it.
+    (
+        "delins-recommendation-reach-when-the-input-arrives-split",
+        "undecided",
     ),
 ];
 

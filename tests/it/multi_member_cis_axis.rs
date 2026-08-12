@@ -650,6 +650,29 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 /// surfacing as a moved tuple. Every field here is pinned by **equality**,
 /// including `respelling_converged` — see [`CONVERGED_ROWS`] for why this is
 /// deliberately not a ratchet.
+///
+/// # A rise is not by itself a licence to re-bless
+///
+/// [`CONVERGED_ROWS`] records that a rise here is "good news to be re-blessed
+/// and declared". That is the common case, not the universal one, and this
+/// section is the exception it does not cover.
+///
+/// A rise reads as progress and is the thing this constant exists to protect,
+/// which makes it the easiest number in the suite to move for the wrong reason.
+/// Two spellings converge when they reach one string; that string can be one
+/// **neither of them asserted**, produced by re-partitioning the block from the
+/// sequence across bases the input left unchanged (`general.md:34`). Convergence
+/// bought that way is a defect wearing the shape of a fix, and it will show up
+/// here as `respelling_converged` going up with nothing else moving.
+///
+/// This is not hypothetical: an experimental partitioner arm moved this figure
+/// by five while leaving `rows`, `declined`, `not_idempotent`, `unwindowed`,
+/// `sequence_changed` and `respellable` all unchanged — which is exactly the
+/// signature described above.
+///
+/// So before raising it: name the classes that moved, and the clause that
+/// carried each. If they cannot be named individually, the rise is a
+/// re-derivation and the constant stays where it is while the cause is found.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
     declined: 0,

@@ -1,45 +1,64 @@
 //! Adjudication records for the divergent cis confluence classes.
 //!
-//! `tests/it/cis_confluence_axis.rs` measures the pile — 11 272 designed classes,
-//! **4 643** of which reach more than one normalized output in the 3' direction,
-//! with `declined` and `sequence_changed` both zero. That census says how large
-//! the disagreement is and nothing about what the right answer would be. This
-//! module carries the answers that have been reached, and names the ones that
-//! have not, on concrete inputs rather than on aggregate counts.
+//! `tests/it/cis_confluence_axis.rs` measures the pile: **`cis_confluence_axis::{THREE_PRIME,
+//! FIVE_PRIME}` are the numbers, and they are the only copy.** Read the size of
+//! the disagreement off those constants, which are asserted every run —
+//! `divergent = classes - converged`, with `declined` and `sequence_changed` both
+//! pinned at zero. That census says how large the disagreement is and nothing
+//! about what the right answer would be. This module carries the answers that
+//! have been reached, and names the ones that have not, on concrete inputs
+//! rather than on aggregate counts.
+//!
+//! **This paragraph used to restate those counts as prose, and the prose went
+//! stale without anything noticing** — it read 4 643 divergent classes with a
+//! `3066 / 696 / 271 / 267 / 181 / 131 / 28 / 3` family split and "4 568 of the
+//! 4 643 (98.4 %)" for the disjoint-output mechanism, while the asserted
+//! constants next door had already moved past it. No divergent count is quoted
+//! as CURRENT anywhere below, and that is the point: `cis_confluence_axis::THREE_PRIME` and
+//! `cis_confluence_axis::FIVE_PRIME` carry a `converged` each, the two are
+//! **not** equal, and a direction's divergent count is that direction's own
+//! `classes - converged`. A single `converged` restated for both directions is
+//! how the first correction to this paragraph went wrong, and the second — the
+//! numbers offered to repair it were themselves a version behind. A doc comment
+//! cannot fail, so a second copy of an asserted number is a copy that will
+//! eventually be wrong; the fix is to delete the copy rather than to refresh it.
 //!
 //! The shape census behind these records is produced by
-//! `examples/dump_confluence_divergences.rs`, which clusters the 4 643 by the
-//! *disagreement* — how the competing outputs' arities relate, and what interior
-//! gaps the more-split one leaves — rather than by the design parameters. Eight
-//! families result; the top four cover **92.6 %**:
+//! `examples/dump_confluence_divergences.rs`, which clusters the divergent
+//! classes by the *disagreement* — how the competing outputs' arities relate,
+//! and what interior gaps the more-split one leaves — rather than by the design
+//! parameters. Eight families result. Run it rather than reading a number here:
 //!
 //! ```text
-//!   3066 (66.0%)  spanning-vs-split/min-2+
-//!    696 (15.0%)  spanning-vs-split/min-1
-//!    271 ( 5.8%)  split-vs-split/min-2+
-//!    267 ( 5.8%)  split-vs-split/min-1
-//!    181 ( 3.9%)  same-arity/min-2+
-//!    131 ( 2.8%)  same-arity/min-1
-//!     28 ( 0.6%)  spanning-vs-split/has-0
-//!      3 ( 0.1%)  split-vs-split/has-0
+//! cargo run --release --features dev --example generate_cis_confluence_corpus
+//! cargo run --release --features dev --example dump_confluence_divergences -- --stats
+//! cargo run --release --features dev --example dump_confluence_divergences -- --stats --direction 5prime
 //! ```
 //!
-//! **These are the post-#1537 figures, and the movement is the point.** Before
-//! that PR the census read 4 639 classes over *nine* families with a
-//! `same-arity/has-0` arm, and the three `has-0` arms held 104 classes between
-//! them. #1537 ("never split a delins into members on consecutive nucleotides")
-//! merged the flush members, so the `has-0` arms collapsed to 31 and the
-//! `same-arity/has-0` family disappeared entirely. What remains under `has-0` is
-//! the carve-out — see `a_dup_flush_against_a_del_is_left_alone`.
+//! Measured 2026-08-09 on `main` @35de96c8 — a dated *measurement*, not an
+//! invariant, and already a base behind: it totals 3 246 divergent at 3' where
+//! this tree's constants give 3 245. It is kept only for the family SPLIT,
+//! which the constants cannot supply; take the total from them. Over the eight
+//! families:
+//! `spanning-vs-split/min-2+` 1 659, `split-vs-split/min-2+` 411,
+//! `spanning-vs-split/min-1` 404, `split-vs-split/min-1` 339,
+//! `same-arity/min-2+` 243, `same-arity/min-1` 154,
+//! `spanning-vs-split/has-0` 28, `split-vs-split/has-0` 8; and
+//! `input-partition-preserving` 1 929 (59.4 %).
 //!
-//! **One mechanism accounts for 4 568 of the 4 643 (98.4 %)**: the single
-//! spanning spelling reaches an output disjoint from every output the
-//! multi-member spellings reach. Ferro re-partitions a lone `delins` from the
-//! sequence and preserves the member boundaries it is handed otherwise, so two
-//! spellings of one variant keep two partitions. Only 205 classes (4.4 %) have
-//! two *multi-member* spellings disagreeing with each other, and in every one of
-//! those the disagreeing spellings have the same member count — a placement
-//! disagreement, not a partitioning one.
+//! #1537 ("never split a delins into members on consecutive nucleotides") is
+//! what collapsed the `has-0` arms and removed a ninth `same-arity/has-0`
+//! family. What remains under `has-0` is the carve-out — see
+//! `a_dup_flush_against_a_del_is_left_alone`.
+//!
+//! The mechanism behind the bulk of the pile is that the single spanning
+//! spelling reaches an output disjoint from every output the multi-member
+//! spellings reach: ferro re-partitions a lone `delins` from the sequence and
+//! preserves the member boundaries it is handed otherwise, so two spellings of
+//! one variant keep two partitions. The instrument no longer reports that share
+//! under the name the stale prose quoted it by (`cross-partition`), so no
+//! percentage is restated here — `input-partition-preserving` above is the
+//! closest thing it emits today.
 //!
 //! Four records live here, in **four kinds**. They are not interchangeable
 //! (see the repository `CLAUDE.md`), so each test states its own:
@@ -473,8 +492,9 @@ fn a_dup_flush_against_a_del_is_left_alone() {
 // ---------------------------------------------------------------------------
 
 /// **Not settled on the side this test pins, and it names the record that turns
-/// on.** This is the largest family in the pile — 3 066 of 4 643 classes,
-/// 66.0 % — and it is
+/// on.** This is the largest family in the pile — `spanning-vs-split/min-2+`,
+/// half of the divergent classes and more, per the module doc's dated
+/// measurement — and it is
 /// the spec's own `DNA/delins.md:44-47` shape reproduced synthetically: parts of
 /// the inserted sequence align with the reference, giving an alternative
 /// description as separate members. `:17` read literally demands the split;
@@ -501,8 +521,8 @@ fn a_dup_flush_against_a_del_is_left_alone() {
 /// The premise of `:44-47` — that parts of the payload align with the
 /// reference — holds for **every** class in this corpus, not just this family:
 /// two spellings can only denote one sequence if the coarser one's payload
-/// re-states the finer one's interior gap bases. So the whole 4 643 is one
-/// question wearing eight shapes, and this record is where it is named.
+/// re-states the finer one's interior gap bases. So the whole divergent pile is
+/// one question wearing eight shapes, and this record is where it is named.
 #[test]
 fn a_spanning_delins_and_its_aligned_split_are_two_fixed_points() {
     let provider = provider();
