@@ -3062,7 +3062,14 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // partitioner produced the pieces. Shipped output is unaffected either way —
     // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
     // widening the arm it is labelled with did not cause.
-    if partition_rule().cuts_with_canonical() {
+    // Scoped to the coding DNA axis as well as to the arms, per the decided
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (#1711): the
+    // pass can only merge *across unchanged reference bases*, which is exactly
+    // the population `general.md:34` keeps individual, and `DNA/delins.md:47` —
+    // the only clause that overrides it here — reaches `c.` and nothing else.
+    // See `compensating_gap_coalesce_applies` for the argument and for the
+    // competing reading it decides against.
+    if compensating_gap_coalesce_applies(partition_rule(), kind) {
         coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
     }
     coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
@@ -5185,6 +5192,42 @@ const MIN_MANUFACTURED_SPLIT_MEMBERS: usize = 3;
 /// `general.md:34` keeps them individual. **There are no counterexamples in the
 /// 65 rows.**
 ///
+/// # …but there ARE counterexamples in the 11,272-class conformance corpus
+///
+/// **Corrected 2026-08-12 (#1711).** The sentence directly above is true of the
+/// corpus it names and was read as a property of the rule. It is not. Six rows
+/// of `conformance::spec_corpus` fire this pass and are merged wrongly, and the
+/// spec corpus counts them itself, through the negative guard it carries for the
+/// **rejected** SVD-WG010 proposal — `spec_conformance_axis`'s `guard_violations`,
+/// pinned at 0, read 6 in both directions on both canonical arms:
+/// `s01-n3{m,p}-pair-del-inv-p4-sep1`, `scale-g-block{128,1032}-inv-del` and
+/// `scale-g-block{248,1032}-delins-del`.
+///
+/// **None of the three conditions is about the axis, and two of them are
+/// satisfied by construction on that shape.** An `inv` or a payload-bearing
+/// `delins` member presents to an edit-distance aligner as inserted somewhere
+/// and deleted somewhere else, so condition 2 holds; and the big `del` beside it
+/// makes condition 3 hold, since [`changed_columns_of_pieces`] counts a
+/// deletion's full reference width. Worked, on the `n3m`/`n3p` row — the derived
+/// pieces over `CGATTTCTG` are `[3,8)/"" · gap 2 · [10,11)/"A" · gap 1 ·
+/// [12,12)/"A"`, so 7 claimed columns against 3 unchanged and `inserted &&
+/// deleted` both true. Note the pass swallowed a **two**-base run as well as a
+/// one-base one: there is no per-gap notion of separation in here at all, and
+/// none of the arithmetic implements "one unchanged base".
+///
+/// So the fix is not in the conditions. The caller now gates the pass on the
+/// **coding DNA axis** ([`compensating_gap_coalesce_applies`]), which is where
+/// `DNA/delins.md:47` — the only clause that can license merging across
+/// unchanged bases at all — was decided to reach. Read that gate's doc before
+/// changing anything here: it also records the competing reading, under which
+/// this rule is partitioner parity rather than a `:47` re-spelling and would
+/// apply on every axis.
+///
+/// **Nothing downstream re-audits the merge.** `split_concealed_separations`
+/// runs *before* this pass and is gated on `pieces.len() >= 2`, so once one
+/// spanning piece is written it is final. That is why the gate is at the call
+/// site and not a later repair.
+///
 /// So this takes no threshold and no constant, which is deliberate: the live
 /// path's [`MAX_SINGLE_BASE_SEPARATION_CHANGE`] records that its own value is
 /// "under-determined", constrained only to `[2, 15)`, and that "no threshold at
@@ -6273,6 +6316,117 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
     // be given *different* arms — and would compile, so the drift would be
     // silent. One rule, written once.
     rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_coding_dna(kind)
+}
+
+/// Whether [`coalesce_compensating_gap_split`] applies, given the arm and the
+/// axis the description is written on.
+///
+/// The **same** clause and the **same** axis scope as [`payload_coalesce_applies`],
+/// differing only in the arm half, and that difference is the whole reason the
+/// two gates are separate functions rather than one. `delins.md:47`'s carve-out
+/// is a [`PartitionRule::CanonicalCoalesced`] behaviour when it is undoing a
+/// *payload* coincidence, because the live partitioner produces that split too;
+/// the compensating-gap shape is produced only by `partition_block_canonical`,
+/// so its pass is scoped to both canonical arms
+/// ([`PartitionRule::cuts_with_canonical`]) and the reasoning for that scoping is
+/// at the call site in [`canonicalize_from_sequence`].
+///
+/// # Why the axis half is here at all (#1711)
+///
+/// Because the two passes re-spell the same clause and were given different
+/// scopes. [`coalesce_compensating_gap_split`] merges a run of derived members
+/// into one spanning `delins`, and it can only ever do so **across unchanged
+/// reference bases** — a piece list with no gaps between its members is one
+/// piece, so the pass would have nothing to join. Every firing is therefore
+/// inside the population `general.md:34` governs: "two variants separated by one
+/// or more nucleotides should be described individually and **not** as a
+/// 'delins'". The only clause that overrides it for this shape is
+/// `DNA/delins.md:47`, and the decided operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
+/// scopes `:47` to the coding DNA axis "and nothing else"; its sibling
+/// `delins-merge-vs-individual-gap-two-or-more` says the same thing from the
+/// other side — "rows on an axis with no reading frame … remain violations and
+/// are untouched by this ruling".
+///
+/// So the merge had no licence off `c.`, and six rows of the spec conformance
+/// corpus were counted by that corpus's own negative guard for the **rejected**
+/// SVD-WG010 proposal: two variants one unchanged base apart, on `g.` and `n.`,
+/// merged into one spanning `delins`. See #1711.
+///
+/// # It is the AXIS KIND, not `AxisFrame::reading_frame`
+///
+/// The same trap [`payload_coalesce_applies`] documents, for the same reason:
+/// `reading_frame` is true for a coding `r.` too, and a `DNA/` clause has no
+/// jurisdiction over the RNA axis (`RNA/delins.md` states no `:47` counterpart).
+/// Keying on the frame flag would extend a DNA-only carve-out onto an axis the
+/// ruling deliberately does not reach.
+///
+/// # What this does NOT claim
+///
+/// [`coalesce_compensating_gap_split`]'s own doc argues its rule from the
+/// *partitioner*: `partition_block` forbids compensating gaps in its search, and
+/// this pass states that restriction on the derived pieces instead. That
+/// argument is about why the split exists; it is not a licence for the
+/// **output**, which is a spanning `delins` across unchanged bases and needs one.
+/// Both readings are real and they disagree off `c.` — the parity reading would
+/// apply the pass on every axis — so the cost of choosing the clause is stated
+/// where it is paid, below, rather than hidden here.
+///
+/// # MEASURED, and the cost is not small
+///
+/// Instrumented over the 11,272-class spec conformance corpus with the arm set
+/// to `canonical`. The gate suppresses **exactly** the non-coding-DNA firings
+/// and no others — 2,101 of 4,204 at 3' (995 `g.`, 1,106 `n.`) and 1,892 of
+/// 3,722 at 5' (916 `g.`, 976 `n.`) — leaving all 2,103 / 1,830 `c.` firings
+/// untouched. That partition is arithmetic, not a threshold: there is no
+/// tunable here and no row in between.
+///
+/// Of those suppressed firings, **1,471 output strings move at 3' and 1,304 at
+/// 5'**, over 58,412 outputs and 260 / 230 distinct corpus rows, **0 of them on
+/// `c.`**. At 3' the direction is 1,387 splits, 65 re-spellings and 19 merges;
+/// at 5' it is 1,237 / 48 / 19. So the price is real and is paid in split
+/// genomic and non-coding descriptions, which is precisely the price
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` already accepted
+/// for the sibling pass when it kept a stored 723-base `g.` `delins` as a
+/// 193-member re-derivation.
+///
+/// **Nothing else moves.** Every other figure of `spec_conformance_axis`'s
+/// census is byte-identical in both directions on both canonical arms — only
+/// `guard_violations` moves, 6 -> 0 — and so are all six `cis_confluence_axis` /
+/// `cis_confluence_nr_axis` censuses on the `canonical` arm, down to the
+/// divergent class ids (`s02-r-m3-sep1-p1-rot3`, `s02-r-m4-sep1-p1-rot3`,
+/// `s06-{g,n,r}-m4-sep1-p1-all-dup`). A census counts *classes*, and a class
+/// whose every spelling moves together stays converged, so those zeros are a
+/// statement about confluence and emphatically not about representation
+/// stability — the 1,471 / 1,304 figure above is the one that measures that.
+/// Shipped output does not move at all: `FERRO_PARTITION` unset is
+/// [`PartitionRule::Live`], which never reached this pass.
+///
+/// # A narrower cut was looked for, and the search FAILED
+///
+/// Recorded so it is not re-run. The obvious repair is a per-gap test inside the
+/// pass, since its three conditions are aggregates over the whole hull and none
+/// of them is about separation. Every candidate was evaluated over the full 5'
+/// firing dump, asking it to refuse all 12 guarded-row firings and few others:
+///
+/// | candidate condition | refuses of the 12 | refuses of the other 3,710 |
+/// |---|---|---|
+/// | some gap sits at cumulative offset 0 | 2 | 1,646 |
+/// | some gap is exactly one base | 12 | 3,124 |
+/// | claimed columns < twice the unchanged bases | 8 | 3,077 |
+/// | three or more unchanged bases in the hull | 12 | 3,608 |
+/// | hull of nine bases or more | 12 | 2,981 |
+///
+/// The zero-offset test is the one with a principled story — an unchanged run at
+/// zero shift is unchanged *in place* rather than by coincidence — and it is
+/// refuted outright: on all six rows **every** gap sits at a non-zero cumulative
+/// offset (the `n3m` row's two gaps are both at −5). Nothing else separates the
+/// populations at all; each predicate that catches all 12 also catches 80–97% of
+/// the rest. The axis is the only clean separator in the data, and it is also
+/// the one a decided ruling names.
+fn compensating_gap_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
+    // As above: one spelling of the axis scope, shared with the sibling gate.
+    rule.cuts_with_canonical() && AxisFrame::is_coding_dna(kind)
 }
 
 /// Re-spell a multi-member allele as the single `delins` the spec recommends,
@@ -13673,6 +13827,82 @@ mod tests {
                         "{rule:?} must not run the `delins.md:44-47` re-spelling"
                     );
                 }
+            }
+        }
+
+        /// The compensating-gap re-spelling carries the **same** axis scope, and
+        /// a **wider** arm scope. #1711.
+        ///
+        /// Both halves are asserted because getting either wrong is a defect
+        /// that has already happened here. Dropping the axis half is #1711
+        /// itself: the pass merged two variants one unchanged base apart on `g.`
+        /// and `n.` into one spanning `delins`, which is the **rejected**
+        /// SVD-WG010 proposal and what `spec_conformance_axis`'s
+        /// `guard_violations` counts. Narrowing the arm half to
+        /// [`PartitionRule::CanonicalCoalesced`] — the obvious way to "make it
+        /// match its sibling" — would silently stop auditing
+        /// [`PartitionRule::Canonical`], whose partitioner is the one that
+        /// manufactures the split in the first place.
+        ///
+        /// The pure predicate rather than the call site, for the reason the test
+        /// directly above states: `partition_rule()` caches in a `OnceLock`.
+        #[test]
+        fn the_compensating_gap_coalesce_needs_both_a_canonical_arm_and_the_coding_dna_axis() {
+            for rule in [PartitionRule::Canonical, PartitionRule::CanonicalCoalesced] {
+                assert!(
+                    compensating_gap_coalesce_applies(rule, CisKind::Cds),
+                    "{rule:?} cuts with `partition_block_canonical`, so it is the \
+                     partitioner whose compensating gaps this pass exists to undo"
+                );
+                for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+                    assert!(
+                        !compensating_gap_coalesce_applies(rule, kind),
+                        "{kind:?} is outside `DNA/delins.md:47`'s scope; `general.md:34` \
+                         governs and the members stay individual (#1711)"
+                    );
+                }
+            }
+            for rule in [PartitionRule::Live, PartitionRule::Shadow] {
+                for kind in [
+                    CisKind::Genome,
+                    CisKind::Mt,
+                    CisKind::Cds,
+                    CisKind::Tx,
+                    CisKind::Rna,
+                ] {
+                    assert!(
+                        !compensating_gap_coalesce_applies(rule, kind),
+                        "{rule:?} does not cut with the canonical partitioner, so its \
+                         boundaries are not the ones this pass argues about"
+                    );
+                }
+            }
+        }
+
+        /// The two gates agree on the axis, and disagree on the arm, **by
+        /// construction rather than by coincidence**.
+        ///
+        /// One clause, one axis scope: if a future change moves
+        /// `delins.md:47`'s jurisdiction, both passes must move together or one
+        /// of them is re-spelling a merge the ruling withdrew. Written as a
+        /// cross-product equality rather than as two independent expectations,
+        /// because two hand-written matrices are exactly how the scopes drifted
+        /// apart in the first place (#1711).
+        #[test]
+        fn the_two_delins_47_gates_share_one_axis_scope() {
+            for kind in [
+                CisKind::Genome,
+                CisKind::Mt,
+                CisKind::Cds,
+                CisKind::Tx,
+                CisKind::Rna,
+            ] {
+                assert_eq!(
+                    payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    compensating_gap_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    "the two `delins.md:47` re-spellings disagree about {kind:?}; \
+                     they answer to one ruling and must carry one axis scope"
+                );
             }
         }
 
