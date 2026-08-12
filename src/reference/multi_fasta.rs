@@ -2745,7 +2745,12 @@ impl MultiFastaProvider {
                             TranscriptMetadata {
                                 gene_symbol: tx.gene_name.clone(),
                                 strand: tx.strand,
-                                // CDS coordinates: cdot 0-based → transcript 1-based
+                                // CDS coordinates: cdot 0-based → transcript 1-based.
+                                // Both bounds are already FLAT transcript offsets
+                                // — `from_genome_build` maps cdot's gap-collapsed
+                                // `start_codon`/`stop_codon` onto the exon table's
+                                // own space (#1619) — so this is a pure basis
+                                // shift with no gap term left to apply here.
                                 cds_start: tx.cds_start.map(|s| s + 1), // 0-based → 1-based
                                 cds_end: tx.cds_end, // 0-based exclusive = 1-based inclusive
                                 chromosome: Some(tx.contig.clone()),
