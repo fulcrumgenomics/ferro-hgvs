@@ -5,8 +5,12 @@
 //! Every census and corpus in this repository is a measurement taken through a
 //! normalizer, and a normalizer carries an [`ErrorConfig`]. The mode that config
 //! names is not a detail of the run — it changes the numbers. Measured on the
-//! spec conformance corpus (`tests/it/corpus_prohibited_inputs.rs`), three of
-//! four refusal counters move between strict and lenient, and the decided ruling
+//! spec conformance corpus (`tests/it/corpus_prohibited_inputs.rs`), which
+//! re-measures three of the four refusal counters in strict mode: two of them
+//! move — `conflicts_accepted`'s 72 are all refused and 16 of
+//! `prohibited_conditional_accepted`'s 40 are — while `prohibited_absolute_accepted`'s
+//! 32 stay accepted. One counter that moves is already enough to make a census
+//! compared across modes a category error, and the decided ruling
 //! `bare-transcript-intronic-position` has to end with the sentence "**so that
 //! counter is a lenient-mode figure**" because nothing in the artifact says so.
 //!
@@ -55,6 +59,18 @@
 //!   the belief that was wrong in every case above.
 //! - **It is [`Deserialize`] as well as [`Serialize`]**, so a consuming test can
 //!   assert the precondition it is comparing against rather than assume it.
+//!
+//! **Name the half the stamp covers.** A stamp describes one `ErrorConfig`, and
+//! a generator usually has two stages that could carry one. Both spec generators
+//! here parse with the bare [`parse_hgvs`](crate::parse_hgvs), which constructs
+//! no `InputPreprocessor` and so applies **no** `ErrorConfig` at all — not
+//! lenient's repairs and not strict's refusals (#1632, pinned by
+//! `tests/it/issue_1632_parse_entry_applies_no_mode.rs`). "No mode" is a third
+//! thing, not a synonym for strict, so a field named `generated_under` on those
+//! artifacts would assert a parser-level precondition no row ever had, which is
+//! a fresh ambiguity introduced by the field added to remove one. They name the
+//! field `normalized_under` for that reason. Stamp what you configured, and let
+//! the field name say how far it reaches.
 //!
 //! The mechanical half — "a generator that normalizes and writes an artifact
 //! must stamp this, or name itself in an allowlist" — is
@@ -121,7 +137,7 @@ impl ErrorModeStamp {
     /// was produced under a plain preset.
     ///
     /// For a consuming test that wants to state its precondition rather than
-    /// assume it: `assert!(doc.generated_under.is_plain(ErrorMode::Lenient))`
+    /// assume it: `assert!(doc.normalized_under.is_plain(ErrorMode::Lenient))`
     /// fails both when the mode moved and when an override was introduced, which
     /// a bare string comparison on `error_mode` would miss.
     #[must_use]

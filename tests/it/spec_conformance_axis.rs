@@ -297,9 +297,11 @@ pub(crate) const THREE_PRIME: Census = Census {
     // -- provenance --
     //
     // LENIENT, because `NormalizeConfig::default()` substitutes
-    // `ErrorConfig::lenient()`. Every figure below is therefore a lenient-mode
-    // figure; `corpus_prohibited_inputs.rs` re-measures the refusal counters in
-    // strict mode and gets different numbers.
+    // `ErrorConfig::lenient()`. Every figure below that is downstream of
+    // normalization is therefore a lenient-mode figure;
+    // `corpus_prohibited_inputs.rs` re-measures the refusal counters in strict
+    // mode and gets different numbers. `attempted` and `unparseable_outputs`
+    // are the exception and carry no mode at all — see the field's own docs.
     measured_under: ErrorMode::Lenient,
     // -- validity (rank 1) --
     outputs: 58_552,
@@ -429,10 +431,21 @@ impl CorpusShape {
 /// accuses the implementation of a defect that is really a stale constant.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Census {
-    /// The error mode every figure below was measured under (#1629).
+    /// The error mode the **normalizer** behind every figure below was built
+    /// with (#1629).
     ///
-    /// **Not decoration.** Three of the four refusal counters move between
-    /// strict and lenient — `corpus_prohibited_inputs.rs` measures the split —
+    /// **It does not reach the parse half.** Every spelling is read with the
+    /// bare `parse_hgvs`, which constructs no `InputPreprocessor` and so applies
+    /// no `ErrorConfig` at all — not lenient's repairs, not strict's refusals
+    /// (#1632, pinned by `issue_1632_parse_entry_applies_no_mode.rs`). So
+    /// `unparseable_outputs` and `attempted` are mode-*less* figures, and only
+    /// the counters downstream of normalization are lenient-mode figures. "No
+    /// mode" is a third thing rather than a synonym for strict, which is exactly
+    /// why it has to be said instead of inferred from this field.
+    ///
+    /// **Not decoration.** `corpus_prohibited_inputs.rs` re-measures three of
+    /// the four refusal counters in strict mode and two of them move
+    /// (`prohibited_absolute_accepted`'s 32 stay accepted) —
     /// so a census compared against one taken under a different mode is a
     /// category error, and until this field existed nothing in the artifact or
     /// the pin said which mode either was. The decided ruling
@@ -853,7 +866,8 @@ fn report(label: &str, measured: &Measured) -> String {
     let census = &measured.census;
     let mut out = format!(
         "spec conformance axis ({label})\n  \
-         MEASURED UNDER: error mode `{}` — every figure below is a figure for THAT mode\n  \
+         NORMALIZED UNDER: error mode `{}` — every figure downstream of normalization is \
+         a figure for THAT mode; the parse half applies no mode at all (#1632)\n  \
          VALIDITY (rank 1): {} outputs, {} declined, {} unparseable, {} denoting no sequence, \
          {} leaving the transcript, {} violating an absolute prohibition\n  \
          CONFLUENCE (rank 2): converged {}, split 2 {}, split 3 {}, split 4+ {}, \

@@ -160,7 +160,7 @@ fn strict_rejects_a_reference_mismatch_that_lenient_accepts() {
 /// which "says only `Lenient` should" — **#1629 removed that predicate**, since
 /// it had no call site in `src/` and could not have acquired one without
 /// overruling the per-code `--ignore`/`--reject` overrides. So the question
-/// survives, in a sharper form: `REFSEQ_MISMATCH` (W3001) reaches the CLI's
+/// survives, in a sharper form: `REFSEQ_MISMATCH` (W5001) reaches the CLI's
 /// diagnostic printer unconditionally rather than through
 /// `NormalizeConfig::should_warn_ref_mismatch()` — which *is* the per-code
 /// authority, *does* answer `false` under silent mode, and is itself unwired
