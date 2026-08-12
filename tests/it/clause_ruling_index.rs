@@ -84,12 +84,18 @@
 //! - `contiguous-insertion-split-by-a-blocked-derivation` — decided
 //! - `delins-recommendation-reach-when-the-input-arrives-split` — undecided
 //!
-//! Both are the branch's own; `main` has added no record since the base. It has
-//! *decided* two that this tree still carries as `undecided`
-//! (`codon-carve-out-shape-restriction`,
-//! `exon-junction-dup-converge-from-the-far-side`), so the pins below will move
-//! once more on the next rebase, in the decided/undecided split rather than in
-//! the total.
+//! Both are the branch's own.
+//!
+//! This paragraph used to predict that the pins below "will move once more on
+//! the next rebase", naming `codon-carve-out-shape-restriction` and
+//! `exon-junction-dup-converge-from-the-far-side` as records `main` had decided
+//! while this tree still carried them as `undecided`. That was already false
+//! when it was written — both read `decided` here too — and the rebase has since
+//! settled the question: measured against current `main`, **no** record is
+//! `decided` there and `undecided` here. The prediction is gone rather than
+//! refreshed, for the reason the sibling module states about restated counts: a
+//! forecast about a moving base is a copy of someone else's state, and it rots
+//! exactly like a copied number does.
 //!
 //! # The index
 //!

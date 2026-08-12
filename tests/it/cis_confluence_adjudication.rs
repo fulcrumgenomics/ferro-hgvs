@@ -3,7 +3,7 @@
 //! `tests/it/cis_confluence_axis.rs` measures the pile: **`cis_confluence_axis::{THREE_PRIME,
 //! FIVE_PRIME}` are the numbers, and they are the only copy.** Read the size of
 //! the disagreement off those constants, which are asserted every run —
-//! `divergent = 11 272 - converged`, with `declined` and `sequence_changed` both
+//! `divergent = classes - converged`, with `declined` and `sequence_changed` both
 //! pinned at zero. That census says how large the disagreement is and nothing
 //! about what the right answer would be. This module carries the answers that
 //! have been reached, and names the ones that have not, on concrete inputs
@@ -13,10 +13,15 @@
 //! stale without anything noticing** — it read 4 643 divergent classes with a
 //! `3066 / 696 / 271 / 267 / 181 / 131 / 28 / 3` family split and "4 568 of the
 //! 4 643 (98.4 %)" for the disjoint-output mechanism, while the asserted
-//! constants next door had moved to 8 026 converged, i.e. **3 246** divergent
-//! (3') and 3 251 (5'). A doc comment cannot fail, so a second copy of an
-//! asserted number is a copy that will eventually be wrong; the fix is to delete
-//! the copy rather than to refresh it.
+//! constants next door had already moved past it. No replacement figures are
+//! given here, and that is the point: `cis_confluence_axis::THREE_PRIME` and
+//! `cis_confluence_axis::FIVE_PRIME` carry a `converged` each, the two are
+//! **not** equal, and a direction's divergent count is that direction's own
+//! `classes - converged`. A single `converged` restated for both directions is
+//! how the first correction to this paragraph went wrong, and the second — the
+//! numbers offered to repair it were themselves a version behind. A doc comment
+//! cannot fail, so a second copy of an asserted number is a copy that will
+//! eventually be wrong; the fix is to delete the copy rather than to refresh it.
 //!
 //! The shape census behind these records is produced by
 //! `examples/dump_confluence_divergences.rs`, which clusters the divergent

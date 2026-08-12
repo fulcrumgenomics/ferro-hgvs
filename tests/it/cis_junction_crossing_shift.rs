@@ -287,14 +287,16 @@ fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_pri
 /// The row above and the row here denote the **same 22-mer**,
 /// `TTAACTATATATAATAAATTAT`, verified by applying each spelling to `DUP_RUN`
 /// through `hgvs_to_spdi` independently of the normalizer (the `apply`
-/// assertions below). Yet each is a fixed point:
+/// assertions below). Yet each direction lands on a stable answer and does not
+/// move off it:
 ///
 /// ```text
-/// 5'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;4_5dup;15del]   (fixed point)
-/// 5'  g.[4_5insCTA;15del]      -> g.[3_4insACT;15del]
+/// 5'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;4_5dup;15del]   (output is stable)
+/// 5'  g.[4_5insCTA;15del]      -> g.[3_4insACT;15del]        (output is stable)
 /// 5'  g.[3_4insACT;15del]      -> g.[3_4insACT;15del]        (fixed point)
-/// 3'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;9_10dup;15del]  (fixed point)
-/// 3'  g.[3_4insACT;15del]      -> g.[4_5insCTA;15del]        (fixed point)
+/// 3'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;9_10dup;15del]  (output is stable)
+/// 3'  g.[3_4insACT;15del]      -> g.[4_5insCTA;15del]        (output is stable)
+/// 3'  g.[4_5insCTA;15del]      -> g.[4_5insCTA;15del]        (fixed point)
 /// ```
 ///
 /// That is the #1235 shape — two stable fixed points for one variant — inside

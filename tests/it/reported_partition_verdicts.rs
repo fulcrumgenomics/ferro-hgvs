@@ -56,8 +56,13 @@
 //!
 //! # Where the wanted form's authority comes from
 //!
-//! Every row carries a [`Row::wanted`] string — the output *its issue asks for*,
-//! as the issue states it — and an [`Authority`] recording what backs it. The
+//! Every row carries a [`Row::wanted`] string and an [`Authority`] recording
+//! what backs it. `wanted` is usually the output *its issue asks for, as the
+//! issue states it* — but not always, and the exception matters: #1419's six
+//! rows carry the **decided chain's** answer instead, the spanning delins, since
+//! `canonical-form-choice-when-both-legal` settled that shape after those issues
+//! were filed. So read `wanted` as "the form this row is measured against",
+//! never as "what the filer asked for". The
 //! project's precedence policy is **spec-explicit > Mutalyzer > our judgement**,
 //! and applying it row by row does not give one answer for the whole family:
 //!
@@ -184,8 +189,14 @@ enum Authority {
     /// consulted, and the wanted form is the target a fix should reach.
     SpecExplicit,
     /// The spec answers this shape *both* ways, so the policy falls through to
-    /// Mutalyzer — which does not pick the issue's form either. The wanted form
-    /// is recorded as what the issue asked for, not asserted as the target.
+    /// Mutalyzer.
+    ///
+    /// **The two families under this authority differ, so do not read one rule
+    /// off it.** For #1421 the wanted form is recorded as what the issue asked
+    /// for and is not asserted as the target — Mutalyzer converges that shape on
+    /// the merged delins, so it does not pick the issue's form. For #1419 the
+    /// wanted form is the decided chain's answer rather than the issue's, and
+    /// the tie-break is never reached.
     SpecSelfConflicting,
 }
 
@@ -794,7 +805,9 @@ fn only_the_named_rows_answer_differently_in_the_two_directions() {
 fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
     for (a, b) in reported_pairs() {
         if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(a.label)) {
-            // Converged, but not on the wanted form, so no sibling prints it.
+            // Neither spelling reaches the wanted form: both rows are `Gap`, so
+            // there is no canonical sibling whose output could be compared. Not
+            // a convergence claim — see `PAIRS_NO_SPELLING_REACHES`.
             continue;
         }
         let (canonical, gap) = match a.verdict {
@@ -844,8 +857,22 @@ fn every_canonical_row_already_prints_its_wanted_form() {
 /// *target* or merely a *record*, and that is the single most consequential
 /// judgement in this file. Three pairs (#1420's) rest on a spec line nothing
 /// contradicts; six (#1419's and #1421's) rest on a spec that answers both
-/// ways, where the precedence policy hands the tie-break to Mutalyzer and
-/// Mutalyzer picks neither ferro's answer nor the issue's.
+/// ways — but the two self-conflicting families no longer sit the same way
+/// under the policy, so stating them together is what made this sentence wrong.
+///
+/// **#1421's three pairs** still carry the issue's split form as `wanted`,
+/// recorded rather than targeted: the policy falls through to Mutalyzer, and the
+/// measurement in this module's docs has Mutalyzer converging that shape on the
+/// **merged** delins, so it does not pick the issue's form.
+///
+/// **#1419's three pairs no longer carry the issue's form at all.** The decided
+/// chain — `adjudication-precedence-order` withdrawing `general.md:56`, then
+/// `canonical-form-choice-when-both-legal` with `delins.md:46-47` — moved all
+/// six `wanted` strings onto the spanning delins, so the Mutalyzer tie-break is
+/// never reached there. Note the same measurement has Mutalyzer converging that
+/// shape on the spanning delins too, i.e. **agreeing** with `wanted` — the
+/// opposite of "picks neither". Ferro prints that form for neither spelling,
+/// which is why both rows of each `1419-r*` pair are `Gap`.
 #[test]
 fn the_spec_authority_census_holds() {
     for (a, b) in reported_pairs() {
