@@ -246,7 +246,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `LRG_199t1:c.11LRG_199t1:c.11` | errors | accepted_divergence | — | — |
 | `LRG_199t1:c.11LRG_199t1:c.11[10]` | normalized | accepted_divergence | — | — |
 | `LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]` | normalized | accepted_divergence | — | — |
-| `LRG_199t1:c.235_237delinsTAT` | genomic | spec_citation | — | — |
 | `LRG_199t1:c.235_237delinsTAT` | normalized | spec_citation | — | — |
 | `LRG_1t1:52_153CAG[21]CAA[1]CAG[1]CCG[1]CCA[1]CCG[7]CCT[2]` | errors | accepted_divergence | — | — |
 | `NG_007485.1(1787):n.204_205insATC` | errors | accepted_divergence | — | — |
@@ -346,7 +345,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 19 | 0 | 0 | 0 | 0 |
-| genomic | 19 | 0 | 0 | 0 | 6 |
+| genomic | 19 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
 | normalized | 28 | 0 | 1 | 0 | 18 |

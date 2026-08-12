@@ -2498,18 +2498,11 @@
       "normalized": "LRG_199t1:c.[235A>T;237G>T]",
       "protein_description": "LRG_199p1:p.(Lys79Tyr)",
       "to_test": true,
-      "spec_citation": [
-        {
-          "axis": "normalized",
-          "section": "HGVS §delins (one-amino-acid exception)",
-          "note": "ferro keeps the block delins c.235_237delinsTAT on the coding axis; mutalyzer decomposes it to per-position substitutions c.[235A>T;237G>T]. delins.md:18-19 uses THIS EXACT variant as its worked example of the exception: two changes separated by one unchanged nucleotide that together affect one amino acid (here codon 79, c.235_237, p.Lys79Tyr) MUST be described as a delins -- the decomposed c.[235A>T;237G>T] is the form the spec explicitly marks incorrect, because it makes tools predict conflicting per-position consequences (p.[Lys79*;Lys79Asn]) instead of the correct p.Lys79Tyr. ferro's coding-axis delins is therefore the spec-correct form (more spec-faithful than mutalyzer). Reclassified from known_bug (#920). CORRECTED (#1664): this note used to end 'the exception is codon-frame-specific: on the genomic axis (no reading frame) ferro decomposes to g.[499798A>T;499800G>T], matching mutalyzer, so this divergence is coding-axis-only'. That is no longer true and the reasoning behind it was the defect #1664 names -- a PROJECTION always names a transcript, so the reading frame is in hand on the genomic axis too, and deciding the exception per rendered axis made ferro publish on g. exactly the split that delins.md:42 marks incorrect on c. The genomic axis now merges as well, and carries its own spec_citation on this case."
-        },
-        {
-          "axis": "genomic",
-          "section": "HGVS §delins (one-amino-acid exception)",
-          "note": "ferro renders the genomic axis of this projection as g.499798_499800delinsTAT; mutalyzer decomposes it to g.[499798A>T;499800G>T]. This is the same clause as the coding-axis citation above, applied on the axis the projection derives rather than the one the caller authored. delins.md:18's precondition -- 'two variants separated by one nucleotide, together affecting one amino acid' -- is a property of the variant and the transcript, not of the coordinate system it is spelled in: g.499798 and g.499800 ARE c.235 and c.237, and they are codon 79. delins.md:42 marks the split spelling class=\"invalid\" and :19 gives the harm it prevents by name -- a tool reading the split predicts p.[Lys79*;Lys79Asn] instead of p.Lys79Tyr -- and that harm does not become acceptable because the description is written in genomic coordinates. This does NOT reopen #79, which scoped the exception out of the BARE genomic axis: a bare g. description names no transcript and ferro still splits it there (pinned by tests/it/lenient_overlap_and_projection_split.rs::a_bare_genomic_description_still_has_no_codon_frame). mutalyzer has no separation rule at all -- it minimises a weighted description length -- so its split here is a different objective meeting, not evidence about the clause. Precedence is spec-explicit > mutalyzer. See #1664."
-        }
-      ]
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §delins (one-amino-acid exception)",
+        "note": "ferro keeps the block delins c.235_237delinsTAT on the coding axis; mutalyzer decomposes it to per-position substitutions c.[235A>T;237G>T]. delins.md:18-19 uses THIS EXACT variant as its worked example of the exception: two changes separated by one unchanged nucleotide that together affect one amino acid (here codon 79, c.235_237, p.Lys79Tyr) MUST be described as a delins -- the decomposed c.[235A>T;237G>T] is the form the spec explicitly marks incorrect, because it makes tools predict conflicting per-position consequences (p.[Lys79*;Lys79Asn]) instead of the correct p.Lys79Tyr. ferro's coding-axis delins is therefore the spec-correct form (more spec-faithful than mutalyzer). The exception is codon-frame-specific: on the genomic axis (no reading frame) ferro decomposes to g.[499798A>T;499800G>T], matching mutalyzer, so this divergence is coding-axis-only. Reclassified from known_bug (#920)."
+      }
     },
     {
       "keywords": [
