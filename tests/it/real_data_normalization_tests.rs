@@ -1,9 +1,26 @@
-//! Tests using real reference data from benchmark-output
+//! Tests using a real ferro-prepared reference.
 //!
-//! These tests require the benchmark-output directory to be present.
+//! The reference is located through `FERRO_MANIFEST`, falling back to
+//! `benchmark-output/manifest.json` — the convention every reference-aware
+//! module here uses. Without one these guards stand down; under
+//! `FERRO_REQUIRE_MANIFEST` standing down is a failure, whether the manifest is
+//! absent or merely does not carry the transcript a guard names.
+//!
+//! **That promotion buys execution, not verification.** Three of the five
+//! guards below (`test_potential_bug_deletion_shift_nm033517`,
+//! `test_potential_bug_delins_shift`, `test_5utr_duplication_shifting`) contain
+//! no assertion at all — they are investigation scripts that print — and
+//! `test_compare_with_mutalyzer_sequence` keeps both of its assertions inside a
+//! bounds check, so an out-of-range coordinate leaves it asserting nothing.
+//! Tracked as #1858; do not read a green run here as coverage of those four.
 
+use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::{parse_hgvs, MultiFastaProvider, Normalizer, ReferenceProvider};
 use std::path::Path;
+use std::sync::Arc;
+
+/// This module's name, as it appears in a `FERRO_REQUIRE_MANIFEST` failure.
+const MODULE: &str = "real_data_normalization_tests";
 
 /// The prepared manifest, by the same convention every other reference-aware
 /// module here uses: `FERRO_MANIFEST` is authoritative when set, with
@@ -42,6 +59,26 @@ fn get_provider() -> Option<MultiFastaProvider> {
     )
 }
 
+/// The transcript a guard names, or `None` after recording the stand-down.
+///
+/// A manifest that is present but does not carry the accession leaves the guard
+/// asserting nothing, which is the same coverage loss an absent manifest causes
+/// and is promoted by the same `FERRO_REQUIRE_MANIFEST` — see
+/// `ferro_hgvs::conformance::manifest_gate::unserved` for why one flag and two
+/// messages rather than two flags.
+///
+/// Each call site keeps its own `return`, so what a reader sees is still an
+/// ordinary early exit.
+fn transcript_or_skip(provider: &MultiFastaProvider, accession: &str) -> Option<Arc<Transcript>> {
+    match provider.get_transcript(accession) {
+        Ok(transcript) => Some(transcript),
+        Err(error) => {
+            crate::common::manifest::unserved(MODULE, accession, &error.to_string());
+            None
+        }
+    }
+}
+
 #[test]
 fn test_nm_001408491_c517dela_should_shift() {
     // This test reproduces the issue found in mutalyzer comparison:
@@ -52,17 +89,13 @@ fn test_nm_001408491_c517dela_should_shift() {
     // Ferro output (before fix): NM_001408491.1:c.517del
 
     let Some(provider) = get_provider() else {
-        crate::common::manifest::absent("real_data_normalization_tests");
+        crate::common::manifest::absent(MODULE);
         return;
     };
 
     // First, let's get the transcript and examine the sequence
-    let transcript = match provider.get_transcript("NM_001408491.1") {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!("Skipping test: transcript not found: {}", e);
-            return;
-        }
+    let Some(transcript) = transcript_or_skip(&provider, "NM_001408491.1") else {
+        return;
     };
 
     println!("=== Transcript NM_001408491.1 ===");
@@ -169,16 +202,12 @@ fn test_potential_bug_deletion_shift_nm033517() {
     // Investigate: ferro outputs c.1324del, mutalyzer outputs c.1326del
     // One of these is wrong about 3' shifting
     let Some(provider) = get_provider() else {
-        crate::common::manifest::absent("real_data_normalization_tests");
+        crate::common::manifest::absent(MODULE);
         return;
     };
 
-    let transcript = match provider.get_transcript("NM_033517.1") {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!("Skipping test: transcript not found: {}", e);
-            return;
-        }
+    let Some(transcript) = transcript_or_skip(&provider, "NM_033517.1") else {
+        return;
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
@@ -218,16 +247,12 @@ fn test_potential_bug_delins_shift() {
     //
     // HGVS spec: delins should NOT be 3' shifted like del/dup
     let Some(provider) = get_provider() else {
-        crate::common::manifest::absent("real_data_normalization_tests");
+        crate::common::manifest::absent(MODULE);
         return;
     };
 
-    let transcript = match provider.get_transcript("NM_001282424.3") {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!("Skipping test: transcript not found: {}", e);
-            return;
-        }
+    let Some(transcript) = transcript_or_skip(&provider, "NM_001282424.3") else {
+        return;
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
@@ -275,16 +300,12 @@ fn test_5utr_duplication_shifting() {
     // In 5'UTR, the 3' direction is towards the start codon (+1)
     // So -55 is more 3' than -56
     let Some(provider) = get_provider() else {
-        crate::common::manifest::absent("real_data_normalization_tests");
+        crate::common::manifest::absent(MODULE);
         return;
     };
 
-    let transcript = match provider.get_transcript("NM_001394148.2") {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!("Skipping test: transcript not found: {}", e);
-            return;
-        }
+    let Some(transcript) = transcript_or_skip(&provider, "NM_001394148.2") else {
+        return;
     };
 
     let cds_start = transcript.cds_start.unwrap_or(1);
@@ -326,16 +347,12 @@ fn test_5utr_duplication_shifting() {
 fn test_compare_with_mutalyzer_sequence() {
     // Compare what we have in cdot vs what mutalyzer reports
     let Some(provider) = get_provider() else {
-        crate::common::manifest::absent("real_data_normalization_tests");
+        crate::common::manifest::absent(MODULE);
         return;
     };
 
-    let transcript = match provider.get_transcript("NM_001408491.1") {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!("Skipping test: transcript not found: {}", e);
-            return;
-        }
+    let Some(transcript) = transcript_or_skip(&provider, "NM_001408491.1") else {
+        return;
     };
 
     // From mutalyzer normalizer output for NM_001408491.1:c.517delA:

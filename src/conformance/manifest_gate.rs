@@ -79,11 +79,19 @@ fn value_requires_manifest(value: Option<&str>) -> bool {
 /// what a reader sees at each one is still an ordinary early exit rather than
 /// control flow that depends on an environment variable.
 pub fn absent(context: &str) {
-    assert!(
-        !manifest_is_required(),
-        "{}",
-        missing_manifest_message(context)
-    );
+    absent_gated(manifest_is_required(), context);
+}
+
+/// The gate itself, over an explicit `required` so the promotion can be
+/// asserted without touching the process environment — the same reason
+/// [`value_requires_manifest`] takes a value rather than reading the variable.
+///
+/// This split is what puts the *promotion* under test rather than only its
+/// message text. Asserting it through the real variable is not an option:
+/// mutating the environment is a process-global side effect and tests run in
+/// threads, so a test that set it could change what a concurrent sibling sees.
+fn absent_gated(required: bool, context: &str) {
+    assert!(!required, "{}", missing_manifest_message(context));
     eprintln!(
         "{context}: skipping — no reference manifest \
          (set {MANIFEST_ENV}=<prepared-dir>/manifest.json)"
@@ -110,6 +118,70 @@ fn missing_manifest_message(context: &str) -> String {
          \n\
          In CI this means the nightly's `ferro prepare` step did not leave a manifest\n\
          where the test step reads it."
+    )
+}
+
+/// Called when a reference manifest IS available but does not serve a resource
+/// the guard names — a transcript the prepared reference does not carry, say.
+/// Panics under `FERRO_REQUIRE_MANIFEST`, otherwise reports the skip on stderr.
+///
+/// This is the same question as [`absent`] one level down, and it is promoted
+/// by the same variable for that reason. The guard's coverage is gone either
+/// way, and the promotion is about the coverage rather than about the cause:
+/// there is no third state in which the manifest is present, the resource is
+/// missing, and the guard still checked anything.
+///
+/// It is a **separate function** only because the remedy differs — "prepare a
+/// reference" against "this reference does not carry `X`" — and a failure whose
+/// text names the wrong fix gets worked around rather than fixed.
+///
+/// It matters more than it looks, because the instrument that found the guards
+/// [`absent`] protects cannot see this one. Those were censused by duration:
+/// 0.02–0.08 s skipped against 9–70 s armed. Here the provider load happens
+/// *before* the lookup, so a stood-down guard costs the same wall clock as an
+/// armed one — measured 13.17 s either way on the blessed reference. Neither
+/// the exit status, the summary line, the check row, nor the runtime
+/// distinguishes them.
+///
+/// `resource` is the thing that was not served; `reason` is the provider's own
+/// error, kept verbatim so a version mismatch reads differently from an
+/// accession the reference never had.
+pub fn unserved(context: &str, resource: &str, reason: &str) {
+    unserved_gated(manifest_is_required(), context, resource, reason);
+}
+
+/// The gate itself, over an explicit `required` — see [`absent_gated`] for why
+/// the promotion is factored out rather than asserted through the variable.
+fn unserved_gated(required: bool, context: &str, resource: &str, reason: &str) {
+    assert!(
+        !required,
+        "{}",
+        unserved_resource_message(context, resource, reason)
+    );
+    eprintln!("{context}: skipping — the reference manifest does not serve `{resource}`: {reason}");
+}
+
+/// The failure text for [`unserved`], factored out so it can be asserted on
+/// rather than re-typed in a test.
+fn unserved_resource_message(context: &str, resource: &str, reason: &str) -> String {
+    format!(
+        "{REQUIRE_ENV} is set and a reference manifest was found, but `{context}` could\n\
+         not get `{resource}` from it: {reason}\n\
+         \n\
+         The manifest is present, so this is not the absence {REQUIRE_ENV} usually\n\
+         reports — the prepared reference simply does not carry what this guard names.\n\
+         The guard would SKIP GREEN, silently dropping its coverage, and unlike an\n\
+         absent manifest this one does not even show up as a faster run: the provider\n\
+         is loaded before the lookup, so a stood-down guard costs the same wall clock\n\
+         as an armed one.\n\
+         \n\
+         Either the `ferro prepare` inputs no longer supply `{resource}` (an accession\n\
+         withdrawn or re-versioned upstream is the common case), or the guard is\n\
+         naming an accession it should no longer name. Confirm with:\n\
+         \n    ferro check --reference <prepared-dir>\n\
+         \n\
+         Fix the reference, or re-point the guard at an accession the reference has\n\
+         and say in the commit why it moved. Do not restore the skip."
     )
 }
 
@@ -165,6 +237,83 @@ mod tests {
             "no continued line found — the remedy no longer spans two lines, so this \
              guard is vacuous and should be re-aimed:\n{message}"
         );
+    }
+
+    /// The unserved-resource message must name the guard, the resource and the
+    /// provider's own reason, and must not read as the absent-manifest case —
+    /// the manifest was found, so pointing at `ferro prepare --output-dir` is
+    /// the wrong remedy and sends the reader to check a file that is fine.
+    #[test]
+    fn the_unserved_resource_message_names_the_resource_and_a_different_remedy() {
+        let message = unserved_resource_message(
+            "real_data_normalization_tests",
+            "NM_001408491.1",
+            "Reference not found: NM_001408491.1",
+        );
+        assert!(message.contains("real_data_normalization_tests"));
+        assert!(message.contains("NM_001408491.1"));
+        assert!(message.contains("Reference not found: NM_001408491.1"));
+        assert!(message.contains(REQUIRE_ENV));
+        assert!(message.contains("ferro check"));
+        assert!(
+            message.contains("does not carry"),
+            "the message must say the reference lacks the resource, not that it is absent"
+        );
+        assert!(
+            !message.contains("found no reference manifest"),
+            "must not be confusable with the absent-manifest message"
+        );
+    }
+
+    /// The two messages are different text for different causes. Pinned because
+    /// the cheap implementation of `unserved` is to call `absent` with a
+    /// concatenated context, which would silently give both causes the same
+    /// remedy.
+    #[test]
+    fn the_two_messages_are_not_the_same_message() {
+        assert_ne!(
+            missing_manifest_message("m"),
+            unserved_resource_message("m", "NM_1.1", "why")
+        );
+    }
+
+    /// The promotion itself, which is the whole point of this module and which
+    /// asserting on message *text* does not check: with the manifest required,
+    /// a stand-down must panic rather than report and continue.
+    ///
+    /// Without this, deleting the `assert!` from `unserved` leaves every other
+    /// test in this file green — the exact shape (a guard that passes without
+    /// checking the thing it names) that this module exists to eliminate.
+    #[test]
+    #[should_panic(expected = "does not carry")]
+    fn an_unserved_resource_panics_when_the_manifest_is_required() {
+        unserved_gated(true, "some_module", "NM_1.1", "Reference not found: NM_1.1");
+    }
+
+    /// The other half: with the manifest not required the same call must return
+    /// normally, because that is the local and PR-CI default. A `should_panic`
+    /// test alone would be satisfied by a function that always panics.
+    #[test]
+    fn an_unserved_resource_only_reports_when_the_manifest_is_not_required() {
+        unserved_gated(
+            false,
+            "some_module",
+            "NM_1.1",
+            "Reference not found: NM_1.1",
+        );
+    }
+
+    /// The same pair for [`absent`]. Same defect class, same gap — pinned here
+    /// so the two stand-down paths cannot drift apart.
+    #[test]
+    #[should_panic(expected = "found no reference manifest")]
+    fn an_absent_manifest_panics_when_the_manifest_is_required() {
+        absent_gated(true, "some_module");
+    }
+
+    #[test]
+    fn an_absent_manifest_only_reports_when_the_manifest_is_not_required() {
+        absent_gated(false, "some_module");
     }
 
     /// The predicate's contract, pinned against the spellings CI and a
