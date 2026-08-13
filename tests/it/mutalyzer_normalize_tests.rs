@@ -4699,7 +4699,7 @@ fn axis_noncoding_idempotent() {
     // fewer means something was fixed and this pin went stale without anyone
     // noticing, which is how a partial fix comes to read as a complete one.
     //
-    // The 21 fall into three shapes, and they are not equally serious:
+    // The 20 fall into two shapes, and both have the same cause:
     //
     // * 16 re-render as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
     //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization runs on the
@@ -4707,7 +4707,17 @@ fn axis_noncoding_idempotent() {
     // * 4 re-partition into members — `n.309delinsCTGA` ->
     //   `n.[308_309insCT;310dup]`, all four from cross-reference `delins`
     //   inputs (the #422 family).
-    // * 1 is NOT 3'-shifted, asserted separately below.
+    //
+    // Both are the `n.` axis inheriting a form the *coding* frame chose because
+    // it declares a reading frame and `n.` does not, so re-deriving on the `n.`
+    // reference disagrees. Closing them means settling which of the projector
+    // and the normalizer is the wrong side of that, and the decided record
+    // `projection-codon-exception-is-decided-by-the-rendered-axis` states that
+    // it does not reach the `n.` axis — its scope paragraph names that axis and
+    // declines to rule on it. Measured: adding a `normalize` to
+    // `noncoding_axis_with_reason` takes this count to zero, and turns three
+    // committed guards red, each of which pins today's answer to that same
+    // question. So the count stays here until it is ruled on.
     assert_eq!(
         failures.len(),
         NONCODING_NON_IDEMPOTENT,
@@ -4716,29 +4726,91 @@ fn axis_noncoding_idempotent() {
         failures.join("\n")
     );
 
-    // Called out by name because it is the only one of the 21 that is a rule 2
-    // miss rather than a re-spelling: the output is simply not 3'-shifted, on a
-    // user-facing axis, and README rule 2 names the 3' rule in its own scope.
-    // Buried inside the aggregate it would survive a fix to the other twenty
-    // without anyone noticing it had.
+    // The 21st row is gone, and this asserts it stays gone. It was
+    // `LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del`, filed as "not
+    // 3'-shifted" — but the shift was the symptom. `LRG_24t1` is a different
+    // sequence from the `NM_001114101.3` the projection resolved (1191 bases /
+    // `cds_start = 127` against 1181 / 119), so renaming the accession while
+    // keeping the transcript coordinate moved the description onto other bases.
+    // `frame_projection_owned` now renames the `n.` axis only when the two
+    // sequences are identical, so this row renders
+    // `LRG_24(NM_001114101.3):n.245_252del` and is a fixed point.
+    //
+    // Asserted as an absence *plus* the surviving shapes above, so a regression
+    // that reintroduced it would fail on the count as well.
     assert!(
-        failures
-            .iter()
-            .any(|f| f.contains(NONCODING_NOT_THREE_PRIME_SHIFTED)),
-        "the one non-3'-shifted row is gone from the residue. If it was fixed, \
-         drop this assertion and lower the pin; do not leave both in place:\n{}",
+        !failures.iter().any(|f| f.contains("LRG_24t1:n.")),
+        "the LRG transcript-frame row is back in the residue (#1712): renaming \
+         the `n.` axis to an LRG transcript accession is only sound when that \
+         transcript's sequence matches the resolved one:\n{}",
         failures.join("\n")
     );
 }
 
 /// The measured non-idempotency residue on the `n.` axis — see #1712.
 ///
-/// Measured at `origin/main` `9fb126ba` against the prepared GRCh38 reference:
-/// 681 axes tested, 21 non-idempotent. The genomic control
+/// Measured at `origin/main` `5bf0b4ff` against the prepared GRCh38 reference:
+/// 681 axes tested, **20** non-idempotent. The genomic control
 /// ([`axis_genomic_idempotent`]) reads 214 tested / 0 non-idempotent on the same
 /// run, which is what isolates this to the non-coding path rather than to
 /// normalization generally.
-const NONCODING_NON_IDEMPOTENT: usize = 21;
+///
+/// It was 21 when #1788 pinned it. The row that left is the LRG one, closed by
+/// the transcript-frame guard in `frame_projection_owned`; the assertion below
+/// keeps it from coming back.
+const NONCODING_NON_IDEMPOTENT: usize = 20;
 
-/// The one row in that residue whose output is not 3'-shifted (#1712).
-const NONCODING_NOT_THREE_PRIME_SHIFTED: &str = "LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del";
+/// The `n.` axis of an LRG-parented projection names the transcript whose bases
+/// it was computed against (#1712).
+///
+/// This is the measurement behind the guard, on the real reference: `LRG_24t1`
+/// and the `NM_001114101.3` the fan-out resolves are **not** the same sequence,
+/// so an `n.` coordinate does not carry between them. The first assertion is the
+/// one that makes the rest mean anything — it reads the two references' bases
+/// directly, so the test states a fact about the reference rather than about the
+/// projector, and cannot go quietly green if the projector stops rendering.
+///
+/// The `c.` axis is the control: it is CDS-relative, so the same eight-base 5'
+/// difference does not move it, and it keeps the `LRG_24t1` namespace echo #860
+/// added. That contrast is the whole scope of the fix — `n.` is the only axis
+/// whose numbers are stated in the transcript's own frame.
+#[test]
+fn lrg_noncoding_axis_names_the_transcript_it_was_measured_against() {
+    let (Some(vp), Some(p)) = (variant_projector(), provider()) else {
+        eprintln!("lrg_noncoding_axis_names_the_transcript_it_was_measured_against: skipping — no manifest");
+        return;
+    };
+    use ferro_hgvs::reference::ReferenceProvider;
+
+    // The premise, read off the reference: same locus, different sequences.
+    let lrg_bases = p
+        .get_sequence("LRG_24t1", 244, 252)
+        .expect("LRG_24t1 n.245_252 must be servable");
+    let nm_bases = p
+        .get_sequence("NM_001114101.3", 244, 252)
+        .expect("NM_001114101.3 n.245_252 must be servable");
+    assert_ne!(
+        lrg_bases, nm_bases,
+        "the premise of this test is that n.245_252 names different bases on \
+         LRG_24t1 than on NM_001114101.3; if they now agree the reference \
+         changed and the guard below is no longer testing anything"
+    );
+
+    let variant = parse_hgvs("LRG_24:g.5526_5533del").expect("parse");
+    let results = vp.project_variant_all(&variant).expect("project");
+    let rendered: Vec<String> = results
+        .iter()
+        .filter(|r| r.transcript_id == "NM_001114101.3")
+        .filter_map(|r| {
+            let n = r.noncoding.as_ref()?.to_string();
+            let c = r.coding.as_ref()?.to_string();
+            Some(format!("{n} | {c}"))
+        })
+        .collect();
+    assert_eq!(
+        rendered,
+        vec!["LRG_24(NM_001114101.3):n.245_252del | LRG_24t1:c.127_134del".to_string()],
+        "the n. axis must keep the accession its coordinate was computed \
+         against, while the CDS-relative c. axis keeps the LRG namespace echo"
+    );
+}
