@@ -303,10 +303,11 @@ fn zone_in_interval(
 /// The first `numbering.md:52`-undefined position of zone `want` that `variant`
 /// states on an `n.` axis, if any.
 ///
-/// Walks allele members, ring segments and the inner description of a `sup`
-/// marker, so a prohibited position cannot be laundered behind a composite
-/// spelling — a cis allele (`n.[*5A>G;100del]`) and a trans pair
-/// (`n.[*5A>G];[100del]`) are both reached.
+/// Walks allele members and the inner description of a `sup` marker, so a
+/// prohibited position cannot be laundered behind a composite spelling — a cis
+/// allele (`n.[*5A>G;100del]`) and a trans pair (`n.[*5A>G];[100del]`) are both
+/// reached. A **ring** is deliberately *not* walked: its segments are genomic,
+/// and `GenomeRing` yields `None` for the reason the arm list below gives.
 ///
 /// The zone is a **parameter** rather than a scan for either, because the two
 /// are enforced at different stages: `Downstream` is refused unconditionally at
