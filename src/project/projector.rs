@@ -1606,9 +1606,46 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 // The rna axis can be an allele needing apply_rna_framing-style
                 // recursion; no #860 corpus row exercises rna under an LRG parent,
                 // so it is intentionally out of scope here.
-                for field in [&mut result.coding, &mut result.noncoding] {
-                    if let Some(v) = field.as_mut() {
+                if let Some(v) = result.coding.as_mut() {
+                    Self::set_bare_accession(v, lrg_tx_acc.clone());
+                }
+                // The `n.` axis is the only one whose numbers are stated in the
+                // transcript's *own* frame, so it is the only one this rename can
+                // misplace (#1712). `c.` is CDS-relative and `p.` is
+                // residue-relative, and both survive a differing 5'UTR length; a
+                // transcript coordinate does not.
+                //
+                // Measured: `LRG_24t1` is 1191 bases with `cds_start = 127` while
+                // the `NM_001114101.3` it resolves to is 1181 with
+                // `cds_start = 119` — an eight-base 5' extension. Renaming the
+                // accession while keeping the number turned
+                // `NM_001114101.3:n.245_252del` (which deletes `GGGGCACC`) into
+                // `LRG_24t1:n.245_252del`, which on the LRG transcript's own bases
+                // deletes `GCCTGCCC`. That is a wrong denotation, not a spelling
+                // choice, and the non-idempotency #1712 measured
+                // (`n.245_252del` -> `n.246_253del`) was only its symptom.
+                //
+                // So rename only when the two sequences are byte-identical, which
+                // is the precondition under which a transcript coordinate carries
+                // over unchanged. Otherwise leave the axis on its resolved
+                // transcript accession — still framed under the LRG parent by
+                // `relabel_under_parent` above, rendering
+                // `LRG_24(NM_001114101.3):n.245_252del`, which is the shape the
+                // other LRG-parented `n.` rows already take.
+                //
+                // Declining is deliberate rather than re-deriving the coordinate:
+                // `LRG_24t2` has no `cds_start` at all in the prepared reference
+                // (and is 1139 bases against `NM_172369.5`'s 1158), so there is no
+                // CDS anchor to reframe through and any offset would be invented.
+                if let Some(v) = result.noncoding.as_mut() {
+                    if self.shares_transcript_frame(&lrg_tx, v) {
                         Self::set_bare_accession(v, lrg_tx_acc.clone());
+                    } else {
+                        log::trace!(
+                            "frame_projection_owned: {lrg_tx} does not share a transcript \
+                             coordinate frame with the resolved transcript; keeping the \
+                             resolved accession on the n. axis rather than renaming it (#1712)"
+                        );
                     }
                 }
                 if let (Some(protein), Some(lrg_p)) =
@@ -1656,6 +1693,52 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         }
         result
+    }
+
+    /// Whether `candidate` serves byte-identical bases to the transcript `axis`
+    /// currently names — i.e. whether an `n.` coordinate carries from one
+    /// accession to the other unchanged (#1712).
+    ///
+    /// Used to gate the #860 LRG namespace echo on the `n.` axis. Sequence
+    /// equality is the honest predicate: a transcript coordinate is an offset
+    /// into the served bases, so two records share a frame exactly when those
+    /// bases agree. Comparing `(cds_start, len)` instead would be a proxy that
+    /// two same-length records with different bases would pass.
+    ///
+    /// Returns `false` when either sequence is unavailable — an unverifiable
+    /// frame must not be treated as a matching one, since the cost of the wrong
+    /// answer is a description that denotes different bases.
+    ///
+    /// The two fetches deliberately do **not** go through
+    /// [`Self::cached_get_transcript_for_variant`]: that cache resolves a record
+    /// *for a variant* (`get_transcript_for_variant`, with a parent-scoped key),
+    /// which is a different question from "what does this accession serve", and
+    /// there is no variant at all for the LRG candidate. They therefore do not
+    /// collapse the way `projection::transcript_cache_collapses_repeat_lookups`
+    /// pins for the protein-prediction path. That is affordable because the call
+    /// is reached only under a bare `LRG_` parent, and `str` equality compares
+    /// lengths first, so a differing record costs no byte scan.
+    fn shares_transcript_frame(&self, candidate: &str, axis: &HgvsVariant) -> bool {
+        let Some(resolved) = axis.accession().map(|a| a.transcript_accession()) else {
+            return false;
+        };
+        // Defensive on today's routes — `lrg_transcript_for_parent` maps an
+        // `NM_`/`NR_` to an `LRG_`, so the two never match here. Kept so a caller
+        // that hands over an already-LRG-named axis is a no-op rather than two
+        // provider fetches that compare a record against itself.
+        if resolved == candidate {
+            return true;
+        }
+        let (Ok(a), Ok(b)) = (
+            self.provider.get_transcript(candidate),
+            self.provider.get_transcript(&resolved),
+        ) else {
+            return false;
+        };
+        match (a.sequence.as_deref(), b.sequence.as_deref()) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
     }
 
     /// Return a clone of `variant` whose top-level accession carries `parent` as
@@ -4611,6 +4694,30 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///
     /// Returns `(axis, decline_reason)`; the reason is `None` whenever the axis
     /// is `Some`.
+    ///
+    /// # The axis is NOT re-normalized on its own reference (#1712)
+    ///
+    /// The coordinates reframe and the `c.` form's edit is cloned verbatim, so
+    /// the `n.` axis inherits whatever canonical form the *coding* frame settled
+    /// on — including forms the coding frame chose because it has a reading
+    /// frame and `n.` does not. Bare normalization of the resulting `n.` string
+    /// therefore rewrites 61 of the 681 projected axes measured against the
+    /// prepared GRCh38 reference (`c.3305_3306del` -> `n.3709_3710del`, which
+    /// normalizes on to `n.3708_3710T[1]`).
+    ///
+    /// Read that 61 off `NONCODING_NON_IDEMPOTENT` rather than from here — it
+    /// tracks the shipped `FERRO_PARTITION` default, and #1835 moved it from 21
+    /// to 62 by making `canonical-coalesced` that default; this branch takes it
+    /// to 61.
+    ///
+    /// Adding a `normalize` here closes all 61 and is the obvious symmetry with
+    /// the genomic axis ([`Self::normalize_or_fallback`], #737) — but it is
+    /// **not** a free correction. Which of the projector and the normalizer is
+    /// the wrong side of the `n.`-versus-`c.` disagreement is a question the
+    /// decided record `projection-codon-exception-is-decided-by-the-rendered-axis`
+    /// declines to reach: its scope paragraph names the `n.` axis and rules only
+    /// on the genomic one. See the residue pinned by `axis_noncoding_idempotent`
+    /// and #1712.
     fn noncoding_axis_with_reason(
         &self,
         normalized: &HgvsVariant,
@@ -10462,6 +10569,125 @@ mod tests {
             assert!(
                 framed.protein.unwrap().to_string().starts_with("LRG_24p1:"),
                 "protein should render bare LRG_24p1"
+            );
+        }
+
+        /// #1712: the #860 namespace echo may only rename the `n.` axis when the
+        /// LRG transcript and the resolved transcript serve the same bases.
+        ///
+        /// `c.` is CDS-relative and `p.` is residue-relative, so a differing
+        /// 5'UTR length leaves both alone. A transcript coordinate is an offset
+        /// into the served sequence, so the same difference silently moves the
+        /// `n.` axis onto other bases — which is what
+        /// `LRG_24t1:n.245_252del` was, against the real reference where
+        /// `LRG_24t1` carries eight extra 5' bases.
+        ///
+        /// The first two arms are the discriminating pair: identical sequences
+        /// must still rename (or the fix would be a blanket refusal that quietly
+        /// retires #860 for this axis), differing ones must not.
+        ///
+        /// The third arm pins the *unverifiable* case, which
+        /// [`Self::shares_transcript_frame`] documents and which neither of the
+        /// other two reaches: a provider that resolves the `LRG_<n>t<k>` record
+        /// but serves no bases for it. It declines, like a differing sequence —
+        /// an unverifiable frame must not be treated as a matching one. It is
+        /// pinned rather than left implicit because it is the arm with the
+        /// widest blast radius: a provider that carries no transcript sequences
+        /// at all would lose the #860 `n.`-axis echo for *every* row, and the
+        /// only report of that is a `log::trace!`.
+        ///
+        /// Deliberately a unit test rather than one of the `tests/it/projection*`
+        /// suites the repo normally asks projection changes to land in. This
+        /// isolates `frame_projection_owned` by handing it a `VariantProjection`
+        /// directly; routing the same case through `project_variant_all` would
+        /// measure transcript enumeration and the reference's own LRG records
+        /// instead of the rename gate. It is also the coverage that actually runs
+        /// on PR CI — the reference-aware sibling
+        /// (`mutalyzer_normalize_tests::lrg_noncoding_axis_names_the_transcript_it_was_measured_against`)
+        /// needs `FERRO_MANIFEST` and only executes in the nightly job.
+        #[test]
+        fn frame_projection_owned_renames_the_noncoding_axis_only_on_a_shared_frame() {
+            fn tx(id: &str, sequence: &str) -> Transcript {
+                Transcript {
+                    id: id.to_string(),
+                    sequence: Some(sequence.to_string()),
+                    cds_start: Some(1),
+                    cds_end: Some(sequence.len() as u64),
+                    exons: vec![Exon::new(1, 1, sequence.len() as u64)],
+                    ..Default::default()
+                }
+            }
+            /// The same record with no served bases — the LRG transcript is
+            /// resolvable but its frame is unverifiable.
+            fn tx_without_sequence(id: &str, len: u64) -> Transcript {
+                Transcript {
+                    id: id.to_string(),
+                    sequence: None,
+                    cds_start: Some(1),
+                    cds_end: Some(len),
+                    exons: vec![Exon::new(1, 1, len)],
+                    ..Default::default()
+                }
+            }
+            fn framed_noncoding(lrg: Transcript) -> String {
+                let mut cdot = CdotMapper::new();
+                cdot.insert_lrg_mapping("LRG_24t1".to_string(), "NM_001114101.1".to_string());
+                let mut provider = MockProvider::new();
+                provider.add_transcript(tx("NM_001114101.3", "ACGTACGTACGT"));
+                provider.add_transcript(lrg);
+                let vp = VariantProjector::new(Projector::new(cdot), provider);
+
+                let noncoding = HgvsVariant::Tx(TxVariant {
+                    accession: parse_accession("NM_001114101.3"),
+                    gene_symbol: None,
+                    loc_edit: LocEdit::new(
+                        TxInterval::point(TxPos::new(5)),
+                        NaEdit::Substitution {
+                            reference: Base::A,
+                            alternative: Base::G,
+                        },
+                    ),
+                });
+                let proj = VariantProjection {
+                    normalization_warnings: Vec::new(),
+                    axis_decline_reasons: AxisDeclineReasons::default(),
+                    genomic: None,
+                    coding: None,
+                    noncoding: Some(noncoding),
+                    protein: None,
+                    rna: None,
+                    transcript_id: "NM_001114101.3".to_string(),
+                    gene_symbol: None,
+                    is_frameshift: false,
+                    is_intronic: false,
+                    is_utr: false,
+                    affects_init: false,
+                };
+                vp.frame_projection_owned(proj, &parse_accession("LRG_24"), None)
+                    .noncoding
+                    .expect("noncoding axis retained")
+                    .to_string()
+            }
+
+            assert_eq!(
+                framed_noncoding(tx("LRG_24t1", "ACGTACGTACGT")),
+                "LRG_24t1:n.5A>G",
+                "identical sequences share a transcript frame, so the #860 \
+                 namespace echo still applies"
+            );
+            assert_eq!(
+                framed_noncoding(tx("LRG_24t1", "TTTTTTTTACGTACGTACGT")),
+                "LRG_24(NM_001114101.3):n.5A>G",
+                "an eight-base 5' extension means n.5 names a different base on \
+                 each accession, so the axis must keep the transcript it was \
+                 measured against"
+            );
+            assert_eq!(
+                framed_noncoding(tx_without_sequence("LRG_24t1", 12)),
+                "LRG_24(NM_001114101.3):n.5A>G",
+                "the LRG record resolves but serves no bases, so the frame is \
+                 unverifiable and must not be treated as a matching one — even \
+                 though every other field (length, cds_start, exons) agrees"
             );
         }
 
