@@ -325,7 +325,12 @@ fn reject_unresolvable_genomic_position(
 /// (#1643) is refused outright by both entry points with
 /// [`ConversionError::InvalidPosition`]: neither has anything on a genomic
 /// accession to resolve it against, and dropping either made distinct
-/// descriptions share one triple.
+/// descriptions share one triple. On the **transcript** axes, a `c.`/`n.`/`r.`
+/// interval whose **end** names no single coordinate — a range boundary
+/// `(20_30)` or an unknown `?` — is refused with the same variant (#1804); see
+/// [`resolve_transcript_end_boundary`] for why those axes need their own
+/// resolver rather than the genomic guard. The genomic axes still substitute
+/// the start in that case, which is #1795's scope and not fixed here.
 ///
 /// # Arguments
 ///
@@ -401,7 +406,10 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// [`ConversionError::MissingReferenceData`]. An offset or a `pter`/`qter`/`cen`
 /// special position on a `g.`/`m.`/`o.` position is refused with
 /// [`ConversionError::InvalidPosition`] — see
-/// [`reject_unresolvable_genomic_position`].
+/// [`reject_unresolvable_genomic_position`]. A `c.`/`n.`/`r.` interval whose
+/// **end** names no single coordinate — a range boundary `(20_30)` or an
+/// unknown `?` — is refused with the same variant (#1804); see
+/// [`resolve_transcript_end_boundary`].
 ///
 /// An **unspelled identity** (`g.100=`, `g.100_102=`) therefore needs a
 /// provider: on [`hgvs_to_spdi_simple`] it returns
@@ -593,7 +601,7 @@ fn transcript_axis_sequence(accession: &Accession) -> String {
 fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError> {
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_tx = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
-    let end_tx = tx_end_for_simple_path(&variant.loc_edit.location, start_tx, "n")?;
+    let end_tx = tx_end_for_simple_path(&variant.loc_edit.location, "n")?;
     emit_spdi_for_edit(
         transcript_axis_sequence(&variant.accession),
         start_tx,
@@ -613,7 +621,7 @@ fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError
 fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionError> {
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = rna_pos_for_simple_path(&variant.loc_edit.location, "r")?;
-    let end_pos = rna_end_for_simple_path(&variant.loc_edit.location, start_pos, "r")?;
+    let end_pos = rna_end_for_simple_path(&variant.loc_edit.location, "r")?;
     emit_spdi_for_edit(
         transcript_axis_sequence(&variant.accession),
         start_pos,
@@ -797,14 +805,8 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             description: "cannot convert c. variant with unknown start position".to_string(),
         }
     })?;
-    let end_cds = variant
-        .loc_edit
-        .location
-        .end
-        .inner()
-        .copied()
-        .unwrap_or(*start_cds);
-    let (start_tx, end_tx) = resolve_cds_to_tx(&variant.accession, start_cds, &end_cds, provider)?;
+    let end_cds = resolve_transcript_end_boundary(&variant.loc_edit.location, "c")?;
+    let (start_tx, end_tx) = resolve_cds_to_tx(&variant.accession, start_cds, end_cds, provider)?;
     emit_spdi_for_edit(
         transcript_axis_sequence(&variant.accession),
         start_tx,
@@ -829,14 +831,8 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
                 description: "cannot convert n. variant with unknown start position".to_string(),
             }
         })?;
-        let end = variant
-            .loc_edit
-            .location
-            .end
-            .inner()
-            .copied()
-            .unwrap_or(*start);
-        resolve_tx_to_provider_tx(&variant.accession, start, &end, provider)?
+        let end = resolve_transcript_end_boundary(&variant.loc_edit.location, "n")?;
+        resolve_tx_to_provider_tx(&variant.accession, start, end, provider)?
     } else {
         resolve_tx_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
@@ -864,14 +860,8 @@ fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
                 description: "cannot convert r. variant with unknown start position".to_string(),
             }
         })?;
-        let end = variant
-            .loc_edit
-            .location
-            .end
-            .inner()
-            .copied()
-            .unwrap_or(*start);
-        resolve_rna_to_provider_tx(&variant.accession, start, &end, provider)?
+        let end = resolve_transcript_end_boundary(&variant.loc_edit.location, "r")?;
+        resolve_rna_to_provider_tx(&variant.accession, start, end, provider)?
     } else {
         resolve_rna_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
@@ -909,6 +899,68 @@ fn unwrap_edit<E>(edit: &crate::hgvs::uncertainty::Mu<E>) -> Result<&E, Conversi
         })
 }
 
+/// Resolve the **end** boundary of a `c.`/`n.`/`r.` interval to the single
+/// position SPDI needs, declining when the boundary names none (#1804).
+///
+/// Two shapes reach here with nothing to resolve, and
+/// [`crate::hgvs::interval::UncertainBoundary::inner`] answers `None` for both: a **range** boundary
+/// (`(20_30)`, the `Range` variant) and an **unknown** one (`?`, `Mu::Unknown`).
+/// Each says "the end is somewhere I am not telling you", and SPDI's end is one
+/// exact interbase coordinate — there is no notation for either.
+///
+/// What every one of the seven call sites did instead was substitute the
+/// **start**, which is the one answer worse than refusing: it silently
+/// re-describes the variant as ending where it begins. Measured on `main` at
+/// `439617c2` against `make_intronic_provider`, `c.10_(20_30)delAAAA` and
+/// `c.10_?delAAAA` both converted to `NM_INTRON.1:19:AAAA:` — two descriptions
+/// that `parse` and `Display` distinctly, sharing one triple with each other and
+/// with any third description of that triple. The short forms are worse still:
+/// `c.10_(20_30)del` became `NM_INTRON.1:19:A:`, a **one-base** deletion
+/// standing in for one whose end is unknown.
+///
+/// **This is deliberately not the genomic guard again, and the difference is the
+/// whole reason #1795 did not sweep these axes in.**
+/// [`reject_unresolvable_genomic_position`] walks *both* endpoints and refuses
+/// what it finds *inside* a resolvable one — a `+`/`-` offset, a
+/// `pter`/`qter`/`cen` landmark — because neither may appear on a genomic
+/// position at all. Here an offset is legitimate: `c.(4185+1_4186-1)_(4357+1_4358-1)del`
+/// is well-formed HGVS and is the motivating example on
+/// [`crate::hgvs::interval::UncertainBoundary`]. So the offset is not the defect
+/// and this resolver never looks at one; what it refuses is the *absence* of a
+/// single coordinate, which is a property of the boundary rather than of its
+/// contents.
+///
+/// **The verdict is [`ConversionError::InvalidPosition`], and it is taken from
+/// this axis rather than inherited from `g.`** — every one of the seven sites
+/// already answers the same question for the **start** side, with `ok_or_else`
+/// and exactly that variant ("cannot convert c. variant with unknown start
+/// position"). The asymmetry between the two sides *is* the defect, so the end
+/// gets what the start has always had. The axis' other verdict,
+/// `MissingReferenceData`, would be a false statement here: it means "a
+/// well-formed position whose SPDI form needs data or a projection I do not
+/// have" (see [`resolve_cds_to_tx`], [`resolve_tx_pos`], [`require_simple_tx_pos`]),
+/// and it invites the caller to supply a provider. No provider, exon table or
+/// genomic projection can resolve `?` — the uncertainty is in the description,
+/// not in ferro's reference data.
+fn resolve_transcript_end_boundary<'a, T: std::fmt::Display>(
+    interval: &'a Interval<T>,
+    coord: &str,
+) -> Result<&'a T, ConversionError> {
+    interval
+        .end
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: format!(
+                "{coord}. interval end `{}` names no single coordinate: an end that is a range \
+                 `(a_b)` or unknown `?` states where the variant ends only approximately, and an \
+                 SPDI triple ends at one exact position. Substituting the start would describe a \
+                 different variant — one ending where it begins. Give the end a position, or keep \
+                 the description in HGVS",
+                interval.end
+            ),
+        })
+}
+
 /// Resolve the start position of a `TxInterval` for the simple (no-provider)
 /// path. Returns `MissingReferenceData` if the position requires provider
 /// data (intronic, downstream `*N`, or non-positive base).
@@ -925,15 +977,8 @@ fn tx_pos_for_simple_path(interval: &Interval<TxPos>, coord: &str) -> Result<u64
     require_simple_tx_pos(start, coord)
 }
 
-fn tx_end_for_simple_path(
-    interval: &Interval<TxPos>,
-    fallback: u64,
-    coord: &str,
-) -> Result<u64, ConversionError> {
-    match interval.end.inner() {
-        Some(end) => require_simple_tx_pos(end, coord),
-        None => Ok(fallback),
-    }
+fn tx_end_for_simple_path(interval: &Interval<TxPos>, coord: &str) -> Result<u64, ConversionError> {
+    require_simple_tx_pos(resolve_transcript_end_boundary(interval, coord)?, coord)
 }
 
 // No-provider path: with no transcript there is no length to bound against,
@@ -986,13 +1031,9 @@ fn rna_pos_for_simple_path(
 
 fn rna_end_for_simple_path(
     interval: &Interval<RnaPos>,
-    fallback: u64,
     coord: &str,
 ) -> Result<u64, ConversionError> {
-    match interval.end.inner() {
-        Some(end) => require_simple_rna_pos(end, coord),
-        None => Ok(fallback),
-    }
+    require_simple_rna_pos(resolve_transcript_end_boundary(interval, coord)?, coord)
 }
 
 // No-provider path: with no transcript there is no length to bound against,
@@ -1128,12 +1169,12 @@ fn resolve_tx_exonic_bounded<P: ReferenceProvider + ?Sized>(
         .ok_or_else(|| ConversionError::InvalidPosition {
             description: "cannot convert n. variant with unknown start position".to_string(),
         })?;
-    let end = interval.end.inner().copied().unwrap_or(*start);
-    match resolve_tx_to_provider_tx(accession, start, &end, provider) {
+    let end = resolve_transcript_end_boundary(interval, "n")?;
+    match resolve_tx_to_provider_tx(accession, start, end, provider) {
         Ok(pair) => Ok(pair),
         Err(ConversionError::MissingReferenceData { .. }) => {
             let s = tx_pos_for_simple_path(interval, "n")?;
-            let e = tx_end_for_simple_path(interval, s, "n")?;
+            let e = tx_end_for_simple_path(interval, "n")?;
             Ok((s, e))
         }
         Err(e) => Err(e),
@@ -1156,12 +1197,12 @@ fn resolve_rna_exonic_bounded<P: ReferenceProvider + ?Sized>(
         .ok_or_else(|| ConversionError::InvalidPosition {
             description: "cannot convert r. variant with unknown start position".to_string(),
         })?;
-    let end = interval.end.inner().copied().unwrap_or(*start);
-    match resolve_rna_to_provider_tx(accession, start, &end, provider) {
+    let end = resolve_transcript_end_boundary(interval, "r")?;
+    match resolve_rna_to_provider_tx(accession, start, end, provider) {
         Ok(pair) => Ok(pair),
         Err(ConversionError::MissingReferenceData { .. }) => {
             let s = rna_pos_for_simple_path(interval, "r")?;
-            let e = rna_end_for_simple_path(interval, s, "r")?;
+            let e = rna_end_for_simple_path(interval, "r")?;
             Ok((s, e))
         }
         Err(e) => Err(e),
@@ -5580,5 +5621,290 @@ mod tests {
                  to `normalize` but one triple to `to_spdi`"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Unresolvable transcript-axis end boundaries (#1804)
+    // ------------------------------------------------------------------
+
+    /// Assert one refusal carries #1804's verdict, reason and axis label.
+    ///
+    /// The verdict is checked rather than a bare `is_err()`: on these axes
+    /// "failed somehow" is satisfied by the pre-existing `MissingReferenceData`
+    /// declines for an intronic or downstream position, so a bare `is_err()`
+    /// would pass on a path where this guard had been removed.
+    fn assert_end_boundary_refused(
+        descriptor: &str,
+        coord: &str,
+        path: &str,
+        converted: Result<SpdiVariant, ConversionError>,
+    ) {
+        let err = match converted {
+            Err(err) => err,
+            Ok(spdi) => panic!(
+                "`{descriptor}` converted {path} to `{spdi}`; the unresolvable end was \
+                 collapsed onto the start"
+            ),
+        };
+        assert!(
+            matches!(err, ConversionError::InvalidPosition { .. }),
+            "`{descriptor}` {path} must be refused as InvalidPosition — the same verdict this \
+             axis already gives an unresolvable START — got {err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("names no single coordinate"),
+            "`{descriptor}` {path} was refused for some other reason: {message}"
+        );
+        assert!(
+            message.contains(&format!("{coord}. interval end")),
+            "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+        );
+    }
+
+    /// An end boundary that names no single coordinate — a range `(20_30)` or an
+    /// unknown `?` — must be refused, not silently replaced by the start.
+    ///
+    /// Measured on `main` at `439617c2`: `c.10_(20_30)delAAAA` and
+    /// `c.10_?delAAAA` both converted to `NM_INTRON.1:19:AAAA:`, and the
+    /// short forms were worse — `c.10_(20_30)del` became `NM_INTRON.1:19:A:`,
+    /// a one-base deletion standing in for a deletion of unknown extent.
+    ///
+    /// All three axes on both public entry points where each is reachable, so
+    /// every one of the seven substitution sites is covered. `c.` has no
+    /// no-provider path (`hgvs_to_spdi_simple` returns `ProviderRequired` for
+    /// it), and `r.*5` is likewise provider-only, so those are listed
+    /// separately rather than asserted through a path that declines earlier for
+    /// an unrelated reason.
+    #[test]
+    fn an_unresolvable_transcript_end_is_refused_rather_than_collapsed() {
+        let provider = make_intronic_provider();
+
+        // Reachable on both entry points.
+        for (descriptor, coord) in [
+            ("NM_INTRON.1:n.10_(20_30)delAAAA", "n"),
+            ("NM_INTRON.1:n.10_?delAAAA", "n"),
+            ("NM_INTRON.1:r.10_(20_30)delaaaa", "r"),
+            ("NM_INTRON.1:r.10_?delaaaa", "r"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            assert_end_boundary_refused(
+                descriptor,
+                coord,
+                "without a provider",
+                hgvs_to_spdi_simple(&variant),
+            );
+            assert_end_boundary_refused(
+                descriptor,
+                coord,
+                "with a provider",
+                hgvs_to_spdi(&variant, &provider),
+            );
+        }
+
+        // Provider-only: `c.` needs the CDS start, and `r.*5` needs the
+        // transcript length, so neither reaches the no-provider path.
+        for (descriptor, coord) in [
+            ("NM_INTRON.1:c.10_(20_30)delAAAA", "c"),
+            ("NM_INTRON.1:c.10_?delAAAA", "c"),
+            ("NM_INTRON.1:c.10_(20_30)del", "c"),
+            ("NM_INTRON.1:c.10_?del", "c"),
+            ("NM_INTRON.1:r.*5_?delaaaa", "r"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            assert_end_boundary_refused(
+                descriptor,
+                coord,
+                "with a provider",
+                hgvs_to_spdi(&variant, &provider),
+            );
+        }
+    }
+
+    /// **The discriminating case, and the reason this is not #1795's guard
+    /// again.** `c.(4185+1_4186-1)_(4357+1_4358-1)del` — the exon-deletion shape
+    /// [`crate::hgvs::interval::UncertainBoundary`] names as its motivating
+    /// example — carries `+`/`-` offsets *inside* the range boundary, and that
+    /// is legitimate HGVS on this axis. The genomic guard refuses an offset
+    /// outright; here the offset must be beside the point, so the refusal must
+    /// cite the absent coordinate and must not mention it.
+    ///
+    /// A guard written as "walk both endpoints of the range and refuse an
+    /// offset" would pass every assertion in the test above and fail this one,
+    /// which is what makes it the discriminating case rather than a restatement.
+    #[test]
+    fn an_offset_inside_the_range_is_not_what_is_refused() {
+        let provider = make_intronic_provider();
+        for descriptor in [
+            "NM_INTRON.1:c.10_(20+1_21-1)del",
+            "NM_INTRON.1:c.10_(20+1_21-1)delAAAA",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let err = hgvs_to_spdi(&variant, &provider)
+                .expect_err("a range end boundary names no single coordinate");
+            let message = err.to_string();
+            assert!(
+                message.contains("names no single coordinate"),
+                "`{descriptor}` must be refused for the absent coordinate: {message}"
+            );
+            assert!(
+                !message.contains("offset"),
+                "`{descriptor}` was refused for carrying an offset, but an offset is legitimate \
+                 on the `c.` axis — the defect is the absent single coordinate: {message}"
+            );
+        }
+    }
+
+    /// The negative control: a boundary that *does* name a coordinate must keep
+    /// converting, on every axis and every entry point that accepted it before.
+    ///
+    /// `(13)` is the case that discriminates a correct guard from an
+    /// over-general one. It is `Mu::Uncertain` — a parenthesised but perfectly
+    /// numeric position — so `inner()` answers `Some` and it resolves exactly
+    /// like the bare `13` beside it. A guard keyed on "the boundary is
+    /// parenthesised", or on `Interval::has_complex_boundaries`, would refuse it
+    /// and pass every assertion in the tests above.
+    ///
+    /// **The denominator is asserted** so a run that converted nothing — the
+    /// shape a `0 of 0` pass takes — cannot read as a green negative control.
+    #[test]
+    fn a_transcript_end_that_names_a_coordinate_still_converts() {
+        let provider = make_intronic_provider();
+        let both_paths = [
+            "NM_INTRON.1:n.10_(13)delAAAA",
+            "NM_INTRON.1:n.10_13delAAAA",
+            "NM_INTRON.1:n.10delA",
+            "NM_INTRON.1:n.10A>G",
+            "NM_INTRON.1:r.10_(13)delaaaa",
+            "NM_INTRON.1:r.10_13delaaaa",
+            "NM_INTRON.1:r.10dela",
+        ];
+        let provider_only = [
+            "NM_INTRON.1:c.10_(13)delAAAA",
+            "NM_INTRON.1:c.10_13delAAAA",
+            "NM_INTRON.1:c.10delA",
+            "NM_INTRON.1:c.10del",
+        ];
+
+        let mut converted = 0usize;
+        for descriptor in both_paths {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, result) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                result.unwrap_or_else(|e| {
+                    panic!("`{descriptor}` must still convert {path}, got {e}")
+                });
+                converted += 1;
+            }
+        }
+        for descriptor in provider_only {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            hgvs_to_spdi(&variant, &provider)
+                .unwrap_or_else(|e| panic!("`{descriptor}` must still convert, got {e}"));
+            converted += 1;
+        }
+
+        assert_eq!(
+            converted,
+            both_paths.len() * 2 + provider_only.len(),
+            "the negative control converted {converted} descriptions; if this shrinks the guard \
+             has over-generalised, and if the loop stops running it proves nothing"
+        );
+    }
+
+    /// The confluence failure the collapse produced, stated as the invariant
+    /// rather than as pinned triples: descriptions that `parse` and `Display`
+    /// distinctly must not share one SPDI triple.
+    ///
+    /// On `main` all three of these converted to `NM_INTRON.1:19:AAAA:`.
+    ///
+    /// **The denominator is asserted, because with the guard in place the
+    /// collision `panic!` is unreachable** — two of the three are refused and
+    /// skipped, so `seen` holds one triple and there is no pair left to collide.
+    /// That is the `0 of 0` shape, so the census below is what carries the
+    /// meaning today, and it goes red the moment an unresolvable end becomes
+    /// convertible again — which is exactly when the collision check goes live
+    /// and has to be re-read rather than trusted.
+    #[test]
+    fn unresolvable_transcript_ends_do_not_collapse_onto_a_resolvable_one() {
+        /// Only the fully-resolvable spelling converts today.
+        const CONVERTIBLE_TODAY: usize = 1;
+
+        let provider = make_intronic_provider();
+        let descriptors = [
+            "NM_INTRON.1:c.10_(20_30)delAAAA",
+            "NM_INTRON.1:c.10_?delAAAA",
+            "NM_INTRON.1:c.10_13delAAAA",
+        ];
+        let mut seen: Vec<(&str, String)> = Vec::new();
+        for descriptor in descriptors {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            if let Ok(spdi) = hgvs_to_spdi(&variant, &provider) {
+                let triple = spdi.to_string();
+                if let Some((other, _)) = seen.iter().find(|(_, t)| *t == triple) {
+                    panic!(
+                        "`{descriptor}` and `{other}` are different descriptions but share the \
+                         triple `{triple}`"
+                    );
+                }
+                seen.push((descriptor, triple));
+            }
+        }
+
+        assert_eq!(
+            seen.len(),
+            CONVERTIBLE_TODAY,
+            "{} of {} descriptors converted, expected {CONVERTIBLE_TODAY}: {seen:?}. If this \
+             grew, an unresolvable end is convertible again and the collision check above has \
+             just become live — read what it now compares before re-pinning this number. If it \
+             shrank, the loop is comparing nothing at all",
+            seen.len(),
+            descriptors.len()
+        );
+    }
+
+    /// An intronic start beside an unresolvable end is refused for the **end**,
+    /// which is a deliberate change of diagnostic and worth pinning as one.
+    ///
+    /// On `main`, `n.10+5_?delAAAA` reported the intronic start
+    /// (`MissingReferenceData`, "cannot be expressed in SPDI without genomic
+    /// projection"); it now reports the end. Both are correct refusals, and the
+    /// ordering is structural rather than a preference: `resolve_tx_to_provider_tx`
+    /// takes a resolved end **by value**, so there is nothing to hand it until
+    /// the boundary yields one. Manufacturing a fake end to satisfy that
+    /// signature — the start — is the defect being fixed.
+    ///
+    /// The intronic decline is unchanged where the end *is* resolvable, which is
+    /// the second half of this test and the thing a reader will actually want to
+    /// know.
+    #[test]
+    fn an_intronic_start_with_an_unresolvable_end_reports_the_end() {
+        let provider = make_intronic_provider();
+
+        let both_unresolvable = parse_hgvs("NM_INTRON.1:n.10+5_?delAAAA").expect("must parse");
+        let err = hgvs_to_spdi(&both_unresolvable, &provider)
+            .expect_err("neither endpoint has an SPDI representation");
+        assert!(
+            matches!(err, ConversionError::InvalidPosition { .. }),
+            "expected the end-boundary verdict, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("names no single coordinate"),
+            "expected the end-boundary reason, got {err}"
+        );
+
+        let intronic_only = parse_hgvs("NM_INTRON.1:n.10+5_20delAAAA").expect("must parse");
+        let err = hgvs_to_spdi(&intronic_only, &provider)
+            .expect_err("an intronic transcript position has no SPDI representation");
+        assert!(
+            matches!(err, ConversionError::MissingReferenceData { .. }),
+            "a resolvable end must leave the intronic decline untouched, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("genomic projection"),
+            "the intronic decline lost its own reason: {err}"
+        );
     }
 }

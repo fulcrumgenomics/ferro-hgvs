@@ -590,3 +590,90 @@ fn test_spdi_half_open_intervals() {
     let result = parse_hgvs("NM_000492.4:c.1521_1523del");
     assert!(result.is_ok());
 }
+
+// ============================================================================
+// Unresolvable end boundaries on the transcript axes (#1804)
+// ============================================================================
+
+/// The refusal added in #1804 must be visible to a **library consumer**, not
+/// only to `src/spdi/convert.rs`'s own unit tests.
+///
+/// This is the integration half of those guards, and it asks a question they
+/// cannot: the unit tests call the conversion through the module's own `use`,
+/// so they would still pass if the error were swallowed by a wrapper on the way
+/// out. `Normalizer::to_spdi` is that wrapper — it is what the PyO3 binding and
+/// the `Normalizer` API route through — so it is the surface that has to
+/// decline.
+///
+/// The collapse being pinned: on `main` at `439617c2`,
+/// `NM_INTRON.1:c.10_(20_30)delAAAA` and `NM_INTRON.1:c.10_?delAAAA` both
+/// converted to `NM_INTRON.1:19:AAAA:`, sharing that triple with each other and
+/// with the fully-resolvable `c.10_13delAAAA`.
+#[test]
+fn an_unresolvable_transcript_end_is_refused_through_the_public_api() {
+    use ferro_hgvs::normalize::Normalizer;
+    use ferro_hgvs::reference::mock::MockProvider;
+    use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+    use ferro_hgvs::spdi::convert::hgvs_to_spdi;
+
+    let mut provider = MockProvider::new();
+    provider.add_transcript(Transcript::new(
+        "NM_INTRON.1".to_string(),
+        Some("INTRON".to_string()),
+        Strand::Plus,
+        "A".repeat(100),
+        Some(11),
+        Some(90),
+        vec![Exon::new(1, 1, 50), Exon::new(2, 51, 100)],
+        None,
+        None,
+        None,
+        GenomeBuild::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+    let normalizer = Normalizer::new(provider.clone());
+
+    for descriptor in [
+        "NM_INTRON.1:c.10_(20_30)delAAAA",
+        "NM_INTRON.1:c.10_?delAAAA",
+        "NM_INTRON.1:n.10_(20_30)delAAAA",
+        "NM_INTRON.1:n.10_?delAAAA",
+        "NM_INTRON.1:r.10_(20_30)delaaaa",
+        "NM_INTRON.1:r.10_?delaaaa",
+    ] {
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+
+        let err = hgvs_to_spdi(&variant, &provider)
+            .expect_err("an end naming no coordinate has no SPDI representation");
+        assert!(
+            err.to_string().contains("names no single coordinate"),
+            "`{descriptor}` was refused for some other reason: {err}"
+        );
+
+        // The wrapper the Python binding and the `Normalizer` API use.
+        let err = normalizer
+            .to_spdi(&variant)
+            .expect_err("the refusal must survive the Normalizer wrapper");
+        assert!(
+            err.to_string().contains("names no single coordinate"),
+            "`{descriptor}` lost its reason through `Normalizer::to_spdi`: {err}"
+        );
+    }
+
+    // Negative control on the same surface: `(13)` is `Mu::Uncertain` — a
+    // parenthesised but perfectly numeric position — and must keep converting,
+    // so this pins the refusal as "no coordinate" rather than "parenthesised".
+    for descriptor in [
+        "NM_INTRON.1:c.10_(13)delAAAA",
+        "NM_INTRON.1:c.10_13delAAAA",
+        "NM_INTRON.1:n.10_(13)delAAAA",
+        "NM_INTRON.1:r.10_(13)delaaaa",
+    ] {
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+        normalizer
+            .to_spdi(&variant)
+            .unwrap_or_else(|e| panic!("`{descriptor}` must still convert, got {e}"));
+    }
+}
