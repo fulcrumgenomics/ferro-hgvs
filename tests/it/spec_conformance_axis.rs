@@ -724,6 +724,10 @@ pub(crate) const THREE_PRIME: Census = Census {
     // short-circuit hands back **unexamined**. `MAX_SPLIT_BLOCK` itself is
     // untouched: raising it is a cost question and is still open.
     guard_violations: 0,
+    // The denominator, pinned so the zero above cannot be a structural silence.
+    // Equals `CorpusShape::guarded_rows` (210) exactly, which is the check that
+    // every guarded row's authored spelling re-parsed and was actually decided.
+    guard_evaluations: 210,
 };
 
 /// The rows that still merge a frameless separation of one, named.
@@ -814,6 +818,10 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // shuffle direction, so the two directions agreeing here is the cross-check
     // — and both read 18, then 2, then 0 through the same two commits.
     guard_violations: 0,
+    // As at 3', and for the same reason. The two directions agreeing is the
+    // cross-check: a direction that stopped evaluating would show up here rather
+    // than as a quietly unchanged zero above.
+    guard_evaluations: 210,
 };
 
 /// The corpus's shape, independent of any property measured over it.
@@ -1002,66 +1010,21 @@ pub(crate) struct Census {
     /// separation floor of two on a frameless axis, which is SVD-WG010
     /// (`consultation/SVD-WG010.md:8`, "The proposal has been **rejected**").
     pub(crate) guard_violations: usize,
-    /// The denominator [`Self::coding_axis_separation_two_or_more_merges`] is
-    /// `n of` — coding-axis rows separated by two or more unchanged nucleotides
-    /// that the measurement actually reached and evaluated.
+    /// How many times the negative guard above was actually **evaluated**.
     ///
-    /// Pinned, and asserted non-zero. A separate figure from
-    /// `SHAPE.coding_axis_separation_two_or_more_rows` on purpose: that one says the
-    /// generator built the rows, this one says the run *normalized* them. A
-    /// measurement whose every eligible row declined would report `0` merges
-    /// with the generator-side denominator still healthy, which is the shape
-    /// of vacuity this axis exists to refuse.
-    pub(crate) coding_axis_separation_two_or_more_rows: usize,
-    /// Coding-axis multi-member alleles whose authored spelling normalized to
-    /// **fewer members than were authored** — i.e. the members were merged
-    /// across the two or more unchanged nucleotides between them.
+    /// The denominator of [`Census::guard_violations`], and pinned separately
+    /// from it on purpose. `CorpusShape::guarded_rows` says how many rows *carry*
+    /// a guard; this says how many reached the point where it could fire, which
+    /// is a strictly narrower claim — the guard runs only on a row's authored
+    /// spelling and only when that spelling's output re-parses. Without it a run
+    /// in which every guarded output became unparseable would report
+    /// `guard_violations: 0` with nothing having been checked, which is exactly
+    /// the shape of a structural zero read as a real one.
     ///
-    /// # An instrument. It counts a population; it does not judge it
-    ///
-    /// This counter reports how often a merge of this shape happens. It does
-    /// **not** assert the merge is wrong. Contrast [`Self::guard_violations`],
-    /// which counts a shape whose merge implements a **rejected** proposal and
-    /// is therefore a verdict. A count of `n` here is a measurement of how large
-    /// the merged population is, not a claim that `n` rows are defective.
-    ///
-    /// # Everything else about this population is stated ONCE, and not here
-    ///
-    /// Why the floor is two; what the sub-floor population contains and which
-    /// part of it is a known defect; which three ruling records govern which
-    /// part of it, and therefore what a rise and a zero each mean; and why this
-    /// is a second counter rather than a widened guard — all of that is on
-    /// `spec_corpus::is_coding_axis_separation_two_or_more_shape`.
-    ///
-    /// It is deliberately not restated here. The first revision of this change
-    /// carried that argument in seven places, and two of the copies ended up
-    /// contradicting each other 406 lines apart in this file — one saying ferro
-    /// implements the codon exception and it accounts for the sub-floor merges,
-    /// the other retracting exactly that. A pointer cannot drift.
-    ///
-    /// # The numerator, and what it can and cannot see
-    ///
-    /// [`coding_axis_merge_observed`] is the test: `members_of(output).len() <
-    /// row.members`. It was `< 2`, which on the 313 of 997 flagged rows carrying
-    /// three or four members could only ever see a collapse **all the way** to
-    /// one member — a 4-member row merged to 2 counted as zero. Below the floor
-    /// that blindness is 25 of 41 merges.
-    ///
-    /// It still cannot see a merge whose output is unparseable, since the count
-    /// is taken on a parsed output; `unparseable_outputs` is the counter for
-    /// that and is pinned at 0.
-    ///
-    /// # Pinned at zero in both directions, and that zero is a measurement
-    ///
-    /// The pass that merges this population under the canonical-coalesced
-    /// evaluation arm — `merge::coalesce_payload_alignment_split`, reached only
-    /// when `payload_coalesce_applies` sees `PartitionRule::CanonicalCoalesced`
-    /// — does not run on the shipped rule, so the shipping arm merges none of
-    /// these rows. That is a mechanical reason rather than an empirical
-    /// coincidence, and the counter is separately shown able to move: see the
-    /// module docs' arm table and
-    /// [`the_coding_axis_merge_counter_can_observe_a_merge`].
-    pub(crate) coding_axis_separation_two_or_more_merges: usize,
+    /// `unparseable_outputs` being pinned at 0 covers most of that, but it does
+    /// so from two counters and a reader has to compose them. This asserts it
+    /// directly, at the site.
+    pub(crate) guard_evaluations: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,6 +1426,9 @@ fn measure_group(group: &[&Row], direction: ShuffleDirection) -> Measured {
             // merge. See `Row::authored_spelling`.
             if !row.negative_guards.is_empty() && spelling == row.authored_spelling() {
                 if let Ok(parsed_output) = parse_hgvs(&output) {
+                    // The guard is about to be decided on this output, so this is
+                    // the denominator `guard_violations` is a numerator over.
+                    census.guard_evaluations += 1;
                     if members_of(&parsed_output).len() < 2 {
                         census.guard_violations += 1;
                         findings.push(Finding {
@@ -1804,6 +1770,15 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
          ({}) counts spellings while RESIDUAL_GUARD_VIOLATIONS counts rows. \
          Look for a duplicated authored spelling in the corpus, not for a \
          representation change.",
+        census.guard_violations
+    );
+
+    // The zero above is only a finding if the guard ran. Asserted at the
+    // denominator, not inferred from `unparseable_outputs` elsewhere.
+    assert!(
+        census.guard_evaluations > 0,
+        "{label}: VACUOUS — the rejected-SVD-WG010 guard was never evaluated, so \
+         `guard_violations: {}` is a structural silence rather than a measurement",
         census.guard_violations
     );
 

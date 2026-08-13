@@ -170,10 +170,21 @@ fn the_same_block_on_the_coding_dna_axis_still_spans() {
     )
     .build();
     let output = normalize_to_string(provider, &format!("NM_TEST.1:c.{}", split_members(0)));
-    assert!(
-        !output.contains(';'),
+    // Pinned as the exact spanning description rather than as "has no `;`".
+    // Absence of a separator is satisfied by any single member, including one
+    // with the wrong bounds or the wrong payload, so it would pass a build that
+    // spanned the block incorrectly — and the whole subject here is which span a
+    // block past the cap comes back as.
+    let separator = core.as_bytes()[SEPARATOR - 1] as char;
+    assert_eq!(
+        output,
+        format!("NM_TEST.1:c.{DELINS_START}_{DEL_AT}delins{PAYLOAD}{separator}"),
         "`c.` is the one axis `DNA/delins.md:44-47` reaches, so the spanning \
          form `:47` recommends stands — this is the positive half of the axis \
-         scope, and without it the gate could be a blanket refusal: {output}"
+         scope, and without it the gate could be a blanket refusal"
+    );
+    assert!(
+        !output.contains(';'),
+        "and it is one member, not a bracket: {output}"
     );
 }
