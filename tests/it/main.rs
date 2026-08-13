@@ -117,6 +117,7 @@ mod from_sequences_roundtrip;
 mod from_sequences_window_condition;
 mod gene_selector_display_preserve;
 mod gene_selector_roundtrip;
+mod generated_fixture_ci_wiring;
 mod generator_completeness;
 mod genome_ring_join;
 mod gnomad_validation;
