@@ -1653,6 +1653,11 @@ impl CdotMapper {
     ///   inclusive end equals 0-based exclusive end).
     /// - `cds_start`: 0-based. Conversion: `cds_start = Transcript.cds_start - 1`.
     /// - `cds_end`: 0-based exclusive. Same numeric value as `Transcript.cds_end`.
+    /// - `cds_start_incomplete`: propagated verbatim from
+    ///   `Transcript.cds_start_incomplete` (the Ensembl `cds_start_NF` flag, #972). Not a
+    ///   coordinate, but listed here because the projector's decline gate reads the *cdot*
+    ///   record in preference to the source `Transcript`, so dropping it on this edge
+    ///   silently re-enables the `c.`/`p.`/`r.` axes for such a transcript.
     ///
     /// Defaults to GRCh38 for contig alias resolution (so `chr17` ↔ `NC_000017.11`
     /// works after construction). Use [`from_transcripts_with_build`] to specify a
@@ -1728,10 +1733,12 @@ impl CdotMapper {
                 // needing a cdot JSON. See #310.
                 protein: tx.protein_id.clone(),
                 exon_cigars: Vec::new(),
-                // Not propagated here (out of this task's scope per brief);
-                // a follow-up can wire tx.cds_start_incomplete through this
-                // reverse Transcript → CdotTranscript direction too.
-                cds_start_incomplete: false,
+                // #972: carry the `cds_start_NF` flag through this reverse
+                // Transcript → CdotTranscript direction. The projector's
+                // decline gate reads the cdot transcript in preference to the
+                // source `Transcript`, so hardcoding `false` here shadowed a
+                // correct `true` and re-enabled c./p./r. for such transcripts.
+                cds_start_incomplete: tx.cds_start_incomplete,
             };
             mapper.add_transcript(tx.id.clone(), cdot_tx);
         }
@@ -4364,6 +4371,85 @@ mod tests {
         assert_eq!(
             stored.cds_start, None,
             "cds_start=Some(0) must become None, not a wrapped u64"
+        );
+    }
+
+    /// #972: `cds_start_incomplete` must survive the reverse
+    /// `Transcript` → `CdotTranscript` construction. The projector's decline
+    /// gate reads the *cdot* transcript first (`projector.rs`
+    /// `terminus_multiaxis_projection`), so a dropped flag here silently
+    /// shadows a correct `true` on the source `Transcript` and re-enables the
+    /// `c.`/`p.`/`r.` axes for a `cds_start_NF` transcript.
+    #[test]
+    fn test_from_transcripts_propagates_cds_start_incomplete() {
+        use crate::reference::transcript::{Exon, ManeStatus, Transcript};
+        use crate::reference::Strand as TxStrand;
+        use std::sync::OnceLock;
+
+        let make_tx = |incomplete: bool| Transcript {
+            cds_start_incomplete: incomplete,
+            id: "NM_CDSNF.1".to_string(),
+            gene_symbol: Some("X".to_string()),
+            strand: TxStrand::Plus,
+            sequence: None,
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::with_genomic(1, 1, 9, 1000, 1008)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: GenomeBuild::GRCh38,
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        };
+
+        // `from_transcripts` (defaults to GRCh38) must carry the flag through.
+        let incomplete = make_tx(true);
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&incomplete));
+        assert!(
+            mapper
+                .get_transcript("NM_CDSNF.1")
+                .expect("transcript should be present (exon coords are valid)")
+                .cds_start_incomplete,
+            "cds_start_incomplete=true must survive Transcript -> CdotTranscript"
+        );
+
+        // `from_transcripts_with_build` is the underlying constructor; pin it
+        // directly so a future refactor of the `from_transcripts` wrapper
+        // cannot quietly reintroduce the drop on the build-specific path.
+        let mapper =
+            CdotMapper::from_transcripts_with_build(std::iter::once(&incomplete), "GRCh37");
+        assert!(
+            mapper
+                .get_transcript("NM_CDSNF.1")
+                .expect("transcript should be present (exon coords are valid)")
+                .cds_start_incomplete,
+            "cds_start_incomplete=true must survive from_transcripts_with_build too"
+        );
+
+        // Guardrail: the flag is propagated, not hardcoded the other way. Cover
+        // both constructors here too, so a hardcode in the opposite direction on
+        // the build-specific path is caught from either side.
+        let complete = make_tx(false);
+        let mapper = CdotMapper::from_transcripts(std::iter::once(&complete));
+        assert!(
+            !mapper
+                .get_transcript("NM_CDSNF.1")
+                .expect("transcript should be present (exon coords are valid)")
+                .cds_start_incomplete,
+            "cds_start_incomplete=false must stay false (propagated, not forced true)"
+        );
+        let mapper = CdotMapper::from_transcripts_with_build(std::iter::once(&complete), "GRCh37");
+        assert!(
+            !mapper
+                .get_transcript("NM_CDSNF.1")
+                .expect("transcript should be present (exon coords are valid)")
+                .cds_start_incomplete,
+            "cds_start_incomplete=false must stay false on from_transcripts_with_build too"
         );
     }
 

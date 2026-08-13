@@ -224,6 +224,133 @@ fn cli_axis_c_and_p_are_unavailable_n_and_g_are_rendered() {
     }
 }
 
+/// `fixture()`'s geometry, but with the cdot side **derived** from the
+/// `Transcript` via `CdotMapper::from_transcripts` instead of hand-written — so
+/// the derivation is what is under test. The resulting `CdotTranscript` is
+/// field-for-field identical to `fixture()`'s (`exons: [[1000, 1009, 0, 9]]`,
+/// `cds_start: Some(0)`, `cds_end: Some(9)`, `protein: Some("NP_TEST.1")`);
+/// `cds_start_incomplete` is the one thing the derivation has to carry across,
+/// and it is set on the `Transcript` per `incomplete`.
+fn from_transcripts_fixture(incomplete: bool) -> VariantProjector<MockProvider> {
+    let mut tx = Transcript::new(
+        "NM_TEST.1".to_string(),
+        Some("TESTGENE".to_string()),
+        TxStrand::Plus,
+        "ATGCGCTAA".to_string(),
+        Some(1),
+        Some(9),
+        vec![Exon::with_genomic(1, 1, 9, 1000, 1008)],
+        Some("chr1".to_string()),
+        Some(1000),
+        Some(1008),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    );
+    tx.cds_start_incomplete = incomplete;
+    tx.protein_id = Some("NP_TEST.1".to_string());
+
+    let projector = Projector::new(CdotMapper::from_transcripts(std::iter::once(&tx)));
+
+    let mut provider = MockProvider::new();
+    provider.add_transcript(tx);
+    let prefix = "N".repeat(999);
+    let suffix = "N".repeat(100);
+    provider.add_genomic_sequence("chr1", format!("{}ATGCGCTAA{}", prefix, suffix));
+
+    VariantProjector::new(projector, provider)
+}
+
+/// Same decline, but with the `CdotMapper` built by
+/// `CdotMapper::from_transcripts` from the `Transcript` itself, rather than
+/// from a hand-written `CdotTranscript` like `fixture()` above.
+///
+/// This is the path `PyProvider::Mock::cdot_mapper()` (`src/python.rs`) takes,
+/// and it used to hardcode `cds_start_incomplete: false`, dropping the flag.
+/// That drop is invisible to `fixture()` (which seats the `CdotTranscript`
+/// directly) and it is *not* caught by the `to_hgvs.rs` annotation gate either,
+/// since that gate reads the source `Transcript`. It bites in the projector,
+/// which consults the cdot transcript first — so a dropped `false` there
+/// shadows the correct `true` on the `Transcript` and re-enables c./p./r. for a
+/// `cds_start_NF` transcript.
+///
+/// `ReferenceSnapshot::to_cdot` calls the same constructor but is **not**
+/// affected, in two independent ways: its `build_transcripts` emits
+/// `chromosome: None` and genomic-less `Exon::new(..)` exons, both of which make
+/// `from_transcripts_with_build` skip the transcript before the
+/// `CdotTranscript` is ever built (pinned by
+/// `test_from_transcripts_skips_missing_chromosome` and
+/// `test_from_transcripts_skips_exon_missing_genomic_coords`); and
+/// `TranscriptSnapshot` carries no `cds_start_NF`-equivalent field to
+/// propagate in the first place.
+#[test]
+fn cdot_built_from_transcripts_still_declines_coding_protein_rna() {
+    let vp = from_transcripts_fixture(true);
+    let result: VariantProjection = vp
+        .project("NC_000001.11:g.1003C>A", "NM_TEST.1")
+        .expect("projection itself must succeed — only the coding/protein axes decline");
+
+    assert!(
+        result.coding.is_none(),
+        "cds_start_NF must survive CdotMapper::from_transcripts: c. must decline, got {:?}",
+        result.coding.map(|v| v.to_string())
+    );
+    assert!(
+        result.protein.is_none(),
+        "cds_start_NF must survive CdotMapper::from_transcripts: p. must decline, got {:?}",
+        result.protein.map(|v| v.to_string())
+    );
+    assert!(
+        result.rna.is_none(),
+        "cds_start_NF must survive CdotMapper::from_transcripts: r. must decline, got {:?}",
+        result.rna.map(|v| v.to_string())
+    );
+    assert!(
+        result.noncoding.is_some(),
+        "n. does not depend on the initiation codon and must still render"
+    );
+    assert!(
+        result.genomic.is_some(),
+        "g. does not depend on the initiation codon and must still render"
+    );
+}
+
+/// Guardrail contrast for the derived-cdot path: the identical
+/// `from_transcripts` derivation with `cds_start_incomplete: false` still
+/// predicts c./p./r.
+///
+/// Without this arm the decline above is not diagnostic — "c./p./r. are `None`"
+/// is also what a *degraded* derivation looks like, and the `n.`/`g.`
+/// assertions cannot rule that out because neither axis consults the CDS. Pairs
+/// with `genomic_input_predicts_coding_protein_when_cds_start_is_complete`,
+/// which pins the exact rendered forms (`:c.4C>A`, `NP_TEST.1:p.(Arg2Ser)`) on
+/// this same geometry; this arm's contract is only that the derived record can
+/// still drive all three axes, so it asserts presence rather than re-pinning
+/// those strings.
+#[test]
+fn cdot_built_from_transcripts_predicts_coding_protein_rna_when_cds_start_is_complete() {
+    let vp = from_transcripts_fixture(false);
+    let result: VariantProjection = vp
+        .project("NC_000001.11:g.1003C>A", "NM_TEST.1")
+        .expect("projection should succeed");
+
+    assert!(
+        result.coding.is_some(),
+        "c. must predict when cds_start is complete — the decline in the sibling \
+         test must come from the flag, not from a degraded from_transcripts \
+         derivation"
+    );
+    assert!(
+        result.protein.is_some(),
+        "p. must predict when cds_start is complete (guardrail for the derived-cdot path)"
+    );
+    assert!(
+        result.rna.is_some(),
+        "r. must predict when cds_start is complete (guardrail for the derived-cdot path)"
+    );
+}
+
 // =============================================================================
 // Real-reference test — ENST00000011700 (VPS13D), genuinely `cds_start_NF`.
 // =============================================================================
