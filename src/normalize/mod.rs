@@ -3529,6 +3529,43 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
+        // `background/numbering.md:6`/`:8`/`:11` (#1628): a `g.`/`o.`/`m.`
+        // position may not carry a `+`/`-` offset, so a description that states
+        // one cannot be normalized — and, like the rung above and unlike every
+        // rung of the ladder below, this refuses in EVERY mode.
+        //
+        // The mode gate belongs at parse (`apply_genomic_offset_rule`), for the
+        // reason `rulings[absolute-prohibition-enforcement-stage]` gives: it
+        // governs whether the INPUT is judged and "does not, and cannot, govern
+        // whether the output conforms". A genomic accession carries no exon
+        // table, so the offset is measured from nothing and the position names
+        // no nucleotide; there is no sequence to shuffle and nothing a lenient
+        // mode could be lenient toward. Lenient therefore fails here on exactly
+        // the ground the ruling gives it — it cannot normalize — rather than on
+        // an input-conformance check it does not run.
+        //
+        // Before this, all three modes returned the offending description
+        // BYTE-IDENTICALLY with an EMPTY warning vector, from the
+        // offset-carrying short circuit in `normalize_genome_variant`:
+        // normalization was not impossible, it was VACUOUS. `hgvs_to_spdi`
+        // meanwhile DROPPED the offset and answered for `g.266del`, so two
+        // halves of ferro called one description two different variants — the
+        // confluence half of #1628, closed separately by #1641 and #1734.
+        if let Some(found) = crate::hgvs::genomic_offsets::genomic_axis_offset(variant) {
+            // `InvalidCoordinates` is this function's existing carrier for a
+            // normalize-stage conformance refusal (W5004, W3022 and W3028 all
+            // use it); here the fault genuinely is in a position, and the
+            // `[W4009]` tag in the message is what names it.
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "[{}] cannot normalize `{}`: {}.",
+                    crate::error_handling::ErrorType::GenomicPositionOffset.code(),
+                    variant,
+                    found.refusal(),
+                ),
+            });
+        }
+
         // Call the canonical core directly (skipping the per-call
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.

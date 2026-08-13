@@ -1400,11 +1400,53 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             ],
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/standards/"),
-            related_codes: &["W3027", "W3012"],
+            related_codes: &["W3027", "W3012", "W4009"],
         },
     );
 
     // --- Position/Range Warnings (W4xxx) ---
+
+    map.insert(
+        "W4009",
+        CodeInfo {
+            code: "W4009",
+            name: "GenomicPositionOffset",
+            summary: "A `+`/`-` offset on a genomic-family (`g.`/`m.`/`o.`) position.",
+            explanation: "background/numbering.md numbers the three genomic-family axes in \
+                three consecutive bullets and ends each with the same sentence: nucleotide \
+                numbers based on a genomic (:6), circular (:8) or mitochondrial (:11) \
+                reference sequence \"do not include\" +, -, *, or other prefixes. \
+                checklist.md:16 says the same of g. in the checklist's register, and \
+                checklist.md:45 supplies the shape that actually occurs \u{2014} a range \
+                written with - where the separator is _, which it marks Not correct. An \
+                intronic c.100+2 is anchored to an exon boundary from the transcript's exon \
+                table; a genomic accession has none, so g.266+2 measures an offset from \
+                nothing and names no nucleotide. Strict rejects at parse; lenient and silent \
+                accept at parse (lenient warns) and then fail at normalize. There is no \
+                auto-correction: dropping the offset answers for a different nucleotide \
+                (which is what hgvs_to_spdi and the VCF writer used to do, #1641/#1734), and \
+                reading g.266-268del as a range guesses a three-base deletion out of a \
+                one-base one. The check is AST-keyed on GenomePos::offset, never a scan of \
+                the rendered description, so an accession's - and a gene symbol's - are not \
+                false positives. W4008 was not available: it is held by \
+                NonCodingPositionOutsideTranscript (#1748), the n.-N clause, which is why \
+                this code is W4009.",
+            category: CodeCategory::Position,
+            bad_examples: &[
+                "NC_000001.11:g.266+2del",
+                "NC_000001.11:g.266-268del",
+                "NC_012920.1:m.100+2A>G",
+            ],
+            good_examples: &[
+                "NC_000001.11:g.266del",
+                "NC_000001.11:g.266_268del",
+                "NC_000001.11(NM_000088.3):c.100+2del",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
+            related_codes: &["W3028", "W4007", "W4008"],
+        },
+    );
 
     map.insert(
         "W4001",
@@ -1556,7 +1598,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             ],
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/refseq/"),
-            related_codes: &["W4004", "E4001"],
+            related_codes: &["W4004", "E4001", "W4009"],
         },
     );
 
@@ -1610,7 +1652,7 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             ],
             mode_behavior: Some(ModeBehavior::warn_accept()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/numbering/"),
-            related_codes: &["W4004", "W4007", "E1003"],
+            related_codes: &["W4004", "W4007", "E1003", "W4009"],
         },
     );
 

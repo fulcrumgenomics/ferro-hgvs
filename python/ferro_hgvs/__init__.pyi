@@ -1868,6 +1868,7 @@ class ErrorType(_NativeEnum):
     MembersCoalescedFromReportedForm: ErrorType  # 46
     AlignmentOnlySymbolInDescription: ErrorType  # 47
     NonCodingPositionOutsideTranscript: ErrorType  # 48
+    GenomicPositionOffset: ErrorType  # 49
 
 class ErrorOverride(_NativeEnum):
     """Override behavior for a specific error type."""

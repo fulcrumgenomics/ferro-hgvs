@@ -182,26 +182,38 @@ fn lenient_mode_warns_on_partial_wraparound_with_start_past_contig() {
 // Same-base endpoints with distinct offsets must still check both ends
 // ---------------------------------------------------------------------------
 
+/// **Superseded by #1628, and inverted rather than deleted.**
+///
+/// This used to assert that `m.16570+1_16570del` still produced W4004 for its
+/// past-end *plain* endpoint even though its start carries a `+1` offset that
+/// `check_mt_pos_past_end`'s offset guard skips — the point being that a naive
+/// `if start.base != end.base` dedupe would drop the end because the bases
+/// match, so the distinctness check must compare the full `(base, offset)`
+/// tuple.
+///
+/// `background/numbering.md:11` says an `m.` nucleotide number does "not
+/// include" a `+`, so that fixture is no longer authorable: normalization now
+/// refuses the description outright, in every mode, before any past-end check
+/// runs. The test is kept as a refusal guard so the fixture's disappearance is
+/// recorded rather than silently dropped.
+///
+/// **The property it pinned is not lost.** The `(base, offset)` distinctness
+/// contract lives on the `c.`/`n.` axes, where an offset is legal — which is
+/// what the original comment meant by "mirrors the c./n. dedupe pattern" — and
+/// `check_mt_pos_past_end`'s offset guard is now unreachable from any parsed
+/// description, which is a fact worth having pinned in its own right.
 #[test]
-fn lenient_mode_w4004_when_only_offset_endpoint_distinguishes_positions() {
-    // `m.16570+1_16570del` — start has a non-standard `+1` offset (skipped by
-    // `check_mt_pos_past_end`'s offset guard), end is plain `m.16570` which
-    // exceeds the 16569-bp contig. A naive `if start.base != end.base` dedupe
-    // would skip the end position because the bases match, and W4004 would
-    // be silently lost. The endpoint distinctness check must compare the
-    // full `(base, offset)` tuple — mirrors the c./n. dedupe pattern.
-    let variant = parse_hgvs("NC_012920.1:m.16570+1_16570del").expect("parse must succeed");
+fn a_mito_offset_endpoint_is_refused_before_the_past_end_check() {
+    let variant = parse_hgvs("NC_012920.1:m.16570+1_16570del").expect("the bare entry parses");
     let normalizer = Normalizer::with_config(mt_provider(), NormalizeConfig::lenient());
-    let result = normalizer
+    let err = normalizer
         .normalize_with_diagnostics(&variant)
-        .expect("lenient mode must not error");
+        .expect_err("an `m.` offset is refused at normalize in every mode (#1628)")
+        .to_string();
     assert!(
-        result
-            .warnings
-            .iter()
-            .any(|w| w.code() == "POSITION_PAST_END"),
-        "expected W4004 for past-end plain end m.16570 (start has +1 offset); got: {:?}",
-        result.warnings,
+        err.contains("W4009") && err.contains("background/numbering.md:11"),
+        "the refusal must be the genomic-offset finding, citing the mitochondrial \
+         clause rather than the genomic one; got: {err}"
     );
 }
 

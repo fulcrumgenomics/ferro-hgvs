@@ -302,27 +302,38 @@ fn no_provider_data_substitution_passes_through() {
     assert_eq!(format!("{}", result), "NC_012920.1:m.100A>G");
 }
 
+/// **Inverted by #1628, and kept rather than deleted.**
+///
+/// This used to assert that an offset-carrying `m.` position *survived*
+/// normalization: `normalize_mt` detects a decorated position and routes to the
+/// canonicalize-only fallback, because the window-based path remaps from
+/// `pos.base` and reconstructs with `GenomePos::new`, which would silently drop
+/// the offset.
+///
+/// **Preserving the offset was itself the defect.** `background/numbering.md:11`
+/// says an `m.` nucleotide number does "not include" a `+`, so re-emitting one
+/// is a rule-1 output violation — and the alternative the fallback was written
+/// to avoid, silently dropping it, answers for a different nucleotide. There is
+/// no third spelling, so the honest answer is a refusal, and it is unconditional
+/// because rule 1 of the README ruleset has no mode escape.
+///
+/// **The routing this pinned is still live and still needed**: the fallback runs
+/// before `get_sequence` and is what keeps the drop from happening on any path
+/// that reaches it by construction rather than by parsing. What changed is that
+/// the *description* no longer gets that far.
 #[test]
-fn decorated_position_with_offset_routes_to_canonicalize_fallback() {
-    // `m.` positions can carry intronic-style offsets in HGVS (e.g.
-    // `m.100+1`). Window-based normalization remaps from `pos.base`
-    // and reconstructs with `GenomePos::new`, which would silently
-    // drop the offset. `normalize_mt` must detect decorated positions
-    // and route to the canonicalize-only fallback so the offset is
-    // preserved verbatim — *even when reference data is present*, so
-    // the guard fires before `get_sequence`. Use an indel form
-    // (substitutions short-circuit before the guard).
+fn a_decorated_position_is_refused_rather_than_preserved() {
     let normalizer = Normalizer::new(provider("ACGT"));
     let variant =
         parse_hgvs(&format!("{}:m.{}+1_{}+1delAC", MT_ACCESSION, C0, C0 + 1)).expect("parse");
-    let normalized = normalizer
+    let err = normalizer
         .normalize(&variant)
-        .expect("decorated m. positions must not panic in normalize");
-    // Minimal-notation cleanup strips the explicit `del` sequence but
-    // preserves the offsets — they are not collapsed to plain bases.
-    assert_eq!(
-        format!("{}", normalized),
-        format!("{}:m.{}+1_{}+1del", MT_ACCESSION, C0, C0 + 1)
+        .expect_err("an `m.` offset is refused at normalize in every mode (#1628)")
+        .to_string();
+    assert!(
+        err.contains("W4009") && err.contains("background/numbering.md:11"),
+        "the refusal must cite the mitochondrial clause rather than the genomic one; \
+         got: {err}"
     );
 }
 

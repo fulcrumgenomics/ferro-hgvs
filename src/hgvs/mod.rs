@@ -5,6 +5,7 @@
 
 pub mod alignment_symbols;
 pub mod edit;
+pub mod genomic_offsets;
 pub mod interval;
 pub mod location;
 pub mod noncoding_zones;

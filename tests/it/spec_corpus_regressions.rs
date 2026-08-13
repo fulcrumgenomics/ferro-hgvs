@@ -63,6 +63,19 @@ fn normalize_3prime(frame: &Frame, input: &str) -> String {
     normalize(frame, input, ShuffleDirection::ThreePrime)
 }
 
+/// Normalize in the default (3') direction, surfacing the refusal instead of
+/// panicking on it — for the rows whose adjudicated answer *is* a refusal.
+fn normalize_3prime_result(frame: &Frame, input: &str) -> Result<String, String> {
+    let variant = parse_hgvs(input).map_err(|e| e.to_string())?;
+    Normalizer::with_config(
+        frame.provider().clone(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    )
+    .normalize(&variant)
+    .map(|v| v.to_string())
+    .map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // The 3' shift crosses an exon junction on a MINUS-strand transcript
 // ---------------------------------------------------------------------------
@@ -239,11 +252,12 @@ fn conflicting_member_geometries_are_normalized_instead_of_refused() {
 ///   (per `DNA/insertion.md:15`), which is a different check that happens to
 ///   catch the spec's own example; with adjacent anchors nothing fires.
 /// - `checklist.md:16` — a genomic reference "can not have nucleotides with
-///   additions like a `+`, `-`, or `*`".
+///   additions like a `+`, `-`, or `*`". **Closed by #1628**: both offset shapes
+///   are refused now, so the two rows below are inverted rather than removed.
 /// - `checklist.md:45` — "Not correct is `c.12-14del`, this describes a deletion
 ///   of nucleotide -14 in the intron directly 5' of nucleotide `c.12`". On a
 ///   genomic axis there is no intron to read it into, so the shape has no legal
-///   reading at all.
+///   reading at all. **Closed by #1628** on the same rule.
 #[test]
 fn absolute_prohibitions_are_accepted_and_re_emitted() {
     let core = at_core();
@@ -258,21 +272,30 @@ fn absolute_prohibitions_are_accepted_and_re_emitted() {
          the inserted sequence … should be specified'. Correct behaviour: refuse."
     );
 
-    // A `+` offset on a genomic axis, which has no introns to hang one off.
-    assert_eq!(
-        normalize_3prime(&genomic, "NC_TEST.1:g.266+2del"),
-        "NC_TEST.1:g.266+2del",
-        "PINNED DEFECT — checklist.md:16 says a `g.` reference 'can not have nucleotides with \
-         additions like a `+`, `-`, or `*`'. Correct behaviour: refuse."
-    );
-
-    // A hyphen where the range separator belongs.
-    assert_eq!(
-        normalize_3prime(&genomic, "NC_TEST.1:g.266-268del"),
-        "NC_TEST.1:g.266-268del",
-        "PINNED DEFECT — checklist.md:45 calls the hyphen form 'Not correct', and on a genomic \
-         axis it has no intronic reading either. Correct behaviour: refuse."
-    );
+    // The two genomic-offset shapes are no longer accepted at all (#1628), so
+    // they are asserted here as REFUSALS rather than dropped: this test is the
+    // record of what the clause census used to hold, and a row silently leaving
+    // it would read as the census shrinking rather than as a defect closing.
+    // The per-mode guard is `genomic_axis_offset_prohibition`.
+    for (input, clause) in [
+        (
+            "NC_TEST.1:g.266+2del",
+            "numbering.md:6 / checklist.md:16 — a `g.` reference admits no `+` addition",
+        ),
+        (
+            "NC_TEST.1:g.266-268del",
+            "checklist.md:45 — the hyphen form is `Not correct`, and on a genomic axis it \
+             has no intronic reading either",
+        ),
+    ] {
+        let refusal = normalize_3prime_result(&genomic, input).expect_err(&format!(
+            "ADJUDICATED CORRECT, REGRESSED: `{input}` must be refused ({clause})"
+        ));
+        assert!(
+            refusal.contains("W4009"),
+            "the refusal of `{input}` must be the genomic-offset finding; got: {refusal}"
+        );
+    }
 }
 
 /// **Question.** Does a prohibited member become *less* visible when it sits

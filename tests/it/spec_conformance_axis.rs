@@ -76,8 +76,8 @@
 //! | `sequence_changed` | 4 | 0 | the output denotes different bases from the input; a member was dropped |
 //! | `non_idempotent_outputs` | ~~7~~ **4** | 4 | the output is not its own fixed point. Re-blessed: see the note below |
 //! | `conflicts_accepted` | 72 | 72 | a conflicting allele was normalized instead of refused — nested, partially overlapping, and two insertions at one interbase |
-//! | `prohibited_absolute_accepted` | 32 | 32 | a shape the spec calls "not allowed" was accepted |
-//! | `prohibition_violating_outputs` | ~~32~~ **8** | ~~32~~ **8** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627: see the fourth section below |
+//! | `prohibited_absolute_accepted` | ~~32~~ **24** | ~~32~~ **24** | a shape the spec calls "not allowed" was accepted. Re-blessed by #1628 |
+//! | `prohibition_violating_outputs` | ~~32~~ ~~8~~ **0** | ~~32~~ ~~8~~ **0** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627 and then to zero by #1628: see the fourth section below |
 //!
 //! `guard_violations` is **0 of 210 guarded rows**, which is a real negative
 //! result rather than a vacuous one: ferro does not merge an irreducible frameless
@@ -248,7 +248,7 @@
 //!
 //! | figure | was | now | direction |
 //! |---|---|---|---|
-//! | 3' and 5' `prohibition_violating_outputs` | 32 | **8** | improves by 24 |
+//! | 3' and 5' `prohibition_violating_outputs` | 32 | **8** | improves by 24 (#1627); #1628 then takes it to **0** |
 //! | 3' and 5' `prohibited_conditional_accepted` | 40 | **16** | improves by 24 |
 //!
 //! **It is one population counted twice, not two.** All 24 rows are
@@ -260,18 +260,22 @@
 //! entry. The residues are the shapes this change does not reach —
 //! `checklist.md:20`'s 16 conditional rows (correct as they stand; see
 //! `rulings[bare-transcript-intronic-position]`) and `checklist.md:16`'s 8
-//! violating outputs (that is #1628).
+//! violating outputs — **which #1628 has since closed, taking that counter to
+//! 0**; the paragraph below is the state as of #1627 and is kept because the
+//! reasoning about the two counters is what makes the two re-blessings
+//! separable.
 //!
-//! **`prohibited_absolute_accepted` deliberately does NOT move**, and its
-//! staying at 32 is the useful half of the measurement. The corpus grades an
+//! **`prohibited_absolute_accepted` did NOT move for #1627**, and its staying
+//! at 32 was the useful half of that measurement. The corpus grades an
 //! `X` row `Strength::Conditional` — the footnote states a scope rather than
 //! using prohibitive words — while this axis counts an `X` *output* as an
 //! absolute violation. The decided ruling records that the grading is moot
 //! either way, because `general.md:48` admits only IUPAC-IUBMB symbols. So the
-//! two counters that moved are the two the clause was actually in, and the
-//! surviving 32 absolute acceptances are `checklist.md:32`'s `ins6` (24) plus
-//! `checklist.md:16`/`:45`'s genomic offset and hyphen range (4 + 4) — the
-//! other half of #1627 and #1628 respectively, neither touched here.
+//! two counters #1627 moved are the two the clause was actually in, and the
+//! then-surviving 32 absolute acceptances were `checklist.md:33`'s `ins6` (24)
+//! plus `checklist.md:16`/`:45`'s genomic offset and hyphen range (4 + 4).
+//! **#1628 took the second group**, so that counter now reads 24 and the
+//! residue is `ins6` alone — #1627's remaining half.
 //!
 //! **Every rank-2, idempotency and sequence-preservation figure is unchanged**,
 //! in both directions, which is what a refusal of un-denotable inputs should
@@ -604,14 +608,18 @@ pub(crate) const THREE_PRIME: Census = Census {
     // makes this a fix rather than a re-partition.
     outputs_leaving_the_transcript: 0,
     outputs_intronic_under_a_genomic_wrapper: 371,
-    // Re-blessed DOWN by #1627: `standards.md:39`'s 24 `X` rows are refused
-    // rather than re-emitted. The residual 8 are `checklist.md:16`'s genomic
-    // offsets, which is #1628. See the module docs' fourth RE-BLESSED section.
+    // Re-blessed DOWN to ZERO. #1627 refused `standards.md:39`'s 24 `X` rows
+    // rather than re-emitting them; #1628 refused the residual 8 —
+    // `checklist.md:16`'s `+` offset (4) and `checklist.md:45`'s hyphen range
+    // (4) — so ferro now emits no description that violates a prohibition the
+    // spec states in as many words. See the module docs' fourth RE-BLESSED
+    // section, and the empty clause map in
+    // `corpus_prohibited_inputs::every_prohibition_violating_output_is_a_re_emitted_prohibited_input`.
     //
-    // Independent of the #1704 split directly above: #1627 refuses rows on the
-    // alignment-symbol ground, #1704 re-parents rows on the junction-crossing
-    // ground, and the two touch disjoint row sets.
-    prohibition_violating_outputs: 8,
+    // Independent of the #1704 split directly above: #1627 and #1628 refuse rows
+    // on input-conformance grounds, #1704 re-parents rows on the
+    // junction-crossing ground, and the two touch disjoint row sets.
+    prohibition_violating_outputs: 0,
     // -- confluence (rank 2) --
     //
     // Re-blessed by #1649's two-deletion alignment, on top of #1536's re-bless
@@ -643,7 +651,13 @@ pub(crate) const THREE_PRIME: Census = Census {
     sequence_changed: 4,
     // -- refusal --
     conflicts_accepted: 72,
-    prohibited_absolute_accepted: 32,
+    // Re-blessed DOWN by #1628, by the 8 genomic-offset rows (4 ×
+    // `checklist.md:16-genomic-has-no-offsets`, 4 ×
+    // `checklist.md:45-range-is-underscore`). Strict refuses them at parse
+    // (`W4009`); lenient and silent accept the input and then fail at normalize,
+    // which is why they leave the LENIENT counter this figure measures. The
+    // residual 24 are `checklist.md:33`'s `ins6`, which is #1627's open half.
+    prohibited_absolute_accepted: 24,
     // Re-blessed DOWN by #1627, same 24 rows as `prohibition_violating_outputs`
     // above. The residual 16 are `checklist.md:20`'s bare-transcript intronic
     // rows, which lenient is CORRECT to accept — see
@@ -686,10 +700,11 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // direction never produces an intronic output at all — wrapped or bare. Read
     // as the negative control for the 3' pin, not as a second measurement of it.
     outputs_intronic_under_a_genomic_wrapper: 0,
-    // Re-blessed DOWN by #1627, by the same 24 rows as at 3'. Validity does not
-    // depend on shuffle direction, so the two directions moving identically is
-    // the cross-check rather than a coincidence.
-    prohibition_violating_outputs: 8,
+    // Re-blessed DOWN by #1627, by the same 24 rows as at 3', and then to ZERO
+    // by #1628, by the same 8. Validity does not depend on shuffle direction, so
+    // the two directions moving identically is the cross-check rather than a
+    // coincidence.
+    prohibition_violating_outputs: 0,
     // Unmoved by #1599 or by #1536 — no 5' family changed which side of the
     // converged/split line it sat on in either. **#1649 moves it for the first
     // time**, by 284, and the same three measured zeros hold as at 3': no family
@@ -717,7 +732,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     non_idempotent_outputs: 4,
     sequence_changed: 0,
     conflicts_accepted: 72,
-    prohibited_absolute_accepted: 32,
+    // Re-blessed DOWN by #1628, by the same 8 rows as at 3'.
+    prohibited_absolute_accepted: 24,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
     prohibited_conditional_accepted: 16,
     guard_violations: 0,
@@ -863,16 +879,20 @@ pub(crate) struct Census {
     pub(crate) outputs_intronic_under_a_genomic_wrapper: usize,
     /// Outputs violating an absolute textual prohibition.
     ///
-    /// **Ratchet-pinned at 8, not asserted at zero** — this doc once said the
-    /// latter while both censuses pinned a non-zero figure, which reads as
-    /// "ferro emits no prohibited output" to anyone who does not go and check
-    /// the pin. It emits 8, and `corpus_prohibited_inputs` decomposes them:
-    /// 8 × `checklist.md:16`, every one a re-emission of an input that already
-    /// violated the clause rather than a violation ferro manufactured.
+    /// **Ratchet-pinned, and it now reads zero** — 32 until #1627, whose 24 ×
+    /// `standards.md:39` rows are refused rather than re-emitted; 8 until
+    /// #1628, whose 4 × `checklist.md:16` `+` offsets and 4 ×
+    /// `checklist.md:45` hyphen ranges are refused too. So ferro emits no
+    /// description violating a prohibition the spec states in as many words,
+    /// and `corpus_prohibited_inputs`' clause map for this counter is empty.
     ///
-    /// It was 32 until #1627, whose 24 × `standards.md:39` rows are now refused
-    /// rather than re-emitted. Quote the pin, not this prose, if the two ever
-    /// disagree again — a count in a doc comment is the thing that goes stale.
+    /// **It stays a ratchet rather than becoming an `assert_eq!(0)`.** Reaching
+    /// zero is not the same as the class being unreachable, and this doc has
+    /// already gone stale in the other direction once — it said "asserted at
+    /// zero" while both censuses pinned 32, which reads as "ferro emits no
+    /// prohibited output" to anyone who does not go and check the pin. Quote
+    /// the pin, not this prose, if the two ever disagree again: a count in a
+    /// doc comment is the thing that goes stale.
     pub(crate) prohibition_violating_outputs: usize,
     /// Families whose spellings all reached ONE output. The goal is for this to
     /// equal `family_rows`.
