@@ -42,6 +42,29 @@ use crate::common::cis_apply_oracle::{
     sweep_seeds, sweep_sequences,
 };
 use ferro_hgvs::{parse_hgvs, ShuffleDirection};
+use rayon::prelude::*;
+
+/// How many offenders a failing sweep names.
+///
+/// Applied per drawn sequence and again to the concatenation, which is what
+/// keeps a parallel sweep's report byte-identical to a serial one: each task
+/// keeps its own first `REPORTED`, and truncating the in-order concatenation
+/// yields the same set the serial loop's global cap kept.
+const REPORTED: usize = 10;
+
+/// What one drawn sequence contributed to a sweep.
+///
+/// The counters are counts over a partition of the cases, so summing them is
+/// exact; the two lists are capped samples for the failure message. Returning
+/// them rather than mutating shared state is what makes the sequences
+/// independent.
+struct SweepTally {
+    checked: usize,
+    residual: usize,
+    skipped: usize,
+    overlapping: Vec<String>,
+    changed: Vec<String>,
+}
 
 /// Nine `T` at positions 1-9 — a tract long enough to canonicalise to a repeat.
 const TRACT: &str = "TTTTTTTTTAATATATTTTA";
@@ -483,11 +506,6 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // `a_five_prime_duplication_beside_a_deletion_keeps_its_sequence`. It was
     // the last residual class here — 74 cases, closed by `blocks_sibling_shift`
     // — and keeping the separate tally says which shape regressed if one does.
-    let mut checked = 0usize;
-    let mut residual = 0usize;
-    let mut skipped = 0usize;
-    let mut overlapping: Vec<String> = Vec::new();
-    let mut changed: Vec<String> = Vec::new();
 
     // 24 seeds, not 48. Widening the second member from 2 shapes to 4 (#1283)
     // doubles the work per sequence, and this is already the suite's slowest
@@ -512,7 +530,27 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // 86.6s local suite at 24 seeds, and the prefix is a strict subset of the
     // corpus, not a different one.
     let seeds = sweep_seeds(48);
-    for seq in sweep_sequences(seeds) {
+
+    // One rayon task per drawn sequence. Each already builds its own `template`
+    // provider and its own normalizers — that is what the comment inside is
+    // about — so the sequences share nothing, and this changes the ORDER cases
+    // run in, never which cases run.
+    //
+    // The totals are byte-identical to the serial sweep, which the exactly
+    // pinned `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` and the two bounds below
+    // require. `checked`, `residual` and `skipped` count over a partition of the
+    // cases, so summing is exact; `overlapping` and `changed` are "the first
+    // `REPORTED` offenders in sweep order", reproduced by capping per sequence
+    // and truncating the in-order concatenation — `collect` preserves input
+    // order however the tasks finish.
+    let per_sequence: Vec<SweepTally> = sweep_sequences(seeds)
+        .into_par_iter()
+        .map(|seq| {
+            let mut checked = 0usize;
+            let mut residual = 0usize;
+            let mut skipped = 0usize;
+            let mut overlapping: Vec<String> = Vec::new();
+            let mut changed: Vec<String> = Vec::new();
         // Built once per sequence rather than once per case. `normalize_in` and
         // `apply` each construct a `TEMPLATE` provider internally, so the previous
         // shape built three per case — the normalizer's, the input apply's and the
@@ -629,14 +667,14 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
                                 // oracle: re-parsing what the normalizer produced is
                                 // part of what this sweep asserts.
                                 match apply_with(&template, &seq, &output) {
-                                    None if overlapping.len() < 10 => {
+                                    None if overlapping.len() < REPORTED => {
                                         overlapping.push(format!("{seq}: {input} -> {output}"))
                                     }
                                     None => {}
                                     Some(got) if got != want && residual_shape => {
                                         residual += 1;
                                     }
-                                    Some(got) if got != want && changed.len() < 10 => {
+                                    Some(got) if got != want && changed.len() < REPORTED => {
                                         changed.push(format!(
                                             "{seq}: {input} [{direction:?}] -> {output} (want {want}, got {got})"
                                         ));
@@ -649,7 +687,28 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
                 }
             }
         }
+            SweepTally {
+                checked,
+                residual,
+                skipped,
+                overlapping,
+                changed,
+            }
+        })
+        .collect();
+
+    let (mut checked, mut residual, mut skipped) = (0usize, 0usize, 0usize);
+    let mut overlapping: Vec<String> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
+    for tally in per_sequence {
+        checked += tally.checked;
+        residual += tally.residual;
+        skipped += tally.skipped;
+        overlapping.extend(tally.overlapping);
+        changed.extend(tally.changed);
     }
+    overlapping.truncate(REPORTED);
+    changed.truncate(REPORTED);
 
     // Per seed, not absolute (#1295): the seed count is now a knob, so a fixed
     // floor would either fail at the default prefix or be vacuous at the full
