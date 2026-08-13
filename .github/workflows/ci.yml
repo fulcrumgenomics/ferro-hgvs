@@ -1184,8 +1184,39 @@ jobs:
   # what the oracle asserts, so re-rolling thousands of random cases here checks
   # nothing the plain run did not already check — it just cost ~80s of every CI
   # run. The deep random coverage lives in the `soak` job below instead.
+  # FOUR shards, and the number is CHOSEN rather than conventional.
+  #
+  # `--partition hash:K/N` assigns each test by a hash of its NAME, so it
+  # balances test *counts* and is blind to duration. At N=3 the two bulk
+  # axis-preservation corpora — the two slowest tests in the repository under the
+  # oracles — both hashed into shard 1, every run, deterministically:
+  #
+  #     Test oracle (1/3)  242s     <- axis_is_preserved_over_the_{cmrg,clinvar_unique}_corpus
+  #     Test oracle (2/3)   94s
+  #     Test oracle (3/3)   77s
+  #
+  # 413s of work split 242/94/77 instead of ~138 each, so the job's critical path
+  # was one unlucky draw.
+  #
+  # N=4 separates them (cmrg -> 1, clinvar_unique -> 3). That is measured, not
+  # hoped for, and it is re-derivable — N=5 also separates them and N=6 puts them
+  # back together, so the number is not monotone and cannot be reasoned about:
+  #
+  #     for K in 1 2 3 4; do
+  #       cargo nextest list --features dev --test it --partition "hash:$K/4" \
+  #         -E 'test(axis_is_preserved_over_the_cmrg_corpus) or
+  #             test(axis_is_preserved_over_the_clinvar_unique_corpus)'
+  #     done
+  #
+  # **This placement is a property of the whole test-NAME set, so adding or
+  # renaming tests re-rolls it.** If this job's shards go lopsided again, re-run
+  # the loop above before assuming anything else changed. The robust alternative
+  # — giving `normalize_axis_preserving` a job of its own and negating it here —
+  # was not taken because this job's `-E` is re-derived by BOTH
+  # `scripts/run_oracle_suite.sh` and `tests/it/oracle_exclude_invariant.rs`, so
+  # a fourth negation term is a three-file change; the shard count is not.
   test-oracle:
-    name: Test oracle (${{ matrix.shard }}/3)
+    name: Test oracle (${{ matrix.shard }}/4)
     needs: [test-build, spec-fixtures, fixtures]
     runs-on: ubuntu-latest
     env:
@@ -1193,7 +1224,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1319,7 +1350,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/3 \
+            --partition hash:${{ matrix.shard }}/4 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
