@@ -520,7 +520,59 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // and opposite steps and no row left the enumeration — verified by a
     // row-id diff of the enumeration regenerated on both sides of the widen,
     // not by the counts agreeing.
-    (Status::ProjectionSplitsSingleMember, 19),
+    //
+    // # 19 -> 26 (#1712), and it is the SAME move the paragraph above allows
+    //
+    // Seven rows enter, and **every one of them is a `project-n` row** — which is
+    // the check to run before reading any further, because the ruling that
+    // causes this reaches exactly one axis:
+    //
+    // ```text
+    // project-n/LRG_199t1:c.145_147delinsTGG   -> LRG_199t1:n.[389C>T;391C>G]
+    // project-n/LRG_199t1:c.235_237delinsTAT   -> LRG_199t1:n.[479A>T;481G>T]
+    // project-n/NM_004006.2:c.145_147delinsTGG -> NM_004006.2:n.[389C>T;391C>G]
+    // project-n/c.235_237delinsTAT             -> NM_004006.2:n.[479A>T;481G>T]
+    // project-n/c.4375_4376delCGinsAGTT        -> NM_004006.2:n.[4619C>A;4620_4621insTT]
+    // project-n/c.4375_4376delinsAGTT          -> NM_004006.2:n.[4619C>A;4620_4621insTT]
+    // project-n/NM_004380.2:c.139delinsTCATCATGAGCTG
+    //                                          -> NM_004380.2:n.[342_343insTC;343_344insTCATGAGCTG]
+    // ```
+    //
+    // (The c.4375_4376 pair are two spellings of one input, so the seven rows
+    // are six distinct variants.) The `NM_004380.2` row is the one the
+    // pre-#1835 measurement did not have: a net insertion that the
+    // `canonical-coalesced` default re-partitions into members on the `n.`
+    // reference, where the `c.` frame's form kept it whole. Measured by
+    // regenerating the enumeration with and without this change's projector on
+    // the same base and diffing row by row: 2340 rows on both sides, these seven
+    // the only status changes.
+    //
+    // `PASSING_CENSUS`'s `ProjectionPinned` falls by the same seven (1156 ->
+    // 1149), so the pair still moves in equal and opposite steps and no row left
+    // the enumeration — the check the "driving this to zero is not the goal"
+    // paragraph asks for, applied.
+    //
+    // **OPERATOR RULING, 2026-08-13 —
+    // `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`.** The
+    // projector re-derives the `n.` axis on its own reference instead of
+    // reframing the form the `c.` frame chose, which closes the half
+    // `projection-codon-exception-is-decided-by-the-rendered-axis` parked. So
+    // these seven rows are the `n.` analogue of the two `project-g/LRG_199t1`
+    // rows already sitting here, and they are here for the identical reason:
+    // `DNA/delins.md:42`'s antecedent is unstatable on a reference that
+    // declares no reading frame, so `:17` governs unopposed and the members
+    // stay individual.
+    //
+    // **Read this as the ruling's cost, not as a regression.** The parked
+    // record already recorded the same shape as its own accepted cost — the two
+    // `project-g` rows "KEEP sitting in `ProjectionSplitsSingleMember`, so a
+    // reader of that budget alone sees two rows parked in a divergence status
+    // indefinitely. That is the ruling and not a regression." Seven more rows are
+    // now parked there on the same ground. Merging them back is what the ruling
+    // refuses; a change that takes this **below** 26 has merged something
+    // `DNA/delins.md:17` wanted split, which is the direction the paragraph
+    // above forbids.
+    (Status::ProjectionSplitsSingleMember, 26),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -690,7 +742,16 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]` —
     // land here as the single spanning `delins` `:47` recommends. Equal and
     // opposite, as this pair must always be read.
-    (Status::ProjectionPinned, 1156),
+    //
+    // 1156 -> 1149 (#1712), and it is a re-partition rather than a capability
+    // loss: the seven rows are all `project-n`, they move to
+    // `ProjectionSplitsSingleMember`, and that status takes the matching +7
+    // (19 -> 26). Equal and opposite, as this pair must always be read — no row
+    // left the enumeration. The adjudication, the row list and why the rows are
+    // parked in a divergence status deliberately are recorded with that status
+    // in `DIVERGENCE_BUDGET`; the ruling is
+    // `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`.
+    (Status::ProjectionPinned, 1149),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
