@@ -16,10 +16,31 @@ on:
     # it, adding the trailer a red check just asked for re-runs nothing and the check
     # stays red until an unrelated push.
     types: [opened, synchronize, reopened, edited]
+  # Required for a merge queue, and it is a hard prerequisite rather than an
+  # optimisation: a queue entry is gated on the branch's required status checks
+  # being reported against the MERGE GROUP, and a workflow that does not trigger
+  # on `merge_group` reports nothing there at all. Nine of `main`'s ten required
+  # contexts come from this file (`zizmor + actionlint` is the tenth, in
+  # `lint-workflows.yml`), so without this line every queued pull request would
+  # sit on "Expected — waiting for status to be reported" forever. That is the
+  # same failure mode the `paths:` filter caused in `lint-workflows.yml`, one
+  # event further out: a check that never reports is indistinguishable from a
+  # check that has not finished.
+  #
+  # This is inert until a merge queue is actually enabled on `main` — no
+  # `merge_group` event can be delivered before then — so it is safe to land
+  # ahead of the settings change, and it has to, or the first queued PR hangs.
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a merge-group run. `github.ref` is unique per merge group
+  # (`refs/heads/gh-readonly-queue/main/pr-<n>-<base-sha>`), so a collision needs
+  # the same PR re-queued against an unmoved base — rare, and the cost of losing
+  # that race is not a wasted run but a cancelled required check, which the queue
+  # reads as a failure and which evicts the pull request from the queue. Cheap
+  # insurance; `pull_request` and `push` are unaffected.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 permissions:
   contents: read
@@ -272,6 +293,33 @@ jobs:
     # `pull_request` only. The check reads the PR description, which is what becomes the
     # squash commit body and therefore what git-cliff's footer rule matches. A push to
     # `main` has no equivalent to read, and by then the declaration is already merged.
+    #
+    # UNDER `merge_group` THIS JOB IS SKIPPED, AND THAT IS DELIBERATE — but the reason is
+    # not "it would be awkward to run", it is that there is nothing there to read.
+    # `github.event.pull_request` does not exist on a `merge_group` event (nor do
+    # `github.head_ref`/`github.base_ref`), so every one of the steps below would resolve
+    # its inputs to the empty string and the checker would fail on a change that had
+    # already declared correctly.
+    #
+    # A skipped job reports a conclusion of SUCCESS, which satisfies a required status
+    # check — that is GitHub's documented behaviour for a job skipped by a job-level
+    # conditional, and it is what keeps `Representation change declared` from stalling
+    # every queue entry. (The failure mode it must not be confused with is a *workflow*
+    # that never triggers: that reports nothing, stays "Expected — waiting for status to
+    # be reported", and blocks forever. Which is why `merge_group` is in this file's `on:`
+    # block.)
+    #
+    # So in the queue this context is reported and vacuous. Nothing is lost by that,
+    # because the declaration is a property of the PR description and the queue cannot
+    # invalidate it: a merge group changes the BASE, and no base change can turn a present
+    # trailer into an absent one. That is exactly unlike the value-pinned tests the queue
+    # does exist to protect — those are properties of the merged tree. The real
+    # enforcement point is the pull request, where required checks gate entry to the queue.
+    #
+    # Do NOT "fix" this by widening the condition to run here. Reading the declaration
+    # under `merge_group` would mean parsing it back out of the merge commit message,
+    # which is a different and much weaker source than the description GitHub actually
+    # squashes.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -321,6 +369,17 @@ jobs:
   changelog-grouping:
     name: Changelog grouping audit
     runs-on: ubuntu-latest
+    # Not on `merge_group`. This job judges what a SQUASH will render, and it gets there
+    # by synthesizing that squash commit from the PR title and description (the step
+    # below). A merge group carries the branch's intermediate commits, un-squashed, and
+    # no PR description to synthesize from — so here it would audit commits that will
+    # never exist after the merge and report on a changelog nobody will ship. This
+    # context is not required, so a spurious red would not block the queue; it would do
+    # something slightly worse, which is make a permanently-red check normal to look past.
+    #
+    # The question it asks is answered on the pull request and again on `push: main`
+    # after the squash lands, which are the two places the commit it audits is real.
+    if: github.event_name != 'merge_group'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

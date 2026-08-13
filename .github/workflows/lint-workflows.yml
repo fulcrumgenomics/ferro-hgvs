@@ -21,13 +21,28 @@ on:
   # of them costs well under a minute and buys a context that always reports,
   # which is the price of being able to require it.
   pull_request:
+  # `zizmor + actionlint` is the tenth required context on `main`, and the only one
+  # this file produces. A merge queue gates each entry on the required contexts being
+  # reported against the merge group, so without this trigger every queued pull request
+  # would hang on "Expected — waiting for status to be reported".
+  #
+  # That is the same defect the `paths:` filter caused above, arriving through a
+  # different door — and the note above already states the rule this line follows from:
+  # a check that never reports is indistinguishable, to a required-status-check rule,
+  # from a check that has not finished. A `paths:` filter made this workflow not run for
+  # PRs touching no workflow; no `merge_group:` makes it not run for any queue entry at
+  # all. The fix is the same in both cases, and so is the price: linting the workflows
+  # on a merge group costs about eight seconds.
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # See `ci.yml` — a cancelled required check reads to the queue as a failure and evicts
+  # the pull request, so merge-group runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 jobs:
   lint:
