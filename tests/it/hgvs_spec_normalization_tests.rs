@@ -868,10 +868,21 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `inversion.md:5` — an inversion is a whole-span property, and the spec's
     // own worked example (`inversion.md:33-34`, `NM_004006.2:c.4145_4160inv`)
     // has two three-base unchanged interior runs, so `general.md:34` does not
-    // decompose one. `:56` cannot rank the alternative because `delins` is
-    // absent from its list, which is what separates this from #1230 — whose
-    // competing members really are substitutions, and whose guard stays green.
+    // decompose one. Its OUTCOME stands and `c.76_83inv` does not move; its
+    // REASON — that `:56` cannot rank a `delins` competitor but does rank a
+    // substitution one, so #1230's case still splits — was superseded on
+    // 2026-08-13 by the record below, and the record itself says so.
     ("inversion-vs-two-delins-76-83", "decided"),
+    // The supersession. Decided 2026-08-13: a whole-span reverse complement is
+    // typed `inv` uniformly, keyed on the span rather than on the type of the
+    // partition it competes with, which overturns #1230. `inversion.md:5`
+    // governs; `general.md:56` is declined on `adjudication-precedence-order`'s
+    // already-decided E1, which holds that `:56` cannot settle a
+    // merge-versus-split question at all — the clause both halves of the old
+    // rule argued over. A rule 6 maintainer choice, not a rule 1 correction:
+    // the spec permits the `inv` and no clause compels it. Ships no code, so it
+    // moves no row by itself; the moves it decides belong to #1703/#1541/#1575.
+    ("whole-span-reverse-complement-types-as-inv", "decided"),
     // The sibling question, one step wider: the competitor is neither all
     // `delins` nor all substitutions but a MIX of lone substitutions and
     // multi-column members. **Decided for the `inv` by operator ruling

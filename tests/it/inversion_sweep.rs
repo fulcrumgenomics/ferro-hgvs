@@ -49,27 +49,48 @@
 //! This corpus was authored against a tree where the `c.` axis did not run the
 //! sequence-derived partitioner, and its invariant read "an authored `inv` is
 //! never split into allele members". **#1484 widened that gate to
-//! `c.`/`n.`/`r.`**, and 155 of these 2,075 rows now repartition — the
-//! generator refused to pin them on the first run after the rebase, which is
-//! how this was found rather than absorbed.
+//! `c.`/`n.`/`r.`**, and 155 of these 2,075 rows repartitioned — the generator
+//! refused to pin them on the first run after the rebase, which is how this was
+//! found rather than absorbed. **#1706's post-hoc run scan then put 62 of those
+//! back together, leaving [`CENSUS_REPARTITIONED`] = 93**, and **#1835's flip of
+//! the default partition rule to `canonical-coalesced` took one more, leaving
+//! 92**; read the count off that constant rather than from this prose, which has
+//! been stale against it twice already.
 //!
-//! That direction is decided, at least in part:
-//! `rulings[inversion-vs-two-delins-76-83]` records "#1230's substitution case
-//! is untouched and still splits", since `general.md:56` ranks substitution.
-//! So the shape invariant was narrowed to what survives — no retype, no member
-//! on another accession, no member that changes the sequence's length — and
-//! the falsifiable weight moved to layer 2, which does not care what shape the
-//! answer takes as long as it denotes the same bases.
+//! **That direction has since been decided the other way, and against every one
+//! of them.** This paragraph used to read that the split was decided "at
+//! least in part", on `rulings[inversion-vs-two-delins-76-83]`'s note that
+//! "#1230's substitution case is untouched and still splits" since
+//! `general.md:56` ranks substitution. The `decided` record
+//! `rulings[whole-span-reverse-complement-types-as-inv]` (2026-08-13) supersedes
+//! that: a whole-span reverse complement is typed `inv` uniformly, keyed on the
+//! span rather than on the type of the competing partition, and `general.md:56`
+//! is declined on `rulings[adjudication-precedence-order]`'s E1. So the shape
+//! invariant below — no retype, no member on another accession, no member that
+//! changes the sequence's length — is still the right invariant, but the rows
+//! it tolerates are now a **decided-against** census bucket rather than a
+//! partly-endorsed one.
 //!
-//! **What is *not* settled, and is filed rather than pinned here.** Of the 155,
-//! 87 split into substitutions only (the decided case), 43 into an `inv` core
-//! with flanking substitutions, and **25 into members that include a `delins`**
-//! — e.g. `c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`. That last group
-//! is the shape the same ruling says `inversion.md:5` governs, "since
-//! `general.md:56` ranks substitution but not `delins`". Filed as #1575 and
-//! pinned here as characterization, not endorsed — every one of them denotes
-//! the right bases (layer 2 checks each), so it is a question about which legal
-//! spelling ships, not about correctness.
+//! **The sub-shapes no longer differ in status, and that is the change — but
+//! the population is not the one #1575 costed, in either direction.** At 155 it
+//! split 87 substitutions-only, 43 an `inv` core with flanking substitutions,
+//! and 25 members including a `delins`. #1706 absorbed all 43 of the `inv`-core
+//! rows and 19 of the 25, so **all 93 that then remained on `live` are the
+//! all-substitutions case** — the population `general.md:56` was read as
+//! deciding, and the one this ruling overturns. (#1835's flip of the default
+//! partition rule has since taken one more, so the default arm leaves 92; the
+//! shape of the population is unchanged.) Six of them still *render* a `delins`
+//! member
+//! (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`); that is the coding
+//! codon carve-out merging two isolated substitutions after the fact, not a
+//! `delins` in the partition, and [`CENSUS_REPARTITIONED`] says so at length.
+//! So the ruling reaches a **narrower** row set than the 155 the record was
+//! costed on and a **wider** one than #1575's 25 — quote
+//! [`CENSUS_REPARTITIONED`], and quote the commit it was measured on. All of
+//! them stay pinned here as characterization —
+//! every one denotes the right bases (layer 2 checks each), so this remains a
+//! question about which legal spelling ships rather than about correctness, and
+//! the pins move with the implementing change, not with this comment.
 //!
 //! # Which rows are adjudications, and which are characterization
 //!
@@ -220,6 +241,19 @@ const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// one-base substitution. Measured, not assumed — every changed column in all 93
 /// blocks is isolated, so there is no multi-column run for the run scan's gate to
 /// admit on.
+///
+/// **That case used to be the endorsed one, and is now decided against.** The
+/// paragraph directly above records that `general.md:56` ranks substitution
+/// above inversion and that `rulings[inversion-vs-two-delins-76-83]` records
+/// #1230's case as "untouched and still splits".
+/// `rulings[whole-span-reverse-complement-types-as-inv]` (2026-08-13)
+/// supersedes that: a whole-span reverse complement is typed `inv` uniformly,
+/// keyed on the span rather than on what the competing partition looks like,
+/// and `:56` is declined on `rulings[adjudication-precedence-order]`'s E1. So
+/// every row this constant counts is decided *against* — the 92 the default
+/// arm leaves as much as the 93 `live` leaves — and this number is expected to
+/// fall to 0 once #1703/#1541/#1575 implement the ruling; **re-bless it with
+/// the implementing change** rather than treating a move as drift.
 ///
 /// Six of them nevertheless *render* with a `delins` member
 /// (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`), and reading that as a

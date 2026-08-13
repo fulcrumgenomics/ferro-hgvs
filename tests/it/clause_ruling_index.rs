@@ -112,8 +112,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 31 records, 28 decided / 3 undecided
-//! 112 clause lines, of which 34 are named by more than one record
+//! 32 records, 29 decided / 3 undecided
+//! 114 clause lines, of which 36 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -228,6 +228,8 @@
 //! docs/recommendations/DNA/complex.md:161  [MULTI]
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/delins.md:5
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/DNA/delins.md:15
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16  [MULTI]
@@ -312,10 +314,15 @@
 //! docs/recommendations/DNA/inversion.md:5  [MULTI]
 //!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
-//! docs/recommendations/DNA/inversion.md:33
+//!     `whole-span-reverse-complement-types-as-inv` — decided (governing)
+//! docs/recommendations/DNA/inversion.md:16
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
+//! docs/recommendations/DNA/inversion.md:33  [MULTI]
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
-//! docs/recommendations/DNA/inversion.md:34
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//! docs/recommendations/DNA/inversion.md:34  [MULTI]
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/repeated.md:23
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:16
@@ -324,6 +331,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:18
@@ -370,6 +378,7 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:35  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -401,6 +410,7 @@
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:57
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //! docs/recommendations/general.md:58  [MULTI]
@@ -415,6 +425,7 @@
 //! docs/recommendations/style.md:9  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/versions/index.md:16
 //!     `adjudication-precedence-order` — decided (cited)
 //!
@@ -521,10 +532,18 @@
 //! docs/recommendations/DNA/inversion.md:5
 //!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (governing)
+//! docs/recommendations/DNA/inversion.md:33
+//!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//! docs/recommendations/DNA/inversion.md:34
+//!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -536,6 +555,7 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:35
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -563,6 +583,7 @@
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:58
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
@@ -571,6 +592,7 @@
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! ```
 //! <!-- END GENERATED INDEX -->
 //!
@@ -888,7 +910,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (31, 28, 3),
+        (32, 29, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1052,7 +1074,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        34,
+        36,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
