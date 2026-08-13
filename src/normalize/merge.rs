@@ -9929,6 +9929,153 @@ fn blocks_sibling_shift(edit: &NaEdit) -> bool {
         || matches!(edit, NaEdit::Duplication { .. } | NaEdit::DupIns { .. })
 }
 
+/// The repeat unit an edit spells out, or `None` for anything else.
+///
+/// Deliberately narrow — `NaEdit::Repeat` carrying an explicit unit, and nothing
+/// else — because this is the only shape #1597 measured, and the two neighbours
+/// are not verifiable rather than merely untested:
+///
+/// - **A repeat with no stated unit** (`g.269_271[3]`) makes no claim about the
+///   bases under its span, so there is nothing to check it against.
+/// - **`MultiRepeat`** (`GT[2]GC[2]…`) states several units whose reference
+///   footprint is not one tandem tract of one unit, so the containment test
+///   below would be answering a different question.
+///
+/// Both therefore keep today's behaviour. That is the conservative direction:
+/// [`repeat_would_land_off_its_unit`] only ever *declines* a pull, so a shape it
+/// cannot read must fall through to "no objection" rather than block a
+/// repositioning on a guess.
+fn stated_repeat_unit(edit: &NaEdit) -> Option<&Sequence> {
+    match edit {
+        NaEdit::Repeat {
+            sequence: Some(unit),
+            ..
+        } if !unit.is_empty() => Some(unit),
+        _ => None,
+    }
+}
+
+/// Whether translating this member by `delta` would land a repeat on reference
+/// bases that are **not** its unit.
+///
+/// A repeat's span is not merely where the member sits: `g.269A[3]` asserts that
+/// the reference under `g.269` is a tandem tract of `A`, and states a copy count
+/// against it. Every other edit type this pass moves makes no such claim — a
+/// `del` deletes whatever is under it, a `sub` spells its own reference base —
+/// which is why [`translate_member`]'s `landed` check verifies the span alone
+/// and is right to. Slide a repeat one base 5' onto a base that is not its unit
+/// and the description stops being about the sequence it sits on, while still
+/// parsing, still naming an in-range coordinate and still being a fixed point.
+/// Measured on `origin/main` at `439617c2`, over the contig
+/// `TCAACGTATAGCAGCACTAC` with core base 1 at `g.257`:
+///
+/// ```text
+/// NC_TEST.1:g.[267_268insCA;268C>A;269_270insAA]
+///   before this pass   [g.269A[3];g.269A[3]]
+///   after  this pass   [g.268A[3];g.269A[3]]   <-- g.268 is C, not A
+/// ```
+///
+/// `junction_of` reports no junction for a `Repeat`, so such a member takes the
+/// `translate_member` arm and never reaches [`translate_junction_member`] — the
+/// arm that already carries this hazard for `dup`, whose payload is likewise
+/// read from under its own span (#1280, #1292). This is the same class for an
+/// edit type that arm does not cover.
+///
+/// **Answers `false` whenever it cannot read the bases**, which is the whole of
+/// its conservatism: a region with no sequence conversion (`region_sequence_delta`
+/// declines the two `n.` regions outside the transcript, which hold no bases), a
+/// provider that cannot serve the window, or a short read at the sequence end.
+/// None of those is evidence of a mismatch, and declining a pull on one would
+/// widen this guard from "the landing is measurably wrong" into "the landing is
+/// unproven" — a different and much larger change.
+fn repeat_would_land_off_its_unit<P: ReferenceProvider>(
+    variant: &HgvsVariant,
+    kind: CisKind,
+    delta: i64,
+    provider: &P,
+) -> bool {
+    let Some((accession, region, axis_start, axis_end, edit)) = cis_axis_parts(variant, kind)
+    else {
+        return false;
+    };
+    let Some(unit) = stated_repeat_unit(edit) else {
+        return false;
+    };
+    // `r.` spells its unit in the RNA alphabet while the transcript is served as
+    // DNA, so a truthful `r.269a[3]` over an `A` would otherwise read as a
+    // mismatch and this guard would decline a legitimate pull. Same rewrite
+    // `authored_reference_mismatch` makes before it compares (#736).
+    let unit: Vec<u8> = unit
+        .to_string()
+        .bytes()
+        .map(|b| match b.to_ascii_uppercase() {
+            b'U' if matches!(kind, CisKind::Rna) => b'T',
+            other => other,
+        })
+        .collect();
+
+    let provider_key = accession.transcript_accession();
+    // `region_sequence_delta`, not the `region_span_delta` behind `MemberSpan`:
+    // the span reader widens to regions with *virtual* positions so a member
+    // there is still visible to its siblings, and no bases can be read through
+    // one. Reading is exactly what this function does, so it takes the stricter
+    // conversion and declines where that one does.
+    let Some(sequence_delta) = region_sequence_delta(region, &provider_key, provider) else {
+        return false;
+    };
+    // Checked arithmetic throughout: `axis_*` come off a parsed description and
+    // `delta` off this pass's own bound, so an adversarial span could otherwise
+    // overflow and panic in a debug build where answering "no objection" is the
+    // conservative result.
+    let Some(start) = axis_start
+        .checked_add(delta)
+        .and_then(|p| p.checked_add(sequence_delta))
+    else {
+        return false;
+    };
+    let Some(end) = axis_end
+        .checked_add(delta)
+        .and_then(|p| p.checked_add(sequence_delta))
+    else {
+        return false;
+    };
+    if start < 1 || end < start {
+        return false;
+    }
+    let Some(span) = end
+        .checked_sub(start)
+        .and_then(|w| w.checked_add(1))
+        .and_then(|w| usize::try_from(w).ok())
+    else {
+        return false;
+    };
+    let (Ok(from), Ok(to)) = (u64::try_from(start - 1), u64::try_from(end)) else {
+        return false;
+    };
+    let Ok(bases) = provider.get_sequence(&provider_key, from, to) else {
+        return false;
+    };
+    // A short read means the landing span runs off the end of the sequence.
+    // That is `FERRO_ASSERT_IN_BOUNDS`' finding, not this one; comparing against
+    // a truncated window would report a mismatch that is really an overrun.
+    if bases.len() != span {
+        return false;
+    }
+    // Compared **cyclically**, so a span that is not a whole number of copies of
+    // the unit is judged on its bases like any other rather than being declined
+    // for its length. Chunking instead — and treating a non-multiple span as
+    // wrong on arithmetic alone — would have declined a pull for
+    // `g.1_9AT[4]`-shaped members sitting on a genuine tract with a partial
+    // trailing copy, which is a shape nothing here measured and so must not be a
+    // shape this guard moves. Case-insensitive because providers serve
+    // soft-masked references lower-case (see `fetch_window`'s note).
+    !bases
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .all(|(i, base)| base.eq_ignore_ascii_case(&unit[i % unit.len()]))
+}
+
 /// Pull back any cis member whose shift carried it over a sibling's bases.
 ///
 /// The 3' rule (`general.md:41`) is stated per description, with no
@@ -10158,7 +10305,39 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
             // `c.14_15`, not `c.14_*0`. Such a member is *visible* here now,
             // which is the point, but it is repaired by the restore below rather
             // than by arithmetic on a number that means two things.
+
             if a.region == b.region && !a.crosses_regions && !b.crosses_regions {
+                // A repeat's span asserts that the bases under it are a tandem
+                // tract of its unit, so a pull landing it on anything else emits
+                // a description that is no longer about the sequence it sits on
+                // (#1597). Nothing below catches that: `translate_member`
+                // verifies the span and never the bases, and a repeat states no
+                // junction, so it takes that arm rather than
+                // `translate_junction_member`'s.
+                //
+                // Declining leaves the member where its own shift put it, which
+                // is deliberately *not* the pre-shift restore the `else` branch
+                // below uses. The two failures differ in what is broken: there
+                // the pull itself is inexpressible on the member's axis while
+                // some pull is still owed, so the strongest available one is
+                // taken; here the pull is expressible and simply lands wrong.
+                // Restoring `before[i]` instead is the other defensible answer;
+                // it is not taken because it re-spells the member entirely
+                // rather than withholding the one move that was shown to be
+                // wrong, which is a wider change than the defect needs and one
+                // this PR did not measure.
+                //
+                // **Inside this arm, not in front of the whole `if`**, and that
+                // placement is the argument for it: the `else` branch does not
+                // translate by `-pull` at all, it restores the pre-shift member,
+                // which is sequence-correct by construction and so needs no unit
+                // check. Guarding both arms would let a repeat that changed
+                // region during its shift skip that restore and stay past the
+                // sibling it crossed — trading a #1597 mis-spelling for a #1254
+                // wrong-sequence, which is the worse of the two.
+                if repeat_would_land_off_its_unit(&after[i], kind, -pull, provider) {
+                    continue;
+                }
                 // A duplication blocks a sibling's shift without claiming bases,
                 // so it reaches this pass too — and its payload is read from
                 // under its own span, so it cannot simply be slid (#1280, #1292).
