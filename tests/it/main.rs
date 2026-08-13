@@ -78,6 +78,7 @@ mod coalesced_members_diagnostic;
 mod coderabbit_config_paths;
 mod coding_frame_merge_axis_asymmetry;
 mod comma_products_allele;
+mod compound_accession_sequence_frame;
 mod compound_cross_reference;
 mod comprehensive_edge_case_tests;
 mod comprehensive_external_tests;
