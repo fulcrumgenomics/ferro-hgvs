@@ -74,41 +74,48 @@
 //!
 //! # Status
 //!
-//! Green: 29 of 34 rows produce their recorded answer, the two green confluence
+//! Green: 29 of 34 rows produce their recorded answer, all three confluence
 //! classes converge, every answer is a fixed point, and no emitted output puts
 //! two members on consecutive nucleotides.
 //!
 //! Red, `#[ignore]`d, and expected to stay red until fixed:
 //!
-//! - **#1541** — `NM_000500.9:c.[710T>A;713T>A]`, `c.710_713inv` and
-//!   `c.710_713delinsACGA` do not converge. The target form is **decided, not
-//!   open**: `tests/it/issue_1517_inv_priority_over_delins.rs` pins both
-//!   directions of `general.md:56`, and because this block's competing members
-//!   are *substitutions* (ranked 1, above inversion at 3) the preferred form is
-//!   the split, `c.[710T>A;713T>A]` — the same answer as #1230. The blocker is
-//!   the **axis gate**, not the typing rule: `is_splittable_single_member`
-//!   (`src/normalize/mod.rs:2005`) matches only `HV::Genome`/`HV::Mt`, so a lone
-//!   `c.` member never reaches the sequence-first pass, and #1230's control
-//!   passes only because it is written on the `g.` axis. PR #1484 widens that
-//!   gate; **un-ignore [`the_four_mer_inversion_pair_converges`] in the change
-//!   that merges it.** The control for the other direction is
-//!   [`the_inversion_preference_control_still_holds`], which is green.
 //! - **#1542** — `NC_000017.11:g.80110044_80110047delinsGTTGG` emits members at
 //!   separation 0 in a `dup`-shaped split, surviving #1537. The separation
 //!   reading is itself part of the open question: the adjacency depends on
 //!   treating a `dup` as occupying the position it duplicates, and under a
 //!   zero-width (interbase) reading the pair is not adjacent at all.
 //!
-//! Neither red test may be weakened to green. A green re-classification is what
+//! That red test may not be weakened to green. A green re-classification is what
 //! [`the_corpus_census_is_unchanged`] exists to catch.
+//!
+//! ## #1541 stopped reproducing, and its guard now runs
+//!
+//! The `cyp21a2-710-713-four-mer-inversion` class was red here: its three
+//! spellings did not converge, because `is_splittable_single_member` matched
+//! only `HV::Genome`/`HV::Mt`, so a lone `c.` member never reached the
+//! sequence-first pass. **PR #1484 widened that gate to `c.`/`n.`/`r.` and
+//! merged on 2026-08-08**, and all three spellings now converge. The rows
+//! therefore no longer carry a `defect`, and
+//! [`the_four_mer_inversion_pair_converges`] is no longer `#[ignore]`d — it had
+//! been passing while gating nothing, since no CI job passes `--run-ignored`.
+//!
+//! **#1541 itself stays open, and this is not the claim that it is fixed.** The
+//! issue asked for a *ruling on which form governs* and then convergence on it;
+//! convergence arrived as a side effect and no ruling was made. So the class's
+//! rows keep `expected: null` — the corpus's category for an open governing
+//! ruling — and the exact form is held only as a **stability tripwire**, on
+//! `background/basics.md:38`. See [`CYP21A2_TARGET`] for why the `general.md:56`
+//! grounding this file used to give for that form does not stand.
 //!
 //! # One measurement in the brief did not reproduce
 //!
-//! `NM_000500.9:c.710_713delinsACGA` was reported as a fixed point on `main`
-//! alongside its two siblings. It is not: on `main` it normalizes to
-//! `NM_000500.9:c.710_713inv`. #1541's verdict is unchanged — the class still
-//! yields two normal forms — but the split is **2 against 1**, not three
-//! mutually disagreeing forms, and the row's `note` records the correction.
+//! `NM_000500.9:c.710_713delinsACGA` was reported as a fixed point when this
+//! corpus was assembled. It was not: it normalized to `NM_000500.9:c.710_713inv`,
+//! so the class of the day split **2 against 1** rather than three mutually
+//! disagreeing ways. Kept because the figure was reported wrong once; the row's
+//! `note` records the correction. Both readings are historical now — since PR
+//! #1484 merged, all three spellings converge.
 //!
 //! # Regenerating the slice
 //!
@@ -301,7 +308,14 @@ fn reverse_complement(bases: &str) -> String {
 /// spec supports, while asserting *which* form they agree on would freeze a
 /// representation nobody has adjudicated.
 ///
-/// The two red rows' answers are pinned too, at today's **wrong** output. So
+/// One sibling does assert such a form, and does it *as a declared exception*
+/// rather than in spite of this rule: [`the_four_mer_inversion_pair_converges`]
+/// pins [`CYP21A2_TARGET`] for #1541's class as a stability tripwire on
+/// `background/basics.md:38`, not as an adjudication. Read that constant's doc
+/// before adding a second one — a form pinned without that disclosure is the
+/// freezing this paragraph forbids.
+///
+/// The one red row's answer is pinned too, at today's **wrong** output. So
 /// fixing #1542 turns this test red as well as turning its `#[ignore]`d guard
 /// green — which is correct: a red row's answer moving is a representation
 /// change, and it should require re-blessing the fixture rather than passing
@@ -357,8 +371,10 @@ type ClassOutcomes<'a> = Vec<(&'a str, Result<String, String>)>;
 /// in a class were each verified sequence-equivalent from raw FASTA, so a
 /// disagreement is two normal forms for one variant, full stop.
 ///
-/// Only the green classes run here. The red class is #1541, asserted by
-/// [`the_four_mer_inversion_pair_converges`], which is `#[ignore]`d and fails.
+/// All three classes run here: none is red any more. #1541's class also carries
+/// the dedicated [`the_four_mer_inversion_pair_converges`], which adds the form
+/// pin this test deliberately withholds — where the governing ruling is open,
+/// agreement is the claim and the form is not.
 #[test]
 fn the_confluence_classes_converge() {
     let cases = cases();
@@ -573,15 +589,13 @@ fn the_corpus_census_is_unchanged() {
         .collect();
     assert_eq!(
         red,
-        [
-            "NM_000500.9:c.[710T>A;713T>A]",
-            "NM_000500.9:c.710_713inv",
-            "NM_000500.9:c.710_713delinsACGA",
-            "NC_000017.11:g.80110044_80110047delinsGTTGG",
-        ],
+        ["NC_000017.11:g.80110044_80110047delinsGTTGG"],
         "the red set changed. Adding a row to it converts a regression into a recorded defect, \
          which is exactly the laundering this assertion exists to block; removing one claims a \
-         defect is fixed, which must come with the `#[ignore]` being lifted."
+         defect is fixed, which must come with the `#[ignore]` being lifted. The three #1541 rows \
+         left this set that way: PR #1484 merged, they converge, and \
+         `the_four_mer_inversion_pair_converges` was un-ignored in the same change. They are still \
+         unpinned below, because #1541's governing ruling is still open."
     );
 
     let issues: BTreeSet<&str> = cases
@@ -592,8 +606,8 @@ fn the_corpus_census_is_unchanged() {
         .collect();
     assert_eq!(
         issues,
-        ["#1541", "#1542"].into_iter().collect::<BTreeSet<_>>(),
-        "every red row must name a filed issue, and only these two are open"
+        ["#1542"].into_iter().collect::<BTreeSet<_>>(),
+        "every red row must name a filed issue, and only this one still reproduces"
     );
 
     assert_eq!(
@@ -892,45 +906,78 @@ fn the_arfgef2_pair_denotes_one_sequence() {
 }
 
 // ---------------------------------------------------------------------------
-// RED — live defects. These must stay red until fixed; never weaken them.
+// The adjudication-sensitive rows: #1541's class, its control, and #1542.
+//
+// #1542 is the one live defect left. Its guard must stay red and `#[ignore]`d
+// until it is fixed; never weaken it. #1541's class stopped reproducing when PR
+// #1484 merged, so its guard runs — but the form it pins is unruled, which is
+// why that pin is documented as a stability tripwire rather than a target.
 // ---------------------------------------------------------------------------
 
-/// The decided target for #1541's class.
+/// The form #1541's class converges on today. **A stability pin, not an
+/// adjudication** — read the second paragraph before citing this constant.
 ///
-/// Not a guess and not a preference. `general.md:56` — "the preferred
-/// description is: (1) substitution, (2) deletion, (3) inversion, (4)
-/// duplication, (5) insertion" — ranks substitution above inversion, and
-/// `tests/it/issue_1517_inv_priority_over_delins.rs` pins both directions of
-/// that rule in one table. `c.710_713`'s competing members are two
-/// substitutions, so the split wins, exactly as it does for #1230.
+/// This file used to call it "the decided target", grounded on `general.md:56`
+/// ("the preferred description is: (1) substitution, (2) deletion, (3)
+/// inversion, (4) duplication, (5) insertion") ranking the competing
+/// substitutions above the inversion. **That grounding is withdrawn.** The
+/// `decided` ledger record `adjudication-precedence-order`, entry E1, says of
+/// that clause: it "ranks single-variant TYPE LABELS FOR ONE SPAN — it never
+/// ranks a multi-member allele against a spanning description, and an earlier
+/// attempt to use it that way was refuted on exactly that ground — so `:56`
+/// cannot settle a merge-versus-split question at all". `c.[710T>A;713T>A]`
+/// against `c.710_713inv` is precisely a multi-member allele against a spanning
+/// description, so `:56` does not reach it. Note the sibling `decided` record
+/// `inversion-vs-two-delins-76-83` reads `:56` the other way ("a genuine
+/// two-substitution shape splits"); the two are in tension, which is the
+/// operator's call and not this file's.
+///
+/// So the assertion below is held on `background/basics.md:38` — the corpus's
+/// stated authority for its stability pins, which are explicitly **not**
+/// spec-correctness claims. It fires if the form moves, which is what it is for:
+/// #1541's own 2026-08-12 status records that this locus is a live member of the
+/// #1703 family and that "whichever way that is ruled, this row moves with it".
+/// When it is ruled, re-bless this constant **with the ruling**, rather than
+/// deleting the pin.
 const CYP21A2_TARGET: &str = "NM_000500.9:c.[710T>A;713T>A]";
 
 /// #1541 — `NM_000500.9:c.[710T>A;713T>A]`, `c.710_713inv` and
-/// `c.710_713delinsACGA` are one variant and must produce
-/// [`CYP21A2_TARGET`].
+/// `c.710_713delinsACGA` are one variant and converge on [`CYP21A2_TARGET`].
 ///
-/// This asserts the **exact** string, not merely that the three agree, because
-/// the target is decided (see [`CYP21A2_TARGET`]) and agreement on the wrong
-/// form would otherwise satisfy the guard. On `main` the class splits 2 against
-/// 1: the `inv` and `delins` spellings both settle on `c.710_713inv`, while the
-/// substitution spelling stays put.
+/// **Two assertions with different standing, and the difference is the point.**
+/// That the three agree is a correctness claim the project holds outright: the
+/// `decided` record `confluence-gate-is-apply-equality-on-every-determined-axis`
+/// makes "normalize is constant on each equivalence class" the release gate, and
+/// these three spellings were verified sequence-equivalent from raw FASTA (see
+/// [`the_cyp21a2_block_inverts_to_the_two_substitutions_the_sibling_row_writes`],
+/// which reads the bases rather than restating them). That they agree on
+/// *[`CYP21A2_TARGET`] specifically* is a **stability pin** on an unruled form —
+/// read that constant's doc before treating it as an adjudication.
 ///
-/// **The blocker is the axis gate, not the typing rule.**
-/// `Normalizer::is_splittable_single_member` (`src/normalize/mod.rs:2005`)
-/// matches only `HV::Genome`/`HV::Mt`, so a lone `c.` member never reaches the
-/// sequence-first pass; #1230's control passes only because it is written on the
-/// `g.` axis. PR #1484 widens the gate to `c.`/`n.`/`r.`, under which all three
-/// spellings converge on the target. **Un-ignore this test in the change that
-/// merges #1484** — do not weaken it.
+/// **Why it was `#[ignore]`d, and why it no longer is.** The class did not
+/// converge while `Normalizer::is_splittable_single_member` matched only
+/// `HV::Genome`/`HV::Mt`, so a lone `c.` member never reached the sequence-first
+/// pass; #1230's control passed only because it is written on the `g.` axis. PR
+/// #1484 widened that gate to `c.`/`n.`/`r.` and **merged on 2026-08-08**, and
+/// the ignore reason — "un-ignore when #1484 merges" — was left in place. A
+/// passing `#[ignore]`d test gates nothing: it ran on no PR for the five days
+/// between, because no job in `ci.yml` passes `--run-ignored`. The one place CI
+/// selects ignored tests at all is `external-validation.yml`'s weekly API
+/// comparison, and it does not reach this test twice over — it filters to
+/// `api_comparison_tests`, and `--ignored` selects *only* ignored tests, so
+/// lifting the attribute here takes nothing away from it.
+///
+/// **This is not a claim that #1541 is fixed.** It asked for a ruling on which
+/// form governs and then convergence on it; convergence arrived as a side
+/// effect, no ruling was made, and the issue stays open.
 ///
 /// Two green companions bound it. The premise is
 /// [`the_cyp21a2_block_inverts_to_the_two_substitutions_the_sibling_row_writes`];
-/// the control for the *opposite* direction of `general.md:56` is
+/// the control for the *opposite* direction — a whole-block reverse complement
+/// competing with `delins` members, which must stay typed as an `inv` under the
+/// `decided` `inversion-vs-two-delins-76-83` — is
 /// [`the_inversion_preference_control_still_holds`].
 #[test]
-#[ignore = "#1541: c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge. The \
-            target is decided (general.md:56 ranks substitution above inversion); the blocker is \
-            the c.-axis gate in is_splittable_single_member. Un-ignore when #1484 merges."]
 fn the_four_mer_inversion_pair_converges() {
     let cases = cases();
     let provider = audited_provider();
@@ -948,9 +995,17 @@ fn the_four_mer_inversion_pair_converges() {
         .map(|(input, result)| format!("  {input}\n    -> {result:?}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let distinct: BTreeSet<&str> = outputs
+    // An error is a distinct form, not an absent one — the same reading
+    // [`the_confluence_classes_converge`] uses. Dropping the `Err`s would let
+    // two spellings stop normalizing while the third still emits the target,
+    // and the class would report itself converged on one form. That mattered
+    // little while this test was `#[ignore]`d; it gates CI now.
+    let distinct: BTreeSet<String> = outputs
         .iter()
-        .filter_map(|(_, result)| result.as_deref().ok())
+        .map(|(_, result)| match result {
+            Ok(output) => output.clone(),
+            Err(e) => format!("<{e}>"),
+        })
         .collect();
     assert_eq!(
         distinct.len(),
@@ -961,12 +1016,13 @@ fn the_four_mer_inversion_pair_converges() {
         distinct.len(),
     );
     assert_eq!(
-        distinct.iter().copied().next(),
+        distinct.iter().map(String::as_str).next(),
         Some(CYP21A2_TARGET),
-        "#1541: the class converged, but on the wrong form. general.md:56 ranks substitution (1) \
-         above inversion (3), and the competing members here are two substitutions, so the \
-         preferred description is {CYP21A2_TARGET} — the same answer as #1230, pinned in \
-         tests/it/issue_1517_inv_priority_over_delins.rs:\n{rendered}"
+        "#1541: the class converged, but not on the form ferro has been shipping. This half is a \
+         STABILITY pin on background/basics.md:38, not an adjudication — the form is unruled, so \
+         do not simply re-point it at whatever came out. If a ruling on the #1703 family moved it \
+         (see CYP21A2_TARGET), re-bless this constant citing that ruling; if nothing was ruled, \
+         this is an undeclared representation change. Expected {CYP21A2_TARGET}:\n{rendered}"
     );
 }
 
