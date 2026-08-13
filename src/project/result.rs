@@ -21,15 +21,22 @@ use crate::normalize::NormalizationWarning;
 ///
 /// **`None` does not mean "no reason exists."** A field is `None` when that axis
 /// is present, when it was never applicable to the input, *or* when its decline
-/// is one this type does not record. Only `noncoding` is populated today — for
-/// both a single variant and an allele, whose members' reasons are carried up —
-/// and the projector still has articulated-but-unrecorded declines on the other
-/// axes: the genomic re-anchor failure in `frame_projection_owned`, the
-/// `cds_start_incomplete` gate that drops `coding`/`protein`/`rna` together, and
-/// the non-initiator protein decline. Wiring each of those is a judgement call
-/// about what is meaningful to a user, not a mechanical extension, so callers
-/// must keep their own fallback wording and must not read an absent reason as
-/// evidence that none was computed.
+/// is one this type does not record. `noncoding` is populated — for both a
+/// single variant and an allele, whose members' reasons are carried up — and
+/// `genomic` is populated at three sites — the withheld non-flanking genomic
+/// insertion (#1264, in `project_variant_inner`), the two bare-transcript direct
+/// paths where the axis declines because the *description* names no genomic
+/// parent rather than because the reference lacks an alignment (#1713), and an
+/// allele's carry-up of whichever member recorded one.
+///
+/// **Populated is not the same as complete.** The projector still has
+/// articulated-but-unrecorded declines: on `genomic`, the re-anchor failure in
+/// `frame_projection_owned`; elsewhere, the `cds_start_incomplete` gate that
+/// drops `coding`/`protein`/`rna` together, and the non-initiator protein
+/// decline. Wiring each of those is a judgement call about what is meaningful to
+/// a user, not a mechanical extension, so callers must keep their own fallback
+/// wording and must not read an absent reason as evidence that none was
+/// computed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AxisDeclineReasons {
@@ -46,9 +53,13 @@ pub struct AxisDeclineReasons {
 /// whatever representations are derivable from the input and the available
 /// reference data, and `None` means "this representation is not available"
 /// (not an error). In particular `genomic` is `None` for a bare transcript
-/// (e.g. bare-`NM_`) coding input that carries no genome alignment — protein
-/// is still predicted directly from the transcript's CDS (#498). For a
-/// genome-anchored input `genomic` is the canonical g. representation.
+/// (e.g. bare-`NM_`) coding input, because the *description* names no genomic
+/// parent for the axis to be written against (#327) — **not** because the
+/// reference lacks an alignment, which it usually has. That misdescription is
+/// what made a specified decline read as a capability gap (#1713); the recorded
+/// reason on [`AxisDeclineReasons::genomic`] says which it is. Protein is still
+/// predicted directly from the transcript's CDS (#498). For a genome-anchored
+/// input `genomic` is the canonical g. representation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct VariantProjection {
