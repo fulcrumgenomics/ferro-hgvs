@@ -476,9 +476,12 @@ contiguity rule.
 **No CI job arms the oracle where it fires** — checked, not assumed.
 `FERRO_ASSERT_SEQUENCE` is set in exactly two places: `ci.yml`'s `sweeps`, which
 selects `SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)`, and
-`nightly-mutalyzer.yml`, which selects the three reference-aware modules and is
+`nightly-mutalyzer.yml`, which selects every reference-aware module and is
 `continue-on-error`. `normalize_tests` is in neither selection, so the fire is
-reachable only by setting the flag by hand.
+reachable only by setting the flag by hand. (That nightly selection named
+**three** modules until the orphaned-guard sweep; `normalize_tests` was not one
+of the modules added, so this paragraph's conclusion is unchanged — but do not
+re-derive "the three modules" from it.)
 
 **Here is the command the before/after comes from**, because a figure with no
 command is one nobody can re-derive. Swap only the fixture, and exclude the guard

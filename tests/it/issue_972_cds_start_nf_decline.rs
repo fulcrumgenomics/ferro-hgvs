@@ -504,14 +504,16 @@ fn vps13d_coding_variant(
 #[test]
 fn vps13d_bare_coding_input_declines_protein_but_derives_noncoding() {
     let Some(raw_provider) = provider() else {
-        eprintln!(
-            "vps13d_bare_coding_input_declines_protein_but_derives_noncoding: skipping — no manifest"
+        crate::common::manifest::absent(
+            "issue_972_cds_start_nf_decline::\
+             vps13d_bare_coding_input_declines_protein_but_derives_noncoding",
         );
         return;
     };
     let Some(vp) = manifest_projector() else {
-        eprintln!(
-            "vps13d_bare_coding_input_declines_protein_but_derives_noncoding: skipping — no manifest"
+        crate::common::manifest::absent(
+            "issue_972_cds_start_nf_decline::\
+             vps13d_bare_coding_input_declines_protein_but_derives_noncoding",
         );
         return;
     };
@@ -551,11 +553,15 @@ fn vps13d_bare_coding_input_declines_protein_but_derives_noncoding() {
 #[test]
 fn vps13d_cli_axis_c_and_p_unavailable_n_rendered() {
     let Some(raw_provider) = provider() else {
-        eprintln!("vps13d_cli_axis_c_and_p_unavailable_n_rendered: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_972_cds_start_nf_decline::vps13d_cli_axis_c_and_p_unavailable_n_rendered",
+        );
         return;
     };
     let Some(vp) = manifest_projector() else {
-        eprintln!("vps13d_cli_axis_c_and_p_unavailable_n_rendered: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_972_cds_start_nf_decline::vps13d_cli_axis_c_and_p_unavailable_n_rendered",
+        );
         return;
     };
     let variant = vps13d_coding_variant(&raw_provider);
@@ -1002,7 +1008,9 @@ fn vps13d_strict_mode_rejects_bare_coding_input() {
     use ferro_hgvs::{FerroError, NormalizeConfig, Normalizer};
 
     let Some(raw_provider) = provider() else {
-        eprintln!("vps13d_strict_mode_rejects_bare_coding_input: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_972_cds_start_nf_decline::vps13d_strict_mode_rejects_bare_coding_input",
+        );
         return;
     };
     let variant = vps13d_coding_variant(&raw_provider);

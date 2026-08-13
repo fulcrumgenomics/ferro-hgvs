@@ -984,16 +984,19 @@ fn the_committed_slice_serves_the_transcript_whole() {
 /// through any legitimate representation change.
 #[test]
 fn hermetic_normalization_matches_the_prepared_reference() {
+    // The per-PR gates are `every_authored_inversion_produces_its_pinned_output`
+    // and `no_authored_inversion_leaves_the_inversion_family`, which never skip.
     let Some(manifest) = std::env::var_os("FERRO_MANIFEST").map(PathBuf::from) else {
-        eprintln!(
-            "hermetic_normalization_matches_the_prepared_reference: skipping — no FERRO_MANIFEST. \
-             The per-PR gates are every_authored_inversion_produces_its_pinned_output and \
-             no_authored_inversion_leaves_the_inversion_family, which never skip."
+        crate::common::manifest::absent(
+            "inversion_sweep::hermetic_normalization_matches_the_prepared_reference",
         );
         return;
     };
     if !manifest.exists() {
-        eprintln!("hermetic_normalization_matches_the_prepared_reference: skipping — FERRO_MANIFEST does not exist");
+        crate::common::manifest::absent(
+            "inversion_sweep::hermetic_normalization_matches_the_prepared_reference \
+             (FERRO_MANIFEST points at a path that does not exist)",
+        );
         return;
     }
     let real = std::sync::Arc::new(

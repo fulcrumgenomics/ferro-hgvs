@@ -1253,10 +1253,7 @@ fn describe_convergence_move(started: &[&str], stopped: &[&str], pinned: usize) 
 #[test]
 fn axis_normalized() {
     let Some(provider) = provider() else {
-        println!(
-            "multi-member-cis: skipping — no reference manifest at FERRO_MANIFEST or \
-             benchmark-output/manifest.json"
-        );
+        crate::common::manifest::absent("multi_member_cis_axis::axis_normalized");
         return;
     };
     let (census, converged_rows) = measure_axis(&provider);

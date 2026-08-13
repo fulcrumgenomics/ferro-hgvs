@@ -42,7 +42,7 @@ fn provider() -> Option<Arc<MultiFastaProvider>> {
 #[test]
 fn nm_015120_cds_to_tx_transcript_native_across_insertion() {
     let Some(provider) = provider() else {
-        eprintln!("issue_944: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_944_cds_to_tx_transcript_native");
         return;
     };
     let tx = provider
@@ -72,7 +72,7 @@ fn nm_000277_cds_to_tx_naive_across_deletion() {
     // PAH — carries a CIGAR deletion; the transcript axis must stay naive
     // (deletions add no transcript bases), i.e. contiguous with no shift.
     let Some(provider) = provider() else {
-        eprintln!("issue_944: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_944_cds_to_tx_transcript_native");
         return;
     };
     let tx = provider

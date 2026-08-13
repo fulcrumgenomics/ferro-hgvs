@@ -18,6 +18,7 @@ pub mod completeness;
 pub mod error_mode_stamp;
 pub mod hgvs_rs_projection;
 pub mod inversion_sweep;
+pub mod manifest_gate;
 pub mod mutalyzer;
 pub mod protein_corpus;
 pub mod reference_snapshot;

@@ -571,9 +571,17 @@ mod tests {
 
     #[test]
     fn corpus_missing_ng_against_real_reference_when_available() {
-        let manifest = match std::env::var("FERRO_MANIFEST") {
+        let manifest = match std::env::var(crate::conformance::manifest_gate::MANIFEST_ENV) {
             Ok(m) => std::path::PathBuf::from(m),
-            Err(_) => return, // skip without a prepared reference
+            Err(_) => {
+                // Skip without a prepared reference — unless the run demands
+                // one, in which case a skip would be coverage loss wearing a
+                // pass's clothes. See `conformance::manifest_gate`.
+                crate::conformance::manifest_gate::absent(
+                    "accession_inventory::corpus_missing_ng_against_real_reference_when_available",
+                );
+                return;
+            }
         };
         let provider =
             crate::reference::multi_fasta::MultiFastaProvider::from_manifest(&manifest).unwrap();

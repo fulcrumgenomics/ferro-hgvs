@@ -248,10 +248,7 @@ fn loads_fixture() {
 fn manifest_or_skip() {
     match manifest_path() {
         Some(p) => println!("biocommons-normalize: using manifest {}", p.display()),
-        None => println!(
-            "biocommons-normalize: skipping — no manifest at FERRO_MANIFEST \
-             or benchmark-output/manifest.json"
-        ),
+        None => crate::common::manifest::absent("biocommons_normalize_tests::manifest_or_skip"),
     }
 }
 
@@ -658,9 +655,8 @@ fn axis_normalized_hermetic() {
 #[test]
 fn axis_normalized() {
     let Some(provider) = provider() else {
-        eprintln!(
-            "axis_normalized: skipping — no manifest (per-PR gate is axis_normalized_hermetic)"
-        );
+        // The per-PR gate is `axis_normalized_hermetic`, which needs no manifest.
+        crate::common::manifest::absent("biocommons_normalize_tests::axis_normalized");
         return;
     };
     run_normalized_axis(ArcProvider(provider)).finish();

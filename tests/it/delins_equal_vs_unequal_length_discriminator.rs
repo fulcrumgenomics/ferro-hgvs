@@ -209,10 +209,7 @@ const MSH2_RULING_CONFORMANT: &str = "NC_000002.11:g.47639670_47639673delinsTT";
 #[test]
 fn equal_and_unequal_length_delins_get_opposite_verdicts() {
     let Some(path) = manifest_path() else {
-        eprintln!(
-            "delins_equal_vs_unequal_length_discriminator: skipping — FERRO_MANIFEST unset. \
-             Set it to the prepared reference's manifest.json to run these two rows."
-        );
+        crate::common::manifest::absent("delins_equal_vs_unequal_length_discriminator");
         return;
     };
     // FERRO_MANIFEST is an explicit opt-in: once set, a missing or unloadable

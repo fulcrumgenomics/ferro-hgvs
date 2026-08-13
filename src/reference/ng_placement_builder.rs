@@ -348,9 +348,16 @@ mod tests {
     #[test]
     fn derive_for_real_reference_when_available() {
         // Gated: only runs against a prepared reference (repo convention).
-        let manifest = match std::env::var("FERRO_MANIFEST") {
+        let manifest = match std::env::var(crate::conformance::manifest_gate::MANIFEST_ENV) {
             Ok(m) => std::path::PathBuf::from(m),
-            Err(_) => return, // skip when no reference is configured
+            Err(_) => {
+                // Skip when no reference is configured — unless the run demands
+                // one. See `conformance::manifest_gate`.
+                crate::conformance::manifest_gate::absent(
+                    "ng_placement_builder::derive_for_real_reference_when_available",
+                );
+                return;
+            }
         };
         let provider = crate::reference::multi_fasta::MultiFastaProvider::from_manifest(&manifest)
             .expect("load manifest");

@@ -91,7 +91,7 @@ fn project_protein(
 #[test]
 fn decomposed_delins_projects_to_one_combined_protein_consequence() {
     let Some(projector) = manifest_projector() else {
-        eprintln!("protein_cis_delins_decomposition: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("protein_cis_delins_decomposition");
         return;
     };
 

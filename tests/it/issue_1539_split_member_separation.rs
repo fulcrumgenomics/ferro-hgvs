@@ -822,15 +822,21 @@ fn the_committed_windows_serve_every_transcript_whole() {
 /// which fail on the defect this test was written for.
 #[test]
 fn hermetic_normalization_matches_the_prepared_reference() {
+    // The per-PR gate is
+    // `no_emitted_member_separates_two_changes_with_an_unchanged_base`.
     let Some(manifest) = std::env::var_os("FERRO_MANIFEST").map(std::path::PathBuf::from) else {
-        eprintln!(
-            "hermetic_normalization_matches_the_prepared_reference: skipping — no FERRO_MANIFEST \
-             (the per-PR gate is no_emitted_member_separates_two_changes_with_an_unchanged_base)"
+        crate::common::manifest::absent(
+            "issue_1539_split_member_separation::\
+             hermetic_normalization_matches_the_prepared_reference",
         );
         return;
     };
     if !manifest.exists() {
-        eprintln!("hermetic_normalization_matches_the_prepared_reference: skipping — FERRO_MANIFEST does not exist");
+        crate::common::manifest::absent(
+            "issue_1539_split_member_separation::\
+             hermetic_normalization_matches_the_prepared_reference \
+             (FERRO_MANIFEST points at a path that does not exist)",
+        );
         return;
     }
     let real = Arc::new(

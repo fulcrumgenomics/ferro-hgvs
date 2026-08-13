@@ -139,7 +139,7 @@ fn assert_coding(vp: &VariantProjector<ArcProvider>, input: &str, expected: &str
 macro_rules! skip_without_manifest {
     ($vp:ident) => {
         let Some($vp) = manifest_projector() else {
-            eprintln!("issue_1086: skipping — no FERRO_MANIFEST / benchmark-output manifest");
+            crate::common::manifest::absent("issue_1086_c_axis_genomic_context");
             return;
         };
     };

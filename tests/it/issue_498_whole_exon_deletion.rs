@@ -183,7 +183,9 @@ fn protein_of(vp: &VariantProjector<ArcProvider>, input: &str, tx: &str) -> Opti
 #[test]
 fn vsir_whole_exon_deletion_reverse_strand_frameshift() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("vsir_whole_exon_deletion_reverse_strand_frameshift: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_498_whole_exon_deletion::vsir_whole_exon_deletion_reverse_strand_frameshift",
+        );
         return;
     };
     let got = protein_of(
@@ -211,7 +213,9 @@ fn vsir_whole_exon_deletion_reverse_strand_frameshift() {
 #[test]
 fn dmd_exon10_whole_exon_deletion_inframe() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("dmd_exon10_whole_exon_deletion_inframe: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_498_whole_exon_deletion::dmd_exon10_whole_exon_deletion_inframe",
+        );
         return;
     };
     let got = protein_of(&vp, "NM_004006.2:c.961-1_1149+3del", "NM_004006.2");
@@ -240,7 +244,9 @@ fn dmd_exon10_whole_exon_deletion_inframe() {
 #[test]
 fn dmd_exons10_11_whole_exon_deletion_frameshift() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("dmd_exons10_11_whole_exon_deletion_frameshift: skipping — no manifest");
+        crate::common::manifest::absent(
+            "issue_498_whole_exon_deletion::dmd_exons10_11_whole_exon_deletion_frameshift",
+        );
         return;
     };
     let got = protein_of(&vp, "NM_004006.2:c.961-1_1331+1del", "NM_004006.2");
