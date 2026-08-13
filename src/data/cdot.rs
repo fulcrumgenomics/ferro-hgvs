@@ -515,9 +515,15 @@ struct RawGenomeBuild {
     /// must `+ 1` this to match the 1-based exon table before mapping it to tx.
     #[serde(default)]
     cds_start: Option<u64>,
-    /// CDS end in raw cdot genomic coordinates (0-based, exclusive — same space as
-    /// the raw exon `alt_end`). The genomic-CDS fallback in `from_genome_build` must
-    /// `+ 1` this to match the 1-based exon table before mapping it to tx.
+    /// CDS end in raw cdot genomic coordinates (0-based, **exclusive** — same
+    /// space as the raw exon `alt_end`).
+    ///
+    /// A 0-based exclusive end and a 1-based inclusive one are the same number,
+    /// so this value already *is* the 1-based coordinate of the last coding
+    /// base. The genomic-CDS fallback in `from_genome_build` therefore maps it
+    /// as-is — unlike `cds_start`, it takes no `+ 1`. That asymmetry is the
+    /// whole content of this comment; see the fallback for the measurement that
+    /// settles it.
     #[serde(default)]
     cds_end: Option<u64>,
     /// GENCODE/Ensembl completeness + status tags (e.g. `cds_start_NF`,
@@ -611,19 +617,53 @@ impl RawCdotTranscript {
             // Fall back to converting genomic CDS coordinates to transcript coordinates
             match (build.cds_start, build.cds_end) {
                 (Some(g_start), Some(g_end)) => {
-                    // `build.cds_start`/`cds_end` are raw cdot genomic coordinates in
-                    // the same 0-based half-open space as the raw exon `alt_start`/
-                    // `alt_end` bounds. `exons` was converted to the HGVS 1-based
-                    // convention above (`e[0] + 1` / `e[1] + 1`, lines 505-506), so
-                    // these CDS bounds must get the same `+ 1` before being scanned
-                    // against the now-1-based exon table — otherwise every comparison
-                    // in `genomic_to_tx_pos` is off by one (#742).
+                    // `build.cds_start`/`cds_end` are raw cdot genomic bounds,
+                    // 0-based half-open, in the same space as the raw exon
+                    // `alt_start`/`alt_end`. `exons` was converted to the HGVS
+                    // 1-based convention above (`e[0] + 1` / `e[1] + 1`), so both
+                    // endpoints must be restated 1-based before being scanned
+                    // against that table (#742).
+                    //
+                    // `genomic_to_tx_pos` maps a genomic *position*, never a
+                    // half-open bound, so each endpoint must name a base that is
+                    // actually coding. Only ONE of the two takes a `+ 1`:
+                    //
+                    //   - first coding base, 1-based = `g_start + 1`
+                    //     (0-based inclusive -> 1-based inclusive), and
+                    //   - last coding base, 1-based = `g_end`
+                    //     (0-based exclusive and 1-based inclusive are the same
+                    //     number, so the restatement is the identity).
+                    //
+                    // Mapping `g_end + 1` walks one base past the CDS, and the
+                    // `+ 1` below then makes the served CDS one base too long on
+                    // every transcript — on the plus strand `cds_end` lands a base
+                    // past the stop codon, on the minus strand `cds_start` lands a
+                    // base before the ATG. Measured over cdot-0.2.32 GRCh38 by
+                    // replaying this arithmetic over every build: with `g_end + 1`
+                    // the mapped CDS length is not a whole number of codons for
+                    // 354,187 of 355,590 RefSeq coding builds and 253,433 of
+                    // 266,774 Ensembl ones; with `g_end` it is whole for 355,450
+                    // and agrees with the record's own `start_codon`/`stop_codon`
+                    // for all 266,774 Ensembl builds.
+                    //
+                    // Read the RefSeq denominator precisely, because two nearby
+                    // ones differ by exactly one and both are correct for their
+                    // own population: **355,591** GRCh38 builds carry a genomic
+                    // CDS (both `cds_start` and `cds_end`), and **355,590** of
+                    // those belong to a record that also carries both codon
+                    // fields — which is the population the comparison column
+                    // above is over. The single difference is `NM_001077693.2`,
+                    // the one GRCh38 record carrying `stop_codon` but no
+                    // `start_codon`. (Ensembl GRCh38 has no such record, which is
+                    // why its 266,774 is the same number in both readings.)
                     let tx_cds_start = genomic_to_tx_pos(&exons, g_start + 1, strand);
-                    let tx_cds_end = genomic_to_tx_pos(&exons, g_end + 1, strand);
+                    let tx_cds_end = genomic_to_tx_pos(&exons, g_end, strand);
 
                     match (tx_cds_start, tx_cds_end) {
                         (Some(s), Some(e)) => {
-                            // CDS end is exclusive, so add 1
+                            // Both endpoints now name a coding base. Which is the
+                            // last one in transcript order depends on the strand,
+                            // so order them and make the upper bound exclusive.
                             // Use saturating_add to prevent overflow at u64::MAX
                             let (start, end) = if s < e {
                                 (s, e.saturating_add(1))
@@ -3535,6 +3575,165 @@ mod tests {
         assert_eq!(g(128), 112086641, "c.128 (interior)");
         assert_eq!(g(129), 112086640, "c.129 (last cdna base of exon B)"); // was off-by-one
         assert_eq!(g(130), 112085462, "c.130 (first cdna base of exon A)"); // was a decline
+    }
+
+    /// A real cdot-0.2.32 GRCh38 record, plus strand, two contiguous exons.
+    ///
+    /// `NM_000015.3` (NAT2, MANE Select). Raw genomic CDS `[18400003, 18400876)`;
+    /// the record's own `start_codon`/`stop_codon` are 70 and 943.
+    const NAT2_PLUS_STRAND_CDOT: &str = r#"{
+        "transcripts": {
+            "NM_000015.3": {
+                "gene_name": "NAT2",
+                "protein": "NP_000006.2",
+                "genome_builds": {
+                    "GRCh38": {
+                        "contig": "NC_000008.11",
+                        "strand": "+",
+                        "cds_start": 18400003,
+                        "cds_end": 18400876,
+                        "exons": [
+                            [18391281, 18391345, 0, 1, 64, null],
+                            [18399997, 18401218, 1, 65, 1285, null]
+                        ]
+                    }
+                }
+            }
+        }
+    }"#;
+
+    /// A real cdot-0.2.32 GRCh38 record, minus strand, two contiguous exons.
+    ///
+    /// `NM_000025.3` (ADRB3, MANE Select). Raw genomic CDS `[37964217, 37966469)`;
+    /// the record's own `start_codon`/`stop_codon` are 130 and 1357.
+    const ADRB3_MINUS_STRAND_CDOT: &str = r#"{
+        "transcripts": {
+            "NM_000025.3": {
+                "gene_name": "ADRB3",
+                "protein": "NP_000016.1",
+                "genome_builds": {
+                    "GRCh38": {
+                        "contig": "NC_000008.11",
+                        "strand": "-",
+                        "cds_start": 37964217,
+                        "cds_end": 37966469,
+                        "exons": [
+                            [37962989, 37964239, 1, 1336, 2585, null],
+                            [37965264, 37966599, 0, 1, 1335, null]
+                        ]
+                    }
+                }
+            }
+        }
+    }"#;
+
+    /// cdot's raw genomic `cds_end` is 0-based **exclusive**, so the genomic-CDS
+    /// fallback maps it as-is rather than `+ 1`.
+    ///
+    /// `RawGenomeBuild::cds_end`'s doc comment said "exclusive" while the
+    /// arithmetic beneath it mapped `g_end + 1` and then added a further `+ 1` —
+    /// which is only correct if the raw value is inclusive. Real cdot settles it
+    /// for the doc comment; this test pins that answer so the contradiction
+    /// cannot re-open.
+    ///
+    /// **The evidence, from cdot-0.2.32 GRCh38 and the prepared reference's
+    /// transcript FASTA.** Slicing the real transcript sequence with each
+    /// reading, on the two records above:
+    ///
+    /// | record | reading | CDS slice | length | %3 | first | last |
+    /// |---|---|---|---|---|---|---|
+    /// | `NM_000015.3` (+) | `g_end + 1` | `[70, 944)` | 874 | 1 | `ATG` | `AGA` |
+    /// | `NM_000015.3` (+) | `g_end`     | `[70, 943)` | 873 | 0 | `ATG` | `TAG` |
+    /// | `NM_000025.3` (-) | `g_end + 1` | `[129, 1357)` | 1228 | 1 | `GAT` | `TAG` |
+    /// | `NM_000025.3` (-) | `g_end`     | `[130, 1357)` | 1227 | 0 | `ATG` | `TAG` |
+    ///
+    /// Only the `g_end` reading yields a whole number of codons opening on `ATG`
+    /// and closing on a stop, and its lengths are the ones the proteins require
+    /// (`NP_000006.2` is 290 aa = 873/3 - 1; `NP_000016.1` is 408 aa
+    /// = 1227/3 - 1). The defect is strand-symmetric rather than confined to
+    /// `cds_end`: the endpoint mapped one base too far is whichever comes later
+    /// in transcript order, so on the plus strand `cds_end` overshoots the stop
+    /// codon and on the minus strand `cds_start` undershoots the ATG. Either way
+    /// the CDS is one base too long, which is why `% 3` is the sharpest census.
+    ///
+    /// Replayed over every GRCh38 build: with `g_end + 1` the mapped CDS length
+    /// is not divisible by three for 354,187 of 355,590 RefSeq coding builds and
+    /// 253,433 of 266,774 Ensembl ones; with `g_end` it agrees with the record's
+    /// own `start_codon`/`stop_codon` for 354,504 RefSeq and all 266,774 Ensembl
+    /// builds. (The RefSeq residue is `genomic_to_tx_pos` not being CIGAR-aware,
+    /// which is a separate question and untouched here.)
+    #[test]
+    fn genomic_cds_fallback_reads_raw_cds_end_as_exclusive() {
+        for (accession, json, expected) in [
+            ("NM_000015.3", NAT2_PLUS_STRAND_CDOT, (70u64, 943u64)),
+            ("NM_000025.3", ADRB3_MINUS_STRAND_CDOT, (130, 1357)),
+        ] {
+            let label = accession;
+            let cdot = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38")
+                .unwrap_or_else(|e| panic!("{label} fixture should parse: {e}"));
+            let tx = cdot
+                .get_transcript(accession)
+                .unwrap_or_else(|| panic!("{label} should load"));
+
+            assert_eq!(
+                (tx.cds_start, tx.cds_end),
+                (Some(expected.0), Some(expected.1)),
+                "{label}: the genomic-CDS fallback must reproduce the record's own \
+                 start_codon/stop_codon. Reading the raw cds_end as inclusive \
+                 (mapping `g_end + 1`) yields a CDS one base too long."
+            );
+
+            let cds_length = tx.cds_length().expect("CDS is defined");
+            assert_eq!(
+                cds_length % 3,
+                0,
+                "{label}: a coding CDS must be a whole number of codons, got {cds_length}"
+            );
+        }
+    }
+
+    /// The genomic-CDS fallback and the `start_codon`/`stop_codon` branch must
+    /// agree on a record that could take either.
+    ///
+    /// `from_genome_build` prefers the codon fields and reaches the genomic CDS
+    /// only when a record carries neither — which no build in cdot-0.2.32
+    /// GRCh38 does (0 of 482,519 RefSeq and 0 of 574,584 Ensembl), so the
+    /// fallback is currently unreachable on real data and nothing else in the
+    /// suite covers it. Deleting the codon fields from a real record is what
+    /// makes it reachable while keeping a known-correct answer to check against:
+    /// the deleted values themselves.
+    #[test]
+    fn genomic_cds_fallback_agrees_with_the_start_stop_codon_branch() {
+        for (accession, json, codons) in [
+            ("NM_000015.3", NAT2_PLUS_STRAND_CDOT, (70u64, 943u64)),
+            ("NM_000025.3", ADRB3_MINUS_STRAND_CDOT, (130, 1357)),
+        ] {
+            let label = accession;
+            // Re-attach the codon fields the fixtures deliberately omit, so the
+            // same record loads down the *other* branch.
+            let with_codons = json.replacen(
+                "\"genome_builds\"",
+                &format!(
+                    "\"start_codon\": {}, \"stop_codon\": {}, \"genome_builds\"",
+                    codons.0, codons.1
+                ),
+                1,
+            );
+
+            let load = |src: &str| {
+                let cdot = CdotMapper::from_reader_with_build(src.as_bytes(), "GRCh38")
+                    .unwrap_or_else(|e| panic!("{label} fixture should parse: {e}"));
+                let tx = cdot.get_transcript(accession).expect("transcript loads");
+                (tx.cds_start, tx.cds_end)
+            };
+
+            assert_eq!(
+                load(json),
+                load(&with_codons),
+                "{label}: the genomic-CDS fallback must agree with the \
+                 start_codon/stop_codon branch on the same record"
+            );
+        }
     }
 
     /// Builds a minimal `RawGenomeBuild` carrying the given cdot `tag` string
