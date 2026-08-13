@@ -206,16 +206,27 @@ env:
   # before #1599 lowered the count it is derived from.
   #
   # WHY, REASON 2 — simpler, and not covered by the paragraphs above. Five tests
-  # in these modules do not merely count the defect, they ASSERT it: the four in
-  # `defect_non_idempotent_outputs` and
-  # `spec_corpus_regressions::an_insertion_at_the_cds_end_is_not_a_fixed_point`
-  # pin `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` as a known
+  # in these modules used to not merely count the defect but ASSERT it: the four
+  # in `defect_non_idempotent_outputs` and
+  # `spec_corpus_regressions::an_insertion_at_the_cds_end_is_a_fixed_point`
+  # pinned `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` as a known
   # non-fixed point. A test that pins a defect and an oracle that aborts on it
-  # cannot both run, whatever the census does. Together the two reasons account
-  # for all 7 tests a bare armed run fails, and `FERRO_ASSERT_IDEMPOTENT` alone
-  # accounts for all 7 — `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IN_BOUNDS`
-  # each contribute 0, and a prepared reference changes nothing (these modules
-  # are `MockProvider`-backed).
+  # cannot both run, whatever the census does.
+  #
+  # #1650 CLOSED that class. The chain is now `c.*1delinsCTT` ->
+  # `c.72delinsCCT` in one pass, `non_idempotent_outputs` reads 0 in both
+  # directions, and all five tests assert the fixed point instead — which is why
+  # the fifth is now named `..._is_a_fixed_point`. REASON 2 therefore no longer
+  # holds for `FERRO_ASSERT_IDEMPOTENT`, and the exclusion rests on REASON 1
+  # (the censuses count what the oracle would turn into `declined`) plus the
+  # denoted-sequence rows named below. It is deliberately NOT narrowed here:
+  # these modules build their own references and sweep them, so an armed run
+  # that began panicking mid-sweep would EMPTY a sweep rather than redden it,
+  # and establishing that it would not needs its own measurement with
+  # `tests/it/oracle_exclude_invariant.rs` updated in the same change.
+  #
+  # `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IN_BOUNDS` each contribute 0, and a
+  # prepared reference changes nothing (these modules are `MockProvider`-backed).
   #
   # Locally, `scripts/run_oracle_suite.sh` applies this same exclusion, reading
   # it from here rather than copying it.

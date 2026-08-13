@@ -170,8 +170,10 @@ a trap:
 FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev   # ALWAYS RED on main
 ```
 
-It fails **7** tests on a clean `origin/main`, and has for as long as the spec
-corpus has existed. Use the local runner instead, which mirrors `ci.yml`'s
+It has been red for as long as the spec corpus has existed. The count was **7**
+before #1650 closed the idempotency half; it is deliberately not restated here as
+a number, because nothing checks it and a stale one reads as a measurement — read
+it off a run. Use the local runner instead, which mirrors `ci.yml`'s
 `test-oracle` job — its flags, and its selection:
 
 ```bash
@@ -180,20 +182,27 @@ scripts/run_oracle_suite.sh --print-selection   # what it would run, without run
 scripts/run_oracle_suite.sh -E 'test(my_test)'  # extra args reach nextest
 ```
 
-**Why the bare form is red, and why that is not a coverage gap to close.** All 7
+**Why the bare form is red, and why that is not a coverage gap to close.** The
 failures come from `FERRO_ASSERT_IDEMPOTENT` alone — measured: `FERRO_ASSERT_REPARSE`
 and `FERRO_ASSERT_IN_BOUNDS` each contribute **0**, and a prepared reference
-changes nothing (the same 7 fail with and without `FERRO_MANIFEST`; every one of
-these modules is `MockProvider`-backed). All 7 live in modules `ORACLE_EXCLUDE`
+changes nothing (the same set fails with and without `FERRO_MANIFEST`; every one of
+these modules is `MockProvider`-backed). All of them live in modules `ORACLE_EXCLUDE`
 already names, for two reasons that are worth keeping apart:
 
-- **5 of them ASSERT the defect the oracle PANICS on.** The four
+- **Some of them USED TO ASSERT the defect the oracle PANICS on.** The
   `defect_non_idempotent_outputs` tests and
-  `spec_corpus_regressions::an_insertion_at_the_cds_end_is_not_a_fixed_point`
-  pin `c.*1delinsCTT` → `c.72_*1insCT` → `c.72delinsCCT` as a known non-fixed
-  point. A test that pins a defect and an oracle that aborts on it cannot both
-  run; there is no version of this the flag could pass.
-- **2 of them COUNT it**, and arming the oracle makes the count read *better*
+  `spec_corpus_regressions::an_insertion_at_the_cds_end_is_a_fixed_point`
+  pinned `c.*1delinsCTT` → `c.72_*1insCT` → `c.72delinsCCT` as a known non-fixed
+  point, and a test that pins a defect and an oracle that aborts on it cannot both
+  run. **#1650 closed that class** — the chain collapses to
+  `c.*1delinsCTT` → `c.72delinsCCT` in one pass, `non_idempotent_outputs` reads 0
+  in both directions, and those tests now assert the fixed point (which is why the
+  last one is named `..._is_a_fixed_point`). So this reason no longer holds for
+  `FERRO_ASSERT_IDEMPOTENT`. The exclusion is kept anyway, deliberately: see
+  `scripts/run_oracle_suite.sh`'s header for why, and note that narrowing it needs
+  its own measurement with `tests/it/oracle_exclude_invariant.rs` updated in the
+  same change.
+- **Others COUNT it**, and arming the oracle makes the count read *better*
   than the truth. `spec_conformance_axis`'s censuses wrap normalization in
   `catch_unwind`, so a panicking row is filed `declined` and never reaches its
   family's output set. See `ORACLE_EXCLUDE`'s comment in `ci.yml` for the
@@ -304,7 +313,7 @@ normalized description names may be past the end of its own sequence.
 
 `scripts/run_oracle_suite.sh` arms it too. As with the re-parse oracle,
 `FERRO_ASSERT_IN_BOUNDS` on its own fails **0** tests over `ORACLE_EXCLUDE`'s
-modules — the 7 failures a bare armed run shows are the idempotency oracle's,
+modules — the failures a bare armed run shows are the idempotency oracle's,
 and reading them as this one's would send you after the wrong invariant.
 
 It exists because the class kept being found by hand, one shape at a time —
@@ -367,8 +376,11 @@ FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev -E "$SWEEP_SELECTION"
 means inheriting the gap. The job where this flag is green is `sweeps`, so scope
 a local run to that job's selection rather than to the whole suite. Added to
 `ORACLE_EXCLUDE`'s modules it raises **5** further failures beyond the
-idempotency oracle's 7, all in `spec_corpus_regressions` and all the same shape
-as those: a test pinning the CDS-end defect that this oracle aborts on.
+idempotency oracle's own, all in `spec_corpus_regressions` and all the same shape
+as those: a test pinning the CDS-end defect that this oracle aborts on. (That 5
+was measured before #1650; it is the denoted-sequence class, which #1650 did not
+close — `sequence_changed` is unchanged at 4/0 — but re-measure rather than quote
+it, for the reason given above.)
 
 **That 5 is about `ORACLE_EXCLUDE`'s modules, and there is a second, unrelated 5
 below.** `test-oracle`'s own selection *excludes* those modules, and arming the

@@ -1,30 +1,53 @@
-//! The corpus's `non_idempotent_outputs` class, dissected: **4 outputs at 3' and
-//! 4 at 5'** that are not their own fixed point.
+//! The corpus's `non_idempotent_outputs` class, dissected — and **now empty: 0
+//! outputs at 3' and 0 at 5'.**
 //!
-//! # HALF OF THIS CLASS IS FIXED — the three `scale-*` rows are gone
+//! # THE WHOLE CLASS IS FIXED, in two changes with two different mechanisms
 //!
-//! It was **7 at 3'**. The branch that adds `general.md:35`'s second conjunct
-//! ("together affecting one amino acid") to `coalesce_coding_frame_separation`
-//! removed the whole of "Mechanism 2 of 2" below: the three
-//! `scale-c3p-sep{120,128,136}-del-del` rows now settle in **one** pass, and the
+//! It was **7 at 3'** and **4 at 5'**.
+//!
+//! **Mechanism 2 of 2 — the three `scale-*` rows — went first.** Adding
+//! `general.md:35`'s second conjunct ("together affecting one amino acid") to
+//! `coalesce_coding_frame_separation` made
+//! `scale-c3p-sep{120,128,136}-del-del` settle in **one** pass, and the
 //! coding-axis onset sweep that found the class on five of six `ACGT` cores finds
-//! it on **none**.
-//!
-//! The mechanism is the one this file identified and is worth stating in its own
-//! terms, because it is the confirmation: the second pass was reaching a shorter
-//! partition than the first *by merging across codon boundaries the exception
-//! never reached*. Remove those merges and the first pass lands where the second
-//! used to. The three second-pass answers this file pinned are unchanged strings
-//! — they are simply now the **first**-pass answers, which is why
-//! [`pass_one_is_already_a_fixed_point_of_per_member_normalization`] can keep the
+//! it on **none**. The second pass had been reaching a shorter partition than the
+//! first *by merging across codon boundaries the exception never reached*; remove
+//! those merges and the first pass lands where the second used to. The three
+//! second-pass answers this file pinned are unchanged strings — they are simply
+//! now the **first**-pass answers, which is why
+//! [`pass_one_is_already_a_fixed_point_of_per_member_normalization`] keeps the
 //! same table of three expected strings, moved one pass earlier.
 //!
-//! **The pins below are flipped, not deleted.** Every one of them now asserts the
-//! fixed point, and says in its own doc what it used to assert and what changed.
-//! `KNOWN_DIVERGENT_INPUTS`'s discipline applies here too: a deviation that has
-//! been fixed must stay visible, so that it cannot silently come back. What is
-//! **not** claimed is that the class is fixed — mechanism 1, the four `cds-end`
-//! families, is untouched at both 3' and 5'.
+//! **Mechanism 1 of 2 — the four `cds-end` rows — went with #1650.** The
+//! sequence-first pass refused every member on the far side of `cds_end`
+//! (`merge::collect_canonical_edits`'s body-region check), so the group was
+//! handed to the per-member pipeline and the *second* pass answered a question
+//! the first could not see. `merge::ExtendedBody` folds `c.*N` onto
+//! `cds_len + N`, the first pass reads both sides, and
+//! `c.*1delinsCTT -> c.72_*1insCT -> c.72delinsCCT` collapses to
+//! `c.*1delinsCTT -> c.72delinsCCT`.
+//!
+//! **The re-typing itself is NOT fixed and is still pinned.** The interbase
+//! immediately 3' of the last CDS base still re-types a two-base insertion into a
+//! `delins` where all 94 others do not —
+//! [`an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins`]
+//! keeps that sweep. #1650 removed the disagreement between two passes; it did
+//! not remove the asymmetry between one interbase and the rest.
+//!
+//! **Nor is the sequence-changing class at the same boundary.**
+//! `spec_conformance_axis`'s `sequence_changed` reads **4 at 3' either side of
+//! #1650** — the `s00-c3m-cds-end-del-ins-*` rows, respelled from
+//! `c.[72delinsTA;*2del]` to `c.*1T>A`, denoting the same wrong bases. That is a
+//! rank-1 defect and a different row set from the seven named here; do not read
+//! this module's zero as covering it.
+//!
+//! **The pins below are flipped, not deleted** — with one deliberate exception,
+//! `norm_cubed_equals_norm_squared_for_every_row_in_the_class`, which instructed
+//! its own deletion once `a == b`; a tombstone comment stands where it was.
+//! Every remaining pin now asserts the fixed point and says in its own doc what
+//! it used to assert and what changed. `KNOWN_DIVERGENT_INPUTS`'s discipline
+//! applies here too: a deviation that has been fixed must stay visible, so that
+//! it cannot silently come back.
 //!
 //! # What this file is for
 //!
@@ -38,22 +61,36 @@
 //! Both are pinned here as refutations, in this repository's "record what was
 //! refuted, not only what was decided" tradition.
 //!
-//! # These pin DEFECTS, not answers
+//! # These pinned DEFECTS, and now pin that they are fixed
 //!
-//! Every expectation below is what ferro produces on
-//! `feat/exhaustive-spec-corpus` at `a8c415ba`, and the idempotency failures are
-//! **wrong**. Idempotency is not a spec clause — it is an invariant of any
+//! The expectations below began as what ferro produced on
+//! `feat/exhaustive-spec-corpus` at `a8c415ba`, where the idempotency failures
+//! were **wrong**. Idempotency is not a spec clause — it is an invariant of any
 //! normalizer, and `FERRO_ASSERT_IDEMPOTENT` exists to police it — so the
-//! citations below bear on the *mechanism*, not on the invariant. When one is
-//! fixed, the assertion moves to the correct value in the same commit, the
-//! `spec_conformance_axis` census is re-blessed in that same commit, and the
-//! comment says so.
+//! citations here bear on the *mechanism*, not on the invariant. The stated
+//! protocol was: when one is fixed, the assertion moves to the correct value in
+//! the same commit, the `spec_conformance_axis` census is re-blessed in that same
+//! commit, and the comment says so. That protocol has now been followed twice,
+//! and the second time emptied the class.
+//!
+//! What remains pinned as a DEFECT is the re-typing sweep and the
+//! `spec_corpus_regressions.rs` rows named above; what is pinned as an ACHIEVED
+//! invariant is idempotency over all seven former-class families.
 //!
 //! # Why this module is in `ORACLE_EXCLUDE`
 //!
 //! It measures over the spec corpus, and `FERRO_ASSERT_IDEMPOTENT` **panics** on
 //! exactly the condition it measures. A panicking row contributes no output, so
-//! an armed run would not redden this file — it would silently empty it. See
+//! an armed run would not redden this file — it would silently empty it.
+//!
+//! **The exclusion is deliberately NOT removed now that the class is empty**, and
+//! that is a scope decision rather than an oversight. The oracle would today have
+//! nothing to panic on, so the exclusion looks removable; but the file still
+//! sweeps 95 interbases per family and builds its own references, and an armed
+//! run that starts panicking mid-sweep would empty the sweep rather than redden
+//! it — the same failure, differently sourced. Removing it belongs to whoever can
+//! measure that, with `tests/it/oracle_exclude_invariant.rs` updated in the same
+//! change. See
 //! `tests/it/oracle_exclude_invariant.rs`, which fails if this module is not
 //! named in `ci.yml`'s `ORACLE_EXCLUDE`.
 
@@ -70,8 +107,15 @@ use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
 // The class, by row id
 // ---------------------------------------------------------------------------
 
-/// The four `cds-end` families. These are the whole 5' set, and four of the
-/// seven at 3'.
+/// The four `cds-end` families. They were the whole 5' set and four of the seven
+/// at 3', and **they are FIXED** — by #1650, which let the sequence-first pass
+/// read a member on either side of `cds_end` so that the answer the second pass
+/// used to supply is now reached by the first.
+///
+/// Kept as a named list for the same reason [`SCALE_FAMILIES`] is: the tests that
+/// pinned their instability now pin that they are fixed points, and the list is
+/// what stops a later generator edit from quietly un-generating the rows that
+/// prove it.
 const CDS_END_FAMILIES: [&str; 4] = [
     "s01-c3m-cds-end-dup-dup-p1-sep0",
     "s01-c3m-cds-end-dup-dup-p1-sep1",
@@ -90,39 +134,26 @@ const SCALE_FAMILIES: [&str; 3] = [
     "scale-c3p-sep136-del-del",
 ];
 
-/// Every family holding a non-idempotent output, in id order.
+/// Every family that ever held a non-idempotent output, in id order.
 ///
-/// **`SCALE_FAMILIES` is deliberately no longer chained in.** It was, and the
-/// three rows it names are the ones the amino-acid precondition fixed; leaving
-/// them here would make every caller iterate an empty spelling list, which is the
-/// silent-vacuity failure `every_scale_family_is_now_a_fixed_point` exists to
-/// make loud instead.
-fn affected_families() -> Vec<&'static str> {
-    let mut ids: Vec<&'static str> = CDS_END_FAMILIES.to_vec();
+/// **The class is now EMPTY, and this list is what keeps that assertable.** Both
+/// halves are fixed — `SCALE_FAMILIES` by the amino-acid precondition, and
+/// `CDS_END_FAMILIES` by #1650 — so no caller iterates "the affected families"
+/// any more. What the tests below iterate instead is *the former class*, and what
+/// they assert is that every spelling of every one of these seven rows is its own
+/// fixed point.
+///
+/// The function this replaces (`affected_families`) returned only the families
+/// still believed broken, which made every consumer go silently vacuous the
+/// moment one was fixed. That happened once already — three `scale-*` rows
+/// stopped being measured and nothing went red — so the direction of the list is
+/// deliberately inverted: it names what must STAY fixed, which cannot empty
+/// itself.
+fn former_class() -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = SCALE_FAMILIES.to_vec();
+    ids.extend_from_slice(&CDS_END_FAMILIES);
     ids.sort_unstable();
     ids
-}
-
-/// The one spelling of `row` whose output is not its own fixed point.
-///
-/// Fails with a message naming the flip rather than panicking on an out-of-bounds
-/// index. A bare `[0]` on this list reported "the defect got fixed" as
-/// `index out of bounds: the len is 0 but the index is 0`, which is the opposite
-/// of the repo's rule that a fixed deviation must fail *legibly* — the same rule
-/// `ferro_produces_the_form_the_spec_states` implements by failing when a listed
-/// input starts matching the spec.
-fn sole_non_idempotent_spelling(row: &Row, direction: ShuffleDirection) -> String {
-    let spellings = non_idempotent_spellings(row, direction);
-    assert_eq!(
-        spellings.len(),
-        1,
-        "{} ({direction:?}): expected exactly one non-idempotent spelling. An EMPTY list means \
-         the defect this test pins is FIXED — flip the pin to assert the fixed point and \
-         re-bless `spec_conformance_axis`'s census in the same commit; more than one means the \
-         class grew. Found {spellings:#?}",
-        row.id
-    );
-    spellings[0].to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -294,128 +325,111 @@ fn each_member_normalized(frame: &Frame, input: &str, direction: ShuffleDirectio
 
 /// **Question.** Which spelling of an affected family is the non-idempotent one?
 ///
-/// **The spanning `delins` respelling, in all 8 cases — never an authored
-/// allele, and never a description with more than one member.** Each of the
-/// four `cds-end` families holds exactly one non-idempotent spelling at 3' and
-/// one at 5' as well, and every one of those 8 is a single-member `delins`
-/// that the corpus generated as a *respelling* of a two-member design.
+/// **None — the class is empty in both directions, and the axis census agrees.**
 ///
-/// **It was 11 across seven families.** The three `scale-*` families no longer
-/// hold one at all; that half is checked by
-/// [`every_scale_family_is_now_a_fixed_point`], immediately below, so the fix
-/// stays asserted rather than merely absent from this loop.
+/// This is the FLIPPED pin. It used to answer "the spanning `delins` respelling,
+/// in all 8 cases", and to require exactly one such spelling per `cds-end`
+/// family. #1650 removed the last of them: the sequence-first pass can now read a
+/// member on either side of `cds_end`, so the respelling settles on the first
+/// pass instead of the second. `spec_conformance_axis`'s `non_idempotent_outputs`
+/// went 4 -> 0 at 3' and 4 -> 0 at 5' in the same commit.
 ///
-/// That is the first thing to know about this class, because it disposes of the
-/// most natural guess. The adjacent, already-pinned defect is that ferro
-/// normalizes cis members independently and concatenates
-/// (`the_cds_end_flush_pair_is_its_two_members_normalized_separately` in
-/// `spec_corpus_regressions.rs`). A defect of member *interaction* cannot be
-/// reached from an input that has no members. Whatever moves these outputs, it
-/// moves them before an allele exists.
-///
-/// The corpus's own census is the denominator: 4 and 4 are the only
-/// non-idempotent outputs across all 58,552 spellings, pinned in
-/// `spec_conformance_axis.rs`. This test does not re-scan the corpus — it names
-/// the rows so a later generator edit cannot un-generate them silently, which is
-/// the #1456/#1460/#1478 blindness class.
+/// **The cross-check against the axis census is the part that still bites, and it
+/// is why this test is flipped rather than deleted.** The scan below is over the
+/// seven *named* rows; the census figure is derived independently, by scanning
+/// all 58,552 spellings. So a family the corpus NEWLY makes non-idempotent moves
+/// the census while this list stays put, and the two disagree — exactly the
+/// coverage the pre-flip version provided, pointed the other way. Zero on both
+/// sides is a real equality here, not a tautology, because the two sides are
+/// computed from different populations.
 #[test]
-fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
-    let mut three_prime = 0usize;
-    let mut five_prime_families: Vec<&str> = Vec::new();
+fn the_non_idempotent_class_is_empty_and_the_axis_census_agrees() {
+    let mut three_prime: Vec<&str> = Vec::new();
+    let mut five_prime: Vec<&str> = Vec::new();
+    let mut rows_scanned = 0usize;
 
-    for id in affected_families() {
+    for id in former_class() {
         let row = row(id);
-
-        let at_three = non_idempotent_spellings(row, ShuffleDirection::ThreePrime);
-        assert_eq!(
-            at_three.len(),
-            1,
-            "{id} must hold exactly one non-idempotent spelling at 3', found {at_three:#?}"
-        );
-        three_prime += at_three.len();
-
-        let spelling = at_three[0];
         assert!(
-            !spelling.contains('['),
-            "{id}: the non-idempotent spelling must be single-member, got `{spelling}`"
+            !row.spellings.is_empty(),
+            "{id}: VACUOUS — the corpus generates no spellings for this row, so scanning it \
+             proves nothing. A generator edit that un-generates a row is the #1456/#1460/#1478 \
+             blindness class and must fail here rather than pass quietly."
         );
-        assert!(
-            spelling.contains("delins"),
-            "{id}: the non-idempotent spelling must be the spanning delins, got `{spelling}`"
-        );
-        assert_ne!(
-            spelling,
-            row.authored_spelling(),
-            "{id}: the non-idempotent spelling must be a RESPELLING, not the authored design"
-        );
-
-        let at_five = non_idempotent_spellings(row, ShuffleDirection::FivePrime);
-        if !at_five.is_empty() {
-            assert_eq!(
-                at_five, at_three,
-                "{id}: the two directions must agree on WHICH spelling moves"
-            );
-            five_prime_families.push(id);
+        if !non_idempotent_spellings(row, ShuffleDirection::ThreePrime).is_empty() {
+            three_prime.push(id);
         }
+        if !non_idempotent_spellings(row, ShuffleDirection::FivePrime).is_empty() {
+            five_prime.push(id);
+        }
+        rows_scanned += 1;
     }
 
-    // Compared against the AXIS census, not against a literal. A literal `7` is
-    // tautological here: the loop runs once per `affected_families()` entry and
-    // each is asserted to hold exactly one spelling, so the count is the length
-    // of a hardcoded list and equals itself whatever the corpus does. The axis
-    // figure is derived independently — by scanning every row rather than the
-    // seven named ones — so a family the corpus NEWLY makes non-idempotent moves
-    // it while this list stays put, and the two disagree. That disagreement is
-    // the coverage; it is the same cross-check
-    // `corpus_prohibited_inputs::every_prohibition_violating_output_is_a_re_emitted_prohibited_input`
-    // makes with `CENSUS_TOTAL`.
     assert_eq!(
-        three_prime,
+        rows_scanned,
+        SCALE_FAMILIES.len() + CDS_END_FAMILIES.len(),
+        "VACUOUS — {rows_scanned} rows were scanned; the former class is seven families"
+    );
+    let empty: Vec<&str> = Vec::new();
+    assert_eq!(
+        three_prime, empty,
+        "a former-class family is non-idempotent again at 3'. This is a REGRESSION, not a \
+         re-bless: re-open the mechanism rather than moving the census."
+    );
+    assert_eq!(
+        five_prime, empty,
+        "a former-class family is non-idempotent again at 5'"
+    );
+    assert_eq!(
+        three_prime.len(),
         crate::spec_conformance_axis::THREE_PRIME.non_idempotent_outputs,
-        "PINNED DEFECT — the named families no longer account for the axis census's 3' \
-         non-idempotent outputs. If the corpus made a new family non-idempotent, name it in \
-         `CDS_END_FAMILIES` here and re-bless the axis in the same commit; if the count FELL, \
-         a family was fixed — move it out of `affected_families` and flip its pins"
+        "the named families no longer account for the axis census's 3' non-idempotent outputs. \
+         If the corpus made a NEW family non-idempotent it will show here as the census being \
+         non-zero while this list is empty — name it and pin its mechanism; do not simply \
+         re-bless the axis."
     );
     assert_eq!(
-        five_prime_families,
-        CDS_END_FAMILIES.to_vec(),
-        "PINNED DEFECT — the 5' class is the four cds-end families and nothing else"
-    );
-    assert_eq!(
-        five_prime_families.len(),
+        five_prime.len(),
         crate::spec_conformance_axis::FIVE_PRIME.non_idempotent_outputs,
-        "the 5' family list no longer accounts for the axis census's 5' non-idempotent outputs"
+        "the named families no longer account for the axis census's 5' non-idempotent outputs"
     );
 }
 
-/// **Question.** The three `scale-*` families were the 3'-only half of this
-/// class. Are they still?
+/// **Question.** The seven families this module is named for were all
+/// non-idempotent. Are they still?
 ///
-/// **No — every spelling of all three is now its own fixed point, in both
-/// directions.** This is the FLIPPED pin: it used to be
-/// [`the_non_idempotent_output_is_always_the_spanning_delins_respelling`]'s job
-/// to find one moving spelling per `scale` row, and there is none to find. The
-/// cause is `coalesce_coding_frame_separation` gaining `general.md:35`'s second
-/// conjunct — "two variants … together affecting one amino acid" — so it stops
-/// merging pairs whose merged span crosses a codon boundary. Those merges were
-/// exactly what the second pass was doing that the first did not.
+/// **No — every spelling of all seven is now its own fixed point, in both
+/// directions.** This is the FLIPPED pin, and it is the one that fails if a fixed
+/// point is lost.
+///
+/// The two halves were fixed by different changes and the distinction is worth
+/// keeping:
+///
+/// * the three `scale-*` rows, by `coalesce_coding_frame_separation` gaining
+///   `general.md:35`'s second conjunct — "two variants … together affecting one
+///   amino acid" — so it stops merging pairs whose merged span crosses a codon
+///   boundary. Those merges were what the second pass did that the first did not.
+/// * the four `cds-end` rows, by #1650's `merge::ExtendedBody`. The re-typing at
+///   the interbase 3' of the last CDS base still happens — see
+///   [`an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins`],
+///   which still pins the sweep — but the first pass now *lands on the re-typed
+///   form directly*, so there is no second pass to disagree with.
 ///
 /// It exists as its own test rather than as an absence, because an absence is
-/// invisible: dropping `SCALE_FAMILIES` from `affected_families` alone would have
-/// left three rows with no assertion on them at all, and a fix that regressed
-/// would then show up only as the axis census moving — a struct diff, in a
-/// different file, with no mechanism attached. That is the
-/// "a committed test that has never executed reads as coverage" trap pointed
-/// backwards.
+/// invisible: dropping a family from an "affected" list alone would leave its
+/// rows with no assertion on them at all, and a regression would then show up
+/// only as the axis census moving — a struct diff, in a different file, with no
+/// mechanism attached. That is the "a committed test that has never executed
+/// reads as coverage" trap pointed backwards, and it has already happened once
+/// here.
 ///
 /// Asserted over **every** spelling of each row and in both directions, not just
-/// over the one that used to move, since the merge the precondition now declines
+/// over the one that used to move, since the merge each precondition now declines
 /// is reachable from any respelling of the design.
 #[test]
-fn every_scale_family_is_now_a_fixed_point() {
+fn every_family_in_the_former_class_is_now_a_fixed_point() {
     let mut checked = 0usize;
-    for id in SCALE_FAMILIES {
+    for id in former_class() {
         let row = row(id);
         let frame = row.frame();
         assert!(
@@ -429,138 +443,107 @@ fn every_scale_family_is_now_a_fixed_point() {
                     normalize(&frame, &once, direction),
                     once,
                     "{id} ({direction:?}): FIXED, and it must stay fixed — `{spelling}` reached \
-                     `{once}`, which must be its own fixed point. Before the amino-acid \
-                     precondition the spanning-delins spelling of this row took two passes to \
-                     settle. If this fires the defect is back: re-bless \
-                     `spec_conformance_axis`'s `non_idempotent_outputs` and say so in the PR."
+                     `{once}`, which must be its own fixed point. If this fires the defect is \
+                     back: re-bless `spec_conformance_axis`'s `non_idempotent_outputs` and say \
+                     so in the PR."
                 );
                 checked += 1;
             }
         }
     }
     assert!(
-        checked >= SCALE_FAMILIES.len() * 2,
+        checked >= (SCALE_FAMILIES.len() + CDS_END_FAMILIES.len()) * 2,
         "VACUOUS — only {checked} spellings were checked across {} rows and two directions",
-        SCALE_FAMILIES.len()
+        SCALE_FAMILIES.len() + CDS_END_FAMILIES.len()
     );
 }
 
-/// **Question.** Does the class reach a fixed point at all, or does it
-/// oscillate? Nobody had checked, and an oscillation would be far more serious
-/// than a two-step settle.
-///
-/// **It settles, at the second pass. `norm^3 == norm^2` for all 8.** The chain
-/// is `x -> a -> b -> b`, with `a != b`: one extra pass, never more, and no
-/// two-cycle. So a caller who normalizes twice gets a stable answer, and the
-/// blast radius is "the first answer is wrong", not "there is no answer".
-///
-/// Asserted in both directions and on both strands, and asserted `a != b` as
-/// well — without that the test would pass vacuously the moment the defect is
-/// fixed, which is the wrong way round for a pin. When it *is* fixed, `a == b`
-/// and this test must be deleted rather than relaxed.
-///
-/// **It was "all 11", and the `a != b` guard did not save it — the LOOP did the
-/// vacating.** When the three `scale-*` rows became fixed points,
-/// `non_idempotent_spellings` returned empty for them, so the guard sat inside a
-/// loop body that never ran: three rows silently stopped being measured and this
-/// test stayed green. The `chains` counter below is the fix, and it is the reason
-/// a guard against vacuity has to be outside the iteration it is guarding.
-#[test]
-fn norm_cubed_equals_norm_squared_for_every_row_in_the_class() {
-    let mut chains = 0usize;
-    for id in affected_families() {
-        let row = row(id);
-        let frame = row.frame();
-        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
-            for spelling in non_idempotent_spellings(row, direction) {
-                let chain = iterate(&frame, spelling, direction, 4);
-                assert_ne!(
-                    chain[0], chain[1],
-                    "{id} ({direction:?}): PINNED DEFECT — `{spelling}` must still move on the \
-                     second pass for this test to be measuring anything. If it no longer moves, \
-                     the defect is FIXED: delete this file's pins and re-bless the census."
-                );
-                assert_eq!(
-                    chain[1], chain[2],
-                    "{id} ({direction:?}): the second pass is NOT a fixed point — this is an \
-                     oscillation or a longer chain, which is a materially worse defect than the \
-                     two-step settle recorded here. Chain: {chain:#?}"
-                );
-                assert_eq!(
-                    chain[2], chain[3],
-                    "{id} ({direction:?}): chain: {chain:#?}"
-                );
-                chains += 1;
-            }
-        }
-    }
-    // Outside the loop, deliberately: the `assert_ne!` above is the pin's own
-    // anti-vacuity guard and it cannot fire when the list it iterates is empty.
-    assert_eq!(
-        chains,
-        CDS_END_FAMILIES.len() * 2,
-        "VACUOUS — {chains} chains were walked, but the four `cds-end` families each hold one \
-         non-idempotent spelling in each of the two directions. A LOWER number means a family \
-         was fixed and this test stopped measuring it silently; flip its pin and re-bless \
-         `spec_conformance_axis` rather than letting the count drift"
-    );
-}
+// `norm_cubed_equals_norm_squared_for_every_row_in_the_class` stood here, and it
+// is **deleted rather than relaxed**, on its own explicit instruction: "When it
+// *is* fixed, `a == b` and this test must be deleted rather than relaxed."
+//
+// It asked whether the class settles or oscillates, and answered `x -> a -> b ->
+// b` with `a != b`. Its load-bearing assertion was that `a != b` — that the row
+// still moves on the second pass — so with the class fixed there is nothing left
+// for it to hold that is not both weaker and already held:
+// `every_family_in_the_former_class_is_now_a_fixed_point` asserts
+// `norm(norm(x)) == norm(x)` over every spelling of all seven rows in both
+// directions, which is that chain collapsed to length one. Keeping the test and
+// dropping its `assert_ne!` would be exactly the guard-weakening this file exists
+// to prevent.
+//
+// Recorded as a comment rather than removed silently, because the QUESTION it
+// answered is still worth having the answer to: the class settled and never
+// oscillated, so #1650 removed one pass rather than breaking a cycle.
 
-/// **Question.** Does the instability cost bases, or only spelling?
+/// **Question.** Did the instability cost bases, or only spelling — and does the
+/// settled answer still denote what the row denotes?
 ///
-/// **Only spelling. Every step of every chain denotes the row's own sequence.**
-/// That is the honest scoping of this class and it is worth stating plainly: it
-/// is representation churn, not the sequence-preservation failure that
+/// **Only spelling, then and now.** The class was representation churn, not the
+/// sequence-preservation failure that
 /// `a_deletion_flush_against_an_insertion_at_the_cds_end_changes_the_sequence`
-/// pins. `background/basics.md:38` — "The recommendations for the description of
+/// pins — and that distinction survives #1650 unchanged, which is the point of
+/// keeping this test rather than deleting it with the chain it used to walk.
+///
+/// **What changed: there is no chain left to walk.** This test used to iterate
+/// three steps of each non-idempotent chain and assert every intermediate denoted
+/// the row's own sequence. With the class fixed there is one step, so it asserts
+/// the property where it now lives — on the settled output of every spelling of
+/// every former-class row, in both directions. The assertion is strictly the same
+/// one; only the population it quantifies over shrank with the defect.
+///
+/// **This is a rank-1 guard and must not be confused with the class #1650 did not
+/// fix.** `spec_conformance_axis`'s `sequence_changed` reads 4 at 3' either side
+/// of #1650: the four `s00-c3m-cds-end-del-ins-*` rows still denote different
+/// bases, respelled from `c.[72delinsTA;*2del]` to `c.*1T>A`. Those are a
+/// *different* row set from the seven scanned here, and none of them is in
+/// `former_class()`. If one ever is, this test fires — which is the whole reason
+/// the denotation check is kept on a class that no longer moves.
+///
+/// `background/basics.md:38` — "The recommendations for the description of
 /// sequence variants are designed to be **stable**, **meaningful**,
 /// **memorable**, and **unequivocal**" — puts stability first among the spec's
-/// four stated values, so a normalizer whose answer depends on how many times it
-/// has been run fails the first of them; but no base is lost.
-///
-/// The consequence for a fix: any of the three forms in a chain is a *legal*
-/// description of the same variant, so choosing between them is the
-/// `canonical-form-choice-when-both-legal` ruling, which is `decided` —
-/// `general.md:157` governs, and ferro derives the description from the
-/// RESULTING SEQUENCE rather than preserving the input's spelling or the
-/// previously-shipped string. That names the direction a fix takes; it does not
-/// make the move free. Moving these strings is still a declared representation
-/// change under this repo's `Representation-Change:` trailer.
+/// four stated values, so a normalizer whose answer depended on how many times it
+/// had been run failed the first of them; but no base was ever lost. Moving these
+/// strings was still a declared representation change under this repo's
+/// `Representation-Change:` trailer, and #1650 declares it.
 #[test]
-fn the_chain_never_changes_the_sequence_it_denotes() {
-    let mut steps_checked = 0usize;
-    for id in affected_families() {
+fn the_settled_output_never_changes_the_sequence_it_denotes() {
+    let mut outputs_checked = 0usize;
+    for id in former_class() {
         let row = row(id);
         let frame = row.frame();
         let expected = row.denoted.as_deref().unwrap_or_else(|| {
             panic!("{id} must carry a denotation for this test to mean anything")
         });
+        assert!(
+            !row.spellings.is_empty(),
+            "{id}: VACUOUS — the corpus generates no spellings for this row"
+        );
         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
-            for spelling in non_idempotent_spellings(row, direction) {
-                for step in iterate(&frame, spelling, direction, 3) {
-                    assert_eq!(
-                        denotation_of(frame.provider(), frame.served(), &step),
-                        Denotation::Sequence(expected.to_string()),
-                        "{id} ({direction:?}): `{step}` denotes different bases from its row — \
-                         that would move this row into the sequence-changing class, which is a \
-                         rank-1 defect and must be reported as such rather than as churn"
-                    );
-                    steps_checked += 1;
-                }
+            for spelling in &row.spellings {
+                let settled = normalize(&frame, spelling, direction);
+                assert_eq!(
+                    denotation_of(frame.provider(), frame.served(), &settled),
+                    Denotation::Sequence(expected.to_string()),
+                    "{id} ({direction:?}): `{spelling}` settled on `{settled}`, which denotes \
+                     different bases from its row — that would move this row into the \
+                     sequence-changing class, which is a rank-1 defect and must be reported as \
+                     such rather than as churn"
+                );
+                outputs_checked += 1;
             }
         }
     }
-    // The same anti-vacuity guard `norm_cubed_equals_norm_squared_for_every_row_in_the_class`
-    // carries, and for the same reason: every assertion here lives inside a loop
-    // over `non_idempotent_spellings`, which goes empty the moment a family is
-    // fixed. Three chains stopped being walked once the `scale-*` rows settled
-    // and nothing went red.
-    assert_eq!(
-        steps_checked,
-        CDS_END_FAMILIES.len() * 2 * 3,
-        "VACUOUS — {steps_checked} chain steps were checked; expected 3 per direction per \
-         `cds-end` family. A lower number means a family was fixed and dropped out of the \
-         iteration silently"
+    // Outside the iteration it guards, for the reason the deleted
+    // `norm_cubed_equals_norm_squared_for_every_row_in_the_class` recorded: a
+    // guard inside a loop over a list that can empty is not a guard. That failure
+    // happened here for real — three chains stopped being walked once the
+    // `scale-*` rows settled, and nothing went red.
+    assert!(
+        outputs_checked >= (SCALE_FAMILIES.len() + CDS_END_FAMILIES.len()) * 2,
+        "VACUOUS — {outputs_checked} settled outputs were checked; expected at least one \
+         spelling per direction across all seven former-class families"
     );
 }
 
@@ -633,26 +616,27 @@ fn an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins() {
             );
         }
 
-        // The exemplar chain, which is what the census counts.
-        let spelling = sole_non_idempotent_spelling(row, ShuffleDirection::ThreePrime);
-        let chain = iterate(&frame, &spelling, ShuffleDirection::ThreePrime, 2);
+        // The exemplar chain, FLIPPED by #1650 — and this is the precise statement
+        // of what #1650 did and did not change, which is why it is asserted in
+        // three parts rather than one.
+        //
+        // The re-typing is UNCHANGED: the sweep above still finds exactly one
+        // interbase that re-types, and feeding the insertion form back still
+        // yields the `delins`. What changed is that the first pass now *lands on*
+        // the `delins` directly, so the two passes no longer disagree about a
+        // description ferro itself produced. One pass was removed; the mechanism
+        // was not.
+        let chain = iterate(
+            &frame,
+            "NM_TEST.1:c.72_*1insCT",
+            ShuffleDirection::ThreePrime,
+            2,
+        );
         assert_eq!(
             chain,
-            vec!["NM_TEST.1:c.72_*1insCT", "NM_TEST.1:c.72delinsCCT"],
-            "{id}: PINNED DEFECT — one variant, one interbase, two typings. Correct behaviour: \
-             both passes emit the same one."
-        );
-
-        // Feeding the FIRST pass's answer back is what re-types it, so the two
-        // passes disagree about a description ferro itself produced.
-        assert_eq!(
-            normalize(
-                &frame,
-                "NM_TEST.1:c.72_*1insCT",
-                ShuffleDirection::ThreePrime
-            ),
-            "NM_TEST.1:c.72delinsCCT",
-            "{id}: the insertion form is not a fixed point"
+            vec!["NM_TEST.1:c.72delinsCCT", "NM_TEST.1:c.72delinsCCT"],
+            "{id}: the insertion form must re-type ONCE and then stand still. Two distinct \
+             entries here means the re-typing has become non-idempotent again."
         );
         assert_eq!(
             normalize(
@@ -661,8 +645,20 @@ fn an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins() {
                 ShuffleDirection::ThreePrime
             ),
             "NM_TEST.1:c.72delinsCCT",
-            "{id}: the delins form IS a fixed point, which is why the chain settles at two"
+            "{id}: the delins form IS a fixed point"
         );
+
+        // And the row's own spellings reach it in ONE pass, which is the flip
+        // itself: before #1650 the spanning-`delins` respelling of this design
+        // emitted `c.72_*1insCT` here and needed a second pass to re-type it.
+        for spelling in &row.spellings {
+            let once = normalize(&frame, spelling, ShuffleDirection::ThreePrime);
+            assert!(
+                is_fixed_point(&frame, &once, ShuffleDirection::ThreePrime),
+                "{id}: `{spelling}` settled on `{once}`, which is not its own fixed point — \
+                 the two-pass chain this test used to pin is back"
+            );
+        }
     }
 }
 
