@@ -32,6 +32,7 @@ mod issue_1715_rna_alignment_symbol_reach;
 mod issue_1748_noncoding_axis_zones;
 mod issue_1764_hgvs_to_vcf_continues;
 mod issue_1767_unknown_offset_splice_classifiers;
+mod issue_1841_option_returning_splice_classifiers;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;

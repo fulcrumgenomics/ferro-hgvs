@@ -267,19 +267,28 @@ pub enum IntronicRegion {
 }
 
 impl IntronicRegion {
-    /// Create from a *measured* offset value.
+    /// Classify an offset into its distance band, or decline.
     ///
-    /// The argument is a distance from the exon boundary, so the unknown-offset
-    /// sentinels are out of domain: screen them with
-    /// [`CdsPos::has_unknown_offset`] / [`TxPos::has_unknown_offset`] before
-    /// calling, as [`IntronicRegion::from_cds_pos`] and
-    /// [`IntronicRegion::from_tx_pos`] do. The magnitude is taken with
-    /// `unsigned_abs`, so no input can overflow it (#1767); a sentinel passed
-    /// here anyway lands in `DeepIntronic`, which is a distance claim its input
-    /// does not support.
-    pub fn from_offset(offset: i64) -> Self {
+    /// Returns `None` for the unknown-offset sentinels (`+?` / `-?`, carried as
+    /// [`OFFSET_UNKNOWN_POSITIVE`] / [`OFFSET_UNKNOWN_NEGATIVE`]). Every variant
+    /// of this enum names a **distance band**, and a sentinel states that the
+    /// distance is unknown, so none of the four is a true answer for it.
+    ///
+    /// #1767 fixed the arithmetic here — the magnitude is taken with
+    /// `unsigned_abs`, so no `i64` can overflow it — but left the signature
+    /// promising an answer this function cannot always give: a sentinel landed
+    /// in `DeepIntronic`, a distance claim its input does not support. #1841
+    /// took that break. The precondition used to be documented ("screen with
+    /// `has_unknown_offset` before calling"); it is now in the type.
+    ///
+    /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
+    /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
+    pub fn from_offset(offset: i64) -> Option<Self> {
+        if crate::hgvs::parser::position::is_unknown_offset(offset) {
+            return None;
+        }
         let abs_offset = offset.unsigned_abs();
-        if abs_offset <= 2 {
+        Some(if abs_offset <= 2 {
             Self::CanonicalSpliceSite
         } else if abs_offset <= 20 {
             Self::ExtendedSpliceRegion
@@ -287,28 +296,29 @@ impl IntronicRegion {
             Self::NearSpliceSite
         } else {
             Self::DeepIntronic
-        }
+        })
     }
 
     /// Create from a CDS position.
     ///
-    /// Returns `None` for an unknown offset — every variant of this enum names
-    /// a distance band, and a sentinel supports none of them (#1767).
+    /// `None` when the position is not intronic, and when its offset is unknown.
+    /// The unknown-offset rule is [`IntronicRegion::from_offset`]'s own since
+    /// #1841, so this no longer screens for it separately — one rule, one site,
+    /// which is the discipline #1767 applied to `is_unknown_offset` itself.
+    ///
+    /// The sibling ladder [`IntronicConsequence`] still screens in *its*
+    /// position constructors rather than in a scalar entry point, and that
+    /// asymmetry is deliberate rather than a missed cleanup: it exposes no
+    /// public `from_offset`, so there is no scalar site to move the rule into.
     pub fn from_cds_pos(pos: &CdsPos) -> Option<Self> {
-        if pos.has_unknown_offset() {
-            return None;
-        }
-        pos.offset.map(Self::from_offset)
+        pos.offset.and_then(Self::from_offset)
     }
 
     /// Create from a transcript position.
     ///
     /// Declines an unknown offset, as [`IntronicRegion::from_cds_pos`] does.
     pub fn from_tx_pos(pos: &TxPos) -> Option<Self> {
-        if pos.has_unknown_offset() {
-            return None;
-        }
-        pos.offset.map(Self::from_offset)
+        pos.offset.and_then(Self::from_offset)
     }
 }
 
@@ -536,27 +546,47 @@ mod tests {
     fn test_intronic_region_from_offset() {
         assert_eq!(
             IntronicRegion::from_offset(1),
-            IntronicRegion::CanonicalSpliceSite
+            Some(IntronicRegion::CanonicalSpliceSite)
         );
         assert_eq!(
             IntronicRegion::from_offset(-2),
-            IntronicRegion::CanonicalSpliceSite
+            Some(IntronicRegion::CanonicalSpliceSite)
         );
         assert_eq!(
             IntronicRegion::from_offset(10),
-            IntronicRegion::ExtendedSpliceRegion
+            Some(IntronicRegion::ExtendedSpliceRegion)
         );
         assert_eq!(
             IntronicRegion::from_offset(-15),
-            IntronicRegion::ExtendedSpliceRegion
+            Some(IntronicRegion::ExtendedSpliceRegion)
         );
         assert_eq!(
             IntronicRegion::from_offset(35),
-            IntronicRegion::NearSpliceSite
+            Some(IntronicRegion::NearSpliceSite)
         );
         assert_eq!(
             IntronicRegion::from_offset(100),
-            IntronicRegion::DeepIntronic
+            Some(IntronicRegion::DeepIntronic)
+        );
+    }
+
+    /// The #1841 break: the sentinels are out of the enum's domain, and the
+    /// signature now says so. `i64::MIN + 1` and `i64::MAX - 1` are the
+    /// discriminating neighbours — they are *not* sentinels, so they must still
+    /// classify (as `DeepIntronic`), which is what keeps the decline keyed on
+    /// the sentinel rather than on "a very large magnitude".
+    #[test]
+    fn test_intronic_region_from_offset_declines_an_unknown_offset() {
+        assert_eq!(IntronicRegion::from_offset(i64::MIN), None);
+        assert_eq!(IntronicRegion::from_offset(i64::MAX), None);
+
+        assert_eq!(
+            IntronicRegion::from_offset(i64::MIN + 1),
+            Some(IntronicRegion::DeepIntronic)
+        );
+        assert_eq!(
+            IntronicRegion::from_offset(i64::MAX - 1),
+            Some(IntronicRegion::DeepIntronic)
         );
     }
 

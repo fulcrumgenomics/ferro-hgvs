@@ -929,6 +929,29 @@ pub struct IntronPosition {
 // `crate::hgvs::parser::position::is_unknown_offset` first — none of these
 // predicates can decline, and `is_deep_intronic` answers `true` for a sentinel,
 // which is a ">50 bp" claim the input does not support.
+//
+// **Two of the items below are NOT `bool`, so "it cannot decline" is not the
+// reason they were left (#1841).** That PR made `IntronicRegion::from_offset`
+// and `EffectPredictor::classify_splice_variant` return `Option`, on the ground
+// that a value naming a distance band is not a true answer for a sentinel, and
+// it scoped itself to the two entry points whose return type was in the way.
+// The scope, not the shape, is why these stayed:
+//
+// - `splice_site_type` returns `SpliceSiteType` — five distance bands, the same
+//   shape as `IntronicRegion` and no more able to state one for a sentinel. It
+//   would take the identical `Option` treatment; it was simply outside an
+//   approved break. Do not read the `bool` argument above as covering it.
+// - `distance_from_donor` / `distance_from_acceptor` ALREADY return `Option<u64>`,
+//   so they have a decline channel and do not use it. Worse than a fabricated
+//   band: the cross-boundary arm computes `intron_length - offset.unsigned_abs()`,
+//   an unchecked `u64` subtraction that underflows for ANY magnitude exceeding
+//   the intron — panicking under `overflow-checks` and wrapping to a colossal
+//   "distance" in release. `unsigned_abs` closed the ladder's overflow in #1767
+//   and left this subtraction untouched, so the hardening pass is incomplete
+//   here rather than deliberately scoped.
+//
+// Neither is reachable from a string entry point today; both are reachable by a
+// library caller, because every field of this struct is `pub`.
 impl IntronPosition {
     /// Check if this is a deep intronic position (>50bp from nearest exon)
     pub fn is_deep_intronic(&self) -> bool {

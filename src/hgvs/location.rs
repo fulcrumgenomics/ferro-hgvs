@@ -795,12 +795,20 @@ impl IvsPos {
     ///
     /// `unsigned_abs` rather than `abs`: [`IvsNotation::to_ivs`] maps a `CdsPos` /
     /// `TxPos` offset straight in, so an unknown offset (`c.100-?`) reaches
-    /// this predicate, and `i64::MIN.abs()` overflows (#1767). As with
-    /// [`IntronicRegion::from_offset`], this reads a *measured* distance —
-    /// screen sentinels before asking. `IvsPos` carries a bare `i64`, so the
-    /// applicable screen is the scalar [`is_unknown_offset`], not
-    /// [`CdsPos::has_unknown_offset`] / [`TxPos::has_unknown_offset`], which a
-    /// caller holding only an `IvsPos` no longer has.
+    /// this predicate, and `i64::MIN.abs()` overflows (#1767). This reads a
+    /// *measured* distance, so screen sentinels before asking. `IvsPos` carries
+    /// a bare `i64`, so the applicable screen is the scalar
+    /// [`is_unknown_offset`], not [`CdsPos::has_unknown_offset`] /
+    /// [`TxPos::has_unknown_offset`], which a caller holding only an `IvsPos`
+    /// no longer has.
+    ///
+    /// **This is deliberately unlike [`IntronicRegion::from_offset`], which
+    /// since #1841 declines a sentinel rather than asking the caller to screen.**
+    /// The two are not the same shape and the difference is not an oversight: a
+    /// `bool` predicate has no way to say "no answer", so pushing the rule in
+    /// here would only move the fabricated answer from `DeepIntronic` to
+    /// `false`. Making these decline needs its own decision about what the four
+    /// `IvsPos`/`IntronPosition` predicates return.
     ///
     /// [`IntronicRegion::from_offset`]: crate::convert::noncoding::IntronicRegion::from_offset
     /// [`is_unknown_offset`]: crate::hgvs::parser::position::is_unknown_offset

@@ -19,9 +19,13 @@
 //! The contract applied here is the one `CdsPos::has_unknown_offset` already
 //! documents (closing #1087): the sentinels denote an unknown position
 //! unbounded in one direction, so no distance can be derived from them at all.
-//! Classifiers that can say so return `None`; classifiers whose return type
-//! cannot decline fall back to the plain "intronic" answer, which asserts no
-//! distance.
+//! **Every** classifier now says so by returning `None` — #1767 could only give
+//! that answer where the return type already admitted it, and #1841 took the
+//! public-API break for the two that did not (`IntronicRegion::from_offset` and
+//! `EffectPredictor::classify_splice_variant`). The guards that used to pin the
+//! fall-back "intronic" answer for those two now pin the decline; see
+//! `tests/it/issue_1841_option_returning_splice_classifiers.rs` for the
+//! break's own guards.
 //!
 //! [`OFFSET_UNKNOWN_POSITIVE`]: ferro_hgvs::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
 //! [`OFFSET_UNKNOWN_NEGATIVE`]: ferro_hgvs::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
@@ -174,30 +178,22 @@ fn an_unknown_offset_is_not_a_clinically_significant_splice_position() {
     }
 }
 
-/// `classify_splice_variant` returns a bare `ProteinEffect`, so it cannot
-/// decline. It must still refuse to claim a splice site: `IntronVariant` is the
-/// weakest true statement about a position that is known to be intronic and
-/// whose distance is unknown.
+/// The property #1767 was filed for, stated in the form it takes after #1841
+/// widened the answer from "the weakest true statement" to "no statement".
+///
+/// What must never happen is a *splice-site* claim — that was the release-mode
+/// defect (`SpliceAcceptorVariant`/HIGH). A decline satisfies that strictly more
+/// than `IntronVariant` did, so this guard is not weakened by the change; it is
+/// the same claim asserted against a return type that can carry it.
 #[test]
 fn classify_splice_variant_makes_no_distance_claim_for_an_unknown_offset() {
     let predictor = EffectPredictor::new();
     for offset in SENTINELS {
-        let effect = predictor.classify_splice_variant(offset);
-        assert_eq!(
-            effect.consequences,
-            vec![Consequence::IntronVariant],
+        assert!(
+            predictor.classify_splice_variant(offset).is_none(),
             "an unknown offset ({offset}) must not be reported as a splice \
-             donor/acceptor or splice-region variant"
-        );
-        assert_eq!(
-            effect.impact,
-            Impact::Modifier,
-            "an unknown offset ({offset}) cannot support a HIGH impact call"
-        );
-        assert_eq!(
-            effect.intronic_offset,
-            Some(offset),
-            "the sentinel is still reported, so a caller can tell `unknown` from `far`"
+             donor/acceptor or splice-region variant, and since #1841 it is not \
+             reported as anything"
         );
     }
 }
@@ -303,22 +299,29 @@ fn the_coordinate_validators_decline_an_unknown_offset() {
 fn measured_offsets_are_unaffected() {
     let predictor = EffectPredictor::new();
 
-    assert_eq!(
-        predictor.classify_splice_variant(1).consequences,
-        vec![Consequence::SpliceDonorVariant]
-    );
-    assert_eq!(
-        predictor.classify_splice_variant(-2).consequences,
-        vec![Consequence::SpliceAcceptorVariant]
-    );
-    assert_eq!(
-        predictor.classify_splice_variant(5).consequences,
-        vec![Consequence::SpliceRegionVariant]
-    );
-    assert_eq!(
-        predictor.classify_splice_variant(50).consequences,
-        vec![Consequence::IntronVariant]
-    );
+    // `.expect` rather than a bare unwrap: since #1841 a `None` here would mean
+    // the decline had widened past the sentinels, which is the failure worth
+    // naming.
+    let classify = |offset: i64| {
+        predictor
+            .classify_splice_variant(offset)
+            .unwrap_or_else(|| panic!("a measured offset ({offset}) must still classify"))
+    };
+
+    // Impact is asserted alongside the consequence because it is the half the
+    // #1767 defect got wrong (HIGH for a position stating no distance), and
+    // because this file's only previous `Impact` assertion was on the sentinel
+    // — which since #1841 has no effect to carry one.
+    for (offset, consequence, impact) in [
+        (1, Consequence::SpliceDonorVariant, Impact::High),
+        (-2, Consequence::SpliceAcceptorVariant, Impact::High),
+        (5, Consequence::SpliceRegionVariant, Impact::Low),
+        (50, Consequence::IntronVariant, Impact::Modifier),
+    ] {
+        let effect = classify(offset);
+        assert_eq!(effect.consequences, vec![consequence]);
+        assert_eq!(effect.impact, impact);
+    }
 
     assert_eq!(
         IntronicConsequence::from_cds_pos(&cds_with_offset(-2)),
