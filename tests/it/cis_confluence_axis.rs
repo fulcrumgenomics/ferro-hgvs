@@ -97,6 +97,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use rayon::prelude::*;
 use serde::Deserialize;
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
@@ -504,15 +505,37 @@ struct Divergence {
     outputs: Vec<String>,
 }
 
-fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
-    let classes = &corpus().classes;
-    let mut census = Census::default();
-    let mut worst: Vec<Divergence> = Vec::new();
+impl Census {
+    /// Fold another census in. Every field is a count over a partition of the
+    /// classes, so summing is exact rather than approximate — which is what
+    /// makes [`measure`]'s per-group split safe.
+    fn absorb(&mut self, other: &Census) {
+        self.classes += other.classes;
+        self.spellings += other.spellings;
+        self.declined += other.declined;
+        self.converged += other.converged;
+        self.split_two += other.split_two;
+        self.split_three += other.split_three;
+        self.split_more += other.split_more;
+        self.underdetermined += other.underdetermined;
+        self.sequence_changed += other.sequence_changed;
+    }
+}
 
-    // Classes are sorted by an id that starts with the core index and the axis,
-    // so every class sharing a reference is contiguous. Building one provider
-    // and one normalizer per group instead of per class is the difference
-    // between this running in seconds and in minutes.
+/// How many divergent classes the failure message names. Applied per group and
+/// again to the concatenation, which is what keeps the parallel result
+/// byte-identical to a serial one — see [`measure`].
+const WORST_LIMIT: usize = 10;
+
+/// The contiguous runs of `classes` that share one reference.
+///
+/// Classes are sorted by an id that starts with the core index and the axis, so
+/// every class sharing a reference is contiguous. Building one provider and one
+/// normalizer per group instead of per class is the difference between this
+/// running in seconds and in minutes; [`measure`] additionally runs the groups
+/// concurrently, which it can do only because each one owns its provider.
+fn reference_groups(classes: &[Class]) -> Vec<&[Class]> {
+    let mut groups = Vec::new();
     let mut start = 0usize;
     while start < classes.len() {
         let mut end = start + 1;
@@ -522,60 +545,106 @@ fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
         {
             end += 1;
         }
-        let (provider, reference) = reference_for(&classes[start]);
-        let normalizer = Normalizer::with_config(
-            provider.clone(),
-            NormalizeConfig::default().with_direction(direction),
-        );
-
-        for class in &classes[start..end] {
-            census.classes += 1;
-            let expected = expected_sequence(class);
-            let mut outputs: BTreeSet<String> = BTreeSet::new();
-            let mut normalized_spellings = 0usize;
-            for spelling in &class.spellings {
-                census.spellings += 1;
-                let Ok(variant) = parse_hgvs(spelling) else {
-                    census.declined += 1;
-                    continue;
-                };
-                let normalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    normalizer.normalize(&variant)
-                }));
-                let output = match normalized {
-                    Ok(Ok(value)) => value.to_string(),
-                    _ => {
-                        census.declined += 1;
-                        continue;
-                    }
-                };
-                normalized_spellings += 1;
-                if apply_with(&provider, &reference, &output).as_deref() != Some(expected.as_str())
-                {
-                    census.sequence_changed += 1;
-                }
-                outputs.insert(output);
-            }
-
-            if normalized_spellings < 2 {
-                census.underdetermined += 1;
-                continue;
-            }
-            match outputs.len() {
-                1 => census.converged += 1,
-                2 => census.split_two += 1,
-                3 => census.split_three += 1,
-                _ => census.split_more += 1,
-            }
-            if outputs.len() > 1 && worst.len() < 10 {
-                worst.push(Divergence {
-                    id: class.id.clone(),
-                    outputs: outputs.into_iter().collect(),
-                });
-            }
-        }
+        groups.push(&classes[start..end]);
         start = end;
     }
+    groups
+}
+
+/// Census one reference group. Owns its provider and normalizer, reads nothing
+/// outside its own slice, and so is safe to run alongside its siblings.
+fn measure_group(group: &[Class], direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
+    let mut census = Census::default();
+    let mut worst: Vec<Divergence> = Vec::new();
+
+    let (provider, reference) = reference_for(&group[0]);
+    let normalizer = Normalizer::with_config(
+        provider.clone(),
+        NormalizeConfig::default().with_direction(direction),
+    );
+
+    for class in group {
+        census.classes += 1;
+        let expected = expected_sequence(class);
+        let mut outputs: BTreeSet<String> = BTreeSet::new();
+        let mut normalized_spellings = 0usize;
+        for spelling in &class.spellings {
+            census.spellings += 1;
+            let Ok(variant) = parse_hgvs(spelling) else {
+                census.declined += 1;
+                continue;
+            };
+            let normalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                normalizer.normalize(&variant)
+            }));
+            let output = match normalized {
+                Ok(Ok(value)) => value.to_string(),
+                _ => {
+                    census.declined += 1;
+                    continue;
+                }
+            };
+            normalized_spellings += 1;
+            if apply_with(&provider, &reference, &output).as_deref() != Some(expected.as_str()) {
+                census.sequence_changed += 1;
+            }
+            outputs.insert(output);
+        }
+
+        if normalized_spellings < 2 {
+            census.underdetermined += 1;
+            continue;
+        }
+        match outputs.len() {
+            1 => census.converged += 1,
+            2 => census.split_two += 1,
+            3 => census.split_three += 1,
+            _ => census.split_more += 1,
+        }
+        if outputs.len() > 1 && worst.len() < WORST_LIMIT {
+            worst.push(Divergence {
+                id: class.id.clone(),
+                outputs: outputs.into_iter().collect(),
+            });
+        }
+    }
+
+    (census, worst)
+}
+
+/// Census one direction over both axes, one reference group per rayon task.
+///
+/// **The result is byte-identical to the serial walk, not merely equivalent**,
+/// which is the only basis on which a pinned census may be parallelized at all:
+///
+/// * every `Census` field is a count over a partition of the classes, so
+///   [`Census::absorb`] over the groups is exact and order-free;
+/// * `par_iter().collect()` preserves *input* order, so the per-group results
+///   are folded in corpus order however they finish;
+/// * `worst` is "the first [`WORST_LIMIT`] divergent classes in corpus order".
+///   Each group keeps its own first `WORST_LIMIT`, and concatenating the groups
+///   in corpus order and truncating again yields exactly that set — the serial
+///   loop's global cap can only have kept the same ones.
+///
+/// Nothing is shared across tasks: each group builds its own `MockProvider` and
+/// `Normalizer` (it already did — that is the per-group loop's whole point), and
+/// the only borrow that crosses is the immutable corpus slice. The normalization
+/// oracles' recursion guard is a thread-local, so it is per-task too.
+fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
+    let groups = reference_groups(&corpus().classes);
+
+    let per_group: Vec<(Census, Vec<Divergence>)> = groups
+        .par_iter()
+        .map(|group| measure_group(group, direction))
+        .collect();
+
+    let mut census = Census::default();
+    let mut worst: Vec<Divergence> = Vec::new();
+    for (group_census, group_worst) in per_group {
+        census.absorb(&group_census);
+        worst.extend(group_worst);
+    }
+    worst.truncate(WORST_LIMIT);
 
     (census, worst)
 }
