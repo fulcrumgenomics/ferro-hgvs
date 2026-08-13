@@ -514,19 +514,31 @@
 //! it, not a widening of it. That disjointness is pinned as a property of the
 //! corpus by `the_coding_axis_merge_population_is_what_it_says_it_is`.
 //!
-//! **Pinned at 0 / 0, measured over 997 rows in each direction.** The zero is a
-//! real negative result, not an absence. Re-measured on `origin/main`
-//! `e98fa77e`, which is **after #1698** — see the paragraph below. (The table
-//! was first derived at `1ea75334` and reproduced cell-for-cell after the
-//! rebase; `git diff 1ea75334 origin/main -- src/` is empty, so the arms could
-//! not have moved.)
+//! **Pinned at 8 / 8, measured over 997 rows in each direction, and that pin is
+//! a DISCLOSURE.** It read 0 / 0 before #1616. The eight rows, why they are a
+//! `general.md:34` deviation rather than a shape that clause fails to reach, and
+//! what a rise or a fall means, are on
+//! `rulings[coding-axis-merges-are-a-disclosed-general-34-deviation]` and are
+//! restated once beside the pin in [`THREE_PRIME`] — nowhere else. Read one of
+//! those two before arguing about the number.
+//!
+//! **The arm table below is a `main`-base measurement and is left as one.**
+//! Re-measured on `origin/main` `e98fa77e`, which is **after #1698** — see the
+//! paragraph below. (The table was first derived at `1ea75334` and reproduced
+//! cell-for-cell after the rebase; `git diff 1ea75334 origin/main -- src/` is
+//! empty, so the arms could not have moved.) Its `unset` row is what the shipped
+//! rule did **before** this branch; only that row has moved, to 8 / 8, and the
+//! other three arms were not re-measured here. They are not refreshed rather
+//! than being re-derived on a guess, which is the discipline the #1698 paragraph
+//! below exists to enforce.
 //!
 //! | evaluation arm (`FERRO_PARTITION`) | 3' | 5' |
 //! |---|---|---|
-//! | unset — the shipped rule | **0** of 997 | **0** of 997 |
-//! | `shadow` | 0 | 0 |
-//! | `canonical` | 1 | 1 |
-//! | `canonical-coalesced` | **3** | **3** |
+//! | unset — the shipped rule, **on `origin/main`** | 0 of 997 | 0 of 997 |
+//! | unset — the shipped rule, **on this branch (#1616)** | **8** of 997 | **8** of 997 |
+//! | `shadow` (on `origin/main`) | 0 | 0 |
+//! | `canonical` (on `origin/main`) | 1 | 1 |
+//! | `canonical-coalesced` (on `origin/main`) | **3** | **3** |
 //!
 //! The 3 are one row at a separation of 3 and two at a separation of 2, all of
 //! them two-member designs collapsing to one member — every one a row
@@ -559,10 +571,16 @@
 //! takes the `canonical-coalesced` arm to the `canonical` figure exactly.
 //! Removing the arm gate so the pass runs on the shipped rule takes the shipping
 //! arm off zero. (Both figures were measured pre-#1698 — 122 -> 1, and 0 -> 110
-//! (3') / 113 (5') — so quote the direction, not the numbers.) The shipped
-//! zero is the pass not running, not the instrument failing to look. Since
-//! neither mutation ships, `the_coding_axis_merge_counter_can_observe_a_merge`
-//! is the positive control that keeps a blinded numerator from passing CI.
+//! (3') / 113 (5') — so quote the direction, not the numbers.) That was the
+//! evidence, when the shipped figure was zero, that the zero was the coalesce
+//! pass not running rather than the instrument failing to look. **#1616 has
+//! since taken the shipped arm to 8 by a different route** — the scoping of the
+//! payload-coincidence carve-out and the refusal to emit an unexamined block —
+//! so the counter is now witnessed moving on the arm that ships, which is
+//! stronger evidence than either mutation was. The positive control
+//! `the_coding_axis_merge_counter_can_observe_a_merge` is kept regardless: a
+//! non-zero pin is satisfied by a numerator wired to any constant, not only to
+//! zero.
 //!
 //! # The honest-zero discipline is enforced, not described
 //!
@@ -753,7 +771,37 @@ pub(crate) const THREE_PRIME: Census = Census {
     guard_evaluations: 210,
     // -- instruments (#1710), kept across the #1616 rebase --
     coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // **Re-pinned 0 -> 8 by #1616, and this pin IS the disclosure.** Operator
+    // ruling, 2026-08-13, recorded as
+    // `rulings[coding-axis-merges-are-a-disclosed-general-34-deviation]`: the
+    // eight rows are a `general.md:34` deviation, stated plainly and not
+    // reasoned away, and `separation-rule-force-modal-or-negation` grades that
+    // clause rule 2, whose remedy is to disclose and pin with a tripwire rather
+    // than to block a release. The eight, all pure deletions deriving to ONE
+    // member with `retained == payload length` and `sequence_changed: 0` — so
+    // nothing is inserted and `DNA/delins.md:47` has no gap to reach:
+    //
+    // | row | span | deleted | retained |
+    // |---|---:|---:|---:|
+    // | s01-c1-m3-all-del-p1-sep2  |  7 |  3 |  4 |
+    // | s01-c1-m3-all-del-p2-sep2  | 10 |  6 |  4 |
+    // | s01-c1-m3-all-del-p2-sep8  | 22 |  6 | 16 |
+    // | s01-c1-m4-all-del-p2-sep2  | 14 |  8 |  6 |
+    // | s01-c3m-m3-all-del-p4-sep3 | 18 | 12 |  6 |
+    // | s01-c3m-m4-all-del-p4-sep3 | 25 | 16 |  9 |
+    // | s01-c3p-m3-all-del-p4-sep3 | 18 | 12 |  6 |
+    // | s01-c3p-m4-all-del-p4-sep3 | 25 | 16 |  9 |
+    //
+    // TWO rows carry more retained than deleted — `p2-sep8` at 16 > 6 and
+    // `p1-sep2` at 4 > 3 — not one, which an earlier note claimed; the
+    // correction matters because "only `sep8` is lopsided" makes that row look
+    // like a lone outlier to argue separately, and it is not one.
+    //
+    // A rise above 8 must NAME THE CLAUSE that carried it, in the same terms the
+    // ratchets above demand. A fall is equally a finding: a row that gains a
+    // gap-bearing member leaves the deviation set on `delins.md:47`'s reach, so
+    // this is a set to re-derive and not a constant to defend.
+    coding_axis_separation_two_or_more_merges: 8,
 };
 
 /// The rows that still merge a frameless separation of one, named.
@@ -850,7 +898,13 @@ pub(crate) const FIVE_PRIME: Census = Census {
     guard_evaluations: 210,
     // -- instruments (#1710), kept across the #1616 rebase --
     coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // **Re-pinned 0 -> 8 by #1616, the mirror of [`THREE_PRIME`]'s** — see the
+    // table and the ruling citation there rather than a second copy of them
+    // here. The two directions agreeing on the same eight ids is the
+    // cross-check: the merge is decided by the partition, which is direction-
+    // independent, so a figure appearing at one direction and not the other
+    // would be a claim about the shuffle rather than about the partitioner.
+    coding_axis_separation_two_or_more_merges: 8,
 };
 
 /// The corpus's shape, independent of any property measured over it.
@@ -1103,16 +1157,27 @@ pub(crate) struct Census {
     /// is taken on a parsed output; `unparseable_outputs` is the counter for
     /// that and is pinned at 0.
     ///
-    /// # Pinned at zero in both directions, and that zero is a measurement
+    /// # Pinned at EIGHT in both directions since #1616, and that pin is a disclosure
     ///
-    /// The pass that merges this population under the canonical-coalesced
-    /// evaluation arm — `merge::coalesce_payload_alignment_split`, reached only
-    /// when `payload_coalesce_applies` sees `PartitionRule::CanonicalCoalesced`
-    /// — does not run on the shipped rule, so the shipping arm merges none of
-    /// these rows. That is a mechanical reason rather than an empirical
-    /// coincidence, and the counter is separately shown able to move: see the
-    /// module docs' arm table and
-    /// [`the_coding_axis_merge_counter_can_observe_a_merge`].
+    /// It was pinned at zero, for a mechanical reason: the pass that merges this
+    /// population under the canonical-coalesced evaluation arm —
+    /// `merge::coalesce_payload_alignment_split`, reached only when
+    /// `payload_coalesce_applies` sees `PartitionRule::CanonicalCoalesced` — does
+    /// not run on the shipped rule.
+    ///
+    /// **#1616 puts eight rows here by a different route**, and the operator
+    /// ruling of 2026-08-13 records what they are:
+    /// `rulings[coding-axis-merges-are-a-disclosed-general-34-deviation]` holds
+    /// that they ARE a `general.md:34` deviation — stated plainly, not reasoned
+    /// away — and that because
+    /// `separation-rule-force-modal-or-negation` grades that clause rule 2, the
+    /// remedy is to disclose and pin with a tripwire rather than to block. **This
+    /// pin is that tripwire.** The eight ids, their spans and their derived
+    /// member counts are tabulated once, beside [`THREE_PRIME`]'s pin.
+    ///
+    /// A rise above eight must name the clause that carried it. A fall is a
+    /// finding too: a row that gains a gap-bearing member leaves the deviation
+    /// set, because `DNA/delins.md:47` then reaches it.
     pub(crate) coding_axis_separation_two_or_more_merges: usize,
 }
 
@@ -2029,10 +2094,10 @@ fn the_corpus_has_the_shape_its_censuses_are_measured_over() {
 /// A **positive control** for the coding-axis merge counter: it must be able to
 /// observe a merge.
 ///
-/// # Why a zero pin needs one, and why nothing else supplies it
+/// # Why a pinned counter needs one, and why nothing else supplies it
 ///
-/// `coding_axis_separation_two_or_more_merges` is pinned at **0**, so every
-/// other test that mentions it is satisfied by a numerator that can never
+/// `coding_axis_separation_two_or_more_merges` was pinned at **0**, so every
+/// other test that mentions it was satisfied by a numerator that could never
 /// increment. Measured as a mutation matrix over the four tests that claim to
 /// cover the counter — the two censuses, the corpus-shape test and
 /// `spec_corpus`'s population test — hard-wiring
@@ -2040,6 +2105,12 @@ fn the_corpus_has_the_shape_its_censuses_are_measured_over() {
 /// at 0" and "wired to 0" were the same observation, which is exactly what this
 /// module's own thesis says an instrument must not be: *a counter nobody has
 /// seen move is not an instrument*.
+///
+/// **#1616 took the pin to 8, and that does not retire this control.** A pin of
+/// 8 is satisfied by a numerator wired to any constant that happens to be 8, and
+/// it is *specifically* satisfied by one that never observes the ninth row. What
+/// this test asserts is the predicate's behaviour on individual rows, which no
+/// aggregate pin can reach at any value.
 ///
 /// The other five mutations in that matrix are caught: predicate always-true,
 /// predicate always-false (as VACUOUS), the separation floor weakened to one,

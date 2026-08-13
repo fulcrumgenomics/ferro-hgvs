@@ -411,6 +411,61 @@ fn the_reported_pair_census_is_unchanged() {
 // `reported_partition_verdicts` with `OPEN_GAPS` lowered, and a MEASURED
 // addendum on the record above.
 
+/// The three #1421 pairs converge — **without pinning the string they converge
+/// on**.
+///
+/// # Why this is not a string pin
+///
+/// Measured on this branch, all three land on a form that is neither spelling's
+/// `wanted`, and under 5' all three do:
+///
+/// | pair | 3' | 5' |
+/// |---|---|---|
+/// | `1421-n1` | `g.[29C>A;32_33delinsACATACTG]` (its `wanted`) | `g.[29delinsAACACAT;32_33delinsTG]` |
+/// | `1421-n2` | `g.[32G>T;35C>G;38_39insCGACAT]` | `g.[32G>T;35C>G;36_37insATCGAC]` |
+/// | `1421-n3` | `g.[34G>T;37_38delinsCCTTTACG]` (its `wanted`) | `g.[34G>T;35_36insACCTTT;37_38delinsCG]` |
+///
+/// `reported_partition_verdicts` pins those strings per row, which is what makes
+/// the movement disclosed rather than silent. **This test asserts the durable
+/// half instead**: that the two spellings of each pair reach ONE string,
+/// whatever that string is. A literal pin stops meaning anything the moment the
+/// form moves again; this keeps meaning.
+///
+/// # It rules on nothing
+///
+/// `rulings[canonical-form-choice-when-both-legal]` (decided) licenses deriving
+/// from the resulting sequence and emitting what falls out, so a form neither
+/// spelling authored is not wrong on its face. Whether THESE forms are right is
+/// a `:47`/`:34` question, and it is deliberately not answered here or by this
+/// PR.
+///
+/// **And this is not the `OPEN_GAPS` hazard.** That hazard is a row reaching
+/// *its wanted string* by re-derivation — the shape that banks a defect as a
+/// fix. A pair landing on a form that is not `wanted` banks nothing.
+#[test]
+fn the_1421_pairs_converge_whatever_form_they_land_on() {
+    for pair in ["1421-n1", "1421-n2", "1421-n3"] {
+        for direction in DIRECTIONS {
+            let (label, a, b) = REPORTED_PAIRS
+                .iter()
+                .find(|(label, _, _)| *label == pair)
+                .unwrap_or_else(|| panic!("{pair} is not a reported pair"));
+            let (first, second) = (
+                normalize_in(TEMPLATE, a, direction),
+                normalize_in(TEMPLATE, b, direction),
+            );
+            assert_eq!(
+                first, second,
+                "{label} under {direction:?}: the two spellings must reach ONE string. \
+                 The string itself is deliberately NOT pinned here — see the doc \
+                 above; `reported_partition_verdicts` carries the per-row pins. \
+                 If this fails the pair has split apart again, which is a \
+                 regression and not a re-bless.",
+            );
+        }
+    }
+}
+
 /// Idempotence, which convergence alone does not imply.
 ///
 /// A pass could converge two spellings onto a string that itself normalizes to

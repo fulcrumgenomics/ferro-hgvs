@@ -83,11 +83,18 @@
 //! and `delins-recommendation-reach-when-the-input-arrives-split` — have landed
 //! on `main` in their turn and are now base as well, which is the same rot a
 //! second time. `rna-axis-alignment-only-symbol-reach` was the delta named here
-//! in its turn and has landed as well, which is the third instance. Measured
+//! in its turn and has landed as well, which is the third instance.
+//! `c-and-n-positions-are-flat-transcript-offsets` was the fourth, named here as
+//! this branch's whole delta and since landed on `main` as #1619. Measured
 //! against the merge base, what this branch adds is one record:
 //!
-//! - `c-and-n-positions-are-flat-transcript-offsets` — ruled 2026-08-12
-//!   (#1619), with `docs/background/numbering.md:52` governing
+//! - `coding-axis-merges-are-a-disclosed-general-34-deviation` — ruled
+//!   2026-08-13, deviating from `docs/recommendations/general.md:34` and its
+//!   axis-local twin `DNA/delins.md:17`, with `DNA/delins.md:81` governing as
+//!   the clause whose "**preferably**" carries the force. The roles are split
+//!   that way because `common::rulings` refuses one clause being both the
+//!   authority and the departure, which is the shape a disclosed deviation
+//!   otherwise wants; the record says so in its own rationale
 //!
 //! This paragraph used to predict that the pins below "will move once more on
 //! the next rebase", naming `codon-carve-out-shape-restriction` and
@@ -104,8 +111,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 27 records, 23 decided / 4 undecided
-//! 111 clause lines, of which 27 are named by more than one record
+//! 28 records, 24 decided / 4 undecided
+//! 111 clause lines, of which 28 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -219,6 +226,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
@@ -235,6 +243,7 @@
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
@@ -245,6 +254,7 @@
 //! docs/recommendations/DNA/delins.md:80
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:81  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:82
@@ -339,6 +349,7 @@
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
@@ -346,7 +357,8 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
-//! docs/recommendations/general.md:35
+//! docs/recommendations/general.md:35  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //! docs/recommendations/general.md:39
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
@@ -413,6 +425,7 @@
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
@@ -420,6 +433,7 @@
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
@@ -430,6 +444,7 @@
 //!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
@@ -462,6 +477,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/DNA/delins.md:81
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:83
@@ -483,6 +499,9 @@
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//! docs/recommendations/general.md:35
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
+//!     `codon-carve-out-shape-restriction` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
@@ -829,7 +848,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (27, 23, 4),
+        (28, 24, 4),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -993,7 +1012,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        27,
+        28,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
