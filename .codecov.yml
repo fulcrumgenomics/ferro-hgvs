@@ -1,6 +1,24 @@
 # Codecov configuration
 # https://docs.codecov.com/docs/codecovyml-reference
 
+# The `Code Coverage` job is a 4-way matrix, so a commit gets FOUR uploads and
+# Codecov merges them server-side. Verified: the sharded run reports 82.52%
+# against 82.51-82.53% for the unsharded runs either side of it, so the merge is
+# exact.
+#
+# `after_n_builds` makes it deterministic rather than eventually-consistent.
+# Without it Codecov posts a status as soon as the FIRST upload lands — one
+# shard's quarter of the suite — and corrects as the rest arrive, so anyone
+# reading the check in that window sees a coverage collapse that is not real.
+# Both statuses are `informational: true` so nothing blocks either way; what this
+# removes is the misleading transient.
+#
+# Keep this equal to the shard count in `.github/workflows/coverage.yml`. Set it
+# too HIGH and no status is ever posted; too low and the race returns.
+codecov:
+  notify:
+    after_n_builds: 4
+
 coverage:
   status:
     project:
