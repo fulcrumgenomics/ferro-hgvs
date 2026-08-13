@@ -189,6 +189,167 @@ def find_declarations(text: str) -> list[str]:
     return [match.group("value") for match in TRAILER_RE.finditer(text)]
 
 
+#: A line that *looks* like a declaration but that `TRAILER_RE` will not match, and that
+#: git-cliff's footer rule and `inject_representation_disclosure.py` will not match either.
+#:
+#: #1838 is the live instance: its description declares on line 3 as
+#: `` `Representation-Change: none` ``, inside a code span. One backtick, and all three
+#: consumers see silence while the author believes they declared. Nothing was lost there —
+#: the PR touches no watched directory and the value was a decline, which the changelog
+#: excludes anyway — but a gated change carrying a real disclosure in that shape is exactly
+#: the silent representation change this whole mechanism exists to prevent.
+#:
+#: The pattern is deliberately looser than `TRAILER_RE` in three directions, each a real
+#: Markdown habit rather than an invented one:
+#:
+#: * **decoration before the token** — a code span, `>`, `#`, `-`/`*`/`+`, `*`/`_`, or plain
+#:   indentation. Every one of these renders the line as prose while leaving it looking like
+#:   a trailer in the editor.
+#: * **decoration around the colon and the value** — `**Representation-Change:** none`.
+#: * **the separator** — the hyphen is what git-cliff keys on, so `Representation Change:`
+#:   and `Representation_Change:` are as invisible as a backtick.
+#:
+#: **What keeps it from firing on prose is the anchor, and that is the load-bearing half.**
+#: A declaration is a *line*, not a phrase, so the token must open the line once decoration
+#: is stripped. Measured over all 39 open PRs, that alone excludes every mention that is not
+#: a declaration: #1753's two reviewer-checklist mentions (the release PR) and #1752's
+#: "the `Representation-Change:` disclosure above is unaffected" all carry the token
+#: mid-sentence and none of them match.
+#:
+#: **The value requirement is defensive rather than measured-necessary.** Dropping it changes
+#: nothing on today's corpus — the same one PR is reported either way, measured — but
+#: `Representation-Change:` with nothing after it names the field rather than filling it in,
+#: so there is no disclosure to lose and reporting it would be a false accusation. Keep it,
+#: and do not cite the release PR as evidence for it; that was an earlier draft's claim and
+#: it does not survive re-derivation.
+NEAR_MISS_RE = re.compile(
+    r"^(?P<lead>[ \t>*_+#`-]*)"
+    r"Representation(?P<separator>[-_ ]?)Change"
+    # Captured, not merely skipped. `Representation-Change : none` is unreadable to all
+    # three consumers and matches here, but its lead is empty and its separator is a
+    # hyphen — so with the gap discarded no reason could be named for it and
+    # `find_near_misses` dropped it silently, which is the very shape this scan exists to
+    # stop being silent about. Same for a tab, and for `Representation-Change*: none`.
+    r"(?P<gap>[`*_ \t]*):"
+    r"[`*_ \t]*"
+    # The value's first character must be a real one. `\S` is not enough: on
+    # `` `Representation-Change:` `` the regex backtracks and matches the *closing backtick*
+    # as the value, so a bare field mention in a code span was reported as a failed
+    # declaration. Excluding the decoration characters here is what makes "has a value" mean
+    # "has something other than the punctuation that wrapped it".
+    r"[^\s`*_].*?[ \t`*_]*$",
+    re.IGNORECASE,
+)
+
+#: A list marker is `-`, `*` or `+` followed by whitespace; the same characters *not*
+#: followed by whitespace are emphasis. That is Markdown's own rule, and keeping it lets the
+#: message say `list marker` or `emphasis` rather than naming a character and leaving the
+#: author to work out which construct they wrote.
+_LIST_MARKER_RE = re.compile(r"^[-*+][ \t]")
+
+
+def _near_miss_reason(line: str, lead: str, separator: str, gap: str) -> str:
+    """Name what makes `line` unreadable to the strict parser, in the author's terms.
+
+    Several can apply at once — an indented code span inside a list item is one line — so
+    every one that applies is reported. The point is that the author can see which character
+    to delete; "no declaration found" is what this replaces, and it sends them looking for a
+    trailer they have already written.
+
+    **Never returns the empty string for a line `NEAR_MISS_RE` matched**, and that is a
+    contract rather than an observation: the caller reports what this names, so a match with
+    nothing to say is a near miss dropped in silence. It is enforced by
+    `test_every_near_miss_shape_names_a_reason`, which drives every shape through the real
+    pattern rather than through a list of the ones anybody thought of.
+    """
+    reasons: list[str] = []
+    if "`" in line:
+        reasons.append("wrapped in a code span (a backtick)")
+    marker = lead.lstrip(" \t")
+    if marker.startswith(">"):
+        reasons.append("prefixed by a block quote marker `>`")
+    elif _LIST_MARKER_RE.match(marker):
+        reasons.append(f"prefixed by a list marker `{marker[0]}`")
+    elif marker.startswith("#"):
+        reasons.append("prefixed by a heading marker `#`")
+    elif marker.startswith(("*", "_")):
+        reasons.append(f"wrapped in Markdown emphasis (`{marker[0]}`)")
+    elif not marker and lead:
+        # Only when the lead is whitespace and nothing else. Testing `lead` alone reported a
+        # backtick-led line as "indented", which names a character the author did not type
+        # and sends them to delete whitespace that is not the problem.
+        reasons.append("indented, which git reads as a continuation of the line above")
+    if separator != "-":
+        spelt = "a space" if separator == " " else ("an underscore" if separator else "nothing")
+        reasons.append(f"spelled with {spelt} instead of a hyphen (the spelling git-cliff keys on)")
+    decoration = gap.strip(" \t")
+    if decoration and "`" not in decoration:
+        # A backtick anywhere on the line is already reported above, so naming it again here
+        # would read as two faults where the author typed one.
+        reasons.append(f"separated from its colon by `{decoration[0]}`")
+    elif gap and not decoration:
+        reasons.append("separated from its colon by whitespace")
+    if not reasons:
+        # Unreached today, and deliberately not an assertion: a matched line the specific
+        # rules cannot explain is still unreadable to every consumer, so the honest answer is
+        # to report it in general terms rather than to drop it or to crash on it.
+        reasons.append("not the exact `Representation-Change:` token at the start of the line")
+    return "; ".join(reasons)
+
+
+def find_near_misses(text: str) -> list[tuple[int, str, str]]:
+    """Return `(line number, line, reason)` for every near-miss declaration in `text`.
+
+    Lines `TRAILER_RE` already accepts are skipped — those are real trailers, not near
+    misses. Nothing else is: `_near_miss_reason` is contracted to name a reason for every
+    line the pattern matched, so a match can no longer be discarded for having nothing to
+    say. That discard used to be here, described as unreachable, and it was not —
+    `Representation-Change : none`, the tab form, and `Representation-Change*: none` all
+    matched, named no reason, and were dropped, which reported them as silence in a scan
+    whose whole subject is a declaration nobody reads.
+
+    **A single valid trailer anywhere in `text` silences the whole scan**, and that is a
+    property of this function rather than a rule its callers have to remember. An author who
+    declared at column 0 has demonstrated they know the form, and the same author routinely
+    *discusses* that declaration in prose: #1742 and #1837 each quote their own trailer in a
+    code span, on a line beside a real one. `CONTRIBUTING.md` also documents indenting a
+    quoted example as the way to keep it out of the trailer count, and the two-trailer
+    refusal's own message recommends exactly that — so reporting here would contradict the
+    escape hatch this checker already offers.
+
+    Re-measured over all **46** open PRs later on 2026-08-13: the pattern matches a line in
+    **five** of them, **two** of which carry a real trailer as well (#1742 and #1837, each
+    explaining its own declaration in prose — failing those would be the #1555 mistake in a
+    new place), so the scan reports **three**: #1838, the PR that motivated it, plus #1850
+    and #1855, which opened afterwards in the same shape.
+
+    Quote the command rather than the figure — the denominator is a property of the day, and
+    it moved from 39 to 46 while this PR was in review:
+
+    ```
+    gh pr list -R fulcrumgenomics/ferro-hgvs --state open --limit 100 --json number,body
+    ```
+
+    Three live instances in one afternoon is the argument for the check. One would not have
+    been.
+    """
+    if find_declarations(text):
+        return []
+
+    misses: list[tuple[int, str, str]] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if TRAILER_RE.match(line):
+            continue
+        match = NEAR_MISS_RE.match(line)
+        if match is None:
+            continue
+        reason = _near_miss_reason(
+            line, match.group("lead"), match.group("separator"), match.group("gap")
+        )
+        misses.append((number, line.strip(), reason))
+    return misses
+
+
 def find_declaration(text: str) -> str | None:
     """Return the first trailer's value, or `None` when the text carries no trailer."""
     declarations = find_declarations(text)
@@ -199,20 +360,30 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     """
     Decide whether `changed` is adequately declared by `declaration_text`.
 
-    Returns `(ok, message)`. `ok` is False in three cases:
+    Returns `(ok, message)`. `ok` is False in four cases:
 
     1. the message carries **more than one** trailer (#1573) — checked first, and ahead of
        the watched-file test, because two trailers are a disagreement with how the
        *changelog* files the commit, which applies to every commit;
-    2. a watched file changed and **no** trailer is present at all;
-    3. the trailer **declines while describing a move** (`no. 3 rows move`).
+    2. the message carries a **near miss** and no readable trailer — a line that looks like
+       a declaration but that none of the three consumers can see. Also ahead of the
+       watched-file test, and for the same reason as case 1;
+    3. a watched file changed and **no** trailer is present at all;
+    4. the trailer **declines while describing a move** (`no. 3 rows move`).
 
     A trailer whose value is `none` otherwise passes, because declining is a declaration.
 
-    Note case 3 is scoped to watched changes, unlike case 1: it sits after the
+    Note case 4 is scoped to watched changes, unlike cases 1 and 2: it sits after the
     watched-file early return, so a docs-only commit whose voluntary trailer contradicts
     itself is not refused. That is the narrower choice — the contradiction is the same
     either way — and it keeps a gratuitous trailer on an unwatched change from failing CI.
+
+    Cases 2 and 4 point in opposite directions on that question and both are deliberate. A
+    contradicted decline is a trailer the machinery *does* read, so the author's declaration
+    is published and merely disagrees with itself; a near miss is a declaration nobody reads
+    at all, which is indistinguishable from silence to every consumer and to the author is
+    indistinguishable from having declared. Only the second can ship a representation change
+    with nothing in the changelog, so only the second is refused everywhere.
     """
     # Refused BEFORE the watched-file test, and deliberately: the harm is in changelog
     # grouping, which applies to every commit, not only to the ones touching a watched
@@ -231,6 +402,44 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "changelog, and the disclosure silently disappears.\n\n"
             "Delete the superseded trailer, or indent it if it is quoted as an example --\n"
             "an indented line is a continuation of the value above it, not a new trailer."
+        )
+
+    # Also refused BEFORE the watched-file test, and for the same reason as the case above:
+    # the harm is in what the *changelog* renders, which applies to every commit. Putting it
+    # behind the early return would rebuild the exact hole it closes — #1838, the PR that
+    # motivated this, touches no watched directory, so it reaches that return before the
+    # unreadable trailer would have mattered and passes green today.
+    #
+    # `find_near_misses` returns nothing when a readable trailer exists, so there is no
+    # condition to repeat here — see its docstring for why a valid column-0 trailer silences
+    # the scan rather than merely outranking it.
+    near_misses = find_near_misses(declaration_text)
+    if near_misses:
+        listed = "\n".join(
+            f"  line {number}: {line}\n    -> {reason}" for number, line, reason in near_misses
+        )
+        return False, (
+            f"{len(near_misses)} line(s) look like a `Representation-Change:` declaration but\n"
+            "no consumer can read them:\n\n"
+            f"{listed}\n\n"
+            "This is not a style note. The trailer must begin at column 0 with the exact\n"
+            "token, because three separate consumers match it that way and all three see\n"
+            "silence here: this check; git-cliff's footer rule in `release-plz.toml`, so it\n"
+            "never reaches the changelog; and `scripts/inject_representation_disclosure.py`,\n"
+            "so its text is never attached to the changelog bullet.\n\n"
+            "You have declared something and nobody will be told. Write the line with no\n"
+            "decoration of any kind:\n\n"
+            "  Representation-Change: none\n\n"
+            "or, for a real disclosure, what moved and whether the affected inputs were\n"
+            "previously rejected (free) or accepted (a migration):\n\n"
+            "  Representation-Change: 3 rows of 500,004 move, 2 respell / 1 merge.\n"
+            "    Previously-accepted inputs, so a real migration.\n\n"
+            "To quote the form as an *example* rather than declare it, indent the line — an\n"
+            "indented line is a continuation, which is what keeps it out of the count. Note\n"
+            "that indenting is a quoting device only *beside* a real declaration: this scan\n"
+            "stands down as soon as one readable trailer exists, so a body whose only\n"
+            "`Representation-Change:` line is the indented one is reported here rather than\n"
+            "read as a quotation."
         )
 
     watched = watched_files(changed)
