@@ -2540,6 +2540,14 @@ static SEQFIRST_ATTEMPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// Of those, the ones it declined.
 static SEQFIRST_DECLINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Blocks cut under **any** arm, [`PartitionRule::Live`] included.
+///
+/// Debug-only, so the shipped release path keeps the property
+/// [`PartitionDeclineCounts`] is careful about: no per-block atomic on the
+/// `Live` arm.
+#[cfg(debug_assertions)]
+static PARTITION_BLOCKS_CUT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// This process's census of sequence-first partition attempts and declines.
 ///
 /// Process-wide and monotone, like the arm selection itself: there is one
@@ -2558,6 +2566,35 @@ pub fn partition_decline_counts() -> PartitionDeclineCounts {
     }
 }
 
+/// Blocks this process has cut, on whichever arm `FERRO_PARTITION` selected.
+///
+/// The **denominator** [`partition_decline_counts`] deliberately does not
+/// provide. That census counts only the sequence-first arms, so it is
+/// structurally zero on `live` and cannot answer "did this corpus reach the
+/// switch at all" — the question a cross-arm conformance run has to answer
+/// before any of its numbers mean anything. A run reporting no behaviour change
+/// across the four arms has proved nothing until this reads non-zero; a zero
+/// here says the corpus never reached the partitioner, which is a fact about the
+/// corpus and not about the arms.
+///
+/// Counted at the one seam every arm passes through, so it is a count of blocks
+/// **cut**, not of normalizations: [`canonicalize_from_sequence`] declines most
+/// variants long before this point, and one variant may cut several blocks. A
+/// caller wanting a per-row answer reads it either side of each row and asks
+/// whether it moved — which is what
+/// `examples/measure_spec_conformance_per_arm.rs` does.
+///
+/// **Debug builds only**, like the four normalization oracles and for the same
+/// reason: the shipped `Live` path must not grow a per-block atomic to serve a
+/// measurement. Release builds do not have this function.
+///
+/// **Unstable, like the switch it measures.** It is expected to be removed with
+/// `FERRO_PARTITION`.
+#[cfg(debug_assertions)]
+pub fn partition_blocks_cut() -> u64 {
+    PARTITION_BLOCKS_CUT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Cut a trimmed block with `rule`, falling back to [`partition_block`] when a
 /// sequence-first arm declines — and **counting** the fallback.
 ///
@@ -2573,6 +2610,10 @@ fn partition_block_for_rule(
     min_separation: u32,
 ) -> Vec<Piece> {
     use std::sync::atomic::Ordering;
+
+    // Before the arm split, so `Live` is counted too — see `partition_blocks_cut`.
+    #[cfg(debug_assertions)]
+    PARTITION_BLOCKS_CUT.fetch_add(1, Ordering::Relaxed);
 
     let attempt = match rule {
         // The shipped rule, and the only configuration that ships. It has no

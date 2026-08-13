@@ -58,6 +58,19 @@ pub use merge::dev_partitioners;
 // forget to read. See `PartitionDeclineCounts`.
 pub use merge::{partition_decline_counts, PartitionDeclineCounts};
 
+// The denominator beside that census: blocks cut on EVERY arm, `Live` included.
+//
+// This one IS a census that exists only in some builds, which is exactly what the
+// comment above declines to do — so the trade is stated rather than left to be
+// read off the `cfg`. The reason it goes the other way is that the shipped `Live`
+// path must not grow a per-block atomic to serve a measurement, and `Live` is the
+// arm this counter exists to cover. Its only consumer,
+// `examples/measure_spec_conformance_per_arm.rs`, refuses to run in a build where
+// it is absent rather than reporting a zero it cannot distinguish from a corpus
+// that never reached the partitioner — see `partition_blocks_cut`'s own doc.
+#[cfg(debug_assertions)]
+pub use merge::partition_blocks_cut;
+
 // The refusal a binary should print and exit on when `FERRO_PARTITION` named an
 // arm this build has not got. A library cannot refuse from
 // `canonicalize_from_sequence` -- it is infallible -- so the refusal is offered
