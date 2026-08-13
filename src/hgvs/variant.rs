@@ -1278,6 +1278,10 @@ pub(crate) fn cis_member_order_key(
     // `SelfCancellingPoint` derives `Ord` over `(region, base, offset)` in that
     // field order, which is exactly the comparison this key wants, so the points
     // go in whole rather than flattened into six scalars.
+    // Unrelated to the unknown-OFFSET sentinels (`OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`,
+    // re-exported as `GENOME_OFFSET_UNKNOWN_*`): this is a sorts-last key for a point
+    // that has no position, not a `+?`/`-?` marker. It happens to reuse `i64::MAX`
+    // because that is what "sorts last" spells.
     let sentinel = SelfCancellingPoint::new(true, i64::MAX, i64::MAX);
     let (start, end) = cis_member_range(v).unwrap_or((sentinel, sentinel));
     (accession, start, end, junction_rank(v), descriptor)
