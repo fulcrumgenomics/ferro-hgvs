@@ -12017,7 +12017,46 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok((final_start, final_end, new_edit, warnings))
     }
 
-    /// Convert CDS position to transcript position
+    /// Convert CDS position to transcript position.
+    ///
+    /// **Sequence frame.** `c.N` is `cds_start + N - 1` on the transcript's own
+    /// bases — the same flat arithmetic as
+    /// [`crate::convert::mapper::CoordinateMapper::cds_to_tx`] — and that is
+    /// what the normalizer needs, because the offsets it produces index the
+    /// sequence `ReferenceProvider::get_sequence` serves for a transcript
+    /// accession, and that sequence is flat. It deliberately does **not**
+    /// consult the exon table.
+    ///
+    /// **Same frame, but not interchangeable at `c.0`.** The two implementations
+    /// disagree on exactly one input, and it is a reachable one, so do not read
+    /// "same arithmetic" as "call either". `c.0` is not a valid HGVS position;
+    /// the legacy arm below maps it to `cds_start - 1` (i.e. `c.-1`, the formula
+    /// continued), while `CoordinateMapper::cds_to_tx` folds `base < 1` into one
+    /// branch and answers `cds_start` (i.e. `c.1`). Both arms are live —
+    /// `merge::collapse_overlapping_cis_edits` can build a `base == 0` anchor,
+    /// and `spdi::convert::resolve_cds_to_tx` routes the `c.?` sentinel
+    /// (`CDS_BASE_UNKNOWN == 0`) through the mapper. Which one is right needs
+    /// its own ruling; see #1772.
+    ///
+    /// A second, quieter divergence at the other end of the 5'UTR: for
+    /// `pos.base < -(cds_start as i64)` — a `c.-N` further upstream than the
+    /// transcript is long — this method **errors**
+    /// (`u64::try_from` on a negative), while `CoordinateMapper::cds_to_tx`
+    /// returns a `TxPos` with a *negative* `base`.
+    /// `CoordinateMapper::fold_non_intronic_utr_offset` relies on being handed
+    /// that negative base, so it is deliberate there rather than an oversight.
+    ///
+    /// Note also that neither of these pairs round-trips through `c.0`, because
+    /// HGVS has no `c.0` to round-trip to: here `c.0` goes to `cds_start - 1`
+    /// and [`Self::tx_to_cds_pos`] brings it back as `c.-1`; on the mapper,
+    /// `c.0` goes to `cds_start` and comes back as `c.1`.
+    ///
+    /// It is therefore *not* interchangeable with the genome-frame conversions
+    /// (`genomic_to_tx` / `tx_to_genomic` and the projector above them), which
+    /// are exon- and CIGAR-aware. On a transcript whose alignment carries a
+    /// transcript-coordinate gap the two families give different answers, by
+    /// design; `tests/it/axis_frame_disagreement.rs` pins that. Making this one
+    /// walk the exon table is #1619, adjudicated by PR #1735.
     fn cds_to_tx_pos(
         &self,
         pos: &CdsPos,
@@ -12054,7 +12093,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
-    /// Convert transcript position to CDS position
+    /// Convert transcript position to CDS position.
+    ///
+    /// **Sequence frame**, the inverse of [`Self::cds_to_tx_pos`] and on the
+    /// same flat axis: no exon walk, no CIGAR adjustment. See that method for
+    /// why the genome-frame conversions are not a substitute — and for the one
+    /// input on which the round trip does not close, `c.0`, which comes back as
+    /// `c.-1` because HGVS has no `c.0` for it to come back as.
     fn tx_to_cds_pos(
         &self,
         pos: u64,

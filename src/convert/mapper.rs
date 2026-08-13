@@ -87,6 +87,17 @@ impl<'a> CoordinateMapper<'a> {
     /// `c.N` is `cds_start + N - 1` on the flat transcript, with no adjustment
     /// for exon geometry, for a CIGAR insertion (#944), or for a
     /// transcript-coordinate gap in the genome alignment (#1619).
+    ///
+    /// One input where this is **not** interchangeable with the normalizer's
+    /// own sequence-frame copy (`Normalizer::cds_to_tx_pos`): `c.0`, which is
+    /// not a valid HGVS position but is reachable (`CDS_BASE_UNKNOWN` is `0`,
+    /// and cis-collapse can build a `base == 0` anchor). It falls into the
+    /// `base < 1` branch here and answers `cds_start`, where the normalizer
+    /// continues the formula and answers `cds_start - 1`. Which is right needs
+    /// its own ruling; see #1772. A `c.-N` further upstream than the transcript
+    /// is long diverges too: this method returns a `TxPos` with a *negative*
+    /// `base` (which [`Self::fold_non_intronic_utr_offset`] relies on), where
+    /// the normalizer's copy errors.
     pub fn cds_to_tx(&self, pos: &CdsPos) -> Result<TxPos, FerroError> {
         let cds_start = self
             .transcript
@@ -123,8 +134,10 @@ impl<'a> CoordinateMapper<'a> {
 
     /// Convert transcript position to CDS position
     ///
-    /// The exact inverse of [`Self::cds_to_tx`], and on the same flat
-    /// sequence axis: no exon walk, no CIGAR adjustment.
+    /// The inverse of [`Self::cds_to_tx`], and on the same flat sequence axis:
+    /// no exon walk, no CIGAR adjustment. The one input on which the round trip
+    /// does not close is `c.0` — it converts to `cds_start` and comes back as
+    /// `c.1`, because HGVS has no `c.0` for it to come back as.
     pub fn tx_to_cds(&self, pos: &TxPos) -> Result<CdsPos, FerroError> {
         let cds_start = self
             .transcript
@@ -246,6 +259,14 @@ impl<'a> CoordinateMapper<'a> {
     ///
     /// Returns None if the genomic position is in an intron.
     /// The transcript must have genomic coordinates set on its exons.
+    ///
+    /// **This is a genome-frame conversion and it does consult the exon
+    /// table** — see the module's "two frames" note, and contrast
+    /// [`Self::cds_to_tx`], which must not. The two answer different questions
+    /// and therefore *must* disagree on a transcript whose alignment carries a
+    /// transcript-coordinate gap; `tests/it/axis_frame_disagreement.rs` pins
+    /// that, so collapsing them onto one implementation fails loudly rather
+    /// than reintroducing #1619.
     pub fn genomic_to_tx(&self, genomic_pos: u64) -> Result<Option<TxPos>, FerroError> {
         // Check if transcript has genomic coordinates
         if !self.transcript.has_genomic_coords() {
@@ -331,6 +352,20 @@ impl<'a> CoordinateMapper<'a> {
     /// Convert transcript position to genomic position
     ///
     /// Returns None if the transcript position is not covered by exons with genomic coords.
+    ///
+    /// **Genome frame**, like [`Self::genomic_to_tx`] and unlike
+    /// [`Self::tx_to_cds`]: the alignment answer of `None` means "this
+    /// transcript base aligns to nothing", which is a fact about the alignment
+    /// and not about the transcript's own numbering — that base still has a
+    /// `c.`/`n.` number.
+    ///
+    /// `None` is not exclusively that answer, though, so do not read it as
+    /// "unaligned" without ruling the other two out: it is also returned for a
+    /// non-positive `tx_pos.base`, and for a `Strand::Unknown` transcript,
+    /// whose bases are all reported unaligned however complete its exon table
+    /// is. A caller using `tx_to_genomic(..).is_some()` as its definition of
+    /// "aligned" — `tests/it/axis_frame_disagreement.rs`'s genome-frame walk
+    /// does — is relying on the transcript having a known strand.
     pub fn tx_to_genomic(&self, tx_pos: &TxPos) -> Result<Option<u64>, FerroError> {
         // Check if transcript has genomic coordinates
         if !self.transcript.has_genomic_coords() {

@@ -43,6 +43,7 @@ mod annotation_cross_format;
 mod annotation_real_format_slices;
 mod annotation_tool_conformance;
 mod api_comparison_tests;
+mod axis_frame_disagreement;
 mod biocommons_local_tests;
 mod biocommons_normalize_tests;
 mod biocommons_tests;
