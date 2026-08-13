@@ -288,13 +288,40 @@ const CDS_END: u64 = 63;
 /// 10; the three sum to the 334 `converged` gains, so **every** moved class went
 /// straight to convergence and none merely dropped an arity. No divergence
 /// figure rises, so the ratchet is satisfied in the direction it was written for.
+///
+/// # Re-blessed by #1716, and this one costs a class rather than buying one
+///
+/// `merge_consecutive_edits`' per-member codon-frame predicate tested its left
+/// anchor's **right edge** for codon membership while authorising a `delins` over
+/// `prev_a.start ..= next.end`, so a left member wider than one base merged
+/// across a codon boundary — `general.md:35`'s "together affecting one amino
+/// acid" cannot hold over four or more positions. Testing the span instead
+/// declines those merges.
+///
+/// `converged` is **unchanged at 8 361 / 8 367**, and exactly one class moves, in
+/// both directions: `s03-c-m3-sep1-p8-rot2` goes from two outputs to three, so
+/// `split_two` falls by one and `split_three` rises by one. The full divergence
+/// list was dumped either side (the `worst` cap raised locally, then restored)
+/// and diffed by class id: **no class loses convergence, none gains it, and no
+/// other class changes arity** in either direction.
+///
+/// **`split_three` rising is a divergence figure going UP**, which this pin's
+/// ratchet forbids without a re-bless — hence this section. The price is the same
+/// one #1240 records two paragraphs above, and for the same reason: the
+/// newly-divergent third output is `c.[9_16delinsATGAGTAA;18delinsGTCCTGGCA]`,
+/// and what it stopped agreeing with is `c.9_18delinsATGAGTAAAGTCCTGGCA` — a
+/// merge across `c.9..c.18`, i.e. codons 3 to 6, which `general.md:34` says to
+/// describe individually. Agreement is lost; correctness is not. `declined`,
+/// `underdetermined` and `sequence_changed` are all still 0.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
     converged: 8_361,
-    split_two: 2_835,
-    split_three: 67,
+    // #1716: one class (`s03-c-m3-sep1-p8-rot2`) moved from two outputs to
+    // three — see the section above.
+    split_two: 2_834,
+    split_three: 68,
     split_more: 9,
     underdetermined: 0,
     sequence_changed: 0,
@@ -350,13 +377,20 @@ const THREE_PRIME: Census = Census {
 /// finer partition is chosen before the shift, so the two members are then
 /// shuffled independently and only some of those landings coincide with the
 /// other spelling's.
+///
+/// **Re-blessed by #1716 with `converged` unchanged at 8 367**, `split_two` down
+/// one and `split_three` up one — the same single class (`s03-c-m3-sep1-p8-rot2`)
+/// as at 3', and no asymmetry this time because the merge the fix declines is
+/// decided before either shuffle. See `THREE_PRIME` for the class's two forms and
+/// for why losing this agreement is not losing correctness.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
     converged: 8_367,
-    split_two: 2_826,
-    split_three: 74,
+    // #1716: see `THREE_PRIME` — one class moved from two outputs to three.
+    split_two: 2_825,
+    split_three: 75,
     split_more: 5,
     underdetermined: 0,
     sequence_changed: 0,

@@ -46,9 +46,9 @@
 //! behaviour, not that PR's. The corpus is new; the defects it counts are not.
 //!
 //! **That paragraph is the CORPUS branch speaking, and it no longer holds.**
-//! Four changes have re-blessed figures here since, and there are four
+//! Five changes have re-blessed figures here since, and there are five
 //! RE-BLESSED sections below — one per change, in the order they landed. Read
-//! all four before quoting any figure as a `main` baseline:
+//! all five before quoting any figure as a `main` baseline:
 //!
 //! 1. the amino-acid precondition on `coalesce_coding_frame_separation` (#1599),
 //!    which moved five figures, one of them a net regression in `converged`;
@@ -57,7 +57,9 @@
 //! 3. the two-deletion alignment in the payload splitter (#1649), which moved
 //!    eight and regressed none — the largest confluence move recorded here;
 //! 4. the `standards.md:39` refusal (#1627), which moved two REFUSAL/validity
-//!    figures, both down, identically in both directions.
+//!    figures, both down, identically in both directions;
+//! 5. the codon-frame merge's own span (#1716), which moved six rank-2 figures,
+//!    left `converged` alone in both directions, and raised `split_three` at 3'.
 //!
 //! **The second was measured on the first, not composed with it.** The two
 //! changes' affected row sets are disjoint — verified by diffing the row ids, not
@@ -88,7 +90,7 @@
 //! fix intact — it is now carried by `outputs_intronic_under_a_genomic_wrapper`,
 //! and it is still a claim about the code rather than about the corpus.
 //!
-//! # RE-BLESSED (1 of 4) — #1599, the amino-acid precondition
+//! # RE-BLESSED (1 of 5) — #1599, the amino-acid precondition
 //!
 //! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus
 //! PR, which touched no normalizer file. **That is no longer the base.** #1599
@@ -127,7 +129,7 @@
 //! #1599, which was the pre-existing baseline and not a regression of its — it is
 //! #1704, three sections down, that finally moves it.
 //!
-//! # RE-BLESSED (2 of 4) — #1536, the cross-axis re-typing carve-out
+//! # RE-BLESSED (2 of 5) — #1536, the cross-axis re-typing carve-out
 //!
 //! This branch adds a third carve-out from the #350 cross-axis bail in
 //! `normalize_cds`, so a `delins`/`inv` whose span straddles a CDS boundary is
@@ -180,7 +182,7 @@
 //! measures **6** at 3', the two extra rows being
 //! `s00-c3{p,m}-cds-end-del-del-p2-sep1`. Every rank-1 counter is unchanged.
 //!
-//! # RE-BLESSED (3 of 4) — #1649, the two-deletion alignment
+//! # RE-BLESSED (3 of 5) — #1649, the two-deletion alignment
 //!
 //! `merge`'s payload splitter could express *insertion, retained reference,
 //! insertion* but not *deletion, retained reference, deletion*, so a payload
@@ -233,7 +235,7 @@
 //! converged. `s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and stays pinned
 //! there — its spanning `delins` still stops where `general.md:34` puts it.
 //!
-//! # RE-BLESSED (4 of 4) — #1627, the alignment-only symbol
+//! # RE-BLESSED (4 of 5) — #1627, the alignment-only symbol
 //!
 //! `background/standards.md:39` footnotes the table's daggered `X` and `-` as
 //! "used in alignment only", and the decided
@@ -287,6 +289,58 @@
 //! `corpus_prohibited_inputs::an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`,
 //! which covers the embedded shapes (`delinsACGTX`, `delinsXACGT`,
 //! `delinsACXGT`) the corpus does not generate.
+//!
+//! # RE-BLESSED (5 of 5) — #1716, the codon-frame merge's own span
+//!
+//! `merge_consecutive_edits`' per-member codon-frame predicate asked
+//! `same_codon(prev_a.end, next_start)` — its left anchor's **right** edge —
+//! while authorising a `delins` over `prev_a.start ..= next.end`. A codon is
+//! three positions, so any anchor wider than one base makes that span four or
+//! more and `general.md:35`'s "together affecting one amino acid" cannot hold;
+//! `general.md:34` / `DNA/delins.md:17` then govern and the members stay
+//! individual. Asking the span instead is the fix. (Sibling passes always did:
+//! `apply_coding_codon_exception` and `coalesce_coding_frame_separation`.)
+//!
+//! **Six figures move, all rank 2, and `converged` is unchanged in BOTH
+//! directions:**
+//!
+//! | figure | was (post-#1627) | now | direction |
+//! |---|---|---|---|
+//! | 3' `converged` | 9,402 | **9,402** | unchanged |
+//! | 3' `split_two` | 2,225 | **2,223** | −2, both to `split_three` |
+//! | 3' `split_three` | 223 | **226** | **+3 — rises** |
+//! | 3' `split_more` | 32 | **31** | −1, to `split_three` |
+//! | 5' `converged` | 9,228 | **9,228** | unchanged |
+//! | 5' `split_two` | 2,461 | **2,462** | +1, from `split_more` |
+//! | 5' `split_three` | 167 | **168** | +1, from `split_more` |
+//! | 5' `split_more` | 26 | **24** | −2 |
+//!
+//! **Exactly three family instances move per direction, and they are named**,
+//! because the net counters cannot tell an arity rise from an arity fall when
+//! both happen. The full divergence row-id lists were dumped either side (the
+//! `divergences` cap in [`measure`] raised locally, then restored) and diffed:
+//!
+//! - **0 families lose convergence, 0 gain it, and 0 become divergent that were
+//!   not** — the divergent *set* is byte-identical in both directions (3': 2,480
+//!   families; 5': 2,654). Only three members of it change arity.
+//! - 3': `s00-c1-m4-all-del-p2-sep1` 4 -> 3 (improves);
+//!   `s00-c3p-m4-all-del-p1-sep2` and `s00-c3m-m4-all-del-p1-sep2` 2 -> 3.
+//! - 5': `s00-c1-m4-all-del-p2-sep1` 3 -> 2 and both `m4-all-del-p1-sep2` rows
+//!   4 -> 3 (all three improve).
+//!
+//! **The two rows that rise are already promoted**, which is why this section
+//! adds nothing to `spec_corpus_regressions.rs`:
+//! `the_codon_gate_splits_a_spanning_delins_its_own_members_do_not` has pinned
+//! `s00-c3{p,m}-m4-all-del-p1-sep2` since #1599. What changed there is its
+//! *members'* answer, and it changed toward that test's own clause — the old
+//! `c.[24del;30_33delinsA]` merged across `c.30..c.33`, codon 10 into codon 11.
+//! The pin is updated in this commit with the reason on the row.
+//!
+//! **Every rank-1 counter is unchanged**, in both directions — `outputs`,
+//! `declined`, `unparseable_outputs`, `outputs_denoting_no_sequence`,
+//! `outputs_leaving_the_transcript`, `prohibition_violating_outputs` — as are
+//! `non_idempotent_outputs` (4 / 4), `sequence_changed` (4 / 0), all three
+//! refusal counters and `guard_violations`.
 //!
 //! # CORRECTED — what the transcript-leaving class actually violates
 //!
@@ -571,10 +625,14 @@ pub(crate) const THREE_PRIME: Census = Census {
     // (which cannot tell net from gross). Every moved family goes straight to
     // `converged`, which is why the three deltas below sum exactly to
     // `converged`'s: 215 + 25 + 21 = 261.
+    //
+    // #1716 leaves `converged` alone and moves three family instances between
+    // the `split_*` buckets — see the module docs' fifth RE-BLESSED section for
+    // the three row ids and the diffed divergence sets.
     converged: 9_402,
-    split_two: 2_225,
-    split_three: 223,
-    split_more: 32,
+    split_two: 2_223,
+    split_three: 226,
+    split_more: 31,
     underdetermined: 0,
     // -- idempotency --
     //
@@ -607,7 +665,7 @@ pub(crate) const THREE_PRIME: Census = Census {
 /// partitioner.
 ///
 /// Measured on the same base as [`THREE_PRIME`], and re-blessed by the same
-/// four changes — see the module docs' four RE-BLESSED sections.
+/// five changes — see the module docs' five RE-BLESSED sections.
 ///
 /// The two directions agreeing on every rank-1 counter except
 /// `outputs_leaving_the_transcript` is itself the cross-check the two-direction
@@ -648,9 +706,13 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // is decided the same way in both, but the *follow-on* shuffle it enables
     // runs 3' or 5'. Here 5' moves the larger set (284 against 261), the reverse
     // of #1536.
-    split_two: 2_461,
-    split_three: 167,
-    split_more: 26,
+    //
+    // #1716 moves the same three family instances as at 3', all three
+    // *improving* on this side; `converged` is unchanged. Fifth RE-BLESSED
+    // section.
+    split_two: 2_462,
+    split_three: 168,
+    split_more: 24,
     underdetermined: 0,
     non_idempotent_outputs: 4,
     sequence_changed: 0,
