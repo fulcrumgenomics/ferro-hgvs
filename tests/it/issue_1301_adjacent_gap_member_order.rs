@@ -67,7 +67,24 @@ fn assert_preserving(input: &str, output: &str) {
         for member in &members {
             triples.push(hgvs_to_spdi(member, &provider).ok()?);
         }
-        triples.sort_by_key(|t| std::cmp::Reverse(t.position));
+        // Descending position, and **longer deletions first** among triples at
+        // one position — the key `spdi::apply::splice_denoted_sequence`, the
+        // conformance corpus applier, and (since #1831)
+        // `spdi::apply::apply_triples` all use. The path form of that middle
+        // name is deliberately not written here: `oracle_exclude_invariant`
+        // scans for it as a literal, and a module that merely mentions it in a
+        // comment reads as one measuring over the corpus. Without the second
+        // component this walk's `end > claimed` test
+        // reads an insertion flush against a sibling as an overlap or not
+        // depending on the order the members were written in, so a *local* oracle
+        // would carry exactly the defect #1831 removed from the applier it exists
+        // to check independently of.
+        triples.sort_by_key(|t| {
+            (
+                std::cmp::Reverse(t.position),
+                std::cmp::Reverse(t.deletion.len()),
+            )
+        });
         let mut edited = reference.as_bytes().to_vec();
         let mut claimed = reference.len();
         for triple in &triples {

@@ -562,7 +562,7 @@ which is what makes it an argument for the fix beside it:
 | class | fires | why it was not a defect |
 |---|---|---|
 | output cannot be transliterated | 328 | the input states its own deleted bases (`g.1000delC`) and converts with no provider; the output (`g.1000del`) must read the reference, which the fixture does not hold |
-| insertion flush against a deletion | 233 | `triples_are_disjoint` calls it an overlap; `cis_apply_oracle`'s tie-break does not, and it is well defined |
+| insertion flush against a deletion | 233 | `triples_are_disjoint` called it an overlap; `cis_apply_oracle`'s tie-break does not, and it is well defined. **No longer true of the applier as of #1831** — `apply_triples` now sorts longer deletions first among triples sharing a position, the key `splice_denoted_sequence` and `conformance::spec_corpus`'s applier already used, so `triples_are_disjoint` sees correctly-ordered input and no longer reports this shape. The 233 is the size of the class when it was diagnosed, and is kept as that |
 | overlap-conflicting input | ~12 | an insertion *interior* to a deletion — the input denotes nothing, so there is no baseline |
 | `pter`/`qter` | 6 | carry no numeric coordinate (`base: 0`); `hgvs_to_spdi` reads `base` and silently resolves `c.pterdel` to the sequence's **last** base |
 | corrected `REFSEQ_MISMATCH` | 5 | `c.10dupA` where the reference reads `C`: normalization is *supposed* to change the denoted sequence here |

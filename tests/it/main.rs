@@ -518,6 +518,7 @@ mod weight_bound_worked_examples;
 mod workflow_gh_repo_context;
 
 mod issue_1618_anchored_repeat_semantics;
+mod issue_1831_applier_member_order;
 mod report_failure_degrades;
 mod report_failure_provenance;
 mod reported_confluence_pairs;
