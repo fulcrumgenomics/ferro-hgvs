@@ -79,13 +79,15 @@
 //! | `prohibited_absolute_accepted` | 32 | 32 | a shape the spec calls "not allowed" was accepted |
 //! | `prohibition_violating_outputs` | ~~32~~ **8** | ~~32~~ **8** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627: see the fourth section below |
 //!
-//! `guard_violations` is **2 of 210 guarded rows**, and the two are named in
-//! [`RESIDUAL_GUARD_VIOLATIONS`] rather than absorbed into a count. The
-//! denominator is asserted non-zero, because `0 of 0` is what a rebuilt #1456
-//! looks like.
+//! `guard_violations` is **0 of 210 guarded rows**, and
+//! [`RESIDUAL_GUARD_VIOLATIONS`] is empty. The denominator is asserted non-zero,
+//! because `0 of 0` is what a rebuilt #1456 looks like — and the instrument's
+//! ability to read non-zero is not inferred either: it read **18** on this
+//! branch's first commit and **2** on its second, so the zero below is a
+//! measurement and not a structural silence.
 //!
-//! **It was 0, then 18, and is now 2**, and the middle figure is the one to
-//! understand. Deleting the input-relative weight bound
+//! **It was 0, then 18, then 2, and is now 0 again**, and the middle figures are
+//! the ones to understand. Deleting the input-relative weight bound
 //! (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) let the
 //! partitioner re-derive multi-member spellings instead of handing them back —
 //! and the partitioner was applying `DNA/delins.md:44-47`'s payload-coincidence
@@ -95,10 +97,30 @@
 //! already decided and which the non-shipping `CanonicalCoalesced` arm already
 //! honoured, closed 16 of them.
 //!
-//! **The 2 that remain are not a clause question.** Both are 2 065-base blocks,
-//! over `merge::MAX_SPLIT_BLOCK` (1 024), so `partition_block` returns the whole
-//! block on length before any rule about the derived pieces runs. Raising that
-//! cap is a cost question, and it is open.
+//! **The last 2 were `MAX_SPLIT_BLOCK`, and the fix is the same clause one hop
+//! earlier.** Both are 2 065-base blocks, over the 1 024 cap, so
+//! `partition_block` returns the whole block on length *before any rule about
+//! the derived pieces runs*. What comes back is therefore not a finding that the
+//! block holds one variant — it is the absence of a finding, and emitting it
+//! asserts "no separation here" about a block nothing examined. Off `c.`
+//! `general.md:34` governs that assertion and nothing licenses it, so
+//! `canonicalize_from_sequence` now **declines** such a block and the per-member
+//! pipeline answers. On `c.` the carve-out is in reach and `:47` recommends the
+//! spanning `delins`, so nothing there moves. See
+//! `merge::CoincidenceCarveOut::block_may_be_asserted_unexamined` and
+//! `tests/it/issue_1616_unexamined_block_stays_split.rs`.
+//!
+//! **What that costs, disclosed rather than netted away.** A block past the cap
+//! cannot be split, so its spanning spelling and its split spelling can no
+//! longer reach one string: `converged` falls **18** at 3' (10 995 -> 10 977) and
+//! **14** at 5' (10 789 -> 10 775), with `split_two` rising by exactly the same
+//! amounts. Confluence is ferro's own policy (README rule 3) and `general.md:34`
+//! is a spec preference clause (rule 2), which outranks it — so this is the
+//! ruled trade and not an accident. Against `origin/main` the direction is still
+//! strongly positive: 9 402 -> 10 977 (+1 575) and 9 228 -> 10 775 (+1 547).
+//! **Raising the cap would buy those classes back and is still open**; it is a
+//! cost question with no clause behind it, and it is deliberately not answered
+//! here.
 //!
 //! **These are a rule-2 preference miss, not a rule-1 violation.**
 //! `rulings[separation-rule-force-modal-or-negation]` holds that
@@ -659,8 +681,16 @@ pub(crate) const THREE_PRIME: Census = Census {
     // inputs now reach one answer: converged 9 402 -> 10 995, +1 593. The three
     // split counters fall by 1 548 + 42 + 3 = 1 593, exactly the gain, so every
     // family that moved went straight to `converged` and none left the corpus.
-    converged: 10_995,
-    split_two: 677,
+    //
+    // **Then 18 of them are given back**, by the `general.md:34` gate that takes
+    // `guard_violations` to zero below: a block past `MAX_SPLIT_BLOCK` cannot be
+    // split, so off `c.` the derivation declines and the spanning and split
+    // spellings of those 18 classes stay two strings. `split_two` rises by
+    // exactly 18 and nothing else moves. Net against `origin/main`: +1 575.
+    // Rule 2 outranks rule 3, so a preference clause is paid for in confluence
+    // and not the other way round.
+    converged: 10_977,
+    split_two: 695,
     split_three: 181,
     split_more: 29,
     underdetermined: 0,
@@ -681,44 +711,38 @@ pub(crate) const THREE_PRIME: Census = Census {
     prohibited_conditional_accepted: 16,
     // -- negative guards --
     //
-    // **2, and pinned at its TRUE value rather than at zero.** See
-    // [`RESIDUAL_GUARD_VIOLATIONS`], which names both rows and fails if either
-    // starts conforming, so the residual cannot rot into a silent permanent
-    // exemption. It was 18 while the shipping partitioner applied
-    // `DNA/delins.md:44-47`'s payload-coincidence carve-out on every axis; 16 of
-    // those closed when the carve-out was scoped to `c.` per
-    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+    // **Zero, and measured rather than structural.** The same instrument read
+    // 18 on this branch's first commit and 2 on its second, so it can report
+    // non-zero over this corpus and this denominator; see the module docs.
     //
-    // The two left are `MAX_SPLIT_BLOCK` (1024): both are 2 065-base blocks, so
-    // `partition_block` short-circuits on length before any rule about the
-    // derived pieces is consulted. Raising that cap is a cost question rather
-    // than a clause question and is deliberately not decided here.
-    guard_violations: 2,
-    // -- instruments -- (added by #1710, kept across the #1616 rebase)
-    coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // 18 while the shipping partitioner applied `DNA/delins.md:44-47`'s
+    // payload-coincidence carve-out on every axis; 16 closed when that carve-out
+    // was scoped to `c.` per
+    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`, and
+    // the last 2 — 2 065-base blocks over `MAX_SPLIT_BLOCK` (1024) — closed when
+    // `canonicalize_from_sequence` stopped emitting the whole block the length
+    // short-circuit hands back **unexamined**. `MAX_SPLIT_BLOCK` itself is
+    // untouched: raising it is a cost question and is still open.
+    guard_violations: 0,
 };
 
 /// The rows that still merge a frameless separation of one, named.
 ///
-/// # Why the residual is named rather than merely counted
+/// **Empty, and kept rather than deleted.** The list is the mechanism that stops
+/// a residual rotting into a silent permanent exemption:
+/// `the_residual_guard_violations_are_exactly_these_rows` asserts the set both
+/// ways, so a row entering FAILS and a listed row that starts conforming FAILS
+/// too. Empty, it is the strongest form of that assertion — *no* row may merge a
+/// frameless separation of one — and it is where the next regression will land
+/// with its id already printed.
 ///
-/// `guard_violations` is pinned at 2, its true value. A count alone would let
-/// the residual drift — one row conforming while a different one regressed
-/// reads as "unchanged" — and, worse, a count that someone re-pinned to zero to
-/// make a run green would delete the finding rather than record it. So the two
-/// are listed, and `the_residual_guard_violations_are_exactly_these_rows`
-/// asserts the set both ways: a new row entering FAILS, and a listed row that
-/// starts conforming FAILS too, which is what stops a fixed defect sitting here
-/// as a permanent exemption.
-///
-/// Both are `MAX_SPLIT_BLOCK`, not a clause: their blocks are 2 065 bases, over
-/// the 1 024 cap, so the length short-circuit returns the whole block before
-/// `separations_are_meaningful` or `split_buys_no_higher_priority_type` is
-/// reached. They are the only rows in the corpus that exceed it, which is also
-/// why no smaller-scale corpus can see this class at all (#1460).
-pub(crate) const RESIDUAL_GUARD_VIOLATIONS: &[&str] =
-    &["scale-g-block1032-delins-del", "scale-g-block1032-inv-del"];
+/// It last held `scale-g-block1032-delins-del` and `scale-g-block1032-inv-del`,
+/// whose 2 065-base blocks are the only ones in the corpus over
+/// `merge::MAX_SPLIT_BLOCK`; both closed when `canonicalize_from_sequence`
+/// stopped emitting the block that cap hands back unexamined. They are also why
+/// no smaller-scale corpus can see this class at all (#1460), so do not read a
+/// zero here as covering a corpus that cannot build the shape.
+pub(crate) const RESIDUAL_GUARD_VIOLATIONS: &[&str] = &[];
 
 /// The 5'-direction census, pinned.
 ///
@@ -765,7 +789,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // reason every earlier re-bless in this file records: the partition is
     // decided the same way in both, and the follow-on shuffle that it enables
     // runs 3' or 5', so only some landings coincide with the sibling spelling's.
-    converged: 10_789,
+    converged: 10_775,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -776,7 +800,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // is decided the same way in both, but the *follow-on* shuffle it enables
     // runs 3' or 5'. Here 5' moves the larger set (284 against 261), the reverse
     // of #1536.
-    split_two: 945,
+    split_two: 959,
     split_three: 124,
     split_more: 24,
     underdetermined: 0,
@@ -786,13 +810,10 @@ pub(crate) const FIVE_PRIME: Census = Census {
     prohibited_absolute_accepted: 32,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
     prohibited_conditional_accepted: 16,
-    // 2, as at 3', and the same two rows — see [`RESIDUAL_GUARD_VIOLATIONS`].
-    // The guard is a property of the partition rather than of a shuffle
-    // direction, so the two directions agreeing here is the cross-check.
-    guard_violations: 2,
-    // -- instruments -- (added by #1710, kept across the #1616 rebase)
-    coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // Zero, as at 3'. The guard is a property of the partition rather than of a
+    // shuffle direction, so the two directions agreeing here is the cross-check
+    // — and both read 18, then 2, then 0 through the same two commits.
+    guard_violations: 0,
 };
 
 /// The corpus's shape, independent of any property measured over it.

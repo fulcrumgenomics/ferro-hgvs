@@ -1127,11 +1127,17 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // is exactly the `delins.md:44-47` coincidence — so it refused every merge
     // `:47` recommends. (It did not refuse every merge unconditionally; #1591's
     // `a_span_outweighs_a_split_that_keeps_reference_bases` pins the gap-free
-    // counter-example, and the record carries the correction.) The deletion
-    // itself is #1616 and is NOT on this branch — this entry pins the record's
-    // status only. Measurements quoted in the record are #1616's to re-derive;
-    // the +3,245/+3,251 and +3,244/+3,249 pairs quoted through its review are
-    // on superseded bases and are not to be re-quoted.
+    // counter-example, and the record carries the correction.) **The deletion
+    // is on this branch** (#1616), together with the two gates the ruling's own
+    // scope paragraph asks for: `general.md:34` still governs the merges the
+    // deleted comparand happened to be blocking, so `DNA/delins.md:44-47`'s
+    // payload-coincidence carve-out is scoped to `c.` inside the shipping
+    // partitioner, and a block `MAX_SPLIT_BLOCK` hands back **unexamined** may
+    // not be emitted as one spanning member off that axis either.
+    // `spec_conformance_axis`'s `guard_violations` is 0 in both directions as a
+    // result, having read 18 and then 2 on the way. The +3,245/+3,251 and
+    // +3,244/+3,249 pairs quoted through review are on superseded bases and are
+    // not to be re-quoted.
     (
         "derivation-may-not-be-bounded-by-the-inputs-spelling",
         "decided",

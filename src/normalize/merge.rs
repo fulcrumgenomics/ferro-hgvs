@@ -1864,6 +1864,19 @@ const CANONICAL_PAD: i64 = 128;
 /// that rule retired it. See its doc comment for the measurement.
 const MAX_SPLIT_BLOCK: usize = 1024;
 
+/// Whether [`MAX_SPLIT_BLOCK`] will make [`partition_block`] hand this block back
+/// **unexamined**.
+///
+/// One statement of the cap, consulted by [`partition_block`] itself and by
+/// [`canonicalize_from_sequence`], because the two must not be able to disagree
+/// about which blocks were looked at. See
+/// [`CoincidenceCarveOut::block_may_be_asserted_unexamined`] for why the caller
+/// asks at all.
+fn past_the_split_cap(reference: &[u8], result: &[u8]) -> bool {
+    reference.len() != result.len()
+        && (reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK)
+}
+
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
 ///
@@ -2156,6 +2169,47 @@ impl CoincidenceCarveOut {
 
     /// Whether a separation `general.md:34` would accept may be refused here.
     fn may_disbelieve_a_separation(self) -> bool {
+        matches!(self, Self::InReach)
+    }
+
+    /// Whether a block [`past_the_split_cap`] may still be emitted as the single
+    /// spanning member [`partition_block`] returns for it.
+    ///
+    /// # The cap is a cost guard, and a cost guard may not decide a clause
+    ///
+    /// Over [`MAX_SPLIT_BLOCK`] the length short-circuit returns the whole block
+    /// **before any rule about the derived pieces runs** — so the one member that
+    /// comes back is not a finding that the block holds one variant, it is the
+    /// absence of a finding. Emitting it anyway asserts "there is no separation
+    /// here" on a block nothing examined.
+    ///
+    /// Off the coding DNA axis that assertion has no licence. `general.md:34` —
+    /// "two variants separated by one or more nucleotides should be described
+    /// individually and **not** as a 'delins'" — governs unopposed there, and the
+    /// one passage that could override it for this shape, `DNA/delins.md:44-47`,
+    /// reaches `c.` and nothing else per the decided
+    /// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`. So
+    /// the derivation **declines** and the per-member pipeline answers, which is
+    /// the individual form `:34` asks for. On `c.` the carve-out is in reach and
+    /// `:47` recommends the spanning `delins`, so the block stands as returned.
+    ///
+    /// # This is not the deleted weight bound wearing a new name
+    ///
+    /// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` deleted a
+    /// refusal whose comparand was **the input's own member list**. This one has
+    /// no term for the input at all: it reads the block's two lengths against a
+    /// constant and the axis off [`AxisFrame`]. An input spelled as one 2 065-base
+    /// `delins` and the same variant spelled as two members reach it identically,
+    /// which is exactly what that ruling requires and what the deleted bound could
+    /// not do.
+    ///
+    /// # It is the axis KIND, not `AxisFrame::reading_frame`
+    ///
+    /// A coding `r.` carries a reading frame and is still out of reach: a `DNA/`
+    /// clause has no jurisdiction over the RNA axis, and that ruling names this
+    /// trap by name. [`CoincidenceCarveOut::for_axis`] is the one place the
+    /// question is asked.
+    fn block_may_be_asserted_unexamined(self) -> bool {
         matches!(self, Self::InReach)
     }
 }
@@ -2839,12 +2893,26 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // partitioners and not their decline rates — and every such fallback is
     // counted, so the run can tell "the candidate agreed" from "the candidate
     // was not asked" (see `PartitionDeclineCounts`).
+    let carve_out = CoincidenceCarveOut::for_axis(frame.kind);
+    // `general.md:34`, on a block no rule ever looked at. Over `MAX_SPLIT_BLOCK`
+    // the splitter short-circuits on length and hands back one spanning member;
+    // off the coding DNA axis that member is an unlicensed assertion rather than
+    // a derivation, so decline and let the per-member pipeline emit the
+    // individual descriptions `:34` asks for. See
+    // `CoincidenceCarveOut::block_may_be_asserted_unexamined` for the authority,
+    // for why the axis KIND rather than the reading frame decides it, and for why
+    // this is not the deleted input-relative weight bound under another name.
+    if past_the_split_cap(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
+        && !carve_out.block_may_be_asserted_unexamined()
+    {
+        return None;
+    }
     let mut pieces = partition_block_for_rule(
         partition_rule(),
         &ref_bytes[lo..hi_ref],
         &result[lo..hi_alt],
         axis_min_separation(frame.carries_translated_frame()),
-        CoincidenceCarveOut::for_axis(frame.kind),
+        carve_out,
     );
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -4760,9 +4828,13 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
     // measures confluence tops out well below `MAX_SPLIT_BLOCK` (see the
     // `MAX_SPLIT_BLOCK` scale blindness recorded for #1460), so a zero from it
     // would say nothing. Left as recorded history rather than re-asserted.
-    if reference.len() != result.len()
-        && (reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK)
-    {
+    //
+    // What comes back here is the block **unexamined**, which is not the same
+    // claim as the two rule-driven `whole()` returns below. Off the coding DNA
+    // axis it may not be emitted at all — see
+    // [`CoincidenceCarveOut::block_may_be_asserted_unexamined`], which
+    // [`canonicalize_from_sequence`] consults before it ever gets here.
+    if past_the_split_cap(reference, result) {
         return whole();
     }
     let Some(columns) = best_alignment(reference, result) else {
@@ -14218,6 +14290,95 @@ mod tests {
                 "`r.` is the RNA axis; `DNA/delins.md:47` does not reach it and \
                  `RNA/delins.md` states no counterpart"
             );
+        }
+
+        /// The three `delins.md:47` axis gates carry **one** scope, including the
+        /// unexamined-block one.
+        ///
+        /// The sibling of `the_two_delins_47_gates_share_one_axis_scope`, extended
+        /// to the gate `canonicalize_from_sequence` consults over
+        /// [`MAX_SPLIT_BLOCK`]. Same clause, same ruling, so a future change to
+        /// `:47`'s jurisdiction must move all three or one of them is re-spelling
+        /// a merge the ruling withdrew.
+        #[test]
+        fn the_unexamined_block_gate_shares_the_delins_47_axis_scope() {
+            for kind in [
+                CisKind::Genome,
+                CisKind::Mt,
+                CisKind::Cds,
+                CisKind::Tx,
+                CisKind::Rna,
+            ] {
+                assert_eq!(
+                    CoincidenceCarveOut::for_axis(kind).block_may_be_asserted_unexamined(),
+                    payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    "the unexamined-block gate disagrees with `payload_coalesce_applies` \
+                     about {kind:?}; all three `:47` gates answer to one ruling"
+                );
+            }
+        }
+
+        /// A coding `r.` is out of reach here too — the **kind**, not the frame.
+        ///
+        /// Its own assertion for the reason `a_coding_rna_row_is_outside_the_dna_carve_out`
+        /// records: `AxisFrame::reading_frame` is **true** for [`CisKind::Rna`]
+        /// whenever the transcript resolves a `cds_start`, so a gate written in
+        /// terms of the frame would silently readmit the RNA axis to a `DNA/`
+        /// clause. That is how the sibling defect (#1711) arose.
+        #[test]
+        fn a_coding_rna_block_may_not_be_asserted_unexamined() {
+            assert!(
+                !CoincidenceCarveOut::for_axis(CisKind::Rna).block_may_be_asserted_unexamined(),
+                "`r.` is the RNA axis; `DNA/delins.md:44-47` does not reach it, so an \
+                 unexamined block may not be emitted as one spanning member there"
+            );
+            assert!(
+                CoincidenceCarveOut::for_axis(CisKind::Cds).block_may_be_asserted_unexamined(),
+                "`c.` is the one axis the carve-out reaches, and `:47` recommends the \
+                 spanning `delins` there"
+            );
+        }
+
+        /// The cap is stated **once**, and the two consultations agree by
+        /// construction.
+        ///
+        /// [`partition_block`] short-circuits on it and
+        /// [`canonicalize_from_sequence`] asks about it beforehand; if those two
+        /// could disagree about which blocks were examined, the caller would
+        /// decline blocks the splitter cut and emit blocks it did not. Pinned
+        /// against [`partition_block`]'s observable behaviour rather than against
+        /// a second copy of the arithmetic.
+        #[test]
+        fn the_split_cap_predicate_matches_what_the_splitter_actually_examines() {
+            // Equal-length blocks are exempt from the cap at every width: there is
+            // no gap to place, so there is no search to bound.
+            let long_ref = vec![b'A'; MAX_SPLIT_BLOCK + 2];
+            let mut long_equal = long_ref.clone();
+            long_equal[0] = b'C';
+            long_equal[MAX_SPLIT_BLOCK + 1] = b'C';
+            assert!(!past_the_split_cap(&long_ref, &long_equal));
+            assert_eq!(
+                partition_block(&long_ref, &long_equal, NO_AXIS).len(),
+                2,
+                "an equal-length block is examined at any width, so its two \
+                 separated changes stay two members"
+            );
+
+            // A length-changing block past the cap is handed back whole, and the
+            // predicate says so before the call.
+            let mut long_unequal = long_equal.clone();
+            long_unequal.remove(MAX_SPLIT_BLOCK / 2);
+            assert!(past_the_split_cap(&long_ref, &long_unequal));
+            assert_eq!(
+                partition_block(&long_ref, &long_unequal, NO_AXIS).len(),
+                1,
+                "past the cap the splitter returns the whole block unexamined — \
+                 which is the answer the caller's gate must not emit off `c.`"
+            );
+
+            // And a short length-changing block is under it, so the predicate must
+            // not fire and the split must survive.
+            assert!(!past_the_split_cap(b"AAAAAAAAAA", b"CAAAAAAAA"));
         }
 
         /// A **non-UTF-8** value is refused, and must not produce `live`.
