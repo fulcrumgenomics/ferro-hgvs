@@ -133,7 +133,7 @@ The most heavily ruled stage in the pipeline, and the one the rest depend on: `c
 
 **Decided under.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 
 **Governed by nothing.** Nothing recorded at this stage.
@@ -150,9 +150,9 @@ Settled at the level of principle and in flight at the level of shipped behaviou
 
 **Decided under.**
 
-- `docs/recommendations/general.md:41`
+- `docs/recommendations/general.md:40`
   > **3'rule**: for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed.
-- `docs/recommendations/general.md:44`
+- `docs/recommendations/general.md:43`
   > **exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences
 - `docs/recommendations/DNA/complex.md:50`
   > the general HGVS rule of maintaining the longest unchanged sequence applies (the 3' rule)
@@ -177,7 +177,7 @@ Settled at the level of principle and in flight at the level of shipped behaviou
 
 **Decided under.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/DNA/substitution.md:32`
   > changes involving two or more consecutive nucleotides are described as deletion-insertion (delins)
@@ -220,12 +220,12 @@ rather than left looking unimplemented.
 
 | clause | scope | normalization-relevant? |
 |---|---|---|
-| `docs/recommendations/general.md:35` | Coding only by construction — the condition names amino acids, which an axis with no reading frame cannot state. | modelled |
-| `docs/recommendations/general.md:44` | `c.`, `r.` and `n.` only — the spec scopes the exception by naming prefixes. | modelled |
+| `docs/recommendations/general.md:34` | Coding only by construction — the condition names amino acids, which an axis with no reading frame cannot state. | modelled |
+| `docs/recommendations/general.md:43` | `c.`, `r.` and `n.` only — the spec scopes the exception by naming prefixes. | modelled |
 | `docs/recommendations/DNA/repeated.md:21` | `c.` only. | modelled |
-| `docs/recommendations/general.md:162-167` | The `g.`/`c.` pair, on the minus strand, inside a repeated sequence. | modelled |
+| `docs/recommendations/general.md:161-166` | The `g.`/`c.` pair, on the minus strand, inside a repeated sequence. | modelled |
 | `docs/recommendations/general.md:13` | RNA and protein axes. | modelled |
-| `docs/recommendations/general.md:136` | `c.` only. | not-a-normalization-rule |
+| `docs/recommendations/general.md:135` | `c.` only. | not-a-normalization-rule |
 | `docs/recommendations/RNA/adjoined_transcript.md:18` | `r.` only. | not-a-normalization-rule |
 | `docs/background/refseq.md:47` | Intronic positions on transcript axes. | not-a-normalization-rule |
 | `docs/recommendations/DNA/delins.md:83` | Axis-neutral. Listed here because it is the clearest case of a rule this table must record as unmodellable rather than leave looking unimplemented. | unmodellable |
@@ -233,7 +233,7 @@ rather than left looking unimplemented.
 
 ### The clauses, with their text
 
-#### `docs/recommendations/general.md:35` — modelled
+#### `docs/recommendations/general.md:34` — modelled
 
 > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
 
@@ -241,7 +241,7 @@ rather than left looking unimplemented.
 
 Keyed on the property, not on the axis label: `axis_min_separation(reading_frame: bool)` selects the floor, which correctly groups `n.` — a transcript axis with no frame — with `g.` rather than with `c.`. An axis-name-keyed table would get that pair wrong.
 
-#### `docs/recommendations/general.md:44` — modelled
+#### `docs/recommendations/general.md:43` — modelled
 
 > **exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences
 
@@ -255,7 +255,7 @@ Also precedent, cited as such by `projection-codon-exception-is-decided-by-the-r
 
 **Scope.** `c.` only.
 
-#### `docs/recommendations/general.md:162-167` — modelled
+#### `docs/recommendations/general.md:161-166` — modelled
 
 > Yes, when a gene is on the minus strand of a chromosome (opposite transcriptional orientation) and the change is located in a repeated sequence (mono-, di-, tri-, etc. nucleotide stretches), the 3'rule has this as a consequence.
 
@@ -269,9 +269,9 @@ The load-bearing row of this table, and the reason the table exists. The Q&A ans
 
 **Scope.** RNA and protein axes.
 
-The method half of `canonical-form-choice-when-both-legal`, whose governing clause is `general.md:157` — the same statement made for protein and extended here to RNA.
+The method half of `canonical-form-choice-when-both-legal`, whose governing clause is `general.md:156` — the same statement made for protein and extended here to RNA.
 
-#### `docs/recommendations/general.md:136` — not-a-normalization-rule
+#### `docs/recommendations/general.md:135` — not-a-normalization-rule
 
 > The minus sign should only be used as a minus in the description of variants based on a coding DNA reference sequence.
 

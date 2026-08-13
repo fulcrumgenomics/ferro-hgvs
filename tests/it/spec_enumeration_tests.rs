@@ -281,7 +281,21 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // Repairs that need real reference bases; not assertable hermetically.
     (Status::RequiresReference, 10),
     // MUST-level output invariants violated by a string ferro emits.
-    (Status::InvariantViolationMust, 0),
+    //
+    // 0 -> 1 at spec pin `565b973`, and the row is a REAL DEFECT that the old
+    // pin was masking rather than a consequence of the bump — issue #1789.
+    // `output-invariant/B8-no-size-number-forms/NM_004006.2:c.5439_5440ins6`:
+    // ferro accepts the size-number form `ins6`, which `checklist.md:33` marks
+    // `class="invalid"` by name ("Describing a variant as `c.5439_5440ins6` is
+    // not allowed, the inserted sequence ... should be specified").
+    //
+    // It was invisible at `6f85311` only because the spec's own example carried
+    // an inverted range (`c.5439_5430ins6`, 5439 > 5430) that ferro refuses for
+    // the RANGE, so the `ins6` violation was never reached. Upstream `565b973`
+    // corrected the typo to `c.5439_5440ins6`, the range now parses, and the
+    // defect surfaces. Do NOT suppress this row to restore a 0 — the zero was
+    // the bug hiding, and #1789 tracks the fix.
+    (Status::InvariantViolationMust, 1),
     // SHOULD-level (advisory) output invariants. Never a hard failure.
     (Status::InvariantViolationShould, 2),
     // syntax.yaml examples that do not parse into their declared axis.
@@ -589,14 +603,45 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // example, so a spec example is in the moving set. That is a statement
     // about the reference this corpus is built on, not about the description —
     // and `project` refused those rows already.
-    (Status::ProjectionPinned, 1154),
+    //
+    // Spec pin `6f85311` -> `565b973`: 1154 -> 1157.
+    //
+    // The four counts below move together and must be read together, because
+    // they have ONE cause: upstream corrected five worked examples, so the
+    // harvested INPUT set changed. 23 rows left and 21 arrived; the enumeration
+    // total goes 2340 -> 2338. Ferro's behaviour did not change — of the 2317
+    // rows common to both pins, every one that differs differs in exactly one
+    // field, `spec_citation`, and ZERO differ in any other field.
+    //
+    // The corrections that moved the input set, each named by the citation the
+    // row carries at the pin it appears under:
+    //   - `DNA/insertion.md:74`   `NM_004006.1:c.761_762insN[5]` -> `NM_004006.2:`
+    //   - `checklist.md:33`       `c.5439_5430ins6` -> `c.5439_5440ins6`, which
+    //     also arrives fully qualified at `checklist.md:49` as
+    //     `NM_004006.2:c.5439_5440ins6` (the inverted range that was masking
+    //     #1789 — see `InvariantViolationMust` in DIVERGENCE_BUDGET)
+    //   - `uncertain.md:27` `c.427T>C` -> `c.424C>T`, and `uncertain.md:199`
+    //     `r.(306g>u)` and `DNA/alleles.md:57` `c.476C>T` retire, while
+    //     `protein/substitution.md:72` introduces `NM_004006.2:c.2622G>C`
+    //
+    // An accession corrected to a version the committed reference slice CAN
+    // serve reaches projection, which is what moves rows out of the error and
+    // mode-divergence buckets and into the pinned/unavailable ones. Every
+    // figure above and every per-status delta is measured by regenerating the
+    // enumeration at both pins on THIS base and diffing it row-id by row-id —
+    // not composed from the two branches' deltas. They read +3 / +2 / -5 / -3,
+    // netting -3 here and +1 in DIVERGENCE_BUDGET's `InvariantViolationMust`,
+    // for the -2 total.
+    (Status::ProjectionPinned, 1157),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
     // #1870: 485 -> 479. See `ProjectionPinned` above — same ten-row move.
-    (Status::ProjectionUnavailablePinned, 479),
+    // 479 -> 481 at `565b973`, from the harvest change described above.
+    (Status::ProjectionUnavailablePinned, 481),
     // #1870: 210 -> 220, the +10 receiving the two deltas above.
-    (Status::ProjectionErrorPinned, 220),
+    // 220 -> 215 at `565b973`, same cause.
+    (Status::ProjectionErrorPinned, 215),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
     // `LRG_199:g.954966C>T`, `LRG_199:g.981731G>A` and `LRG_476:g.4950_39800=`,
     // one per mode — and **no row entered**, which is what says this is the LRG
@@ -632,7 +677,11 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // record's 56 are prohibited-stratum corpus rows refused in no mode
     // (`ins6`, `X`, and the `g.` offsets); these 56 are spec-harvested strings
     // on a bare transcript accession. Neither figure is derived from the other.
-    (Status::ModeDivergencePinned, 288),
+    //
+    // 288 -> 285 at spec pin `565b973`, from the same harvest change recorded on
+    // `ProjectionPinned` above — not a further LRG move and not a further #1630
+    // move.
+    (Status::ModeDivergencePinned, 285),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors

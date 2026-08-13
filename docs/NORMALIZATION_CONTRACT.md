@@ -168,9 +168,9 @@ REPRESENTATION IMPACT of leaving it undecided: none.
 - `docs/recommendations/DNA/complex.md:28`
   > the start of the chromosome is described as `pter`, the end as `qter`, and the centromere as `cen`
 - `docs/recommendations/DNA/complex.md:127`
-  > NC_000022.11:g.pter_(12200001_14700000)del::(37600001_410000000)_qterdel
+  > NC_000022.11:g.pter_(12200001_14700000)del::(37600001_41000000)_qterdel
 - `docs/recommendations/DNA/complex.md:161`
-  > NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_410000000)_qterdel]sup
+  > NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_41000000)_qterdel]sup
 - `docs/recommendations/DNA/complex.md:13`
   > the description of complex changes can become rather complicated and at some point, although literally correct, becomes effectively meaningless
 
@@ -302,7 +302,7 @@ Pinned by `tests/it/issue_1748_noncoding_axis_zones.rs`, whose `the_unconditiona
 
 **Also cited.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/recommendations/DNA/complex.md:64`
   > HGVS, therefore, recommends to describe translocations exclusively using a "delins" format.
@@ -362,7 +362,7 @@ WHAT ACTUALLY GATED THE TWO ROWS DIFFERENTLY, BISECTED. Two mechanisms were prop
   > masked nucleotide
 - `docs/background/standards.md:37`
   > gap of indeterminate length
-- `docs/recommendations/general.md:48`
+- `docs/recommendations/general.md:47`
   > nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide symbols]
 
 **The ruling.**
@@ -394,7 +394,7 @@ REPRESENTATION IMPACT: none. No input that is currently normalized to a legal de
 
 - `docs/recommendations/checklist.md:45`
   > this describes a deletion of nucleotide -14 in the intron directly 5' of nucleotide `c.12`
-- `docs/recommendations/general.md:44`
+- `docs/recommendations/general.md:43`
   > **exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences
 
 **The ruling.**
@@ -523,18 +523,18 @@ Pinned by `tests/it/issue_1870_cds_less_transcript_refusal.rs`, whose `issue_187
 
 **Governing clause.**
 
-- `docs/recommendations/general.md:157`
+- `docs/recommendations/general.md:156`
   > It means that protein variant descriptions should be derived from comparing the variant protein sequence with the reference protein sequence.
 
 **Also cited.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/recommendations/RNA/delins.md:41`
   > This format is preferred when either of the two variants is known as a frequently occurring variant ("polymorphism").
 - `docs/recommendations/DNA/complex.md:50`
   > the general HGVS rule of maintaining the longest unchanged sequence applies (the 3' rule)
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/protein/delins.md:50`
   > Although the proteins resulting from the changes `NM_080877.2:c.1733_1735delinsTTT` and `c.1732_1794del` are identical, their HGVS description is different.
@@ -568,7 +568,7 @@ A FOURTH PIECE OF COUNTER-EVIDENCE, ADDED 2026-08-11, AND IT IS THE SHARPEST OF 
 
 **Deviates from.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/DNA/delins.md:17`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
@@ -577,7 +577,7 @@ A FOURTH PIECE OF COUNTER-EVIDENCE, ADDED 2026-08-11, AND IT IS THE SHARPEST OF 
 
 - `docs/recommendations/DNA/delins.md:47`
   > **The "delins" format is recommended**: it is simpler and prevents software tools making incorrect predictions for the consequences on protein level.
-- `docs/recommendations/general.md:35`
+- `docs/recommendations/general.md:34`
   > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
 
 **The ruling.**
@@ -627,7 +627,7 @@ THE FALSIFIER — 8 IS A SET TO RE-DERIVE, NOT A CONSTANT TO DEFEND. If a future
 
 **Also cited.**
 
-- `docs/recommendations/general.md:35`
+- `docs/recommendations/general.md:34`
   > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
 - `docs/recommendations/DNA/duplication.md:18`
   > when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion
@@ -667,9 +667,9 @@ WHAT #1599 DOES NOT IMPLEMENT. It does not implement the first of the two constr
 
 **Also cited.**
 
-- `docs/recommendations/general.md:58`
+- `docs/recommendations/general.md:57`
   > descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/background/basics.md:38`
   > designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**
@@ -698,7 +698,7 @@ REPRESENTATION IMPACT: none. Ratifies shipped behaviour in both modes.
 
 **Governing clause.**
 
-- `docs/recommendations/general.md:43`
+- `docs/recommendations/general.md:42`
   > the 3'rule applies to ALL descriptions (genome, gene, transcript, and protein) of a given variant.
 
 **Also cited.**
@@ -744,14 +744,14 @@ AN ADJACENT RISK THE RULING INHERITS AND DOES NOT FIX. `hgvs_to_spdi` is a SECON
 
 **Governing clause.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 
 **Also cited.**
 
-- `docs/recommendations/general.md:41`
+- `docs/recommendations/general.md:40`
   > **3'rule**: for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed.
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/recommendations/DNA/duplication.md:18`
   > when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion
@@ -785,14 +785,14 @@ REPRESENTATION EFFECT, SO THE COST IS ON THE RECORD. Closing this moves any stor
 
 **Deviates from.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 
 **Also cited.**
 
 - `docs/recommendations/DNA/delins.md:16`
   > changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/DNA/duplication.md:18`
   > when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion
@@ -862,7 +862,7 @@ REPRESENTATION IMPACT: none.
   > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins" (e.g., `r.142_144delinsugg` `p.(Arg48Trp)`).
 - `docs/recommendations/RNA/substitution.md:18`
   > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins" (e.g., `r.142_144delinsugg` (`p.Arg48Trp`)).
-- `docs/recommendations/general.md:39`
+- `docs/recommendations/general.md:38`
   > The new recommendation will be: **two variants separated by less than two nucleotides should be described as a "delins"**.
 - `docs/consultation/SVD-WG010.md:5`
   > Status: rejected
@@ -968,9 +968,9 @@ A FALSE CLAIM ABOUT `:44-47`, CORRECTED HERE BECAUSE IT KEEPS CIRCULATING. It ha
   > two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
 - `docs/recommendations/DNA/repeated.md:23`
   > This restriction only applies to the coding sequence, which does not include the introns or the UTR sequence
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
-- `docs/recommendations/general.md:43`
+- `docs/recommendations/general.md:42`
   > the 3'rule applies to ALL descriptions (genome, gene, transcript, and protein) of a given variant
 
 **Convergence pinned by equivalence class.** `dna-delins-vs-aligned-split-850-901`
@@ -1010,7 +1010,7 @@ MEASURED, NOT ESTIMATED. Over the 11,272-class designed cis corpus (`examples/ge
   > **The "delins" format is recommended**: it is simpler and prevents software tools making incorrect predictions for the consequences on protein level.
 - `docs/recommendations/DNA/delins.md:17`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/consultation/open-issues.md:77-78`
   > one variant can be described using different formats. This is undesired; HGVS recommendations should be extended by specifying when to use which format.
@@ -1072,7 +1072,7 @@ THE ZERO IS NOT STRUCTURAL, AND THE EXCLUSIONS ARE NAMED. `normalize::partition_
   > First, the two variants may have been reported (or might occur) individually
 - `docs/recommendations/DNA/delins.md:89`
   > the answer was modified, i.e. the addition "However, since the variant is likely a combination of two other variants, it is acceptable to describe it as <code class="invalid">NM_007294.3:c.[2077G>A;2077_2078insTA]</code>." was removed
-- `docs/recommendations/general.md:58`
+- `docs/recommendations/general.md:57`
   > descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed (e.g., `NM_004006.2:c.[762_768del;767_774dup]`)
 
 **The ruling.**
@@ -1136,9 +1136,9 @@ AND THEN TO 0 OF 18 — 2026-08-12, SAME CLAUSE, ONE HOP EARLIER. The residual 2
   > Duplication: a sequence change where, compared to a reference sequence, a copy of one or more nucleotides is inserted **directly 3'** of the original copy of that sequence.
 - `docs/background/glossary.md:310-311`
   > **variant**<br> a difference between a reference sequence and an observed sequence.
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > **prioritisation**: when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion.
-- `docs/recommendations/general.md:57`
+- `docs/recommendations/general.md:56`
   > when a variant can be described as a duplication or an insertion, prioritisation determines it should be described as a duplication.
 - `docs/recommendations/DNA/insertion.md:5`
   > Insertion: a sequence change where, compared to the reference sequence, one or more nucleotides are inserted **and** where the insertion is not a copy of a sequence immediately 5'.
@@ -1153,9 +1153,9 @@ TWO INDEPENDENT GROUNDS, AND BOTH ARE LOAD-BEARING. Neither is offered as suffic
 
 GROUND 1 — `:17` SUPPLIES THE SCOPE, AND `:18` IS ITS SUB-BULLET. `:17` is the clause that says when the `dup` label "may only be used" at all, and `:18`, `:19` and `:20` are its indented children. Read in that hierarchy the MUST ranks a label inside a scope its parent fixes, and its siblings confirm the register: `:19` REQUIRES the `ins` label where tandemness is unsupported, `:20` requires `ins` for inverted duplications. All three swap ONE LABEL FOR ANOTHER OVER THE SAME CHANGE; none says "and not as, e.g., two members". `:18`'s own forbidden alternative is a same-span relabel every time — `insertion.md:17` gives it as `g.456_457ins123_456`, an insertion-by-range naming the very span the `dup` competes with. This is why `:17` and not `:18` is named governing: the whole ruling is that the scope binds. `README.md:263-269` already reads it this way, in the section the canonical ruleset titles as a worked example of reading force from prose — "the rule ranks the *label* for one span; it does not require that a partition be chosen so as to produce a duplication".
 
-GROUND 2 — THE GLOSSARY FIXES WHICH OBJECT THE MUST IS ABOUT. `:18`'s grammatical subject is "a variant", and `background/glossary.md` defines that term: a variant is "a difference between a reference sequence and an observed sequence" (the term is listed at `:310` and its definition sits on `:311`, so the citation spans both). A difference between two sequences is not a member of a chosen spelling — it is a property of the pair, prior to any partition. So `:18` tests a difference, and the question "which differences are there" is answered by the sequences, not by how a submitter or a partitioner cut them up. This is what makes the two grounds independent rather than one argument twice: `:17` answers "the must is scoped", the glossary answers "scoped to what object", and the second is DEFINITIONAL and lives in a different file. `general.md:56`/`:57` are cited because `:18` names Prioritization as its authority and thereby inherits its scope; `adjudication-precedence-order` records at escalation E1 that `:56` ranks single-variant type labels for one span and never ranks a multi-member allele against a spanning description.
+GROUND 2 — THE GLOSSARY FIXES WHICH OBJECT THE MUST IS ABOUT. `:18`'s grammatical subject is "a variant", and `background/glossary.md` defines that term: a variant is "a difference between a reference sequence and an observed sequence" (the term is listed at `:310` and its definition sits on `:311`, so the citation spans both). A difference between two sequences is not a member of a chosen spelling — it is a property of the pair, prior to any partition. So `:18` tests a difference, and the question "which differences are there" is answered by the sequences, not by how a submitter or a partitioner cut them up. This is what makes the two grounds independent rather than one argument twice: `:17` answers "the must is scoped", the glossary answers "scoped to what object", and the second is DEFINITIONAL and lives in a different file. `general.md:55`/`:57` are cited because `:18` names Prioritization as its authority and thereby inherits its scope; `adjudication-precedence-order` records at escalation E1 that `:56` ranks single-variant type labels for one span and never ranks a multi-member allele against a spanning description.
 
-WHAT WAS REFUTED ALONG THE WAY. The strong reading's best argument is that `general.md:57` restates the MUST in the general file, outside `duplication.md`'s bullet hierarchy, where `:17` is not visible — so read alone `:57` looks free-standing. It is not: `:57` is itself an indented sub-bullet of `:56`, whose antecedent is "when a description is possible according to several types", i.e. several TYPES of one description. It inherits a scope in the same way `:18` does, and inherits it from a clause this ledger has already ruled does not reach a multi-member allele. The strong reading is also circular on the rows that motivate it: to use `:18` to justify a two-member partition one must first accept that partition, because only under it does a "variant that can be described as a duplication" exist. `contiguous-insertion-split-by-a-blocked-derivation` makes exactly that objection in its own text.
+WHAT WAS REFUTED ALONG THE WAY. The strong reading's best argument is that `general.md:56` restates the MUST in the general file, outside `duplication.md`'s bullet hierarchy, where `:17` is not visible — so read alone `:57` looks free-standing. It is not: `:57` is itself an indented sub-bullet of `:56`, whose antecedent is "when a description is possible according to several types", i.e. several TYPES of one description. It inherits a scope in the same way `:18` does, and inherits it from a clause this ledger has already ruled does not reach a multi-member allele. The strong reading is also circular on the rows that motivate it: to use `:18` to justify a two-member partition one must first accept that partition, because only under it does a "variant that can be described as a duplication" exist. `contiguous-insertion-split-by-a-blocked-derivation` makes exactly that objection in its own text.
 
 WHAT THIS DOES NOT CLOSE — READ THIS BEFORE CITING THE RECORD. The `dup` half of `delins-adjacent-members-when-both-consume-reference`'s carve-out is untouched and stays exactly as that record left it. It is a DIFFERENT MECHANISM: merging two ADJACENT MEMBERS AT SEPARATION ZERO into one `delins`, which destroys a `dup` that the members themselves carry. This record is about WHOLE-BLOCK RE-DERIVATION, where no member survives to be destroyed because the partition is recomputed from the resulting sequence. That record says in terms "Do not read this as closing both", and nothing here reaches it. The adjacent repeat-expansion shape it also names is likewise untouched.
 
@@ -1186,7 +1186,7 @@ REPRESENTATION IMPACT: none on the shipped default. The `dup`-losing shape is re
   > the variant (`NC_000023.11:g.32441180dup`) is **not described** as `c.3922dup` since this would shift the position of the variant to the next exon
 - `docs/recommendations/DNA/duplication.md:148`
   > an exception was made to prevent that when `c.3922dup` is translated back to a genomic position, one would end up at the wrong nucleotide, in the wrong exon
-- `docs/recommendations/general.md:44`
+- `docs/recommendations/general.md:43`
   > **exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences
 
 **The ruling.**
@@ -1224,9 +1224,9 @@ WHAT THE TESTS DO IN THE MEANTIME. `tests/it/spec_worked_examples.rs` pinned the
 
 **Also cited.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
-- `docs/recommendations/general.md:58`
+- `docs/recommendations/general.md:57`
   > descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed
 - `docs/recommendations/DNA/alleles.md:5`
   > Allele: a series of variants on one chromosome.
@@ -1235,15 +1235,15 @@ WHAT THE TESTS DO IN THE MEANTIME. `tests/it/spec_worked_examples.rs` pinned the
 
 OPERATOR RULING, 2026-08-12 — DECIDED FOR THE `inv`, AND DECIDED AS A `README.md` RULE 6 CHOICE. A whole-span reverse complement whose competing description mixes lone substitutions with multi-column members is spelled as one `inv`. `inversion.md:5` is named as governing in the same sense `inversion-vs-two-delins-76-83` names it — as a PERMISSION. It defines an inversion as more than one nucleotide replaced by the reverse complement of the original, a property of the whole span, so the `inv` spelling is conformant; nothing in the spec COMPELS it over the mixed multi-member competitor, which is conformant too. The choice between them is therefore `README.md` rule 6 — among multiple conformant forms, the maintainers choose — and rule 7's disclosure obligation is what the PR's `Representation-Change:` trailer discharges. Two things a later reader must not do with this record: cite it as CONFORMANCE (it is not — the competing form violates nothing), or read a build that emits the multi-member form as violating rule 1.
 
-WHAT THIS RULING RESTS ON IS THE SHAPE OF THE COMPETITORS, NOT THE SIZE OF THE POPULATION. Three findings carry it, and each follows from what the competing descriptions ARE rather than from how many there are: `general.md:58` cannot reach a population that contains no `del`, `dup` or `ins`; `general.md:56`, taken to reach at all, argues against BOTH the widened gate and the narrow one it replaced, because every competitor contains a substitution; and withdrawing the route is a new representation change rather than a restoration, because some rows land on a spelling present in neither arm. The counts below are evidence for those three, not premises of them — read a changed count as a reason to re-check the shapes, not as a reason to re-open the ruling.
+WHAT THIS RULING RESTS ON IS THE SHAPE OF THE COMPETITORS, NOT THE SIZE OF THE POPULATION. Three findings carry it, and each follows from what the competing descriptions ARE rather than from how many there are: `general.md:57` cannot reach a population that contains no `del`, `dup` or `ins`; `general.md:55`, taken to reach at all, argues against BOTH the widened gate and the narrow one it replaced, because every competitor contains a substitution; and withdrawing the route is a new representation change rather than a restoration, because some rows land on a spelling present in neither arm. The counts below are evidence for those three, not premises of them — read a changed count as a reason to re-check the shapes, not as a reason to re-open the ruling.
 
 EVERY FIGURE BELOW IS PRE-REBASE, AND ITS BASE IS NAMED IN THE SENTENCE THAT CARRIES IT. All of them were measured with this branch at `3d2a7a03`, whose base is `ce933533`. At the time of writing that head is 9 commits behind `origin/main` at `2f4e3bb9`, two of which touch `src/normalize/merge.rs`: `3228d228` (#1688), which made each frame-derived rule declare its axis scope and redefined the predicates this route is expressed in terms of, and `8f68b425` (#1693). The composition is expected to survive that rebase — it is a property of the sweep's transcript and of what a reverse complement of it partitions into — but the exact counts are NOT guaranteed until re-measured on the rebased head, and whoever rebases owns that re-measurement. Do not quote a number from this record without the sha attached to it.
 
 RE-MEASURED AGAIN ON 2026-08-13, WITH THIS BRANCH REBASED ONTO `origin/main` AT `cc8407bc`. Every figure below reproduces except two, and both are corrected in place rather than left standing under a stale sha. Read the SHA in each sentence, not the date: this is the SECOND re-measurement, and the first one's stamp (`1ea75334`) had already gone stale before it — the branch was rebased onto `57f71d31` without the stamp moving, so a reader trusting this paragraph was two bases behind while it read as current. That is the failure this ledger keeps recording, and the only defence is to re-derive rather than re-date. Between `57f71d31` and `cc8407bc`, `main` gained THIRTEEN commits, three of which touch normalization — `0c925605`/#1751 (parser and `src/normalize/mod.rs`), `f187331a`/#1726 (`src/normalize/mod.rs`) and `b455a637`/#1720, which touches `src/normalize/merge.rs` itself, this pass's own file. NONE moves a row of this sweep on the `origin/main` arm — its committed `cases.tsv` is byte-identical across the whole range, checked rather than assumed — but #1720 DOES move the withdrawal counterfactual, which is recorded below and is the reason a counterfactual has to be re-run rather than carried. Measured against `cc8407bc` by set difference over the 2,075 sweep rows on both arms, never by comparing totals: the shipping arm moves 62 rows and they are the SAME 62 as before (set equality, not count equality); the outcome census still goes (1434, 460, 26, 155) -> (1490, 466, 26, 93); 56 rows return at the authored span and 6 at a narrowed one; the 93 repartitioned rows that remain include 6 that render a `delins`; and the withdrawn arm now moves 10, of which ZERO reach the same answer through the run scan and all TEN land on a third spelling — `c.283_298inv` still becomes `c.[283G>C;286_295inv;298G>C]`, byte-identical to the string recorded above. THOSE THREE FIGURES MOVED (12/3/9 at `c165c939`), and the paragraph below re-derives them rather than restating the old ones. The run scan still never fires with the route present — 0 adoption events across 2,075 rows — and fires 34 times over 17 rows without it, counting the FIRST normalize pass only: the generator re-normalizes every answer to check it is a fixed point, and counting both passes reads 51. Both baselines are measurements, not committed pins read back: `origin/main` at `c165c939` was checked out into its own worktree and its sweep run there, green on all 11 gate tests, and re-running the generator on this head against the prepared reference rewrites `cases.tsv` byte-identically to what is committed. Two things are deliberately NOT restated. The overlap against #1708's 4 moved rows is RETIRED rather than re-asserted: #1708 now sits far below the base and `main` moves no sweep row at all across the range this rebase crossed, so the claim has no denominator left. And the denotation check — 62/62 agree, 0 differ, 0 not-comparable, control firing 116/116 — was NOT re-derived here and keeps its `1ea75334` stamp. Both spellings it compares are byte-identical at this base, which is a reason to expect it to hold; it is not a measurement that it does.
 
-THIS RECORD DOES NOT REST ON `general.md:56`, AND THE PR'S ORIGINAL `:56` ARGUMENT WAS WRONG. Read plainly and taken to reach this comparison, `:56` argues AGAINST the `inv` on every row in question: re-measured at `cc8407bc`, all 62 rows whose answer the fifth route decides have a competitor containing a substitution, and substitution is `:56`'s rank (1), above inversion at (3). So `:56` supports neither the widened gate nor the narrow `no_piece_is_a_lone_substitution` it replaced — under it, both should withdraw the `inv`. The only reading under which either survives is the one in which `:56` does not reach a multi-member allele at all, and that reading is DECIDED elsewhere, by `conflicting-member-geometry-refusal-scope`, which cites `:56` precisely to record that it does not reach one: "`:56` ranks competing descriptions of ONE span; it says nothing about two members of one allele. Citing `:56` against a multi-member allele is this repository's recorded cautionary error". `:56`'s own antecedent — "when a description is possible according to several types" — is one description with several candidate type labels, which no competitor here is; and at `cc8407bc`, 50 of those 62 competitors contain an `inv` member of their own (e.g. `c.[208A>T;211_212inv;215A>T]`), so both sides of the comparison carry the same type. This record RELIES on that holding and does not extend it.
+THIS RECORD DOES NOT REST ON `general.md:55`, AND THE PR'S ORIGINAL `:56` ARGUMENT WAS WRONG. Read plainly and taken to reach this comparison, `:56` argues AGAINST the `inv` on every row in question: re-measured at `cc8407bc`, all 62 rows whose answer the fifth route decides have a competitor containing a substitution, and substitution is `:56`'s rank (1), above inversion at (3). So `:56` supports neither the widened gate nor the narrow `no_piece_is_a_lone_substitution` it replaced — under it, both should withdraw the `inv`. The only reading under which either survives is the one in which `:56` does not reach a multi-member allele at all, and that reading is DECIDED elsewhere, by `conflicting-member-geometry-refusal-scope`, which cites `:56` precisely to record that it does not reach one: "`:56` ranks competing descriptions of ONE span; it says nothing about two members of one allele. Citing `:56` against a multi-member allele is this repository's recorded cautionary error". `:56`'s own antecedent — "when a description is possible according to several types" — is one description with several candidate type labels, which no competitor here is; and at `cc8407bc`, 50 of those 62 competitors contain an `inv` member of their own (e.g. `c.[208A>T;211_212inv;215A>T]`), so both sides of the comparison carry the same type. This record RELIES on that holding and does not extend it.
 
-`general.md:58` DOES NOT REACH IT EITHER, MEASURED RATHER THAN ASSUMED. Grounding the route on `:58` instead of `:56` was considered and is unavailable. `:58` prohibits "removing part of a reference sequence and replacing it with part of the same sequence", and `conflicting-member-geometry-refusal-scope` records that its stated ground "literally describes a deletion beside a duplication, which is the pair in its example `NM_004006.2:c.[762_768del;767_774dup]`". Re-censused at `cc8407bc` over all 62 moved rows: ZERO contain a `del`, a `dup` or an `ins`, at either the rendered-member or the piece level; 19 contain a `delins` and every one contains a substitution. THE `18` THIS SENTENCE CARRIED UNTIL 2026-08-13 WAS THE RIGHT NUMBER AGAINST A DENOMINATOR THAT HAS SINCE CHANGED. At `3d2a7a03` the fifth route decided 59 of the 62 moved rows and 18 of those 59 carried a `delins`; at `cc8407bc` it decides all 62 and 19 carry one. Both readings of the sentence now give 19, because the two denominators have converged — which is exactly why the sentence should never have quoted a count without saying which population it was over. The ZERO is unchanged under every denominator tried, and the zero is the figure this conclusion turns on. The antecedent is unsatisfied on every row, and not narrowly — it misses by the whole population, which is why this conclusion does not turn on the exact counts. Note the direction as well: `:58` is a PROHIBITION, so if it did reach it would rule the COMPETITOR out and thereby license the `inv`, which is the direction wanted; it simply has no purchase here.
+`general.md:57` DOES NOT REACH IT EITHER, MEASURED RATHER THAN ASSUMED. Grounding the route on `:58` instead of `:56` was considered and is unavailable. `:58` prohibits "removing part of a reference sequence and replacing it with part of the same sequence", and `conflicting-member-geometry-refusal-scope` records that its stated ground "literally describes a deletion beside a duplication, which is the pair in its example `NM_004006.2:c.[762_768del;767_774dup]`". Re-censused at `cc8407bc` over all 62 moved rows: ZERO contain a `del`, a `dup` or an `ins`, at either the rendered-member or the piece level; 19 contain a `delins` and every one contains a substitution. THE `18` THIS SENTENCE CARRIED UNTIL 2026-08-13 WAS THE RIGHT NUMBER AGAINST A DENOMINATOR THAT HAS SINCE CHANGED. At `3d2a7a03` the fifth route decided 59 of the 62 moved rows and 18 of those 59 carried a `delins`; at `cc8407bc` it decides all 62 and 19 carry one. Both readings of the sentence now give 19, because the two denominators have converged — which is exactly why the sentence should never have quoted a count without saying which population it was over. The ZERO is unchanged under every denominator tried, and the zero is the figure this conclusion turns on. The antecedent is unsatisfied on every row, and not narrowly — it misses by the whole population, which is why this conclusion does not turn on the exact counts. Note the direction as well: `:58` is a PROHIBITION, so if it did reach it would rule the COMPETITOR out and thereby license the `inv`, which is the direction wanted; it simply has no purchase here.
 
 THE GROUND ACTUALLY HELD: NOTATION MUST NOT TURN ON BASE COINCIDENCE. #1461's `NC_000013.10:g.100809575_100810031inv` is a 457-base exact reverse complement whose canonical partition, re-measured at `cc8407bc`, is 133 pieces, the first of which is `g.100809575A>T` — both reproduce. All four earlier admission routes refuse it, re-verified at `cc8407bc` by probing the gate's own four predicates on the very pieces they read: all four return false. THE TWO MARGINS THIS SENTENCE USED TO QUOTE DO NOT REPRODUCE, and they are corrected rather than dropped. At `cc8407bc` the widest separation between pieces is 6, not 5; and the partition leaves 271 of the 457 columns unchanged, not 229, the payload-weighted count being 225 against a threshold of 228.5 — so the density routes miss by four columns, not by one. The refusal is unchanged, and so is the argument that rests on it; only the margins moved, and they moved because the partitioner did. Quote the predicate verdicts, never the margins. Refusing the `inv` there makes the description turn on whether one interior column happens to be self-complementary — a property of the SEQUENCE, not of the EVENT. The same inversion over a tract with one fewer coincidental column would be spelled `inv`; over this one it is spelled as a 133-member allele. That is the instability rule 6 is being exercised to remove, and it is what this record rests on — not on ranking the competitor's member types, which is the move the paragraph above refuses.
 
@@ -1251,7 +1251,7 @@ WHAT WITHDRAWING THE ROUTE WOULD COST, MEASURED — 62 TO 12, NOT 62 TO 3. Measu
 
 THE COUNTERFACTUAL WAS RE-RUN AT `cc8407bc` AND IT MOVED — 62 TO 10, ALL TEN ON A THIRD SPELLING. This is the figure the paragraph above warned would not survive a rebase, and it did not. `b455a637` (#1720), which lands on `src/normalize/merge.rs` between `c165c939` and `cc8407bc`, changes what the run scan reaches: the three rows that used to arrive at the shipping answer through `window_inversion` (`c.1921_1932inv`, `c.2383_2394inv`, `c.2593_2604inv`) now fall back to `origin/main`'s own spelling instead, so they stop moving at all, while `c.2418_2433inv` starts landing on a third spelling where it previously kept main's. Twelve minus three plus one is ten, and the arithmetic is stated because it is the check that the four row-level changes account for the whole delta. Two consequences, in opposite directions. The fifth route now decides ALL 62 moved rows rather than 59, the run scan reaching none of them on its own (0 adoption events with the route present, 34 over 17 rows without it). And THE DURABLE POINT IS STRENGTHENED, NOT WEAKENED: at `3d2a7a03` three of the twelve were a restoration and nine were a new spelling; at `cc8407bc` NONE is a restoration and all ten are new. Withdrawal has never been a return to the previous behaviour, and it is now less like one than when the claim was first made. What must not be done with this is to re-date the old numbers: a counterfactual is a property of the base it is run against, and this one has now moved once under a commit that touches neither this pass nor this ruling.
 
-WHAT THIS DOES NOT SETTLE. (1) Whether `general.md:56` reaches a multi-member allele — decided elsewhere and negatively, by `conflicting-member-geometry-refusal-scope`. (2) The frameless separation-one family, #1711: canonical arms merging two variants across one unchanged nucleotide on axes that declare no reading frame, which is rejected SVD-WG010 by name and so a rule-1 conformance question rather than a rule-6 choice. (3) The coding-axis merge questions, which are two different questions and neither is this one: the codon-frame merge at separation ONE (#1716, a wrong-edge defect on the shipping arm), and the payload-coincidence carve-out at separation TWO OR MORE (`coalesce_payload_alignment_split`, governed by `delins-merge-vs-individual-gap-two-or-more`). (4) It disturbs neither `inversion-vs-two-delins-76-83`, whose all-`delins` competitor case is untouched and still reaches the `inv` through the narrower gate, nor #1230's all-substitutions case, which BOTH gates refuse — "no piece is a lone substitution" and "not every piece is a lone substitution" both fail exactly when every piece is one.
+WHAT THIS DOES NOT SETTLE. (1) Whether `general.md:55` reaches a multi-member allele — decided elsewhere and negatively, by `conflicting-member-geometry-refusal-scope`. (2) The frameless separation-one family, #1711: canonical arms merging two variants across one unchanged nucleotide on axes that declare no reading frame, which is rejected SVD-WG010 by name and so a rule-1 conformance question rather than a rule-6 choice. (3) The coding-axis merge questions, which are two different questions and neither is this one: the codon-frame merge at separation ONE (#1716, a wrong-edge defect on the shipping arm), and the payload-coincidence carve-out at separation TWO OR MORE (`coalesce_payload_alignment_split`, governed by `delins-merge-vs-individual-gap-two-or-more`). (4) It disturbs neither `inversion-vs-two-delins-76-83`, whose all-`delins` competitor case is untouched and still reaches the `inv` through the narrower gate, nor #1230's all-substitutions case, which BOTH gates refuse — "no piece is a lone substitution" and "not every piece is a lone substitution" both fail exactly when every piece is one.
 
 #### `inversion-vs-two-delins-76-83`
 
@@ -1268,9 +1268,9 @@ WHAT THIS DOES NOT SETTLE. (1) Whether `general.md:56` reaches a multi-member al
 
 **Also cited.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/recommendations/DNA/inversion.md:33-34`
   > **`NM_004006.2:c.4145_4160inv`**<br> inversion of the 16 nucleotides from position `c.4145` to `c.4160`.
@@ -1322,13 +1322,13 @@ SUPERSEDED IN PART, 2026-08-13 — READ BEFORE CITING ANYTHING ABOVE. The outcom
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/DNA/delins.md:18`
   > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
-- `docs/recommendations/general.md:23`
+- `docs/recommendations/general.md:22`
   > a **letter prefix** is mandatory to indicate the type of reference sequence used
-- `docs/recommendations/general.md:26`
+- `docs/recommendations/general.md:25`
   > `g` for a linear genomic reference sequence
-- `docs/recommendations/general.md:43`
+- `docs/recommendations/general.md:42`
   > the 3'rule applies to ALL descriptions (genome, gene, transcript, and protein) of a given variant
-- `docs/recommendations/general.md:44`
+- `docs/recommendations/general.md:43`
   > **exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences
 
 **The ruling.**
@@ -1362,9 +1362,9 @@ COST RECORDED, AND IT IS NOT A MOVEMENT. This ruling DECLINES a merge, so it mov
   > masked nucleotide
 - `docs/background/standards.md:39`
   > used in alignment only
-- `docs/recommendations/general.md:48`
+- `docs/recommendations/general.md:47`
   > nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide symbols]
-- `docs/recommendations/general.md:50`
+- `docs/recommendations/general.md:49`
   > nucleotides in lower case using [IUPAC-IUBMB assigned nucleotide symbols]
 
 **The ruling.**
@@ -1402,14 +1402,14 @@ A REACH ASYMMETRY WORTH KEEPING, BECAUSE IT LOOKS LIKE THE MODE SCHEDULE AND IS 
 
 **Also cited.**
 
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > when a description is possible according to several types
-- `docs/recommendations/general.md:58`
+- `docs/recommendations/general.md:57`
   > descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed
 - `docs/recommendations/DNA/complex.md:5`
   > a range of changes occur that can not be described as one of the basic variant types
 - `docs/recommendations/DNA/complex.md:127`
-  > NC_000022.11:g.pter_(12200001_14700000)del::(37600001_410000000)_qterdel
+  > NC_000022.11:g.pter_(12200001_14700000)del::(37600001_41000000)_qterdel
 - `docs/recommendations/DNA/complex.md:39`
   > a double colon is used to designate break point junctions creating a ring chromosome.<br>
 - `docs/recommendations/DNA/complex.md:51`
@@ -1423,7 +1423,7 @@ A REACH ASYMMETRY WORTH KEEPING, BECAUSE IT LOOKS LIKE THE MODE SCHEDULE AND IS 
 - `docs/recommendations/DNA/complex.md:117`
   > NC_000002.12:g.[32310435_32310710del;32310711_171827243inv;insG]`**<br>
 - `docs/recommendations/DNA/complex.md:161`
-  > NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_410000000)_qterdel]sup`**<br>
+  > NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_41000000)_qterdel]sup`**<br>
 
 **The ruling.**
 
@@ -1447,7 +1447,7 @@ Independently adjudicated twice, reaching the same verdict by different routes; 
 
 **Governing clause.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 
 **Deviates from.**
@@ -1457,7 +1457,7 @@ Independently adjudicated twice, reaching the same verdict by different routes; 
 
 **Also cited.**
 
-- `docs/recommendations/general.md:41`
+- `docs/recommendations/general.md:40`
   > for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed
 - `docs/recommendations/DNA/delins.md:17`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
@@ -1539,7 +1539,7 @@ FINDING 3 — s01-c1-m3-all-del-p2-sep8 REALLY IS 8, AND STANDS APART. Its two r
 
 **Also cited.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 - `docs/recommendations/DNA/duplication.md:18`
   > it **must** be described as a duplication and not as, e.g., an insertion
@@ -1576,7 +1576,7 @@ SCOPE. This record rules on the FORCE of the separation rule, and on the reading
 
 **Governing clause.**
 
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
 
 **Also cited.**
@@ -1614,7 +1614,7 @@ THE COST MODEL IS NOT STATED BY THIS RECORD, AND TWO CANDIDATES DISAGREE — REC
 
 **Status:** decided
 
-**The question.** A span whose whole content is replaced by its exact reverse complement always admits a competing partition at the columns where the complement coincides with the reference. `inversion-vs-two-delins-76-83` typed the span `inv` because that partition was two `delins`, which `general.md:56` does not rank; #1230 split the span because that partition was substitutions, which `:56` ranks above inversion. Does the TYPE of the competing partition decide the typing, or does the span?
+**The question.** A span whose whole content is replaced by its exact reverse complement always admits a competing partition at the columns where the complement coincides with the reference. `inversion-vs-two-delins-76-83` typed the span `inv` because that partition was two `delins`, which `general.md:55` does not rank; #1230 split the span because that partition was substitutions, which `:56` ranks above inversion. Does the TYPE of the competing partition decide the typing, or does the span?
 
 **Applies to.** `c.76_83inv`
 
@@ -1629,9 +1629,9 @@ THE COST MODEL IS NOT STATED BY THIS RECORD, AND TWO CANDIDATES DISAGREE — REC
   > a one-nucleotide inversion should be described as a [substitution](substitution.md)
 - `docs/recommendations/DNA/inversion.md:33-34`
   > **`NM_004006.2:c.4145_4160inv`**<br> inversion of the 16 nucleotides from position `c.4145` to `c.4160`.
-- `docs/recommendations/general.md:34`
+- `docs/recommendations/general.md:33`
   > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
-- `docs/recommendations/general.md:56`
+- `docs/recommendations/general.md:55`
   > the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion
 - `docs/recommendations/DNA/delins.md:5`
   > one or more nucleotides are replaced by one or more other nucleotides **and which is not** a substitution or inversion
@@ -1644,11 +1644,11 @@ THE COST MODEL IS NOT STATED BY THIS RECORD, AND TWO CANDIDATES DISAGREE — REC
 
 OPERATOR RULING, 2026-08-13 — TYPE THE SPAN, NOT THE COMPETITOR. A span whose whole content is replaced by its exact reverse complement is typed `inv`, uniformly: however much of the interior coincides with the reference, and whatever the competing partition is made of. The test is `block == revcomp(block)` over the trimmed block, evaluated on the resulting sequence, and it settles the typing before any cut is considered. `inversion.md:5` governs, being the clause that states the property — and it states it over the whole span.
 
-OVERTURNED. #1230 (CLOSED) held that a substitution competitor splits the span, because `general.md:56` ranks substitution (1) above inversion (3). `inversion-vs-two-delins-76-83` (`decided`) held that a `delins` competitor does not, because `:56` ranks no `delins` — adding that #1230's case "is untouched and still splits". The competitor-type distinction is overturned. #1230's outcome falls; `inversion-vs-two-delins-76-83`'s outcome stands but its reason is superseded, and that record is amended here rather than left asserting the distinction. Per the repository `CLAUDE.md`, #1230's body is agent-drafted under @msto's account, so no maintainer position is reversed.
+OVERTURNED. #1230 (CLOSED) held that a substitution competitor splits the span, because `general.md:55` ranks substitution (1) above inversion (3). `inversion-vs-two-delins-76-83` (`decided`) held that a `delins` competitor does not, because `:56` ranks no `delins` — adding that #1230's case "is untouched and still splits". The competitor-type distinction is overturned. #1230's outcome falls; `inversion-vs-two-delins-76-83`'s outcome stands but its reason is superseded, and that record is amended here rather than left asserting the distinction. Per the repository `CLAUDE.md`, #1230's body is agent-drafted under @msto's account, so no maintainer position is reversed.
 
-GROUND 1, THE STRONGEST: THE DISTINCTION RESTS ON A CLAUSE A DECIDED RECORD ALREADY SCOPED OUT. Both halves of the old rule argue about `general.md:56` — #1230 applying it, `inversion-vs-two-delins-76-83` declining it. But `adjudication-precedence-order`'s escalation E1 (`decided`) holds that `:56` ranks single-variant type labels for one span, never a multi-member allele against a spanning description, and so "cannot settle a merge-versus-split question at all". Whole-span `inv` against a partition is that question. A rule whose whole content is which side `:56` reaches cannot survive a reading the ledger already carries.
+GROUND 1, THE STRONGEST: THE DISTINCTION RESTS ON A CLAUSE A DECIDED RECORD ALREADY SCOPED OUT. Both halves of the old rule argue about `general.md:55` — #1230 applying it, `inversion-vs-two-delins-76-83` declining it. But `adjudication-precedence-order`'s escalation E1 (`decided`) holds that `:56` ranks single-variant type labels for one span, never a multi-member allele against a spanning description, and so "cannot settle a merge-versus-split question at all". Whole-span `inv` against a partition is that question. A rule whose whole content is which side `:56` reaches cannot survive a reading the ledger already carries.
 
-GROUND 2: THE CLAUSE IS STATED OVER THE SPAN. "more than one nucleotide replacing the original sequence is the reverse complement of the original sequence" is a predicate over the replaced run as a whole; interior coincidence is not a term in it, and is uninformative anyway — complementation is an involution, so column `i` coincides exactly when its mirror `L-1-i` does. `general.md:34` is stated over "two variants", and a span that is one inversion is one variant; `separation-rule-force-modal-or-negation` grades `:34` as rule 2 (a preference), so it could not compel a split even where it reached. `substitution.md:32` marks the split spelling of CONSECUTIVE changes `class="invalid"` — a prohibition on adjacency, not a requirement to split at a gap. `inversion.md:16` redirects the degenerate one-nucleotide case to a substitution: a floor on length, not a rule about interiors.
+GROUND 2: THE CLAUSE IS STATED OVER THE SPAN. "more than one nucleotide replacing the original sequence is the reverse complement of the original sequence" is a predicate over the replaced run as a whole; interior coincidence is not a term in it, and is uninformative anyway — complementation is an involution, so column `i` coincides exactly when its mirror `L-1-i` does. `general.md:33` is stated over "two variants", and a span that is one inversion is one variant; `separation-rule-force-modal-or-negation` grades `:34` as rule 2 (a preference), so it could not compel a split even where it reached. `substitution.md:32` marks the split spelling of CONSECUTIVE changes `class="invalid"` — a prohibition on adjacency, not a requirement to split at a gap. `inversion.md:16` redirects the degenerate one-nucleotide case to a substitution: a floor on length, not a rule about interiors.
 
 GROUND 3: THE SPEC'S OWN PUBLISHED INVERSION HAS THIS SHAPE. `inversion.md:33-34` publishes `NM_004006.2:c.4145_4160inv` and prints no bases. Derived from the accession the spec names (the prepared reference's supplemental FASTA, not the `LRG_199t1` proxy used earlier — byte-identical at 13,993 nt), CDS start derived as the longest ORF (position 245, `c.1_3 == ATG`, 3,685 aa): `c.4145_4160` is `TCCAGGAGTCCCTCAC`, revcomp `GTGAGGGACTCCTGGA`, coinciding at 0-based columns 3-5 and 10-12 — two three-base unchanged interior runs, 10 of 16 columns changed. The spec's own worked inversion is one the old rule would have had to argue about, and the spec simply calls it `inv`. Worth precisely: the example is the spec's, the bases are derived — stronger than spec-silence, weaker than a verbatim statement.
 
@@ -1662,10 +1662,10 @@ TWO EARLIER COSTINGS ARE WITHDRAWN, IN OPPOSITE DIRECTIONS (R6). `inversion-vs-t
 
 THE 457 nt ROW: THE GUARD FAILURE IS REAL, THE ATTRIBUTION IS NOT. #1703 records that `case_harvest::no_emitted_output_puts_two_members_on_consecutive_nucleotides` reports 12 violations from `NC_000013.10:g.100809575_100810031inv`, calling it a rule 1 violation of `substitution.md:32`. Re-run at @7cc9846c under `FERRO_PARTITION=canonical-coalesced`, the guard does fail with exactly 12 pairs at the listed coordinates — but `live` and `shadow` return the row unchanged, while `canonical` and `canonical-coalesced` return an identical 133-member allele (47 delins, 44 substitutions, 18 del, 16 ins, 4 inv, 2 dup, 2 repeat) in which ALL 12 pairs involve an `ins` member. An `ins` consumes no reference, so its coordinates flank an insertion point rather than occupying bases: ZERO pairs are two substitutions, the minimum gap between reference-consuming members is 1, and `substitution.md:32`'s named `class="invalid"` shape occurs nowhere in the row. (The instrument was controlled against `:32`'s own invalid example, which it scores as one adjacent pair.) So the question is whether `member_bounds` should treat an `ins` junction as occupying its flanking coordinates — a reading the guard encodes rather than argues. THIS RULING DOES NOT DECIDE THAT and need not: it stands on rule 6, and fixing the typing closes the failure anyway, the row returning to a single `inv`. Do not repeat unqualified "12 pairs of members on consecutive nucleotides, which `substitution.md:32` marks invalid by name" — the count is right, the attribution is not.
 
-THE COUNTERWEIGHT, UNANSWERED. `general.md:56` does rank substitution above inversion, and what retires it is a SCOPE argument (E1's), not a refutation of the ranking; a reader who held that `:56` reaches a partition would reach #1230's answer without contradicting the spec's text. It was rejected because a decided record already scopes `:56`, and because `inversion.md:33-34` comes out wrong under it. Second: scale. The uniform rule types a 457 nt span with four changed columns as one `inv` exactly as it types a 4 nt span, and supplies no length or density bound. The obvious bound was already refuted by measurement — unchanged columns under a random inversion are `2 * Binom(floor(n/2), 1/4)`, so a coincidence FRACTION discriminates only as a proxy for `n`. A later bound would be a new ruling and must say so.
+THE COUNTERWEIGHT, UNANSWERED. `general.md:55` does rank substitution above inversion, and what retires it is a SCOPE argument (E1's), not a refutation of the ranking; a reader who held that `:56` reaches a partition would reach #1230's answer without contradicting the spec's text. It was rejected because a decided record already scopes `:56`, and because `inversion.md:33-34` comes out wrong under it. Second: scale. The uniform rule types a 457 nt span with four changed columns as one `inv` exactly as it types a 4 nt span, and supplies no length or density bound. The obvious bound was already refuted by measurement — unchanged columns under a random inversion are `2 * Binom(floor(n/2), 1/4)`, so a coincidence FRACTION discriminates only as a proxy for `n`. A later bound would be a new ruling and must say so.
 
 SUBSUMES `inversion-vs-a-mixed-member-competitor`, WHICH LANDED FIRST (with #1706, `64fc76df`) WHILE THIS RECORD WAS OPEN — so the reconciliation is made here, not owed to a future merge. The relationship is subsumption, not conflict: that record types the `inv` where the competitor mixes lone substitutions with multi-column members, and says in terms that it disturbs neither `inversion-vs-two-delins-76-83` nor #1230's all-substitutions case, "which BOTH gates refuse". This ruling reaches all of those and the one they exclude. So: (a) the narrower record is NOT a live carve-out — its outcome is a special case of this one; (b) its clause (4), preserving #1230's split, is superseded exactly as `inversion-vs-two-delins-76-83`'s equivalent sentence is, and this change appends that supersession, moving neither outcome nor any pin; (c) its implementation widens a gate from `no_piece_is_a_lone_substitution` to `not_every_piece_is_a_lone_substitution`, which this ruling retires altogether — the uniform rule needs no piece-type predicate, so the widened gate becomes dead rather than wrong. None of this touches #1706's post-hoc run scan, a separate mechanism not adjudicated here.
 
-THREE CONVERGENCES, REACHED BY TWO SESSIONS THAT COULD NOT SEE EACH OTHER. Register: #1706 rules explicitly as a rule 6 choice and warns against citing it as conformance ("the competing form violates nothing") — the same classification reached here and by #1703, three times over; it also corroborates the correction above, a record whose central example IS the 457 nt row declining to call its output a rule 1 violation. Clause: both decline `general.md:56`, #1706 grounding it on `conflicting-member-geometry-refusal-scope` — which cites `:56` precisely to record that it does not reach a multi-member allele, "this repository's recorded cautionary error" — where this record grounds it on E1; take the pair as the settled position on `:56`. Measurement: #1706 measures that row's canonical partition at 133 pieces whose first is `g.100809575A>T`; the independent re-measurement here returns a 133-member allele whose first member is `100809575A>T`. Two instruments, one row. #1706's argument on it generalises: refusing the `inv` makes the notation turn on whether one interior column happens to be self-complementary, "a property of the SEQUENCE, not of the EVENT" — an instability WORST in the all-substitutions case, where a single coincidental column is the whole difference between one `inv` and a multi-member allele. That is the strongest statement of why the competitor-type distinction had to go, and this ledger owes it to #1706.
+THREE CONVERGENCES, REACHED BY TWO SESSIONS THAT COULD NOT SEE EACH OTHER. Register: #1706 rules explicitly as a rule 6 choice and warns against citing it as conformance ("the competing form violates nothing") — the same classification reached here and by #1703, three times over; it also corroborates the correction above, a record whose central example IS the 457 nt row declining to call its output a rule 1 violation. Clause: both decline `general.md:55`, #1706 grounding it on `conflicting-member-geometry-refusal-scope` — which cites `:56` precisely to record that it does not reach a multi-member allele, "this repository's recorded cautionary error" — where this record grounds it on E1; take the pair as the settled position on `:56`. Measurement: #1706 measures that row's canonical partition at 133 pieces whose first is `g.100809575A>T`; the independent re-measurement here returns a 133-member allele whose first member is `100809575A>T`. Two instruments, one row. #1706's argument on it generalises: refusing the `inv` makes the notation turn on whether one interior column happens to be self-complementary, "a property of the SEQUENCE, not of the EVENT" — an instability WORST in the all-substitutions case, where a single coincidental column is the whole difference between one `inv` and a multi-member allele. That is the strongest statement of why the competitor-type distinction had to go, and this ledger owes it to #1706.
 
 NOT DISTURBED, NOT IMPLEMENTED. Nothing about WHERE a whole-span reverse complement's boundaries fall — trimming, shifting and hull selection are untouched — and nothing about spans that are not exact reverse complements, where the competing partition governs unchanged. It does not reach `delins-adjacent-members-when-both-consume-reference`, `duplication-must-ranks-the-label-not-the-partition`, or any other typing question. It ships no code: the normalizer is unchanged, so it moves no output by itself. The moves it decides are #1703's, #1541's and #1575's, together with the `Representation-Change:` measurement over a real corpus that this record does not supply.

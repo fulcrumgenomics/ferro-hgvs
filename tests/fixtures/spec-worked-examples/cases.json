@@ -132,7 +132,7 @@
         "clause": "docs/recommendations/DNA/duplication.md:26",
         "quote": "the variant is described as `LRG_199t1:c.3921dup` (`NC_000023.10:g.32459297dup`) and not as `c.3922dup`"
       },
-      "note": "The flagship worked example of the 3'rule's exon-junction exception (`general.md:44`), and the direction the exception is normally tested: c.3920=A, c.3921=T, c.3922=T, so the unrestricted 3'rule would shift this dup across the junction into the next exon. It must not, and does not. See the sibling row for the direction that is NOT asserted."
+      "note": "The flagship worked example of the 3'rule's exon-junction exception (`general.md:43`), and the direction the exception is normally tested: c.3920=A, c.3921=T, c.3922=T, so the unrestricted 3'rule would shift this dup across the junction into the next exon. It must not, and does not. See the sibling row for the direction that is NOT asserted."
     },
     {
       "input": "LRG_199t1:c.3922dup",
