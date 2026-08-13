@@ -57,10 +57,13 @@ impl Fixture {
 /// input-hygiene modes.
 ///
 /// Three outputs rather than one because the modes do not agree here, and which
-/// mode produces which answer *is* the finding: the single divergence from the
-/// spec belongs to the lenient preprocessor's W3013 repair, not to the
-/// normalizer, and strict mode rejects two of the spec's own inputs outright.
-/// One pinned output would have hidden both facts.
+/// mode produces which answer *is* the finding: strict mode rejects two of the
+/// spec's own inputs outright, and while the corpus still held divergences each
+/// was attributable to a named stage — the lenient preprocessor's W3013 repair
+/// (closed by #1631), and the normalizer's half-applied exon-junction clamp
+/// (closed by #1621). One pinned output would have hidden all of that. The
+/// diverging set is empty as of #1621; `the_divergence_set_is_exactly_the_one_recorded_conflict`
+/// is what holds it there.
 ///
 /// Every case also carries a [`Citation`], because a pinned output with no
 /// authority behind it is a change detector rather than a record: it tells a
