@@ -848,6 +848,43 @@ impl IvsPos {
         }
     }
 
+    // --- Splice-distance convenience predicates ---------------------------
+    //
+    // These two restate rungs that ferro defines once, on
+    // `reference::transcript::SpliceSiteType::from_distance_on_side` (donor
+    // 2/6/20/50, acceptor 2/12/20/50). They are NOT derived from it, and that
+    // is deliberate rather than an oversight (#1766):
+    //
+    // `hgvs::location` is a leaf module of parsed-notation types with no
+    // production dependency on the `reference` layer — `use crate::reference::`
+    // appears under `src/hgvs/` exactly once, inside a test — and `IvsPos` is a
+    // notation this crate *parses*, not something a reference resolves. Adding
+    // an inward edge from the notation layer onto the reference layer to spell
+    // two one-line predicates would invert that for no gain in behaviour.
+    //
+    // The *drift* risk that deriving would remove is covered instead by a
+    // cross-test: `the_ivs_pos_predicates_agree_with_the_one_shape_a_ladder` in
+    // `tests/it/splice_ladder_shapes.rs` fails if either literal below and the
+    // ladder's corresponding rung ever stop agreeing over `-300..=300`.
+    //
+    // **Drift is not the whole of it, and this note used to claim it was.**
+    // Deriving buys a second thing these two do not get: the ladder takes its
+    // magnitude with `unsigned_abs`, while both predicates below still use
+    // `abs()`. That is the difference `IntronPosition`'s sibling note calls the
+    // practical point of deriving, and it is real here — `-?` parses to
+    // `offset == i64::MIN` (`parser::position::OFFSET_UNKNOWN_NEGATIVE`), and
+    // `i64::MIN.abs()` panics under `debug_assertions` and wraps back to a
+    // negative in release, where it reads as a *canonical splice site*. The
+    // cross-test's `-300..=300` sweep cannot see that, by construction: the
+    // sentinels are the only offsets at which the two spellings differ, and
+    // they are outside its range.
+    //
+    // So the guarantee here is narrower than deriving's, in exactly one place.
+    // That place is **#1826 item 1**, which tracks it; #1742 applied the same
+    // two-word fix to `IntronPosition` and deliberately stopped short of this
+    // file. Do not widen the cross-test's range without fixing these two first
+    // — it will panic rather than fail, which reads as a broken test.
+
     /// Check if this is a deep intronic position (>50bp from exon)
     ///
     /// `unsigned_abs` rather than `abs`: [`IvsNotation::to_ivs`] maps a `CdsPos` /
@@ -867,13 +904,21 @@ impl IvsPos {
     /// `false`. Making these decline needs its own decision about what the four
     /// `IvsPos`/`IntronPosition` predicates return.
     ///
+    /// The 50 mirrors `SpliceSiteType::DeepIntronic`; see the note above for
+    /// why this restates the rung rather than deriving it, and which test keeps
+    /// the two from drifting apart.
+    ///
     /// [`IntronicRegion::from_offset`]: crate::convert::noncoding::IntronicRegion::from_offset
     /// [`is_unknown_offset`]: crate::hgvs::parser::position::is_unknown_offset
     pub fn is_deep_intronic(&self) -> bool {
         self.offset.unsigned_abs() > 50
     }
 
-    /// Check if this is at a canonical splice site
+    /// Check if this is at a canonical splice site (within 2bp of exon)
+    ///
+    /// The 2 mirrors `SpliceSiteType::DonorCanonical`/`AcceptorCanonical`,
+    /// which share that rung, so reading the side off the sign of `offset`
+    /// cannot change the verdict. See the note above.
     ///
     /// See [`IvsPos::is_deep_intronic`] for why this is `unsigned_abs`.
     pub fn is_canonical_splice_site(&self) -> bool {
