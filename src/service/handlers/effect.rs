@@ -565,16 +565,33 @@ fn predict_cds_effect(
     cds_pos: &CdsPos,
 ) -> SequenceEffect {
     if is_intronic {
-        // Check for splice site impact
-        if let Some(offset) = cds_pos.offset {
-            if offset.abs() <= 2 {
+        // Check for splice site impact.
+        //
+        // An unknown offset (`c.100-?`) reaches here straight from a parsed
+        // request field: `CdsPos::is_intronic` is satisfied by the `i64::MAX` /
+        // `i64::MIN` sentinels. Taking a magnitude from one is meaningless, and
+        // `.abs()` on `i64::MIN` panicked the worker under `overflow-checks`
+        // while wrapping to a *negative* value in release, where it passed the
+        // `<= 2` test and was answered `splice_site_variant` / HIGH (#1767).
+        // Skip the distance ladder entirely and fall through to
+        // `intron_variant`, which is what is actually known about the position.
+        let measured_offset = if cds_pos.has_unknown_offset() {
+            None
+        } else {
+            cds_pos.offset
+        };
+        if let Some(offset) = measured_offset {
+            // `unsigned_abs` so the ladder is total for every `i64`, not only
+            // for the two values spelled `?`.
+            let abs_offset = offset.unsigned_abs();
+            if abs_offset <= 2 {
                 return SequenceEffect {
                     so_term: "SO:0001629".to_string(),
                     name: "splice_site_variant".to_string(),
                     description: "A sequence variant that changes the first two or last two bases of an intron".to_string(),
                     impact: "HIGH".to_string(),
                 };
-            } else if offset.abs() <= 8 {
+            } else if abs_offset <= 8 {
                 return SequenceEffect {
                     so_term: "SO:0001630".to_string(),
                     name: "splice_region_variant".to_string(),
@@ -2248,6 +2265,31 @@ mod tests {
         let effect = predict_cds_effect("deletion", true, false, &cds_pos);
         assert_eq!(effect.name, "splice_site_variant");
         assert_eq!(effect.impact, "HIGH");
+    }
+
+    /// #1767 — an unknown intronic offset reaches `predict_cds_effect` straight
+    /// from a parsed request field. It must not be answered as a canonical
+    /// splice site: before the fix this panicked the worker under
+    /// `overflow-checks` and returned `splice_site_variant` / HIGH in release.
+    #[test]
+    fn an_unknown_intronic_offset_is_not_a_splice_site() {
+        for offset in [
+            crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE,
+            crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE,
+        ] {
+            let cds_pos = CdsPos {
+                base: 117,
+                offset: Some(offset),
+                utr3: false,
+                special: None,
+            };
+            let effect = predict_cds_effect("deletion", true, false, &cds_pos);
+            assert_eq!(
+                effect.name, "intron_variant",
+                "offset {offset} states no distance, so no splice claim is supported"
+            );
+            assert_eq!(effect.impact, "MODIFIER", "offset {offset}");
+        }
     }
 
     #[test]

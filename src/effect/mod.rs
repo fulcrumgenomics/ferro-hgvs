@@ -388,10 +388,29 @@ impl EffectPredictor {
     }
 
     /// Classify a splice site variant by distance.
+    ///
+    /// An unknown offset (`+?` / `-?`, carried as `i64::MAX` / `i64::MIN`) is
+    /// reported as [`Consequence::IntronVariant`]. This entry point returns a
+    /// bare `ProteinEffect` and so cannot decline the way the `Option`-returning
+    /// classifiers do, and `IntronVariant` is the weakest true statement
+    /// available: the position is known to be intronic and its distance from the
+    /// boundary is not known at all. Before #1767 the sentinel's `.abs()`
+    /// overflowed — a panic under `overflow-checks`, and in release a wrap back
+    /// to `i64::MIN`, which is negative and so passed `<= 2` and was reported as
+    /// a canonical splice site with HIGH impact.
+    ///
+    /// The returned `intronic_offset` still carries the sentinel, so a caller
+    /// that needs to distinguish "unknown" from "far" can.
     pub fn classify_splice_variant(&self, offset: i64) -> ProteinEffect {
-        let abs_offset = offset.abs();
+        let is_unknown = crate::hgvs::parser::position::is_unknown_offset(offset);
+        // `unsigned_abs` rather than `abs`: total for every `i64`, so the
+        // ladder cannot overflow even on a magnitude that is not a sentinel
+        // (`i64::MIN` is the only such value, and it is reachable here).
+        let abs_offset = offset.unsigned_abs();
 
-        let consequence = if abs_offset <= 2 {
+        let consequence = if is_unknown {
+            Consequence::IntronVariant
+        } else if abs_offset <= 2 {
             if offset > 0 {
                 Consequence::SpliceDonorVariant
             } else {

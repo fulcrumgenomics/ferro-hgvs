@@ -194,11 +194,8 @@ impl CdsPos {
     /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
     /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
     pub fn has_unknown_offset(&self) -> bool {
-        use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
-        matches!(
-            self.offset,
-            Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
-        )
+        self.offset
+            .is_some_and(crate::hgvs::parser::position::is_unknown_offset)
     }
 
     /// Create a CDS position with intronic offset
@@ -354,6 +351,24 @@ impl TxPos {
 
     pub fn is_intronic(&self) -> bool {
         self.offset.is_some() && self.offset != Some(0)
+    }
+
+    /// Whether the offset is one of the parser's unknown-offset sentinels
+    /// (`+?` → [`OFFSET_UNKNOWN_POSITIVE`], `-?` → [`OFFSET_UNKNOWN_NEGATIVE`])
+    /// rather than a measured intronic distance.
+    ///
+    /// The n.-axis sibling of [`CdsPos::has_unknown_offset`], with the same
+    /// contract: the sentinels are `i64::MAX` / `i64::MIN`, so using one as a
+    /// distance overflows, and per the spec they denote an unknown position
+    /// unbounded in one direction, from which no distance can be derived at
+    /// all. Callers that classify or measure an offset MUST check this first
+    /// (issues #1087, #1767).
+    ///
+    /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
+    /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
+    pub fn has_unknown_offset(&self) -> bool {
+        self.offset
+            .is_some_and(crate::hgvs::parser::position::is_unknown_offset)
     }
 
     /// Check if this is an upstream position (negative base)
@@ -777,13 +792,27 @@ impl IvsPos {
     }
 
     /// Check if this is a deep intronic position (>50bp from exon)
+    ///
+    /// `unsigned_abs` rather than `abs`: [`IvsNotation::to_ivs`] maps a `CdsPos` /
+    /// `TxPos` offset straight in, so an unknown offset (`c.100-?`) reaches
+    /// this predicate, and `i64::MIN.abs()` overflows (#1767). As with
+    /// [`IntronicRegion::from_offset`], this reads a *measured* distance —
+    /// screen sentinels before asking. `IvsPos` carries a bare `i64`, so the
+    /// applicable screen is the scalar [`is_unknown_offset`], not
+    /// [`CdsPos::has_unknown_offset`] / [`TxPos::has_unknown_offset`], which a
+    /// caller holding only an `IvsPos` no longer has.
+    ///
+    /// [`IntronicRegion::from_offset`]: crate::convert::noncoding::IntronicRegion::from_offset
+    /// [`is_unknown_offset`]: crate::hgvs::parser::position::is_unknown_offset
     pub fn is_deep_intronic(&self) -> bool {
-        self.offset.abs() > 50
+        self.offset.unsigned_abs() > 50
     }
 
     /// Check if this is at a canonical splice site
+    ///
+    /// See [`IvsPos::is_deep_intronic`] for why this is `unsigned_abs`.
     pub fn is_canonical_splice_site(&self) -> bool {
-        self.offset.abs() <= 2
+        self.offset.unsigned_abs() <= 2
     }
 }
 

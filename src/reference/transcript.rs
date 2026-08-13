@@ -916,30 +916,43 @@ pub struct IntronPosition {
     pub intron_length: u64,
 }
 
+// Every predicate below reads `offset` as a *magnitude*, via `unsigned_abs`
+// rather than `abs`. `IntronPosition` is derived from genomic coordinates and
+// so is bounded by its own intron in practice, but its fields are public and
+// `i64::MIN.abs()` overflows — a panic under `overflow-checks` and a wrap to a
+// negative value in release, which passes every `<= n` test below. Sibling
+// `distance_from_donor` / `distance_from_acceptor` already used `unsigned_abs`;
+// these now agree with them (#1767).
+//
+// Totality is not a distance claim: `offset` here is a bare `i64`, so a caller
+// that may hold an unknown-offset sentinel must screen it with
+// `crate::hgvs::parser::position::is_unknown_offset` first — none of these
+// predicates can decline, and `is_deep_intronic` answers `true` for a sentinel,
+// which is a ">50 bp" claim the input does not support.
 impl IntronPosition {
     /// Check if this is a deep intronic position (>50bp from nearest exon)
     pub fn is_deep_intronic(&self) -> bool {
-        self.offset.abs() > 50
+        self.offset.unsigned_abs() > 50
     }
 
     /// Check if this is at a canonical splice site (within 2bp of exon)
     pub fn is_canonical_splice_site(&self) -> bool {
-        self.offset.abs() <= 2
+        self.offset.unsigned_abs() <= 2
     }
 
     /// Check if this is near a splice site (within 10bp of exon)
     pub fn is_near_splice_site(&self) -> bool {
-        self.offset.abs() <= 10
+        self.offset.unsigned_abs() <= 10
     }
 
     /// Check if this is in the extended splice region (within 20bp of exon)
     pub fn is_extended_splice_region(&self) -> bool {
-        self.offset.abs() <= 20
+        self.offset.unsigned_abs() <= 20
     }
 
     /// Get the splice site type based on position
     pub fn splice_site_type(&self) -> SpliceSiteType {
-        let abs_offset = self.offset.abs();
+        let abs_offset = self.offset.unsigned_abs();
         match self.boundary {
             IntronBoundary::FivePrime => {
                 // 5' end of intron = splice donor site
