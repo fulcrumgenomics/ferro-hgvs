@@ -58,6 +58,7 @@ pub mod report;
 pub mod runner;
 pub mod sample;
 pub mod shard;
+pub mod supplemental_store;
 pub mod translate;
 pub mod types;
 pub mod uta_loader;

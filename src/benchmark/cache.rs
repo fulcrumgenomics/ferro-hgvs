@@ -1908,6 +1908,106 @@ pub struct SupplementalMetadata {
     pub transcripts: std::collections::HashMap<String, SupplementalTranscript>,
 }
 
+/// Source of raw NCBI efetch payloads for one batch of accessions.
+///
+/// Exists so the provisioning path can be exercised end-to-end without a network. The
+/// property that matters most about that path — that running it twice is a no-op the
+/// second time — is unstatable in a test that cannot run it at all.
+pub trait EfetchSource {
+    /// GenBank-format payload for a comma-separated accession list.
+    ///
+    /// `Ok(None)` is a failed batch the caller should skip; `Err` is a failure to invoke
+    /// the fetcher at all.
+    fn genbank(&self, ids: &str) -> Result<Option<String>, FerroError>;
+
+    /// FASTA-format payload, used for CON records that carry no `ORIGIN` section.
+    ///
+    /// `None` for any failure: this is already a fallback, and its own fallback is to
+    /// leave the accession unfetched.
+    fn fasta(&self, ids: &str) -> Option<String>;
+
+    /// Delay observed between requests, to respect the endpoint's rate limit.
+    fn rate_delay(&self) -> std::time::Duration;
+}
+
+/// The production [`EfetchSource`]: NCBI's efetch endpoint, over `curl`.
+pub struct NcbiEfetch {
+    rate_delay: std::time::Duration,
+}
+
+impl NcbiEfetch {
+    /// Build a fetcher whose rate limit reflects whether an API key is configured.
+    pub fn new() -> Self {
+        // Rate limiting: 3 req/sec without API key, 10 req/sec with API key.
+        let has_api_key = get_ncbi_api_key().is_some();
+        if has_api_key {
+            eprintln!("  Using NCBI API key (10 req/sec rate limit)");
+        } else {
+            eprintln!("  No NCBI_API_KEY set (3 req/sec rate limit - set key for 3x faster)");
+        }
+        Self {
+            rate_delay: std::time::Duration::from_millis(if has_api_key { 100 } else { 350 }),
+        }
+    }
+
+    /// Run `curl` against an efetch URL, returning its stdout when it succeeded.
+    ///
+    /// Bounded in time deliberately. A provisioning run is hundreds of sequential batches
+    /// against a rate-limited endpoint, so a single stalled connection with no timeout
+    /// hangs the whole run indefinitely. `--max-time` is generous because one batch is up
+    /// to 200 GenBank records and some are megabytes.
+    ///
+    /// `--fail-with-body` makes an HTTP error an unsuccessful exit rather than a
+    /// success carrying an error page. Without it a 429 or 500 body parses to zero
+    /// records and the batch silently "succeeds" having fetched nothing; with it the
+    /// caller reports the batch as failed. Either way the accessions stay unfetched and
+    /// are retried on the next run, so this changes what the operator is told, not what
+    /// ends up on disk.
+    fn curl(url: &str) -> Result<Option<String>, FerroError> {
+        let output = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-L",
+                "--fail-with-body",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                "600",
+                url,
+            ])
+            .output()
+            .map_err(|e| FerroError::Io {
+                msg: format!("Failed to fetch batch: {}", e),
+            })?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned()))
+    }
+}
+
+impl Default for NcbiEfetch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EfetchSource for NcbiEfetch {
+    fn genbank(&self, ids: &str) -> Result<Option<String>, FerroError> {
+        Self::curl(&build_efetch_url("nuccore", ids, "gb", "text"))
+    }
+
+    fn fasta(&self, ids: &str) -> Option<String> {
+        Self::curl(&build_efetch_url("nuccore", ids, "fasta", "text"))
+            .ok()
+            .flatten()
+    }
+
+    fn rate_delay(&self) -> std::time::Duration {
+        self.rate_delay
+    }
+}
+
 /// Fetch sequences from NCBI in GenBank format, extract CDS metadata, and write to files.
 ///
 /// This fetches GenBank format (not FASTA) to get CDS coordinates along with sequences.
@@ -1919,8 +2019,32 @@ pub fn fetch_fasta_to_file(
     output_file: &Path,
     dry_run: bool,
 ) -> Result<usize, FerroError> {
-    use std::io::Write;
-    use std::process::Command;
+    fetch_fasta_to_file_with(accessions, output_file, dry_run, &NcbiEfetch::new())
+}
+
+/// [`fetch_fasta_to_file`] against an arbitrary [`EfetchSource`].
+///
+/// # Presence, and why it is not the sidecar's question
+///
+/// Which accessions still need fetching is derived from the **FASTA**, via
+/// [`SupplementalStore::has_sequence`] — never from `*.metadata.json`. The sidecar records
+/// annotation; a row in it is not a sequence, and treating it as one is what let an
+/// accession whose bases were already on disk be re-fetched and appended a second time.
+///
+/// Fetched records are staged and then merged by accession, so no write path can append
+/// blind: re-fetching an accession that already has a record **replaces** it rather than
+/// duplicating it. That makes the resume predicate free to ask any question it likes —
+/// including PR #1732's "is this record usable?" — without the write path being able to
+/// duplicate anything as a result.
+///
+/// A run with nothing to fetch and nothing to repair writes no byte at all.
+pub fn fetch_fasta_to_file_with(
+    accessions: &[String],
+    output_file: &Path,
+    dry_run: bool,
+    source: &dyn EfetchSource,
+) -> Result<usize, FerroError> {
+    use crate::benchmark::supplemental_store::SupplementalStore;
 
     const BATCH_SIZE: usize = 200; // Larger batches for efficiency (4x fewer requests)
 
@@ -1984,17 +2108,12 @@ pub fn fetch_fasta_to_file(
         return Ok(0);
     }
 
-    // Create/open output file for appending
-    let mut fasta_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(output_file)
-        .map_err(|e| FerroError::Io {
-            msg: format!("Failed to open {}: {}", output_file.display(), e),
-        })?;
+    // The FASTA and the artifacts derived from it. Opening scans the FASTA (and any
+    // staging file an interrupted run left behind), which is what makes presence a
+    // question about sequence rather than about annotation.
+    let mut store = SupplementalStore::open(output_file)?;
 
-    // Metadata file path (same directory, different name)
-    let metadata_path = output_file.with_extension("metadata.json");
+    let metadata_path = store.metadata_path().to_path_buf();
 
     // Load existing metadata if present
     let mut metadata = if metadata_path.exists() {
@@ -2012,11 +2131,22 @@ pub fn fetch_fasta_to_file(
         }
     };
 
-    // Filter out already-fetched accessions
+    let duplicates = store.duplicate_record_count();
+    if duplicates > 0 {
+        eprintln!(
+            "  {} duplicate records across {} accessions in {}; they will be collapsed to one each",
+            duplicates,
+            store.duplicated_accessions().len(),
+            output_file.display()
+        );
+    }
+
+    // Filter out accessions whose bases are already on disk. Keyed on the FASTA, not on
+    // the sidecar: a metadata row is an annotation claim, not a sequence.
     let original_count = nuccore.len();
     let nuccore: Vec<&String> = nuccore
         .into_iter()
-        .filter(|acc| !metadata.transcripts.contains_key(*acc))
+        .filter(|acc| !store.has_sequence(acc))
         .collect();
 
     if nuccore.is_empty() {
@@ -2024,6 +2154,21 @@ pub fn fetch_fasta_to_file(
             "  All {} accessions already fetched (skipping)",
             original_count
         );
+        // Nothing to fetch is not necessarily nothing to do: a duplicate-bearing FASTA or
+        // a sidecar whose keys have drifted from it is repaired here, by the same
+        // merge-and-rename a fetch would have used. When neither holds, this is the fixed
+        // point and not one byte is written.
+        if store.is_dirty(&metadata) {
+            let report = store.commit(&mut metadata)?;
+            eprintln!(
+                "  Repaired {}: {} records, {} duplicates removed, {} metadata rows dropped, {} synthesized",
+                output_file.display(),
+                report.records,
+                report.duplicates_removed,
+                report.metadata_rows_dropped,
+                report.metadata_rows_synthesized
+            );
+        }
         return Ok(0);
     }
 
@@ -2037,10 +2182,7 @@ pub fn fetch_fasta_to_file(
 
     let mut fetched = 0usize;
     let total_batches = nuccore.len().div_ceil(BATCH_SIZE);
-
-    // Rate limiting: 3 req/sec without API key, 10 req/sec with API key
-    let has_api_key = get_ncbi_api_key().is_some();
-    let rate_delay_ms = if has_api_key { 100 } else { 350 };
+    let rate_delay = source.rate_delay();
 
     eprintln!(
         "  Fetching {} nucleotide sequences in {} batches (batch size: {})...",
@@ -2048,11 +2190,6 @@ pub fn fetch_fasta_to_file(
         total_batches,
         BATCH_SIZE
     );
-    if has_api_key {
-        eprintln!("  Using NCBI API key (10 req/sec rate limit)");
-    } else {
-        eprintln!("  No NCBI_API_KEY set (3 req/sec rate limit - set key for 3x faster)");
-    }
 
     let start_time = std::time::Instant::now();
 
@@ -2066,25 +2203,14 @@ pub fn fetch_fasta_to_file(
             std::collections::HashSet::new();
 
         // Fetch GenBank format to get CDS coordinates
-        let url = build_efetch_url("nuccore", &ids, "gb", "text");
-
-        let output = Command::new("curl")
-            .args(["-s", "-L", &url])
-            .output()
-            .map_err(|e| FerroError::Io {
-                msg: format!("Failed to fetch batch: {}", e),
-            })?;
-
-        if !output.status.success() {
+        let Some(genbank_text) = source.genbank(&ids)? else {
             eprintln!(
                 "    Warning: Batch {}/{} failed",
                 batch_idx + 1,
                 total_batches
             );
             continue;
-        }
-
-        let genbank_text = String::from_utf8_lossy(&output.stdout);
+        };
 
         // Parse GenBank records
         let mut batch_count = 0;
@@ -2109,24 +2235,9 @@ pub fn fetch_fasta_to_file(
                 if let Some((seq, cds_start, cds_end, gene_name)) =
                     parse_genbank_record_full(&record)
                 {
-                    // Write FASTA entry
-                    let header = if gene_name.is_empty() {
-                        format!(">{}", acc)
-                    } else {
-                        format!(">{} {}", acc, gene_name)
-                    };
-                    writeln!(fasta_file, "{}", header).map_err(|e| FerroError::Io {
-                        msg: format!("Failed to write to {}: {}", output_file.display(), e),
-                    })?;
-
-                    // Write sequence in 70-char lines
-                    for chunk in seq.as_bytes().chunks(70) {
-                        writeln!(fasta_file, "{}", std::str::from_utf8(chunk).unwrap()).map_err(
-                            |e| FerroError::Io {
-                                msg: format!("Failed to write to {}: {}", output_file.display(), e),
-                            },
-                        )?;
-                    }
+                    // Stage the FASTA entry. The commit merges it by accession, so this
+                    // cannot append a second record for an accession already on disk.
+                    store.stage_record(&acc, &gene_name, &seq)?;
 
                     // Add metadata entry
                     metadata.transcripts.insert(
@@ -2161,12 +2272,9 @@ pub fn fetch_fasta_to_file(
         if !missing_from_batch.is_empty() {
             // Fetch missing accessions using FASTA format
             let missing_ids = missing_from_batch.join(",");
-            let fasta_url = build_efetch_url("nuccore", &missing_ids, "fasta", "text");
 
-            if let Ok(fasta_output) = Command::new("curl").args(["-s", "-L", &fasta_url]).output() {
-                if fasta_output.status.success() {
-                    let fasta_text = String::from_utf8_lossy(&fasta_output.stdout);
-
+            if let Some(fasta_text) = source.fasta(&missing_ids) {
+                {
                     // Parse FASTA records
                     let mut current_acc = String::new();
                     let mut current_seq = String::new();
@@ -2176,16 +2284,8 @@ pub fn fetch_fasta_to_file(
                         if let Some(header) = line.strip_prefix('>') {
                             // Save previous record if any
                             if !current_acc.is_empty() && !current_seq.is_empty() {
-                                // Write to FASTA file
-                                if current_desc.is_empty() {
-                                    writeln!(fasta_file, ">{}", current_acc).ok();
-                                } else {
-                                    writeln!(fasta_file, ">{} {}", current_acc, current_desc).ok();
-                                }
-                                for chunk in current_seq.as_bytes().chunks(70) {
-                                    writeln!(fasta_file, "{}", std::str::from_utf8(chunk).unwrap())
-                                        .ok();
-                                }
+                                // Stage the record; the commit merges it by accession.
+                                store.stage_record(&current_acc, &current_desc, &current_seq)?;
 
                                 // Add metadata (no CDS info for CON records)
                                 metadata.transcripts.insert(
@@ -2222,14 +2322,7 @@ pub fn fetch_fasta_to_file(
 
                     // Save last record
                     if !current_acc.is_empty() && !current_seq.is_empty() {
-                        if current_desc.is_empty() {
-                            writeln!(fasta_file, ">{}", current_acc).ok();
-                        } else {
-                            writeln!(fasta_file, ">{} {}", current_acc, current_desc).ok();
-                        }
-                        for chunk in current_seq.as_bytes().chunks(70) {
-                            writeln!(fasta_file, "{}", std::str::from_utf8(chunk).unwrap()).ok();
-                        }
+                        store.stage_record(&current_acc, &current_desc, &current_seq)?;
 
                         metadata.transcripts.insert(
                             current_acc.clone(),
@@ -2252,7 +2345,7 @@ pub fn fetch_fasta_to_file(
             }
 
             // Small delay between GenBank and FASTA requests
-            std::thread::sleep(std::time::Duration::from_millis(rate_delay_ms));
+            std::thread::sleep(rate_delay);
         }
 
         fetched += batch_count;
@@ -2280,18 +2373,28 @@ pub fn fetch_fasta_to_file(
 
         // Rate limiting - respect NCBI limits
         if batch_idx < total_batches - 1 {
-            std::thread::sleep(std::time::Duration::from_millis(rate_delay_ms));
+            std::thread::sleep(rate_delay);
         }
     }
 
-    // Save metadata
-    let metadata_file = File::create(&metadata_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to create {}: {}", metadata_path.display(), e),
-    })?;
-    serde_json::to_writer_pretty(metadata_file, &metadata).map_err(|e| FerroError::Io {
-        msg: format!("Failed to write {}: {}", metadata_path.display(), e),
-    })?;
-    eprintln!("  Wrote metadata to {}", metadata_path.display());
+    // Merge the staged records into the FASTA by accession, then rebuild the index and
+    // the sidecar from what the FASTA actually holds. The FASTA's rename is the commit
+    // point; a crash after it leaves both derived artifacts recoverable on the next open.
+    //
+    // Gated on `is_dirty` rather than unconditional: reaching here having staged nothing
+    // is a real outcome — every batch can fail against a down or rate-limiting endpoint —
+    // and a failed run must not rewrite the artifact it could not add to.
+    if store.is_dirty(&metadata) {
+        let report = store.commit(&mut metadata)?;
+        eprintln!(
+            "  Committed {} records to {} ({} replaced, {} duplicates removed)",
+            report.records,
+            output_file.display(),
+            report.records_replaced,
+            report.duplicates_removed
+        );
+        eprintln!("  Wrote metadata to {}", metadata_path.display());
+    }
 
     Ok(fetched)
 }
