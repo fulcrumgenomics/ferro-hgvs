@@ -79,6 +79,7 @@ mod cmrg_exhaustive_tests;
 mod coalesced_members_diagnostic;
 mod coderabbit_config_paths;
 mod coding_frame_merge_axis_asymmetry;
+mod codon_frame_deep_window_offset;
 mod comma_products_allele;
 mod compound_cross_reference;
 mod comprehensive_edge_case_tests;
