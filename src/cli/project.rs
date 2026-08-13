@@ -592,7 +592,14 @@ mod tests {
 
     #[test]
     fn project_axis_bare_nm_genomic_axis_unavailable() {
-        // A bare NM_ coding input has no genome alignment → g. is None.
+        // A bare `NM_` coding description names no genomic parent, so there is
+        // no reference for the `g.` axis to be written against → `g.` is None.
+        //
+        // This comment previously read "has no genome alignment", which is not
+        // what the fixture models and not why the axis declines — see
+        // `project_axis_bare_nm_genomic_decline_names_cause_and_remedy` below,
+        // which pins that this very fixture aligns the transcript to
+        // `NC_000001.11` and projects against it happily.
         let vp = fixture();
         let variant = crate::parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
         let outcome = project_axis(&vp, &variant, Axis::Genomic, None).unwrap();
@@ -600,6 +607,98 @@ mod tests {
             matches!(outcome, AxisOutcome::Unavailable { .. }),
             "got {outcome:?}"
         );
+    }
+
+    /// #1713: the `g.` decline on a bare transcript input must state its own
+    /// cause and the remedy, rather than the string synthesized from the axis
+    /// code alone.
+    ///
+    /// The synthesized wording — "no g. representation for this variant" —
+    /// asserts a property of the **variant**. That is false here and measurably
+    /// misleading: the reference data required to derive the axis is present
+    /// (this fixture aligns `NM_TEST.1` to `NC_000001.11`, and the second half
+    /// of this test renders that very axis), and what is missing is a genomic
+    /// reference in the **description**. #1713 was filed against ferro on the
+    /// strength of that wording, reading it as evidence that the CLI could not
+    /// reach a capability the library had.
+    ///
+    /// `project_to_genomic` declines a parentless accession by design — #327
+    /// specifies it, and `projector.rs` refuses to synthesize a parent from
+    /// cdot — so the decline itself is correct and is not what this pins. What
+    /// is owed is that the reason reaches the user, which is a decline the
+    /// projector articulates and then discards (`AxisDeclineReasons`).
+    #[test]
+    fn project_axis_bare_nm_genomic_decline_names_cause_and_remedy() {
+        let vp = fixture();
+
+        let bare = crate::parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
+        let outcome = project_axis(&vp, &bare, Axis::Genomic, None).unwrap();
+        let AxisOutcome::Unavailable { reason, .. } = outcome else {
+            panic!("expected Unavailable, got {outcome:?}");
+        };
+        assert!(
+            !reason.contains("no g. representation for this variant"),
+            "the decline must not fall back to the axis-code string, which \
+             states a property of the variant that is false here: {reason}"
+        );
+        assert!(
+            reason.contains("NM_TEST.1"),
+            "the decline must name the accession it is about: {reason}"
+        );
+        assert!(
+            reason.contains("genomic reference"),
+            "the decline must name the missing thing: {reason}"
+        );
+        assert!(
+            reason.contains("NC_000001.11(NM_TEST.1)"),
+            "the decline must show the remedy on this transcript's own genomic \
+             reference, which the projector can see: {reason}"
+        );
+
+        // The other half of the claim, in the same test so the two cannot drift:
+        // name the genomic reference and the identical variant renders. Nothing
+        // about the reference data changed between these two calls, which is
+        // what makes "no g. representation for this variant" the wrong story.
+        let anchored = crate::parse_hgvs("NC_000001.11(NM_TEST.1):c.4C>A").unwrap();
+        let outcome = project_axis(&vp, &anchored, Axis::Genomic, None).unwrap();
+        match outcome {
+            AxisOutcome::Rendered { output, .. } => {
+                assert!(output.starts_with("NC_000001.11:g."), "got {output}");
+            }
+            other => panic!("expected Rendered once the parent is named, got {other:?}"),
+        }
+    }
+
+    /// The remedy is spelled on the axis the user wrote, not always `c.`.
+    ///
+    /// `project_coding_direct` passes a literal `"c."`; `project_noncoding_direct`
+    /// threads its own `axis_label` (`"n."` / `"r."`). That parameter is the only
+    /// behavioural difference between the two paths' declines, and the `c.`-only
+    /// tests beside this one cannot see it — a `project_noncoding_direct` that
+    /// hardcoded `"c."` would pass every other assertion in the tree. So the two
+    /// non-coding axes are pinned here, and pinned as *not* `c.`, since a
+    /// substring check for the accession alone would survive the regression.
+    #[test]
+    fn project_axis_bare_nm_genomic_decline_spells_the_remedy_on_the_inputs_own_axis() {
+        let vp = fixture();
+
+        for (input, axis_label) in [("NM_TEST.1:n.4C>A", "n."), ("NM_TEST.1:r.4c>a", "r.")] {
+            let variant = crate::parse_hgvs(input).unwrap();
+            let outcome = project_axis(&vp, &variant, Axis::Genomic, None).unwrap();
+            let AxisOutcome::Unavailable { reason, .. } = outcome else {
+                panic!("{input}: expected Unavailable, got {outcome:?}");
+            };
+            assert!(
+                reason.contains(&format!("NC_000001.11(NM_TEST.1):{axis_label}")),
+                "{input}: the remedy must be spelled on the input's own axis \
+                 ({axis_label}): {reason}"
+            );
+            assert!(
+                !reason.contains("NC_000001.11(NM_TEST.1):c."),
+                "{input}: the remedy must not fall back to the coding path's \
+                 hardcoded `c.`: {reason}"
+            );
+        }
     }
 
     #[test]

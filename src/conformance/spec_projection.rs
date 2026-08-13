@@ -331,12 +331,36 @@ mod tests {
             pass.axes[&'c'],
             AxisResult::Rendered("NM_TEST.1:c.4C>A".to_string())
         );
-        // This mock transcript carries no genome alignment, so the `g.` axis
-        // declines — and the decline is reported as a first-class outcome with
-        // its reason, not dropped.
-        assert_eq!(
-            pass.axes[&'g'],
-            AxisResult::Unavailable("no g. representation for this variant".to_string())
+        // The `g.` axis declines, and the decline is reported as a first-class
+        // outcome with its reason, not dropped.
+        //
+        // This comment used to say the mock "carries no genome alignment",
+        // which is not true of this fixture and not why the axis declines: the
+        // cdot record aligns `NM_TEST.1` to `NC_000001.11`, and the sibling
+        // tests in this module project a bare `NC_000001.11:g.` input onto it.
+        // The axis declines because the *description* names no genomic parent
+        // (#327), and #1713 records what that misreading cost. The reason string
+        // now says so, so the assertion no longer pins a wording that pointed
+        // the next reader at the reference data.
+        // The negative half is carried too, in step with the two sibling tests
+        // (`src/cli/project.rs::project_axis_bare_nm_genomic_decline_names_cause_and_remedy`
+        // and `tests/it/issue_1713_bare_transcript_genomic_decline.rs`): three
+        // `contains` on a long string all pass against a reason that *also*
+        // still carries the axis-code fallback, so the thing #1713 is about
+        // has to be asserted absent rather than inferred from the positives.
+        assert!(
+            matches!(
+                &pass.axes[&'g'],
+                AxisResult::Unavailable(reason)
+                    if !reason.contains("no g. representation for this variant")
+                        && reason.contains("NM_TEST.1")
+                        && reason.contains("genomic reference")
+                        && reason.contains("NC_000001.11(NM_TEST.1)")
+            ),
+            "the g. decline must name the accession, the missing genomic \
+             reference, and the remedy, and must not fall back to the \
+             axis-code string: {:?}",
+            pass.axes[&'g']
         );
         assert_eq!(
             pass.axes[&'p'],

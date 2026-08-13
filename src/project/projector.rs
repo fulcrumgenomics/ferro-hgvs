@@ -4577,14 +4577,73 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
     }
 
+    /// The genomic reference this transcript is aligned to, when the reference
+    /// data names one — for phrasing the remedy in
+    /// [`Self::bare_transcript_genomic_decline`], never for deriving an axis.
+    ///
+    /// cdot first (the mapper that would perform the projection), then the
+    /// sequence provider's own transcript record, mirroring the cdot-first /
+    /// provider-fallback resolution the direct paths already use for their
+    /// coding metadata. Runs only on a decline, so it costs nothing on the
+    /// paths that render.
+    fn aligned_genomic_reference(&self, transcript_id: &str) -> Option<String> {
+        if let Some(t) = self.projector.mapper().cdot().get_transcript(transcript_id) {
+            if !t.contig.is_empty() {
+                return Some(t.contig.clone());
+            }
+        }
+        self.provider
+            .get_transcript(transcript_id)
+            .ok()
+            .and_then(|t| t.chromosome.clone())
+            .filter(|c| !c.is_empty())
+    }
+
+    /// Why the `g.` axis declines for a bare transcript description (#1713).
+    ///
+    /// The decline itself is by design and is not this function's subject:
+    /// #327 specifies that a transcript-coordinate input with no resolvable
+    /// parent reference is refused, and `project_to_genomic_nc` deliberately
+    /// does **not** synthesize a parent from cdot. `axis_label` is the input's
+    /// own axis (`c.`/`n.`/`r.`), so the worked remedy is spelled on the axis
+    /// the user actually wrote.
+    ///
+    /// What this fixes is the *reporting*. The reason was articulated inside
+    /// `project_to_genomic_nc` and never recorded, so `ferro project --axis g`
+    /// fell back to `unavailable_reason`'s string synthesized from the axis code
+    /// alone — "no g. representation for this variant" — which asserts a
+    /// property of the **variant**. That is the wrong subject and it is
+    /// routinely false: the alignment is usually present (the projection
+    /// renders the moment the description names a parent), so the missing thing
+    /// is in the description, not in the reference or in the variant. #1713 was
+    /// filed against ferro on the strength of that wording, reading it as a CLI
+    /// path failing to reach a capability the library had; the library declines
+    /// identically, and the wording is what made the two look different.
+    fn bare_transcript_genomic_decline(&self, transcript_id: &str, axis_label: &str) -> String {
+        // Fall back to an elided accession rather than inventing one: a wrong
+        // worked example is worse than a shaped one, and this arm is reached
+        // only when the reference names no alignment at all.
+        let parent = self
+            .aligned_genomic_reference(transcript_id)
+            .unwrap_or_else(|| "NC_…".to_string());
+        format!(
+            "no genomic reference for {transcript_id}: a bare transcript description names no \
+             genomic parent, so the g. axis cannot be derived (see #327); name one in the \
+             description, e.g. {parent}({transcript_id}):{axis_label}…"
+        )
+    }
+
     /// Direct c.→p. projection for a bare transcript coding input (no
-    /// `genomic_context` parent). The c.→g.→CDS roundtrip cannot run without a
-    /// genome alignment, but protein prediction only needs the transcript's
-    /// CDS sequence and the 1-based CDS position — which an exonic c. variant
-    /// already provides. The genomic axis is `None` for a bare `NM_`/`NR_`
-    /// input (no genome alignment), but is filled with the reanchored
-    /// `LRG_<n>:g.…` form when the input is a bare LRG transcript whose
-    /// structural parent resolves (`lrg_genomic_parent`, #886) (#498).
+    /// `genomic_context` parent). The c.→g.→CDS roundtrip cannot run, there
+    /// being no genomic reference in the description to write the `g.` axis
+    /// against (#327) — **not** because the reference lacks an alignment, which
+    /// it usually has; see [`Self::bare_transcript_genomic_decline`] and #1713.
+    /// Protein prediction only needs the transcript's CDS sequence and the
+    /// 1-based CDS position — which an exonic c. variant already provides. The
+    /// genomic axis is `None` for a bare `NM_`/`NR_` input, but is filled with
+    /// the reanchored `LRG_<n>:g.…` form when the input is a bare LRG
+    /// transcript whose structural parent resolves (`lrg_genomic_parent`, #886)
+    /// (#498).
     fn project_coding_direct(
         &self,
         cds: &CdsVariant,
@@ -4715,14 +4774,29 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // #886: a bare LRG transcript has a structurally derivable genomic
         // parent, so its genomic axis IS resolvable (the normalized wrapper
         // fills the LRG parent, reanchors into the LRG frame, and 3'-shifts). A
-        // bare NM_/NR_ has no genome alignment -> stays None. Use
+        // bare NM_/NR_ names no genomic parent for the axis to be written
+        // against (#327), so it stays None — the alignment itself is usually
+        // present, which is the misreading #1713 records. Use
         // `project_to_genomic_normalized` (not the raw pivot) so the reported
         // genomic axis is spec-canonical (#867); `.ok()` degrades to None if the
         // LRG placement is genuinely unavailable.
-        let genomic = if Self::lrg_genomic_parent(&cds.accession).is_some() {
-            self.project_to_genomic_normalized(normalized).ok()
+        //
+        // #1713: either way the axis's absence now carries its reason, so the
+        // CLI reports the real cause instead of synthesizing one from the axis
+        // code. Both arms decline exactly as before — only the record changes.
+        let (genomic, genomic_decline) = if Self::lrg_genomic_parent(&cds.accession).is_some() {
+            match self.project_to_genomic_normalized(normalized) {
+                Ok(g) => (Some(g), None),
+                Err(e) => {
+                    log::trace!("LRG genomic axis declined for {transcript_id}: {e}");
+                    (None, variant_decline_explanation(&e))
+                }
+            }
         } else {
-            None
+            (
+                None,
+                Some(self.bare_transcript_genomic_decline(transcript_id, "c.")),
+            )
         };
 
         // #972: decline coding/protein on a `cds_start_NF` transcript — see the
@@ -4741,6 +4815,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             normalization_warnings: Vec::new(),
             axis_decline_reasons: AxisDeclineReasons {
                 noncoding: noncoding_decline,
+                genomic: genomic_decline,
                 ..Default::default()
             },
             genomic,
@@ -4759,14 +4834,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
     /// Direct n./r.→CDS→p. projection for a bare transcript non-coding (`n.`)
     /// or RNA (`r.`) input (no `genomic_context` parent). The c.→g.→CDS
-    /// roundtrip cannot run without a genome alignment, but an `n.` base is a
+    /// roundtrip cannot run, there being no genomic reference in the
+    /// description to write the `g.` axis against (#327) — **not** because the
+    /// reference lacks an alignment; see
+    /// [`Self::bare_transcript_genomic_decline`] and #1713. An `n.` base is a
     /// 1-based transcript position: convert it to a CDS position via the
     /// transcript's `cds_start` (the exon/CIGAR-aware
     /// [`CoordinateMapper::tx_to_cds`]), then run the same protein-consequence
     /// prediction the coding path uses. The genomic axis is `None` for a bare
-    /// `NM_`/`NR_` input (no genome alignment), but is filled with the
-    /// reanchored `LRG_<n>:g.…` form when the input is a bare LRG transcript
-    /// whose structural parent resolves (`lrg_genomic_parent`, #886) (#506).
+    /// `NM_`/`NR_` input, but is filled with the reanchored `LRG_<n>:g.…` form
+    /// when the input is a bare LRG transcript whose structural parent resolves
+    /// (`lrg_genomic_parent`, #886) (#506).
     ///
     /// `normalized` must be an [`HgvsVariant::Tx`] or [`HgvsVariant::Rna`].
     fn project_noncoding_direct(
@@ -5009,10 +5087,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // (#867). Computed once here because the two return sites below sit in
         // different branches (the `!is_coding` early return and the tail), so
         // there is no shared tail to set it in.
-        let genomic = normalized
+        //
+        // #1713: the decline carries its reason, on the same terms as the
+        // coding path's. `axis_label` is the input's own axis, so the worked
+        // remedy is spelled `n.`/`r.` rather than always `c.`.
+        let is_lrg = normalized
             .accession()
-            .filter(|acc| Self::lrg_genomic_parent(acc).is_some())
-            .and_then(|_| self.project_to_genomic_normalized(normalized).ok());
+            .is_some_and(|acc| Self::lrg_genomic_parent(acc).is_some());
+        let (genomic, genomic_decline) = if is_lrg {
+            match self.project_to_genomic_normalized(normalized) {
+                Ok(g) => (Some(g), None),
+                Err(e) => {
+                    log::trace!("LRG genomic axis declined for {transcript_id}: {e}");
+                    (None, variant_decline_explanation(&e))
+                }
+            }
+        } else {
+            (
+                None,
+                Some(self.bare_transcript_genomic_decline(transcript_id, axis_label)),
+            )
+        };
 
         // Non-coding transcript: there is no CDS to convert into, so there is
         // no protein consequence and no c. form. The n. form is the input
@@ -5020,7 +5115,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if !is_coding {
             return Ok(VariantProjection {
                 normalization_warnings: Vec::new(),
-                axis_decline_reasons: AxisDeclineReasons::default(),
+                axis_decline_reasons: AxisDeclineReasons {
+                    genomic: genomic_decline,
+                    ..Default::default()
+                },
                 genomic,
                 coding: None,
                 noncoding: Some(noncoding_axis),
@@ -5099,7 +5197,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
-            axis_decline_reasons: AxisDeclineReasons::default(),
+            axis_decline_reasons: AxisDeclineReasons {
+                genomic: genomic_decline,
+                ..Default::default()
+            },
             genomic,
             coding,
             // The non-coding axis is the input itself for an `n.` input, and the

@@ -27,6 +27,7 @@ mod issue_1600_reduced_delins_tract_demotion;
 mod issue_1607_protein_residue_one_guard;
 mod issue_1627_named_element_alphabet_reach;
 mod issue_1632_parse_entry_applies_no_mode;
+mod issue_1713_bare_transcript_genomic_decline;
 mod issue_1715_rna_alignment_symbol_reach;
 mod issue_1748_noncoding_axis_zones;
 mod repeat_input_idempotency;
