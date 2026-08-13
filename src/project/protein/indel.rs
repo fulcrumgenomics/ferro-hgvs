@@ -1666,27 +1666,36 @@ pub(crate) fn try_project_cis_combined(
 /// `members` are the pre-classified `SimpleExonic` members as `(lo, hi, edit)`
 /// with insertion spans already collapsed to `hi == lo`, in any order.
 ///
-/// Returns a [`CisResidueDiff`]: the changed residues in ascending order — empty
-/// when the combined product is silent — alongside the codons whose reference
-/// triplet the members rewrote, which is what an all-silent combination is
-/// described by (#1099). Returns `None` (caller keeps its existing behavior)
-/// when the combined product cannot be compared residue-for-residue against the
-/// reference:
+/// # The three outcomes are not interchangeable, and conflating two of them was a
+/// defect
 ///
-/// - fewer than two members, an out-of-bounds or overlapping span (overlapping
-///   members are contradictory in cis), or an unreadable CDS;
-/// - the combined CDS changes length — an in-frame indel is a length-changing
-///   consequence that [`try_project_cis_combined`] already describes;
-/// - the combined protein changes length, i.e. a premature stop (nonsense) or a
-///   stop-loss, both of which need their own spec forms (a stop-delins or a
-///   C-terminal extension) rather than a residue-wise diff.
+/// [`CisResidueOutcome::TerminatorMoved`] used to be reported as the same `None`
+/// as every other decline, so the caller treated "this combination has its own
+/// spec form" and "this path has nothing to say" alike and fell back to
+/// describing the members **separately**. That emits a residue downstream of a
+/// terminator the combination itself introduces — on `NM_FSSTOP.1`,
+/// `c.[4_5delinsTA;9A>G]` gave `p.[(Val2Ter);(Lys3=)]`, and `Lys3` is not
+/// translated at all in a product that stops at residue 2. The outcomes are
+/// therefore distinguished at the type level rather than by a comment.
+///
+/// - [`CisResidueOutcome::Diff`] — the changed residues in ascending order,
+///   empty when the combined product is silent, alongside the codons whose
+///   reference triplet the members rewrote (#1099).
+/// - [`CisResidueOutcome::TerminatorMoved`] — the combined protein changes
+///   length: a premature stop (nonsense) or a stop-loss. Both have their own
+///   spec forms, and [`try_project_cis_combined`] builds them. **Never a
+///   per-member fallback.**
+/// - [`CisResidueOutcome::NotResidueWise`] — fewer than two members, an
+///   out-of-bounds or overlapping span (overlapping members are contradictory in
+///   cis), an unreadable CDS, or a combined CDS that changes length. The caller
+///   keeps its existing behaviour.
 pub(crate) fn combined_cis_residue_changes(
     transcript: &Transcript,
     ref_bundle: &RefProteinBundle,
     members: &[(i64, i64, &NaEdit)],
-) -> Option<CisResidueDiff> {
+) -> CisResidueOutcome {
     if members.len() < 2 {
-        return None;
+        return CisResidueOutcome::NotResidueWise;
     }
 
     // Bounds guard, mirroring `try_project_cis_combined`: a `lo < 1`
@@ -1695,7 +1704,7 @@ pub(crate) fn combined_cis_residue_changes(
     let ref_cds_len = ref_bundle.ref_cds.len() as i64;
     for (lo, hi, _) in members {
         if *lo < 1 || *hi < *lo || *hi > ref_cds_len {
-            return None;
+            return CisResidueOutcome::NotResidueWise;
         }
     }
 
@@ -1704,7 +1713,8 @@ pub(crate) fn combined_cis_residue_changes(
     sorted.sort_by_key(|(lo, _, _)| *lo);
     for pair in sorted.windows(2) {
         if pair[1].0 <= pair[0].1 {
-            return None; // overlapping members: contradictory in cis
+            // Overlapping members: contradictory in cis.
+            return CisResidueOutcome::NotResidueWise;
         }
     }
 
@@ -1712,10 +1722,14 @@ pub(crate) fn combined_cis_residue_changes(
     // splice never invalidates a not-yet-applied 5' member's coordinates.
     let mut mut_cds = ref_bundle.ref_cds.clone();
     for (lo, hi, edit) in sorted.iter().rev() {
-        mut_cds = build_mutated_cds_with_ref(&mut_cds, transcript, *lo, *hi, edit).ok()?;
+        match build_mutated_cds_with_ref(&mut_cds, transcript, *lo, *hi, edit) {
+            Ok(next) => mut_cds = next,
+            Err(_) => return CisResidueOutcome::NotResidueWise,
+        }
     }
     if mut_cds.len() != ref_bundle.ref_cds.len() {
-        return None; // length-changing: not a residue-wise substitution set
+        // Length-changing: not a residue-wise substitution set.
+        return CisResidueOutcome::NotResidueWise;
     }
 
     // Translate the combined product; force residue 1 to Met on a recognized
@@ -1725,10 +1739,14 @@ pub(crate) fn combined_cis_residue_changes(
         force_initiator_met(&mut alt_protein);
     }
     if alt_protein.len() != ref_bundle.ref_protein.len() {
-        return None; // premature stop or stop-loss: needs its own spec form
+        // A premature stop (nonsense) or a stop-loss. Reported as its own
+        // outcome rather than as a decline, because the caller's decline path is
+        // to describe the members separately — and past the new terminator there
+        // is no protein for a member to be a consequence of.
+        return CisResidueOutcome::TerminatorMoved;
     }
 
-    Some(CisResidueDiff {
+    CisResidueOutcome::Diff(CisResidueDiff {
         changed: ref_bundle
             .ref_protein
             .iter()
@@ -1739,6 +1757,23 @@ pub(crate) fn combined_cis_residue_changes(
             .collect(),
         rewritten_codons: rewritten_codons(&ref_bundle.ref_cds, &mut_cds),
     })
+}
+
+/// What [`combined_cis_residue_changes`] found, kept as three outcomes because
+/// two of them used to be one `None` and the conflation was a defect.
+///
+/// See that function's doc for the case it cost: a per-member fallback naming a
+/// residue downstream of a terminator the combination introduces.
+pub(crate) enum CisResidueOutcome {
+    /// A residue-wise, length-preserving change over the combined product.
+    Diff(CisResidueDiff),
+    /// The combined product's protein is a different length from the reference's
+    /// — a premature stop or a stop-loss. It has a spec form of its own and
+    /// [`try_project_cis_combined`] builds it; it must **not** be described
+    /// member by member.
+    TerminatorMoved,
+    /// Nothing this path can compare. The caller keeps its existing behaviour.
+    NotResidueWise,
 }
 
 /// The residue-level effect of applying a cis compound's members together.
@@ -3301,12 +3336,17 @@ mod tests {
     /// byte-identity is the whole claim, so it is asserted rather than described.
     ///
     /// It is asserted **at the builder seam** (`try_project_cis_combined` against
-    /// `predict_indel_protein`) rather than through `VariantProjector`, because
-    /// the projector normalizes first and re-partitions the single delins into
-    /// same-codon substitutions, which then take the substitution-combination path
-    /// and answer `p.[(Val2Ter);(Lys3=)]`. That divergence is real, is present on
-    /// `main`, and is not something this change reaches — it lives in the
-    /// substitution path, not in the combined build.
+    /// `predict_indel_protein`) because that is where the claim belongs. It used
+    /// to be asserted here *instead of* through `VariantProjector`, on the ground
+    /// that the projector normalizes first, re-partitions both spellings to
+    /// `c.[4_5delinsTA;9A>G]`, and answered `p.[(Val2Ter);(Lys3=)]` for that pair
+    /// — a silent residue downstream of a terminator the pair introduces. **That
+    /// is closed**: the dispatch was reporting "the combined protein changes
+    /// length" as an ordinary decline and falling back to describing the members
+    /// separately, and it now reports [`CisResidueOutcome::TerminatorMoved`] and
+    /// routes to this very builder. `project_cis_net_in_frame_but_mid_shift_stop_takes_the_frameshift_arm`
+    /// carries the projector-level equality now, so the two seams agree and
+    /// neither can move alone.
     ///
     /// CDS `ATGGTAAAAGGGCCCTAA` = Met-Val-Lys-Gly-Pro-Ter. `c.[4del;10dup]` (−1
     /// and +1, net 0) and `c.4_12delinsTAAAAGGGG` both denote
@@ -3365,6 +3405,73 @@ mod tests {
              whether it is spelled as one member or as two"
         );
         assert_eq!(prot_str(&combined), "NP_TEST.1:p.(Val2Ter)");
+    }
+
+    /// The dispatch defect this file's outcome split exists for, at the seam
+    /// rather than through the projector: a net-in-frame cis pair whose combined
+    /// product **stops early**.
+    ///
+    /// CDS `ATGGTAAAAGGGCCCTAA` = Met-Val-Lys-Gly-Pro-Ter. The members
+    /// `c.4_5delinsTA` and `c.9A>G` are each length-preserving, so the
+    /// combination is net-in-frame, and neither carries a frameshift consequence
+    /// of its own — which is exactly why the net-frameshift arm does not claim
+    /// it. Their combined product is `ATG TAA AAG GGG CCC TAA`, which terminates
+    /// at residue 2.
+    ///
+    /// So the residue-wise diff cannot describe it (the alt protein is 1 residue
+    /// against the reference's 5) and must say **why**: reported as an ordinary
+    /// decline, the caller describes the members separately and emits
+    /// `p.[(Val2Ter);(Lys3=)]`, naming a residue that a product stopping at
+    /// residue 2 does not have. `frameshift.md:22` forbids `fsTer1` and requires
+    /// the nonsense substitution.
+    ///
+    /// Pinned here as the outcome rather than as the rendered string, because the
+    /// rendering is `projector.rs`'s and the routing decision is this function's.
+    #[test]
+    fn a_cis_pair_whose_combined_product_stops_early_reports_the_moved_terminator() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGGTAAAAGGGCCCTAA", 1, 18);
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![Base::T, Base::A])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let sub = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        };
+        let members = [(4i64, 5i64, &delins), (9i64, 9i64, &sub)];
+        assert!(
+            matches!(
+                combined_cis_residue_changes(&t, &bundle, &members),
+                CisResidueOutcome::TerminatorMoved
+            ),
+            "a combined product that terminates at residue 2 against a 5-residue \
+             reference must be reported as a MOVED TERMINATOR, never as a plain \
+             decline — the caller's decline path names members individually, and \
+             past the new terminator there is no residue to name"
+        );
+
+        // Not vacuous: the same two members' spans with a payload that leaves the
+        // product's terminator where it was is an ordinary residue-wise diff, so
+        // the outcome above is about the stop and not about the shape.
+        let benign = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![Base::C, Base::A])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let benign_members = [(4i64, 5i64, &benign), (9i64, 9i64, &sub)];
+        assert!(
+            matches!(
+                combined_cis_residue_changes(&t, &bundle, &benign_members),
+                CisResidueOutcome::Diff(_)
+            ),
+            "`GTA` -> `CAA` is Val -> Gln, so this product runs to the reference \
+             terminator and IS a residue-wise diff"
+        );
     }
 
     /// #1588: the `Frameshift` arm on a **genuine `fsTer{K}`** whose new stop
