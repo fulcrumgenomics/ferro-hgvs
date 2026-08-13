@@ -105,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 27 records, 23 decided / 4 undecided
-//! 111 clause lines, of which 27 are named by more than one record
+//! 27 records, 24 decided / 3 undecided
+//! 111 clause lines, of which 28 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -171,12 +171,12 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/consultation/open-issues.md:77  [MULTI]
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/consultation/open-issues.md:78  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/alleles.md:5
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
@@ -222,7 +222,7 @@
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
@@ -233,12 +233,13 @@
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/DNA/delins.md:42
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
-//! docs/recommendations/DNA/delins.md:46
+//! docs/recommendations/DNA/delins.md:46  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:79
@@ -343,7 +344,7 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
@@ -398,46 +399,15 @@
 //! -- unanswered question on the same line. This is where re-derivation from --
 //! -- the spec text actually happens; read BOTH records before forming a view. --
 //!
-//! docs/consultation/open-issues.md:77
-//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//! docs/consultation/open-issues.md:78
-//!     `adjudication-precedence-order` — decided (cited)
-//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited, via docs/consultation/open-issues.md:77-78)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/complex.md:127
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:161
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/DNA/delins.md:17
-//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
-//!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
-//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
-//! docs/recommendations/DNA/delins.md:47
-//!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
-//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
-//!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/checklist.md:20
 //!     `bare-transcript-intronic-position` — decided (governing)
 //!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
-//! docs/recommendations/general.md:34
-//!     `canonical-form-choice-when-both-legal` — decided (cited)
-//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
-//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
-//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
-//!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
-//!     `inversion-vs-two-delins-76-83` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
-//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!
 //! -- same verdict across every record naming the line --
 //!
@@ -454,14 +424,39 @@
 //! docs/consultation/SVD-WG010.md:5
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/consultation/open-issues.md:77
+//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/consultation/open-issues.md:78
+//!     `adjudication-precedence-order` — decided (cited)
+//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/recommendations/DNA/delins.md:17
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
+//!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:46
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
+//! docs/recommendations/DNA/delins.md:47
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
+//!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:81
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //!     `separation-rule-force-modal-or-negation` — decided (governing)
@@ -483,6 +478,15 @@
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
+//! docs/recommendations/general.md:34
+//!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
+//!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
@@ -831,7 +835,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (27, 23, 4),
+        (27, 24, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -995,7 +999,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        27,
+        28,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -1011,9 +1015,35 @@ fn clauses_named_by_several_records_are_flagged() {
         })
         .map(|(key, _)| key.to_string())
         .collect();
+    // The round trip is the point, and it is a DELTA of five rather than a
+    // return to a remembered total — read the residue off the failure message,
+    // never off this paragraph. When
+    // `delins-recommendation-reach-when-the-input-arrives-split`
+    // was first filed — as an open question, before any ruling — five
+    // `delins`/`open-issues` lines gained a spread from that one new record.
+    // The operator ruling of 2026-08-12 (`:46` governing) returns exactly those
+    // five. So the comment further down about a count RISING on a filing now
+    // has its closing half: the rise was real, it was temporary, and it burned
+    // down when the question was answered rather than when a record was quietly
+    // dropped.
+    //
+    // What the five leave behind is NOT the two ring lines this comment
+    // originally named. The base has since gained
+    // `junction-exit-wrapper-scope-in-a-mixed-allele`, which spreads
+    // `checklist.md:20` for reasons of its own, so the residue is three lines
+    // and only two of them are the ring pair. That is the same lesson as the
+    // module header's: a remembered total is a copy of someone else's state and
+    // rots when the base moves past it, whereas the delta of five is a property
+    // of this record and survived the move intact.
+    //
+    // The id is on a line of its own above, and the word describing its former
+    // state is not on that line, deliberately: `ruling_citation_currency` reads
+    // a status word sharing a line with a record id as a claim about that
+    // record's CURRENT status, so writing the history inline reads as a
+    // contradiction of the ledger. This comment tripped that check once.
     assert_eq!(
         mixed.len(),
-        8,
+        3,
         "measured count of mixed-verdict clause lines changed: {mixed:?}"
     );
 
@@ -1043,16 +1073,27 @@ fn clauses_named_by_several_records_are_flagged() {
     // down — so this assertion is a moving target BY DESIGN and re-pointing it is
     // the correct maintenance, not a workaround.
     //
-    // **The direction of travel is not monotonic, and `delins.md:17` is the
-    // counter-example.** It is mixed AGAIN, because
-    // `delins-recommendation-reach-when-the-input-arrives-split` was filed
+    // **The direction of travel is not monotonic, and `delins.md:17` was the
+    // counter-example — now carried to its conclusion.** It went mixed AGAIN
+    // when `delins-recommendation-reach-when-the-input-arrives-split` was filed
     // against it (and against `:47`, and `general.md:34`, and
-    // `open-issues.md:77-78`) as `undecided` — five lines gained a spread from
+    // `open-issues.md:77-78`) as `undecided`: five lines gained a spread from
     // one new record, taking the measured `mixed` count from two to seven. So a
     // line can re-acquire a spread by a record being FILED, not only lose one by
     // a record being decided, and the burn-down framing above describes only the
     // decided half. Do not read a rise in this count as a regression: filing an
     // honest `undecided` record is what the ledger is for.
+    //
+    // That record was DECIDED on 2026-08-12 (`:46` governing), and the same five
+    // lines burned back down. The count did not return to the number it left,
+    // because the base gained an unrelated spread on `checklist.md:20` in the
+    // meantime — what closed is the five, not the total. Keep both halves of
+    // this note. The rise was not noise
+    // to be waited out and the fall was not a record being quietly dropped: an
+    // open question was recorded honestly, carried in the count while it was
+    // open, and removed by being answered. That is the whole cycle this
+    // assertion is here to make visible, and it has now been observed end to
+    // end rather than argued.
     //
     // It is pointed at a ring line rather than another `delins` one deliberately.
     // `complex.md:127` is cited by two records whose verdicts differ — and note

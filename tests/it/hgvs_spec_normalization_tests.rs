@@ -1047,17 +1047,29 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ),
     // `delins.md:47` recommends the span; `:17`/`general.md:34` describe
     // separated variants individually. The provenance half of this — "does
-    // `:47` reach an input that arrives already split?" — is NOT open; it is
+    // `:47` reach an input that arrives already split?" — was never open; it is
     // excluded by `canonical-form-choice-when-both-legal`, which holds that the
-    // input's spelling does not decide. What is open is which of the two
+    // input's spelling does not decide. What was open is which of the two
     // clauses a re-derivation should land on when the minimal edit set really
-    // does have two members separated by unchanged bases:
-    // `delins-merge-vs-individual-gap-two-or-more` decided for `:47` but scoped
-    // itself to a single spanning member. #1420's two `SpecExplicit` gap rows
-    // turn on it.
+    // does have two members separated by unchanged bases.
+    // **Decided by operator ruling (2026-08-12):** `:46` governs, as the clause
+    // that scopes `:47` — the split `:47` advises against is manufactured by an
+    // *inserted sequence* re-aligning, so `:47` reaches a payload-coincidence
+    // split only where some member supplies bases while consuming a different
+    // number of reference bases. A split of pure deletions inserts nothing, so
+    // `general.md:34` governs it unqualified. It is the only reading under which
+    // both worked examples in the passage come out as written — `:44-47`'s own
+    // example merges and W58 stays split. A further scope on
+    // `delins-merge-vs-individual-gap-two-or-more`, under that record's shape
+    // and direction scopes and the `c.`-only axis scope; it widens none of them.
+    // Already implemented by `split_carries_a_gap_bearing_insert` (#1698), which
+    // runs only on `CanonicalCoalesced`, so the ruling moves no shipped row and
+    // the real-corpus disclosure is owed by the default flip, not by this
+    // record. #1420's two `SpecExplicit` gap rows are released from their hold —
+    // but both are `g.`, so the axis scope, not this ruling, decides them.
     (
         "delins-recommendation-reach-when-the-input-arrives-split",
-        "undecided",
+        "decided",
     ),
     // What the release gate "equivalent inputs produce one canonical output"
     // means, given that `normalize` cannot define the classes it is asserted
