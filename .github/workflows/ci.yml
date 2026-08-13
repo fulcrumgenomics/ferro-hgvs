@@ -634,6 +634,7 @@ jobs:
             tests/fixtures/grammar/hgvs_spec_normalization.json
             tests/fixtures/grammar/hgvs_spec_enumeration.json
             tests/fixtures/cis/cis_confluence_corpus.json
+            tests/fixtures/cis/cis_confluence_nr_corpus.json
           key: generated-fixtures-${{ runner.os }}-${{ github.sha }}
       - name: Generate HGVS v21.0 spec fixture
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
@@ -641,21 +642,31 @@ jobs:
       - name: Generate HGVS spec test enumeration
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --bin generate_spec_enumeration
-      # The cis confluence corpus, generated here for the same reason and at far
-      # greater saving. `tests/it/cis_confluence_axis.rs` regenerates it on demand
-      # through `common::fixture_gen`, which shells out to a nested `cargo run
-      # --features dev --example generate_cis_confluence_corpus`. The `test` /
-      # `test-oracle` shards run from a nextest **archive** and so have no warm
-      # `target/`: that nested call compiles the crate from scratch *inside the
-      # test*, and the cost lands on whichever of the three `cis_confluence_axis`
-      # tests the shard happens to hold.
+      # The two cis confluence corpora, generated here for the same reason and at
+      # far greater saving. `tests/it/cis_confluence_axis.rs` and
+      # `tests/it/cis_confluence_nr_axis.rs` regenerate theirs on demand through
+      # `common::fixture_gen`, which shells out to a nested `cargo run --features
+      # dev --example generate_cis_confluence_corpus`. The `test` / `test-oracle`
+      # shards run from a nextest **archive** and so have no warm `target/`: that
+      # nested call compiles the crate from scratch *inside the test*, and the
+      # cost lands on whichever of the nine tests the shard happens to hold.
       #
       # Measured on run 31268888323: `the_corpus_is_a_dense_set_of_real_confluence_classes`
       # took 117.6s in `Test (2/6)` and 127.3s in `Test oracle (2/3)` — a test that
       # reads an 8 MB JSON and makes a handful of cheap assertions, and that takes
-      # 0.071s once the file exists. Six jobs paid it per run: the three tests are
-      # spread across the six `test` shards and again across the three
-      # `test-oracle` shards, so three shards of each hold one apiece.
+      # 0.071s once the file exists.
+      #
+      # **The `--axes n,r` corpus is the second step for the same reason, and it
+      # was missing until now.** `cis_confluence_nr_axis` landed with no wiring
+      # here, so every one of its SIX tests paid the nested build in every shard
+      # that held one — the cost is per test *process*, and nextest gives each
+      # test its own. Measured on run 31670057963 (`Test oracle (1/3)`):
+      # `the_rna_axis_is_spelled_in_the_rna_alphabet` took **129.2s** against
+      # 0.15s locally once the file exists — it normalizes nothing, it only
+      # compares strings — and `rna_five_prime_confluence_census` took **205.9s**,
+      # of which the census itself is the ~77s remainder. Its `g,c` sibling
+      # `three_prime_confluence_census` took 88.0s over *twice* the spellings,
+      # because its corpus was downloaded. That asymmetry is the whole tell.
       #
       # It lives in THIS job rather than one of its own, and that was measured both
       # ways. Generation is ~3s but compiling the example is ~50s, so on run
@@ -670,6 +681,16 @@ jobs:
       - name: Generate the cis confluence corpus
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_cis_confluence_corpus
+      # The transcript-typed half. `--axes` defaults to `g,c` and `--output` to
+      # the corpus above, so BOTH flags are required and the path must match the
+      # one `cis_confluence_nr_axis::CORPUS_RELATIVE_PATH` reads. The example is
+      # already built by the step above, so this costs the ~3s of generation
+      # rather than another ~50s of compiling.
+      - name: Generate the cis confluence n./r. corpus
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
+        run: |
+          cargo run --features dev --example generate_cis_confluence_corpus -- \
+            --axes n,r --output tests/fixtures/cis/cis_confluence_nr_corpus.json
       # Merged in from the former `generated-docs` job. Those three generators are
       # `cargo run --features dev --example …` — the SAME profile and feature set as
       # the four steps above — so they were compiling an identical dependency tree
@@ -726,6 +747,7 @@ jobs:
             tests/fixtures/grammar/hgvs_spec_normalization.json
             tests/fixtures/grammar/hgvs_spec_enumeration.json
             tests/fixtures/cis/cis_confluence_corpus.json
+            tests/fixtures/cis/cis_confluence_nr_corpus.json
           key: generated-fixtures-${{ runner.os }}-${{ github.sha }}
       # Only the fixtures are published from here. The two generator binaries
       # `spec_generator_preconditions` executes need no staging: they are
@@ -737,14 +759,30 @@ jobs:
           path: |
             tests/fixtures/grammar/hgvs_spec_normalization.json
             tests/fixtures/grammar/hgvs_spec_enumeration.json
+          # As on `bulk-fixtures` below, and with the same limit: this catches an
+          # EMPTY artifact, not a short one. A consumer that downloads an artifact
+          # missing a fixture falls back to `fixture_gen`'s nested `cargo run` and
+          # rebuilds the crate inside the test — silently, since the suite still
+          # passes. `warn` is the wrong default for an artifact anything reads.
+          if-no-files-found: error
           retention-days: 1
       # A second artifact rather than a second path on the one above, because the
       # consumers download `spec-fixtures` with `path: tests/fixtures/grammar/` — a
       # single artifact spanning two fixture directories cannot be unpacked that way.
+      #
+      # Both corpora DO share a directory, so they can ride one artifact: the
+      # upload roots it at their common ancestor (`tests/fixtures/cis`) and the
+      # consumers' `path: tests/fixtures/cis/` unpacks both onto the paths their
+      # tests read. Keep them on separate lines rather than a glob, so adding a
+      # third file to that directory cannot be swept in by accident.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: cis-corpus
-          path: tests/fixtures/cis/cis_confluence_corpus.json
+          path: |
+            tests/fixtures/cis/cis_confluence_corpus.json
+            tests/fixtures/cis/cis_confluence_nr_corpus.json
+          # See the note on `spec-fixtures` above.
+          if-no-files-found: error
           retention-days: 1
 
   # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
@@ -1092,10 +1130,13 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      # Without this the three `cis_confluence_axis` tests regenerate the corpus
-      # themselves, via a nested `cargo run --example` that has to compile the
-      # crate from scratch inside the test — 117.6s on run 31268888323 for the
-      # one that only reads it. See the generating step in `spec-fixtures`.
+      # Carries BOTH confluence corpora — `cis_confluence_axis`'s `g,c` one and
+      # `cis_confluence_nr_axis`'s `n,r` one. Without it those nine tests
+      # regenerate theirs themselves, via a nested `cargo run --example` that has
+      # to compile the crate from scratch inside the test — 117.6s on run
+      # 31268888323 for the `g,c` test that only reads it, and 129.2s on run
+      # 31670057963 for the `n,r` one. See the generating steps in
+      # `spec-fixtures`.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cis-corpus
@@ -1177,10 +1218,13 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      # Without this the three `cis_confluence_axis` tests regenerate the corpus
-      # themselves, via a nested `cargo run --example` that has to compile the
-      # crate from scratch inside the test — 117.6s on run 31268888323 for the
-      # one that only reads it. See the generating step in `spec-fixtures`.
+      # Carries BOTH confluence corpora — `cis_confluence_axis`'s `g,c` one and
+      # `cis_confluence_nr_axis`'s `n,r` one. Without it those nine tests
+      # regenerate theirs themselves, via a nested `cargo run --example` that has
+      # to compile the crate from scratch inside the test — 117.6s on run
+      # 31268888323 for the `g,c` test that only reads it, and 129.2s on run
+      # 31670057963 for the `n,r` one. See the generating steps in
+      # `spec-fixtures`.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cis-corpus
