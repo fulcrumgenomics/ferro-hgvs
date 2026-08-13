@@ -325,8 +325,8 @@ is the only place the check runs against true transcript and contig lengths.
 
 **The fourth flag is not set in all of those places, so do not read "all four"
 off this paragraph.** `FERRO_ASSERT_SEQUENCE` runs in `sweeps` and in the
-nightly, and deliberately not in `test-oracle` — the reason, and the two rows
-that keep it out, are under
+nightly, and deliberately not in `test-oracle` — the reason, and what currently
+keeps it out, are under
 [Where it runs, and the one place it deliberately does not](#normalization-denoted-sequence-oracle)
 below and in `ci.yml`'s comment on the `test-oracle` job.
 
@@ -347,6 +347,13 @@ a local run to that job's selection rather than to the whole suite. Added to
 `ORACLE_EXCLUDE`'s modules it raises **5** further failures beyond the
 idempotency oracle's 7, all in `spec_corpus_regressions` and all the same shape
 as those: a test pinning the CDS-end defect that this oracle aborts on.
+
+**That 5 is about `ORACLE_EXCLUDE`'s modules, and there is a second, unrelated 5
+below.** `test-oracle`'s own selection *excludes* those modules, and arming the
+flag over it raises 5 failures too — none of them in `spec_corpus_regressions`
+and none of them the same defect. The two figures share a digit and nothing
+else, so never carry one over to the other's scope; say which selection a count
+was taken on, every time.
 
 **The other three are all form questions, and a wrong sequence passes all of
 them.** It is a fixed point, so `FERRO_ASSERT_IDEMPOTENT` is satisfied; it
@@ -412,8 +419,9 @@ both were real disagreements inside ferro rather than noise:
 | #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before `6116f84a` |
 | #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
 
-**Both are now green, and the flag is still not set here — deliberately, for
-one measurement short of the claim.** Measured on the #1619 branch:
+**Both are now green, and the flag is STILL not set here — the selection-wide
+run those two closures were blocking on has since been done, and it is RED.**
+The two-row measurement, on the #1619 branch, was this:
 
 ```bash
 FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
@@ -423,9 +431,27 @@ FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
 ```
 
 That is the two named rows, not `test-oracle`'s selection, which is the whole
-suite minus `ORACLE_EXCLUDE`, `test(proptest)` and `SWEEP_FILTER`. Arming the
-flag in that job is a CI change that needs a run over **that** selection before
-anyone can say it is green, so it is a follow-up rather than a rider on the fix.
+suite minus `ORACLE_EXCLUDE`, `test(proptest)` and `SWEEP_FILTER`. Run over
+**that** selection — `origin/main` @ 674e9c8b, this job's own env plus
+`FERRO_ASSERT_SEQUENCE=1`, no `--partition` — it reads
+`10383 tests run: 10378 passed, 5 failed, 289 skipped`. The five are in two
+classes, **neither of them #1618 or #1619**, so neither was reachable by the
+two-row check above:
+
+- **3x `issue_1487_canonical_window_overflow`** — not an oracle fire at all.
+  `attempt to add with overflow` at `src/convert/mapper.rs:114`: arming the flag
+  routes the output through `hgvs_to_spdi`, which reaches `cds_to_tx`'s unchecked
+  `cds_start as i64 + pos.base - 1` on an `i64::MAX`-adjacent `c.` coordinate.
+  The open issue is **#1690**.
+- **2x `stranded_identity_member`** — a genuine fire, of #1281's "denotes no
+  sequence" shape, on a module that exists to PIN a defect (#1655's stranded
+  derived identity). That is the class `ORACLE_EXCLUDE` already documents: a test
+  pinning a defect and an oracle aborting on it cannot both run.
+
+So arming it is blocked on **#1690** and on finding a home for
+`stranded_identity_member` — **not** on another measurement. Do not read "both
+rows are green" as "it can be armed". `ci.yml`'s comment on the `test-oracle`
+job carries the full triage, including what a run with `FERRO_MANIFEST` set adds.
 Suppressing a row would still hollow out the oracle; that has not changed.
 
 **#1619's row was replaced before it was closed, and the swap is the whole

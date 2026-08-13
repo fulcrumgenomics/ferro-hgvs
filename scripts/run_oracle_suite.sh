@@ -51,11 +51,20 @@
 #   scripts/run_oracle_suite.sh -E 'test(foo)'     # extra args go through to nextest
 #
 # The denoted-sequence oracle (`FERRO_ASSERT_SEQUENCE`) is deliberately NOT
-# among the flags this mirrors, because `test-oracle` does not set it -- see
-# that job's comment for the two rows (#1618, #1619) that keep it out. Setting
-# it on this selection adds 5 further failures on `main`, all in
-# `spec_corpus_regressions` and all the same shape: a test pinning a defect the
-# oracle aborts on.
+# among the flags this mirrors, because `test-oracle` does not set it. Nothing
+# has to be done here to keep that true: `oracle_flags` below READS the flag set
+# out of that job, so this script arms it on the day the job does and not
+# before.
+#
+# The figure this header used to quote -- "5 further failures, all in
+# `spec_corpus_regressions`" -- was about `ORACLE_EXCLUDE`'s modules, which this
+# selection does not run, so it never described what it claimed to. Measured
+# over THIS selection instead, on `origin/main` @ 674e9c8b: 5 failures, none of
+# them in `spec_corpus_regressions` -- 3 in `issue_1487_canonical_window_overflow`
+# (an `i64` overflow at `src/convert/mapper.rs:114`, issue #1690) and 2 in
+# `stranded_identity_member` (a real fire on a module that PINS a defect). The
+# blocking rows are no longer #1618/#1619, both of which are closed and green;
+# see `test-oracle`'s own comment in `ci.yml` for the full triage.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
