@@ -1339,80 +1339,132 @@ fn run_hgvs_to_vcf(
     use ferro_hgvs::hgvs::variant::HgvsVariant;
     use ferro_hgvs::vcf::genomic_hgvs_to_vcf;
 
+    // OutputFormat: FromStr is Infallible, so the never-taken error arm falls
+    // back to the default (Text) — same idiom as `run_project`. Parsed once and
+    // used for every decision below, rather than re-matching the `&str` in
+    // parallel: one value read two ways is one of them going stale later.
+    let out_format: OutputFormat = format.parse().unwrap_or_default();
+
     let stdout = io::stdout();
     let mut handle = stdout.lock();
 
     // Print VCF header if outputting VCF format
-    if format == "vcf" {
+    if out_format == OutputFormat::Vcf {
         writeln!(handle, "##fileformat=VCFv4.2")?;
         writeln!(handle, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")?;
     }
 
-    let process_variant = |v: &str,
-                           handle: &mut io::StdoutLock|
-     -> Result<(), Box<dyn std::error::Error>> {
+    // Convert one description. Returns that record's own failure instead of
+    // propagating it out of the command (#1764): a description the converter
+    // declines is a property of the *record*, not of the run, so it must not
+    // discard the input lines that follow. The set of declined descriptions is
+    // growing — #1734 correctly refuses `g.10+2del` and `g.pter_4del`, and the
+    // provider-less path declines insertions and deletions by design — so an
+    // abort turns one wrong row into a truncated VCF for anyone processing a
+    // file.
+    //
+    // The reporting contract this returns into is the one `run_normalize`,
+    // `run_parse` and `run_project` already share: continue, format the
+    // diagnostic to stderr with the input line number, count it, and fail the
+    // run at the end. `hgvs-to-vcf` was the only batch driver here that did not.
+    let convert = |v: &str, handle: &mut io::StdoutLock| -> Result<(), FerroError> {
         let parsed = parse_hgvs(v)?;
 
-        // Convert genomic variants directly
-        if let HgvsVariant::Genome(ref gv) = parsed {
-            let vcf = genomic_hgvs_to_vcf(gv)?;
-            match format {
-                "vcf" => {
-                    writeln!(handle, "{}", vcf)?;
-                }
-                "json" => {
-                    writeln!(
-                        handle,
-                        r#"{{"hgvs": "{}", "chrom": "{}", "pos": {}, "ref": "{}", "alt": "{}"}}"#,
-                        v,
-                        vcf.chrom,
-                        vcf.pos,
-                        vcf.reference,
-                        vcf.alternate.first().unwrap_or(&String::new())
-                    )?;
-                }
-                _ => {
-                    writeln!(
-                        handle,
-                        "{} -> {}:{}:{}/{}",
-                        v,
-                        vcf.chrom,
-                        vcf.pos,
-                        vcf.reference,
-                        vcf.alternate.first().unwrap_or(&String::new())
-                    )?;
-                }
-            }
-        } else {
-            writeln!(handle, "ERROR: {} is not a genomic variant (g.)", v)?;
+        // Only genomic descriptions convert. This used to write an `ERROR: …`
+        // line to *stdout*, i.e. into the VCF body, which corrupts a downstream
+        // parse — and the run still exited 0, so the failure was invisible. It
+        // is a per-record decline like any other and is reported like one.
+        let HgvsVariant::Genome(ref gv) = parsed else {
+            return Err(FerroError::UnsupportedVariant {
+                variant_type: "only genomic (g.) descriptions convert to VCF".to_string(),
+            });
+        };
+
+        let vcf = genomic_hgvs_to_vcf(gv)?;
+        // A failed write to the result stream must not be reported as success:
+        // count it so the exit status reflects the truncated output. Same
+        // reasoning as `run_project`'s write-failure arm.
+        let io_err = |e: io::Error| FerroError::Io { msg: e.to_string() };
+        match out_format {
+            OutputFormat::Vcf => writeln!(handle, "{}", vcf).map_err(io_err),
+            OutputFormat::Json => writeln!(
+                handle,
+                r#"{{"hgvs": "{}", "chrom": "{}", "pos": {}, "ref": "{}", "alt": "{}"}}"#,
+                v,
+                vcf.chrom,
+                vcf.pos,
+                vcf.reference,
+                vcf.alternate.first().unwrap_or(&String::new())
+            )
+            .map_err(io_err),
+            OutputFormat::Text => writeln!(
+                handle,
+                "{} -> {}:{}:{}/{}",
+                v,
+                vcf.chrom,
+                vcf.pos,
+                vcf.reference,
+                vcf.alternate.first().unwrap_or(&String::new())
+            )
+            .map_err(io_err),
         }
-        Ok(())
     };
 
+    // Diagnostics go to stderr, never to the result stream, and carry the
+    // 1-based input line so the caller can tell *which* row was declined.
+    // Format-aware (`--format json` stays parseable) because it routes through
+    // the same helper the sibling drivers use.
+    let report = |v: &str, e: &FerroError, line: Option<usize>| {
+        let _ = cli_output_error_with_context(&mut io::stderr(), v, e, out_format, line);
+    };
+
+    let mut error_count = 0usize;
+
     if let Some(v) = variant {
-        process_variant(v, &mut handle)?;
+        // Single-variant path: no line number, there being no file to number
+        // lines in. Mirrors `run_normalize`/`run_project`, which special-case it
+        // the same way.
+        if let Err(e) = convert(v, &mut handle) {
+            report(v, &e, None);
+            error_count += 1;
+        }
     } else if let Some(input_path) = input {
         let file = std::fs::File::open(input_path)?;
         let reader = io::BufReader::new(file);
-        for line in reader.lines() {
+        for (line_num, line) in reader.lines().enumerate() {
             let line = line?;
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                process_variant(trimmed, &mut handle)?;
+            // `process_input_line` in place of the ad-hoc trim/`#` test this
+            // used to do: it is what the three sibling drivers use, and it also
+            // strips a UTF-8 BOM on the first line and trailing inline comments.
+            if let Some(v) = process_input_line(&line, line_num == 0) {
+                if let Err(e) = convert(v, &mut handle) {
+                    report(v, &e, Some(line_num + 1));
+                    error_count += 1;
+                }
             }
         }
     } else {
         let stdin = io::stdin();
-        for line in stdin.lock().lines() {
+        for (line_num, line) in stdin.lock().lines().enumerate() {
             let line = line?;
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                process_variant(trimmed, &mut handle)?;
+            if let Some(v) = process_input_line(&line, line_num == 0) {
+                if let Err(e) = convert(v, &mut handle) {
+                    report(v, &e, Some(line_num + 1));
+                    error_count += 1;
+                }
             }
         }
     }
 
-    Ok(())
+    // A run that declined some records is a failure: the caller must be able to
+    // tell a complete conversion from a partial one. Same terminal shape as the
+    // three sibling drivers, so `hgvs-to-vcf` reports partial failure exactly
+    // the way `normalize`, `parse` and `project` already do.
+    if error_count > 0 {
+        Err(format!("{} variant(s) failed to convert", error_count).into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Outcome of processing one input line in the batch normalize/parse driver.
