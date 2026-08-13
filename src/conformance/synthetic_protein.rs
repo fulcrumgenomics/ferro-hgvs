@@ -63,7 +63,7 @@
 
 use std::fmt;
 
-use crate::backtranslate::codon::CodonTable;
+use crate::backtranslate::codon::{Codon, CodonTable};
 use crate::conformance::spec_corpus::{three_exon_layout, transcript_provider, CODING_ACCESSION};
 use crate::hgvs::edit::{
     AminoAcidSeq, ExtDirection, FrameshiftTer, ProteinEdit, ProteinInsSeq, RepeatCount,
@@ -282,7 +282,77 @@ impl ProteinFrame {
     /// See [`ProteinFrameError`].
     pub fn build(shape: ProteinRefShape, peptide: &[AminoAcid]) -> Result<Self, ProteinFrameError> {
         let cds_bases = back_translate_cds(peptide)?;
+        Self::assemble(shape, &cds_bases, peptide)
+    }
 
+    /// Build a frame from a **designed CDS** rather than from a peptide.
+    ///
+    /// The inverse entry point to [`Self::build`], and the one a codon-designed
+    /// corpus needs. [`Self::build`] back-translates, so it can only ever emit
+    /// the codon table's *first* codon for each residue — a CDS with exactly 20
+    /// distinct codons in it, in which no synonymous pair, no alternative stop
+    /// and no codon-level property is expressible. A caller that has designed
+    /// the codons hands them in here instead and the peptide is **derived** by
+    /// translating them, which is the direction the coupling should run.
+    ///
+    /// `cds` must be a whole number of codons, start with a start codon, hold
+    /// no internal terminator, and end with one. Those are checked rather than
+    /// assumed, and the same re-read-and-translate round trip [`Self::build`]
+    /// performs still runs afterwards, so this constructor cannot produce a
+    /// frame whose protein is not its transcript's translation either.
+    ///
+    /// # Errors
+    ///
+    /// See [`ProteinFrameError`]. [`ProteinFrameError::Empty`] additionally
+    /// covers a CDS that is not a whole number of codons or carries no
+    /// terminator, and [`ProteinFrameError::NotMetInitiated`] a CDS whose first
+    /// codon is not read as `Met`.
+    pub fn from_cds(shape: ProteinRefShape, cds: &str) -> Result<Self, ProteinFrameError> {
+        if cds.len() < 6 || !cds.len().is_multiple_of(3) {
+            return Err(ProteinFrameError::Empty);
+        }
+        let table = CodonTable::standard();
+        let codons: Vec<Codon> = (0..cds.len() / 3)
+            .map(|index| Codon::parse(&cds[index * 3..index * 3 + 3]))
+            .collect::<Option<_>>()
+            .ok_or(ProteinFrameError::Empty)?;
+        let (last, body) = codons.split_last().ok_or(ProteinFrameError::Empty)?;
+        if !table.is_stop(last) {
+            return Err(ProteinFrameError::Empty);
+        }
+        let mut peptide = Vec::with_capacity(body.len());
+        for (index, codon) in body.iter().enumerate() {
+            match table.amino_acid_for(codon) {
+                // An internal stop truncates translation, so the CDS would not
+                // be the protein's. Reported with the residue number the
+                // peptide-first path would report.
+                Some(AminoAcid::Ter) | None => {
+                    return Err(ProteinFrameError::InternalStop(index + 1))
+                }
+                Some(aa) => peptide.push(aa),
+            }
+        }
+        // Translation initiation installs `Met` whatever the start codon is
+        // (`background/standards.md:229`), so the check is on the *residue*, as
+        // in `back_translate_cds`.
+        match peptide.first() {
+            Some(AminoAcid::Met) => {}
+            Some(other) => return Err(ProteinFrameError::NotMetInitiated(*other)),
+            None => return Err(ProteinFrameError::Empty),
+        }
+        Self::assemble(shape, cds, &peptide)
+    }
+
+    /// Wrap `cds_bases` in UTRs, lay it on `shape`'s exon geometry, and verify
+    /// the transcript the provider serves translates back to `peptide`.
+    ///
+    /// Shared by [`Self::build`] and [`Self::from_cds`] so the two entry points
+    /// cannot drift on UTR length, exon layout, or the round-trip guarantee.
+    fn assemble(
+        shape: ProteinRefShape,
+        cds_bases: &str,
+        peptide: &[AminoAcid],
+    ) -> Result<Self, ProteinFrameError> {
         let filler = |len: usize| UTR_FILLER.chars().cycle().take(len).collect::<String>();
         let utr5 = filler(UTR_LEN);
         let utr3 = filler(UTR_LEN);
@@ -413,6 +483,43 @@ impl ProteinFrame {
             return None;
         }
         i64::try_from(index * 3 + 1).ok()
+    }
+
+    /// The exon boundaries the frame was laid out on, 1-based inclusive
+    /// transcript coordinates.
+    #[must_use]
+    pub fn exons(&self) -> Vec<(usize, usize)> {
+        match self.shape {
+            ProteinRefShape::SingleExon => vec![(1, self.transcript.len())],
+            ProteinRefShape::ThreeExon(_) => three_exon_layout(self.transcript.len()),
+        }
+    }
+
+    /// How the codon for 1-based `residue` sits relative to the exon junctions:
+    /// `None` when it lies wholly inside one exon, otherwise `Some(k)` with `k`
+    /// the number of its three bases that fall in the earlier exon — so `1` and
+    /// `2` are the two ways a codon can straddle a junction.
+    ///
+    /// This is the protein axis's reading-frame **phase** observable, and the
+    /// reason it is a method rather than a comment: a corpus that never returns
+    /// `Some(1)` and `Some(2)` here is blind in exactly the dimension #1478 was
+    /// about, and would report that blindness as coverage. `None` for a residue
+    /// past the terminator, which has no codon.
+    #[must_use]
+    pub fn junction_phase_of_residue(&self, residue: u64) -> Option<usize> {
+        let first = usize::try_from(self.cds_position_of_residue(residue)?).ok()?;
+        // Transcript coordinates of the codon's three bases, 1-based.
+        let start = self.cds.0 + first - 1;
+        let exons = self.exons();
+        let exon_of = |position: usize| {
+            exons
+                .iter()
+                .position(|&(lo, hi)| (lo..=hi).contains(&position))
+        };
+        let first_exon = exon_of(start)?;
+        (0..3usize)
+            .map(|offset| exon_of(start + offset))
+            .position(|exon| exon != Some(first_exon))
     }
 
     /// A `p.` description against this frame's protein accession.

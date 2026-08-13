@@ -448,6 +448,7 @@ mod projection_coverage;
 mod property_tests;
 mod protein_axis_split_move;
 mod protein_cis_delins_decomposition;
+mod protein_conformance_axis;
 mod protein_construct_boundaries;
 mod protein_frameshift_alternatives;
 mod protein_frameshift_legacy_stop_modes;
