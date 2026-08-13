@@ -45,7 +45,15 @@ pub struct GenomePos {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special: Option<SpecialPosition>,
     /// Optional offset from the base position (e.g., -? for uncertain upstream, +? for uncertain downstream)
-    /// Uses i64::MIN for uncertain negative offset (-?) and i64::MAX for uncertain positive offset (+?)
+    ///
+    /// The uncertain forms are stored in band, as
+    /// [`OFFSET_UNKNOWN_POSITIVE`] (`+?`) and [`OFFSET_UNKNOWN_NEGATIVE`]
+    /// (`-?`). Name the constants rather than their current values: they are
+    /// defined in exactly one place, and a doc that respells them as literals
+    /// is a second declaration in prose.
+    ///
+    /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
+    /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i64>,
 }
@@ -100,10 +108,25 @@ impl GenomePos {
     }
 }
 
-/// Sentinel value for unknown positive offset (+?)
-pub const GENOME_OFFSET_UNKNOWN_POSITIVE: i64 = i64::MAX;
-/// Sentinel value for unknown negative offset (-?)
-pub const GENOME_OFFSET_UNKNOWN_NEGATIVE: i64 = i64::MIN;
+/// The unknown-offset sentinels, under their historical genome-axis names.
+///
+/// These are **re-exports**, not a second definition. The pair is defined once,
+/// by the parser that produces it
+/// ([`crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE`] and its negative
+/// twin), because the values enter the AST there and every axis — `g.`, `c.`,
+/// `n.`, `r.` — stores the same two.
+///
+/// They were previously declared here as their own `pub const`s, spelled as
+/// bare `i64::MAX` / `i64::MIN` literals. That is the same failure mode
+/// `unknown_offset_marker` was extracted to remove, one level up: two
+/// independent definitions of one value pair, where changing either leaves the
+/// other silently behind and the rendering stops matching the parser. Kept as
+/// aliases rather than deleted because they are public API of a published
+/// crate.
+pub use crate::hgvs::parser::position::{
+    OFFSET_UNKNOWN_NEGATIVE as GENOME_OFFSET_UNKNOWN_NEGATIVE,
+    OFFSET_UNKNOWN_POSITIVE as GENOME_OFFSET_UNKNOWN_POSITIVE,
+};
 
 /// The rendered form of an unknown-offset sentinel (`+?` / `-?`), or `None`
 /// when `offset` is a measured intronic distance.
