@@ -283,8 +283,21 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
         #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json", "tsv"])]
         format: String,
 
-        /// Shuffle direction (3prime or 5prime)
-        #[arg(long, default_value = "3prime")]
+        /// Shuffle direction. `3prime`/`3'`/`3` or `5prime`/`5'`/`5`,
+        /// case-insensitively — the same set the Python bindings accept.
+        ///
+        /// The values are listed here rather than left to
+        /// `parse_shuffle_direction` because that function ends in a catch-all
+        /// (`_ => ThreePrime`): without a `value_parser`, `--direction banana`
+        /// silently 3'-shifted and exited 0 (#1863, the CLI half of #1016).
+        /// `ignore_case` is load-bearing — the function lowercases its input,
+        /// so `--direction 5PRIME` has always worked and must keep working.
+        #[arg(
+            long,
+            default_value = "3prime",
+            ignore_case = true,
+            value_parser = ["3prime", "3'", "3", "5prime", "5'", "5"]
+        )]
         direction: String,
 
         /// Reference directory (with manifest.json from 'ferro prepare')

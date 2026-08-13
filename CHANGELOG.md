@@ -75,6 +75,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Default::default()` was the only reachable constructor — the two documented knobs could not be
   set by any downstream caller.
 
+### Fixed
+
+- **`ferro normalize --direction` now rejects an unrecognized value instead of silently 3'-shifting.**
+  The flag carried no `value_parser`, and the function behind it ends in a catch-all, so
+  `--direction banana` ran a **3'** normalization and exited **0** — producing output
+  byte-identical to `--direction 3prime`. Since direction changes the answer, a typo returned a
+  plausible result to a question the user did not ask. It is now a clap usage error naming the
+  accepted values.
+
+  This was the CLI half of the defect fixed for the Python bindings in 0.8.0; the CLI has its own
+  independent copy of the parsing logic, which was left untouched at the time. Both surfaces now
+  accept exactly the same set — `3prime`/`3'`/`3` and `5prime`/`5'`/`5`, case-insensitively — and
+  every previously-valid spelling still works.
+
+  `ferro_hgvs::cli::parse_shuffle_direction` is unchanged: it is public, doctested API, so
+  tightening its signature would be a breaking change. A direct Rust caller still receives
+  `ThreePrime` for an unrecognized string; `ferro_hgvs::python_helpers::parse_direction` is the
+  validating form.
+
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
 ### Representation changes

@@ -37,6 +37,25 @@ pub fn parse_genome_build(build: &str) -> GenomeBuild {
 /// - 5prime, 5', 5 -> FivePrime
 /// - Other values default to ThreePrime
 ///
+/// # The lenient fallback is legacy, and is no longer how the CLI validates
+///
+/// The final arm accepts anything, which is why `ferro normalize --direction
+/// banana` used to 3'-shift and exit 0 (#1863, the CLI half of #1016). The flag
+/// now carries its own `value_parser` listing the six aliases, so **the
+/// fallback is unreachable from the CLI** and an unrecognized value is a clap
+/// usage error naming the accepted values.
+///
+/// The fallback is retained here, rather than made fallible, only because this
+/// function is public API — re-exported from [`crate::cli`] and doctested — so
+/// tightening its signature is a breaking change and a decision separate from
+/// the defect. It is also entangled with #1857, which may remove the 5'
+/// direction (and this function) outright.
+///
+/// **A direct Rust caller therefore still gets `ThreePrime` for an
+/// unrecognized string.** Prefer [`crate::python_helpers::parse_direction`],
+/// which returns `Option<ShuffleDirection>` and is what the Python bindings
+/// validate with; it accepts exactly the same six aliases, case-insensitively.
+///
 /// # Examples
 ///
 /// ```
@@ -45,11 +64,19 @@ pub fn parse_genome_build(build: &str) -> GenomeBuild {
 ///
 /// assert!(matches!(parse_shuffle_direction("3prime"), ShuffleDirection::ThreePrime));
 /// assert!(matches!(parse_shuffle_direction("5'"), ShuffleDirection::FivePrime));
+///
+/// // The legacy fallback, documented above. The CLI no longer reaches it —
+/// // `--direction unknown` is rejected by clap before this function is called.
 /// assert!(matches!(parse_shuffle_direction("unknown"), ShuffleDirection::ThreePrime));
 /// ```
 pub fn parse_shuffle_direction(direction: &str) -> ShuffleDirection {
     match direction.to_lowercase().as_str() {
         "5prime" | "5'" | "5" => ShuffleDirection::FivePrime,
+        // The 3' aliases are spelled out rather than left to the catch-all, so
+        // the mapping the CLI's `value_parser` promises is stated here too. The
+        // catch-all is the legacy fallback described above; it is not the route
+        // by which a valid 3' spelling resolves.
+        "3prime" | "3'" | "3" => ShuffleDirection::ThreePrime,
         _ => ShuffleDirection::ThreePrime,
     }
 }

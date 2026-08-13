@@ -287,6 +287,7 @@ mod issue_1691_homopolymer_convergence;
 mod issue_1716_codon_frame_merged_span;
 mod issue_180_allele_3prime_shift;
 mod issue_182_postcanon_adjacency;
+mod issue_1863_cli_direction_validation;
 mod issue_207_multi_repeat_compound_roundtrip;
 mod issue_209_repeat_3prime_remaining;
 mod issue_214_repeat_unit_divides;
