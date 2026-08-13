@@ -558,6 +558,7 @@ mod tests {
                 nc_end: 200,
                 parent_start: 1,
                 strand: Strand::Plus,
+                gaps: Vec::new(),
             },
         );
 

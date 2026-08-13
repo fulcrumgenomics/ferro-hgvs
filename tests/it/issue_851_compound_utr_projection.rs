@@ -77,6 +77,7 @@ fn plus_fixture() -> VariantProjector<MockProvider> {
             nc_start: 900,
             nc_end: 1100,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     VariantProjector::new(projector, provider)
@@ -192,6 +193,7 @@ fn minus_fixture() -> VariantProjector<MockProvider> {
             nc_start: 1900,
             nc_end: 2100,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     VariantProjector::new(projector, provider)

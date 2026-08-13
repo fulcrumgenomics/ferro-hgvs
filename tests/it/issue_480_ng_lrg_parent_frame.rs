@@ -8,8 +8,11 @@
 //! input is parented on an `NG_` RefSeqGene or an `LRG_`, the resolved
 //! coordinate is on the chromosome but the emitted accession is the
 //! `NG_`/`LRG_` one — the two frames disagree. Given the parent's chromosomal
-//! placement (`GenomicPlacement`), ferro composes NM→NC (cdot) with the affine
+//! placement (`GenomicPlacement`), ferro composes NM→NC (cdot) with the
 //! NC→parent transform and emits the coordinate in the parent's own frame.
+//! (That transform is affine only for a placement with no alignment gaps; since
+//! #1833 an indel-bearing LRG carries its `<diff>` list and is walked instead.
+//! The fixtures in this file are all gapless, so they exercise the affine arm.)
 //! Without a placement the chromosome coordinate cannot be re-anchored into the
 //! parent frame, so `project_to_genomic` declines (`UnsupportedProjection`)
 //! rather than stamp a chromosome coordinate under the parent accession, which
@@ -95,6 +98,7 @@ fn placement_maps_chromosome_to_parent_frame_plus_strand() {
         nc_start: 1000,
         nc_end: 1009,
         strand: Strand::Plus,
+        gaps: Vec::new(),
     };
     assert_eq!(p.nc_to_parent(1000), Some(1));
     assert_eq!(p.nc_to_parent(1003), Some(4));
@@ -113,6 +117,7 @@ fn placement_maps_chromosome_to_parent_frame_minus_strand() {
         nc_start: 1000,
         nc_end: 1009,
         strand: Strand::Minus,
+        gaps: Vec::new(),
     };
     assert_eq!(p.nc_to_parent(1009), Some(1));
     assert_eq!(p.nc_to_parent(1003), Some(7));
@@ -134,6 +139,7 @@ fn ng_parent_emits_parent_frame_coords_plus_strand() {
             nc_start: 1000,
             nc_end: 1009,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);
@@ -155,6 +161,7 @@ fn ng_parent_emits_parent_frame_coords_minus_strand() {
             nc_start: 1000,
             nc_end: 1009,
             strand: Strand::Minus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);
@@ -268,6 +275,7 @@ fn bare_lrg_transcript_input_reanchors_to_lrg_frame() {
             nc_start: 1000,
             nc_end: 1009,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);

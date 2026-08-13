@@ -92,6 +92,7 @@ fn lrg_fixture() -> (Projector, MockProvider) {
             nc_start: 1000,
             nc_end: 1009,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     (projector, provider)
