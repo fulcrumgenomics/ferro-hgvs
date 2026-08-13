@@ -3392,8 +3392,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         w_lo,
         &ref_bytes,
     );
-    shift_pieces(&mut pieces, &ref_bytes, direction);
-    coalesce_adjacent_pieces(&mut pieces);
+    shift_and_coalesce_direction_symmetrically(&mut pieces, &ref_bytes, direction);
     // Partitioning decides where the members are; this decides how wide each
     // one is spelled, and the two are not the same question — see
     // `shrink_pieces_to_differences`.
@@ -9276,6 +9275,110 @@ fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
         } else {
             i += 1;
         }
+    }
+}
+
+/// Shift in `direction`, then merge what the shift left touching — and merge
+/// what a shift in the **other** direction would have left touching (#1542).
+///
+/// # The defect
+///
+/// [`coalesce_adjacent_pieces`] is the enforcement point for `delins.md:16`, and
+/// it runs *after* [`shift_pieces`]. So whether two pieces merge depends on
+/// where the requested direction happened to park a pure indel between them —
+/// which makes the **member count** a function of `ShuffleDirection`.
+///
+/// Measured on `NC_000017.11:g.80110044_80110047delinsGTTGG` (`CTGA -> GTTGG`),
+/// whose live partition is the three edit-ops `[C>G][ins T][A>G]`:
+///
+/// ```text
+/// 3'  ->  g.[80110044C>G;80110045dup;80110047A>G]     three members
+/// 5'  ->  g.[80110044delinsGT;80110047A>G]            two members
+/// ```
+///
+/// The inserted `T` copies the very base it is separated by, so both junctions
+/// denote one sequence. At 5' it rolls onto `44|45`, abuts the substitution, and
+/// this pass merges the pair; at 3' it rolls onto `45|46`, escapes the merge and
+/// is then spelled `dup`. One variant, two normal forms, differing by nothing
+/// but the shuffle direction — and each is a fixed point, so no idempotency,
+/// re-parse, in-bounds or denoted-sequence oracle can see it.
+///
+/// # The rule
+///
+/// **The shuffle direction may move a member's placement; it may not change how
+/// many members there are.** Direction is documented as an orthogonal axis (see
+/// [`crate::normalize::FromSequencesOptions`]), and a partition that varies with
+/// it is reading a separation off a placement rather than off the sequence —
+/// which `separation-is-a-property-of-the-spelling-not-of-the-variant` (decided
+/// 2026-08-10) rules against: the separation `general.md:34` keys on is read off
+/// the partition **re-derived from the resulting sequence**.
+///
+/// So the mirror is asked as well, and where it closes a gap this direction did
+/// not, its partition is adopted and re-shifted the requested way. Adopting the
+/// *merged* side rather than the split one is not a preference for merging: it
+/// is that a separation one legal placement erases was never a separation, while
+/// a gap both placements leave open is real.
+///
+/// # Why this is not the reserved `dup` carve-out
+///
+/// `delins-adjacent-members-when-both-consume-reference` is **decided**, and its
+/// ruling reserves one shape from itself: two **members** at separation zero,
+/// one of them a `dup` that merging would destroy. This is not that shape, on
+/// the operator's 2026-08-13 ruling for
+/// #1542: the input is a single spanning `delins` carrying no members, so the
+/// `dup` is *manufactured* by `live`/3' rather than carried; the emitted
+/// members' SPDI write footprints are at separation `[1, 1]`, not zero; and
+/// `duplication-must-ranks-the-label-not-the-partition` (decided 2026-08-13)
+/// settles whole-block re-derivation — `duplication.md:18` ranks the label
+/// applied to a derived change, and never requires a partition that exposes one.
+/// The re-derived piece here replaces a base as well as adding one, so
+/// `duplication.md:17`'s scope fails and `:18` never fires on it.
+///
+/// # Cost
+///
+/// The mirror is computed only where its answer *can* differ, and the
+/// precondition is exact rather than a heuristic: [`shift_pieces`] moves nothing
+/// but pure indels, so a block with none of those places identically in both
+/// directions and the two runs are the same run. A single piece likewise has no
+/// gap to close. Both are cheap to test and neither can hide a case.
+fn shift_and_coalesce_direction_symmetrically(
+    pieces: &mut Vec<Piece>,
+    ref_bytes: &[u8],
+    direction: ShuffleDirection,
+) {
+    let can_differ = pieces.len() > 1 && pieces.iter().any(Piece::is_pure_indel);
+    let mirror = can_differ.then(|| {
+        let mut mirrored = pieces.clone();
+        shift_pieces(&mut mirrored, ref_bytes, opposite_direction(direction));
+        coalesce_adjacent_pieces(&mut mirrored);
+        mirrored
+    });
+
+    shift_pieces(pieces, ref_bytes, direction);
+    coalesce_adjacent_pieces(pieces);
+
+    // Strictly fewer, never merely different: a mirror that merges the *same*
+    // number of pieces at different coordinates is the 3'/5' choice doing its
+    // job, and adopting it there would silently overrule the caller's direction.
+    if let Some(mirrored) = mirror.filter(|m| m.len() < pieces.len()) {
+        *pieces = mirrored;
+        // Re-shift the merged partition the way the caller asked. A merged
+        // `delins` is not a pure indel and so does not move; the pieces around
+        // it still place themselves in the requested direction.
+        shift_pieces(pieces, ref_bytes, direction);
+        coalesce_adjacent_pieces(pieces);
+    }
+}
+
+/// The other shuffle direction.
+///
+/// A free function rather than a method on [`ShuffleDirection`], because the
+/// mirror above is the only caller and "the opposite direction" is not a concept
+/// the public normalization API otherwise has.
+fn opposite_direction(direction: ShuffleDirection) -> ShuffleDirection {
+    match direction {
+        ShuffleDirection::ThreePrime => ShuffleDirection::FivePrime,
+        ShuffleDirection::FivePrime => ShuffleDirection::ThreePrime,
     }
 }
 
