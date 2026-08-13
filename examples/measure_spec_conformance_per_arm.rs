@@ -7,10 +7,20 @@
 //! can fetch a block and `merge::canonicalize_from_sequence` — the only consumer
 //! of the `FERRO_PARTITION` switch — is never reached. The fixture is therefore
 //! **byte-identical on all four arms**, and every assertion the spec suite makes
-//! is constant across them by construction. That blindness is pinned by
-//! `it::hgvs_spec_normalization_tests::the_spec_fixture_is_blind_to_the_partition_switch`;
-//! this generator is the measurement that closes it, and it deliberately does
-//! not change the fixture or that suite.
+//! is constant across them by construction.
+//!
+//! **That blindness is not yet pinned by anything in this tree.** The guard is
+//! `it::hgvs_spec_normalization_tests::the_spec_fixture_is_blind_to_the_partition_switch`,
+//! which lands with #1822 — open, not merged — so until it does, the byte-identity
+//! above rests on the measurement recorded in this PR's description rather than on
+//! a test. Do not cite it as coverage before checking it exists:
+//!
+//! ```text
+//! grep -rn the_spec_fixture_is_blind_to_the_partition_switch tests/
+//! ```
+//!
+//! This generator is the measurement that closes the blindness, and it
+//! deliberately does not change the fixture or that suite.
 //!
 //! # What it measures, stated so nobody reads it as something else
 //!
@@ -100,6 +110,31 @@ struct Cli {
     /// Shuffle direction to normalize under.
     #[arg(long, default_value = "three-prime")]
     direction: Direction,
+
+    /// Measure only the rows named in this file, one `input` per line.
+    ///
+    /// The cross-arm shortcut, and it is exact rather than a sample. Every bail
+    /// on the way to `partition_block_for_rule` is arm-independent — the switch
+    /// is first consulted *at* that call — so a row that cuts no block on one
+    /// arm cuts none on any, and its output is identical across all four. Run
+    /// the full corpus once, take the rows whose `blocks_cut` is non-zero, and
+    /// the remaining arms need only those. Roughly 900 of 934 rows are then
+    /// skipped, which is the difference between a half-hour arm and a brisk one.
+    ///
+    /// Reported in the artifact as `restricted_to`, so a census taken this way
+    /// can never be mistaken for a full one.
+    #[arg(long)]
+    only_inputs: Option<PathBuf>,
+
+    /// Print a progress line every N rows. Zero disables.
+    ///
+    /// Not a nicety: the first full run of this generator spent 29 minutes of
+    /// CPU without finishing, and with no per-row output there was no way to
+    /// tell a slow corpus from a stalled one. The line carries the elapsed time
+    /// and the row being measured, so a pathological row (a whole-chromosome
+    /// inversion, a `pter`-anchored delins) names itself.
+    #[arg(long, default_value_t = 25)]
+    progress_every: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -172,9 +207,25 @@ struct Measurement {
     /// built from a partial pass, and nothing else in the file would say so.
     normalized_under: ErrorModeStamp,
     /// One row in, one row out. A refusal is *recorded* rather than dropped, so
-    /// `dropped` is expected to be zero — the stamp is what lets a reader see
-    /// that rather than assume it.
+    /// the only drop this pass can produce is a panic.
+    ///
+    /// **`dropped` is always zero here, and that is a property of the control
+    /// flow rather than a measurement**: `ledger.finish()?` refuses before the
+    /// artifact is written, so a run with a drop produces no file at all. Read
+    /// this field as "attempted == succeeded == the row count below", which is
+    /// the claim it can actually support — not as evidence that drops were
+    /// looked for and found to be none. A dropped row is reported on stderr by
+    /// the refusal, never here.
     completeness: CaptureCounts,
+    /// `Some` when `--only-inputs` restricted the run. A census taken this way
+    /// covers only the named rows and is not comparable to a full one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restricted_to: Option<String>,
+    /// Rows the restriction skipped. Zero on a full run.
+    skipped_by_restriction: usize,
+    /// Wall seconds this measurement took, for the record. Not a benchmark —
+    /// these runs share a heavily loaded machine.
+    elapsed_seconds: u64,
     total: usize,
     by_status: BTreeMap<String, usize>,
     /// `preserved` — ferro renders the spec's stated form. The conformance
@@ -296,10 +347,64 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // rather than assumed. The one way a row could vanish is a panic, which the
     // ledger records as a shortfall at `finish` instead of leaving the artifact
     // one row shorter than the corpus with nothing to say so.
+    let only: Option<std::collections::BTreeSet<String>> = match &cli.only_inputs {
+        None => None,
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+            let set: std::collections::BTreeSet<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect();
+            if set.is_empty() {
+                anyhow::bail!(
+                    "{} names no rows; a restriction to nothing would report an empty census \
+                     that reads like a measurement",
+                    path.display()
+                );
+            }
+            Some(set)
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let mut skipped_by_restriction = 0usize;
     let mut ledger = CaptureLedger::new("spec fixture rows");
     let mut rows = Vec::with_capacity(fixture.rows.len());
     let mut by_status: BTreeMap<String, usize> = BTreeMap::new();
+    // Rows this pass will actually measure — the progress line's denominator.
+    // Counting the *fixture* instead would report `[7/934]` on a 35-row
+    // restricted run, and, worse, would step the counter on rows the restriction
+    // skips: with ~900 of 934 skipped, `index % progress_every` then fires on
+    // roughly one measured row in 25 by coincidence of position, so the
+    // recommended `--only-inputs` path — the one this flag exists to make
+    // survivable — could print no progress at all.
+    let to_measure = match &only {
+        None => fixture.rows.len(),
+        Some(set) => fixture
+            .rows
+            .iter()
+            .filter(|row| set.contains(&row.input))
+            .count(),
+    };
+    let mut measured = 0usize;
     for row in &fixture.rows {
+        if only.as_ref().is_some_and(|set| !set.contains(&row.input)) {
+            skipped_by_restriction += 1;
+            continue;
+        }
+        if cli.progress_every > 0 && measured.is_multiple_of(cli.progress_every) {
+            eprintln!(
+                "  [{}/{}] {:>5}s  {}",
+                measured,
+                to_measure,
+                started.elapsed().as_secs(),
+                row.input
+            );
+        }
+        measured += 1;
         let target = row
             .input_prefixed
             .clone()
@@ -389,6 +494,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             .unwrap_or_else(|| "manifest.json".to_string()),
         normalized_under,
         completeness,
+        restricted_to: cli.only_inputs.as_ref().map(|p| p.display().to_string()),
+        skipped_by_restriction,
+        elapsed_seconds: started.elapsed().as_secs(),
         total: rows.len(),
         conforms,
         conforms_excluding_ferro_derived,
