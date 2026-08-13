@@ -173,57 +173,71 @@ enum Disposition {
 /// The comparison is on [`CoordinateAxis`] and on nothing else — in particular
 /// not on the accession or the rendered prefix, both of which normalization is
 /// allowed to move (legacy-selector resolution does exactly that).
-fn classify(variant: &HgvsVariant, normalized: &HgvsVariant) -> Option<Disposition> {
-    let (before, after) = (variant.coordinate_axis()?, normalized.coordinate_axis()?);
-    Some(if before == after {
+/// Which disposition a compared row lands in.
+///
+/// Takes the two axes rather than re-deriving them: the caller has already
+/// resolved both to decide the row *is* comparable, and `coordinate_axis()` was
+/// being called twice more per row for a value already in hand.
+fn classify(variant: &HgvsVariant, before: CoordinateAxis, after: CoordinateAxis) -> Disposition {
+    if before == after {
         Disposition::Preserved
     } else if is_mitochondrial_relabel(variant, before, after) {
         Disposition::MitochondrialRelabel
     } else {
         Disposition::Violation
-    })
+    }
 }
 
 const MAX_REPORTED_VIOLATIONS: usize = 20;
 
 impl AxisCensus {
-    fn of_one(input: &str) -> Self {
-        let mut census = Self {
-            rows: 1,
-            ..Self::default()
-        };
+    /// Fold one input into this census, in place.
+    ///
+    /// **Deliberately not `of_one(input) -> Self`.** That shape allocated a
+    /// whole `AxisCensus` per row — including a `per_axis` `BTreeMap` node on
+    /// every *compared* row — and then merged it pairwise, over corpora of
+    /// millions. Accumulating in place makes it one census per rayon chunk (see
+    /// [`census_of`]), which is the same arithmetic with the per-row allocation
+    /// removed.
+    ///
+    /// The `normalizer` is borrowed for the same reason: it was rebuilt per row.
+    /// Its provider is empty and never populated — deliberately, since the
+    /// property under test is about the axis *label*, which no reference can
+    /// inform — so every row was constructing an identical value.
+    fn absorb_one(&mut self, input: &str, normalizer: &Normalizer<MockProvider>) {
+        self.rows += 1;
         let Ok(variant) = parse_hgvs(input) else {
-            census.unparsed = 1;
-            return census;
+            self.unparsed += 1;
+            return;
         };
-        // An empty provider, deliberately: the property is about the axis label,
-        // which no reference can inform. Normalization degrades leniently
-        // without one, so a large majority of every corpus still normalizes.
-        let normalizer = Normalizer::new(MockProvider::new());
         let Ok(normalized) = normalizer.normalize(&variant) else {
-            census.unnormalizable = 1;
-            return census;
+            self.unnormalizable += 1;
+            return;
         };
         let (Some(before), Some(after)) = (variant.coordinate_axis(), normalized.coordinate_axis())
         else {
-            census.axis_less = 1;
-            return census;
+            self.axis_less += 1;
+            return;
         };
-        census.compared = 1;
-        *census.per_axis.entry(before.code()).or_default() += 1;
-        match classify(&variant, &normalized).expect("both sides carry an axis here") {
-            Disposition::Preserved => census.preserved = 1,
-            Disposition::MitochondrialRelabel => census.mito_relabels = 1,
+        self.compared += 1;
+        *self.per_axis.entry(before.code()).or_default() += 1;
+        match classify(&variant, before, after) {
+            Disposition::Preserved => self.preserved += 1,
+            Disposition::MitochondrialRelabel => self.mito_relabels += 1,
             Disposition::Violation => {
-                census.violations_seen = 1;
-                census.violations.push(format!(
-                    "`{input}` [{}] normalized to `{normalized}` [{}]",
-                    before.code(),
-                    after.code()
-                ));
+                self.violations_seen += 1;
+                // Capped here as well as in `merge`: an uncapped push would
+                // allocate a `String` per violating row, and the report shows
+                // only a sample either way.
+                if self.violations.len() < MAX_REPORTED_VIOLATIONS {
+                    self.violations.push(format!(
+                        "`{input}` [{}] normalized to `{normalized}` [{}]",
+                        before.code(),
+                        after.code()
+                    ));
+                }
             }
         }
-        census
     }
 
     fn merge(mut self, other: Self) -> Self {
@@ -317,6 +331,17 @@ fn is_mitochondrial_relabel(
             .is_some_and(|accession| accession.is_mitochondrial())
 }
 
+/// Census a corpus, one accumulator and one normalizer per rayon chunk.
+///
+/// **The totals are unchanged** — `absorb_one` performs exactly the arithmetic
+/// `of_one` + `merge` did, and `merge` still folds the chunks — so every pinned
+/// figure and the four-way disposition accounting are identical. What changes is
+/// how much is built to get them: `fold` replaces the per-row `AxisCensus` (and
+/// its per-compared-row `BTreeMap` node) with one per chunk, and the closure's
+/// init replaces the per-row `Normalizer<MockProvider>` with one per chunk.
+///
+/// Order-independence is unaffected: `merge` is associative over counts, and the
+/// two `Vec`s it folds are capped samples for a failure message, not results.
 fn census_of<I>(inputs: I) -> AxisCensus
 where
     I: IntoParallelIterator,
@@ -324,7 +349,14 @@ where
 {
     inputs
         .into_par_iter()
-        .map(|input| AxisCensus::of_one(input.as_ref()))
+        .fold(
+            || (AxisCensus::default(), Normalizer::new(MockProvider::new())),
+            |(mut census, normalizer), input| {
+                census.absorb_one(input.as_ref(), &normalizer);
+                (census, normalizer)
+            },
+        )
+        .map(|(census, _)| census)
         .reduce(AxisCensus::default, AxisCensus::merge)
 }
 
@@ -423,9 +455,18 @@ fn the_check_reads_the_axis_letter_not_the_prefix() {
         resolved_form.accession().map(|a| a.to_string()),
         "the two spellings must differ in accession for this to be the near-miss it claims"
     );
+    // Resolved here rather than inside `classify`, which now takes the two axes
+    // the caller has already established — so the `expect`s are part of what
+    // this test pins: both spellings do carry an axis, and it is the same one.
+    let before = selector_form
+        .coordinate_axis()
+        .expect("the selector form carries an axis");
+    let after = resolved_form
+        .coordinate_axis()
+        .expect("the resolved form carries an axis");
     assert_eq!(
-        classify(&selector_form, &resolved_form),
-        Some(Disposition::Preserved),
+        classify(&selector_form, before, after),
+        Disposition::Preserved,
         "the census must read legacy-selector resolution as axis-preserving; a comparison \
          that also looked at the accession or the rendered prefix would call it a violation"
     );

@@ -28,9 +28,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Sharded, because this is the longest job in the repository and the only long
+  # one that was not: 609s against 353s for the next slowest, all of it one step,
+  # on one runner.
+  #
+  # `cargo llvm-cov` with no subcommand shells out to `cargo test`, which offers
+  # no way to partition. `cargo llvm-cov nextest` does, and that is the ONLY
+  # reason nextest is back here: unsharded it was measured **worse** — 566s ->
+  # 649s for the run step — because nextest gives each of ~10,400 tests its own
+  # process and llvm-cov must merge a `.profraw` per process, so its cost scales
+  # with the test count that is meant to be its advantage. Sharding is what pays
+  # for that merge: the per-shard test set is a quarter the size, and four
+  # runners absorb it in parallel.
+  #
+  # Codecov merges the four uploads for a commit server-side, which is the
+  # ordinary matrix-build path and needs no merge job here.
+  #
+  # Doctests are NOT here — see the `doctests` job below for why they exist at
+  # all and why they are not a coverage shard.
   coverage:
-    name: Code Coverage
+    name: Code Coverage (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -43,6 +65,9 @@ jobs:
         with:
           toolchain: stable
       - uses: taiki-e/install-action@3f7f2bd74f95d407a45d96b106f26d4f6c238fab  # cargo-llvm-cov
+      # Partitioning is a nextest feature; see the note on the job above for why
+      # that is the whole reason it is here. Same pinned revision `ci.yml` uses.
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       # Cargo caching is delegated to `Swatinem/rust-cache` (#1218) — see the
       # full rationale on the first such step in `ci.yml`. In short: the
       # hand-rolled entries had grown to ~3 GiB each because they cached a whole
@@ -70,6 +95,17 @@ jobs:
           # dependency-bumping PRs, against every cache in the repo currently racing
           # eviction.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # ONE key across all four shards, deliberately. `--partition hash:K/N`
+          # is a nextest RUNTIME filter: every shard compiles the identical
+          # `target/`, so a per-shard key would store four copies of one tree.
+          # That is not a hypothetical cost — this entry measured 737 MB, and the
+          # repository's cache sits at 10.73 GB against a 10 GiB cap (146 entries,
+          # 2026-08-13), so four generations would add ~2.2 GB to a budget already
+          # at 100% and evict by LRU. #1218 records that exact failure taking the
+          # nightly's 3.25 GB `ferro-manifest-v3` with it.
+          #
+          # Four shards racing one key on `main` is benign: the first save wins
+          # and the rest no-op on "cache already exists".
           key: coverage
           # This job needs it too, and needs it more than `ci.yml`'s two do
           # (#1396). `install-action` puts `cargo-llvm-cov` into
@@ -96,7 +132,9 @@ jobs:
           # Absence of a bulk fixture fails the run rather than skipping it.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
-          cargo llvm-cov --features dev --codecov --output-path codecov.json
+          cargo llvm-cov --no-report nextest --features dev \
+            --partition hash:${{ matrix.shard }}/4
+          cargo llvm-cov report --codecov --output-path codecov.json
           cargo llvm-cov report --html --output-dir coverage
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
@@ -105,12 +143,58 @@ jobs:
           fail_ci_if_error: false
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.shard }}
           path: coverage/
           retention-days: 30
 
+  # Doctests, in a job of their own.
+  #
+  # They have to run SOMEWHERE: `nextest` does not run them, this repository has
+  # 230, and `cargo llvm-cov` with no subcommand — the form this workflow used
+  # before it was sharded — ran them via `cargo test`. Dropping them when the
+  # coverage job moved to nextest would have been a speedup made of deleted
+  # checks, which is the failure mode this whole branch keeps running into.
+  #
+  # They are not a coverage shard, and that is deliberate rather than a
+  # simplification: `cargo llvm-cov` excludes doctest coverage unless
+  # `--doctests` is passed, which needs nightly. So their coverage was never
+  # counted here, before or after, and instrumenting them would buy nothing while
+  # adding a fifth `.profraw` set for Codecov to merge.
+  #
+  # Why a job rather than a step on shard 1, which is where they started: at 82s
+  # they were a serial tail on one shard, so `Code Coverage (1/4)` finished at
+  # 458s against its siblings' ~370s and set the whole workflow's wall clock. A
+  # job runs them concurrently with the four shards instead of after one of them.
+  #
+  # It needs no `cargo-llvm-cov`, no bulk fixtures (no doctest reads one) and no
+  # instrumentation, so it is a plain cached `cargo test --doc`. It shares the
+  # coverage cache key: the compiled dependency tree is the same one, and a key of
+  # its own would mint another ~737 MB entry against a budget already at its cap.
+  doctests:
+    name: Doctests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The spec generators resolve citations against the vendored checkout;
+          # a doctest that reaches one needs it present rather than empty.
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          # Restore-only on a PR and shared with the shards above, for the reasons
+          # given on that job's cache step.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: coverage
+          cache-bin: "false"
+      - name: Doctests
+        run: cargo test --doc --features dev
+
   report-failure:
-    needs: coverage
+    needs: [coverage, doctests]
     if: failure()
     uses: ./.github/workflows/report-failure.yml
     permissions:

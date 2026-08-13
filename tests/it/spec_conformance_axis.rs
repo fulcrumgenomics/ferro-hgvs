@@ -522,14 +522,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
+
 use ferro_hgvs::conformance::spec_corpus::{
-    corpus, denotation_of, denoted_by, CorpusBounds, Denotation, Frame, RefShape, Row, RowKind,
-    SpecCorpus, Strength,
+    corpus, denotation_of, denoted_by, CorpusBounds, Denotation, Row, RowKind, SpecCorpus, Strength,
 };
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::hgvs::interval::{Interval, UncertainBoundary};
 use ferro_hgvs::hgvs::location::{CdsPos, TxPos};
-use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, NormalizeConfig, Normalizer, ShuffleDirection};
 
 // ---------------------------------------------------------------------------
@@ -1150,8 +1150,33 @@ fn measurement_config(direction: ShuffleDirection) -> NormalizeConfig {
     NormalizeConfig::default().with_direction(direction)
 }
 
-fn measure(direction: ShuffleDirection) -> Measured {
-    let built = built();
+/// The contiguous runs of `rows` that share one synthetic reference.
+///
+/// [`grouped`] sorts by `(shape, core, id)`, so every row sharing a reference is
+/// already adjacent — this only names the boundaries. It replaces the running
+/// `frame` cache the serial loop carried: same "one provider per reference, not
+/// per row" property, expressed as an explicit partition so [`measure`] can hand
+/// each group to its own task.
+fn reference_groups<'a>(rows: &'a [&'a Row]) -> Vec<&'a [&'a Row]> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    while start < rows.len() {
+        let mut end = start + 1;
+        while end < rows.len()
+            && rows[end].shape == rows[start].shape
+            && rows[end].core == rows[start].core
+        {
+            end += 1;
+        }
+        groups.push(&rows[start..end]);
+        start = end;
+    }
+    groups
+}
+
+/// Census one reference group. Builds its own frame and normalizer, reads
+/// nothing outside its own slice, and so is safe to run alongside its siblings.
+fn measure_group(group: &[&Row], direction: ShuffleDirection) -> Measured {
     let mut census = Census {
         measured_under: measurement_config(direction).error_config.mode,
         ..Census::default()
@@ -1159,20 +1184,12 @@ fn measure(direction: ShuffleDirection) -> Measured {
     let mut divergences: Vec<Divergence> = Vec::new();
     let mut findings: Vec<Finding> = Vec::new();
 
-    let rows = grouped(&built);
-    let mut frame: Option<(RefShape, String, Frame, Normalizer<MockProvider>)> = None;
-    for row in rows {
-        let key_matches = frame
-            .as_ref()
-            .is_some_and(|(shape, core, _, _)| *shape == row.shape && core == &row.core);
-        if !key_matches {
-            let rebuilt = row.frame();
-            let normalizer =
-                Normalizer::with_config(rebuilt.provider().clone(), measurement_config(direction));
-            frame = Some((row.shape, row.core.clone(), rebuilt, normalizer));
-        }
-        let (_, _, active, normalizer) = frame.as_ref().expect("a frame was just built");
+    let active = group[0].frame();
+    let normalizer =
+        Normalizer::with_config(active.provider().clone(), measurement_config(direction));
+    let (active, normalizer) = (&active, &normalizer);
 
+    for row in group {
         let mut outputs: BTreeSet<String> = BTreeSet::new();
         let mut normalized_spellings = 0usize;
         for spelling in &row.spellings {
@@ -1416,7 +1433,7 @@ fn measure(direction: ShuffleDirection) -> Measured {
                     3 => census.split_three += 1,
                     _ => census.split_more += 1,
                 }
-                if outputs.len() > 1 && divergences.len() < 12 {
+                if outputs.len() > 1 && divergences.len() < MAX_DIVERGENCES {
                     divergences.push(Divergence {
                         id: row.id.clone(),
                         outputs: outputs.into_iter().collect(),
@@ -1431,6 +1448,124 @@ fn measure(direction: ShuffleDirection) -> Measured {
         divergences,
         findings,
     }
+}
+
+/// How many divergent families the failure message names. Applied per group and
+/// again to the concatenation, which is what keeps the parallel result
+/// byte-identical to a serial one — see [`measure`].
+const MAX_DIVERGENCES: usize = 12;
+
+impl Census {
+    /// Fold another census in.
+    ///
+    /// Every field below is a count over a partition of the rows, so summing is
+    /// exact rather than approximate — that is what makes [`measure`]'s
+    /// per-group split safe.
+    ///
+    /// **The destructuring is the point, not style.** It carries no `..`, so
+    /// adding a field to [`Census`] makes this function fail to COMPILE until
+    /// the field is folded. An earlier version of this listed the fields by hand
+    /// and #1710 added two underneath it; they were silently never summed, and
+    /// the census reported `coding_axis_separation_two_or_more_merges` as
+    /// **0 of 0** — a denominator of zero, which is the flattering direction
+    /// this file's own VACUOUS guard exists to catch. It did catch it. This
+    /// makes the next one a build error instead.
+    ///
+    /// [`Census::measured_under`] is bound and deliberately NOT summed: it is a
+    /// mode stamp rather than a counter, and every group is built from the same
+    /// [`measurement_config`], so the accumulator's own stamp already carries
+    /// it. Binding it keeps it inside the exhaustiveness check.
+    fn absorb(&mut self, other: &Census) {
+        let Census {
+            measured_under: _,
+            outputs,
+            declined,
+            unparseable_outputs,
+            outputs_denoting_no_sequence,
+            outputs_leaving_the_transcript,
+            outputs_intronic_under_a_genomic_wrapper,
+            prohibition_violating_outputs,
+            converged,
+            split_two,
+            split_three,
+            split_more,
+            underdetermined,
+            non_idempotent_outputs,
+            sequence_changed,
+            conflicts_accepted,
+            prohibited_absolute_accepted,
+            prohibited_conditional_accepted,
+            guard_violations,
+            coding_axis_separation_two_or_more_rows,
+            coding_axis_separation_two_or_more_merges,
+        } = other;
+        self.outputs += outputs;
+        self.declined += declined;
+        self.unparseable_outputs += unparseable_outputs;
+        self.outputs_denoting_no_sequence += outputs_denoting_no_sequence;
+        self.outputs_leaving_the_transcript += outputs_leaving_the_transcript;
+        self.outputs_intronic_under_a_genomic_wrapper += outputs_intronic_under_a_genomic_wrapper;
+        self.prohibition_violating_outputs += prohibition_violating_outputs;
+        self.converged += converged;
+        self.split_two += split_two;
+        self.split_three += split_three;
+        self.split_more += split_more;
+        self.underdetermined += underdetermined;
+        self.non_idempotent_outputs += non_idempotent_outputs;
+        self.sequence_changed += sequence_changed;
+        self.conflicts_accepted += conflicts_accepted;
+        self.prohibited_absolute_accepted += prohibited_absolute_accepted;
+        self.prohibited_conditional_accepted += prohibited_conditional_accepted;
+        self.guard_violations += guard_violations;
+        self.coding_axis_separation_two_or_more_rows += coding_axis_separation_two_or_more_rows;
+        self.coding_axis_separation_two_or_more_merges += coding_axis_separation_two_or_more_merges;
+    }
+}
+
+/// Census one direction, one reference group per rayon task.
+///
+/// **The result is byte-identical to the serial walk, not merely equivalent**,
+/// which is the only basis on which a pinned census may be parallelized at all:
+///
+/// * every counter is a count over a partition of the rows, so [`Census::absorb`]
+///   over the groups is exact and order-free;
+/// * `par_iter().collect()` preserves *input* order, so the per-group results
+///   fold in corpus order however they finish — which matters for `findings`,
+///   an uncapped list whose order the failure message reproduces;
+/// * `divergences` is "the first [`MAX_DIVERGENCES`] divergent families in
+///   corpus order". Each group keeps its own first `MAX_DIVERGENCES`, and
+///   concatenating in corpus order and truncating again yields exactly that set
+///   — the serial loop's global cap can only have kept the same ones.
+///
+/// Nothing is shared across tasks: [`measure_group`] builds its own `Frame` and
+/// `Normalizer` (the serial loop already rebuilt both per reference — that is
+/// what the `frame` cache was), and the only borrow that crosses is the
+/// immutable corpus slice.
+fn measure(direction: ShuffleDirection) -> Measured {
+    let built = built();
+    let rows = grouped(&built);
+    let groups = reference_groups(&rows);
+
+    let per_group: Vec<Measured> = groups
+        .par_iter()
+        .map(|group| measure_group(group, direction))
+        .collect();
+
+    let mut measured = Measured {
+        census: Census {
+            measured_under: measurement_config(direction).error_config.mode,
+            ..Census::default()
+        },
+        divergences: Vec::new(),
+        findings: Vec::new(),
+    };
+    for group in per_group {
+        measured.census.absorb(&group.census);
+        measured.divergences.extend(group.divergences);
+        measured.findings.extend(group.findings);
+    }
+    measured.divergences.truncate(MAX_DIVERGENCES);
+    measured
 }
 
 fn report(label: &str, measured: &Measured) -> String {
