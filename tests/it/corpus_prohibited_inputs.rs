@@ -51,17 +51,23 @@
 //! [`the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`]):
 //!
 //! ```text
-//! ACCEPTED, absolute (32)   checklist.md:33  ins6            24   <- rank-1 defect
-//!                           checklist.md:16  g. `+` offset    4   <- rank-1 defect
-//!                           checklist.md:45  g. hyphen range  4   <- rank-1 defect
-//! ACCEPTED, conditional(40) standards.md:39  `X` base        24   <- rank-1 defect (alphabet)
-//!                           checklist.md:20  bare NM_ intron 16   <- strict refuses; correct
+//! ACCEPTED, absolute (24)   checklist.md:33  ins6            24   <- rank-1 defect (#1627)
+//! ACCEPTED, conditional(16) checklist.md:20  bare NM_ intron 16   <- strict refuses; correct
 //! REFUSED at parse (92)     checklist.md:31  c.10insT        24
 //!                           checklist.md:49  del3            24
 //!                           general.md:96    internal space  24
 //!                           checklist.md:26  c.20+2_+5del    16
-//!                           checklist.md:16  g. `*` offset    4
+//!                           checklist.md:16  g. `*` offset    4   <- the GRAMMAR, not a rule
+//! REFUSED, mode-gated (32)  standards.md:39  `X` base        24   <- closed by #1627
+//!                           checklist.md:16  g. `+` offset    4   <- closed by #1628
+//!                           checklist.md:45  g. hyphen range  4   <- closed by #1628
 //! ```
+//!
+//! The last block is the shape the enforcement-stage ruling asks for: strict
+//! refuses at PARSE, lenient and silent accept the input and then fail at
+//! NORMALIZE. Those 32 rows are absent from **both** acceptance maps in
+//! [`the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`],
+//! which is how a mode-gated refusal reads from here.
 //!
 //! **The corpus's rule ids name the BULLET, the citations here name the
 //! PROHIBITIVE LINE, and the two differ by one or two lines.** The corpus calls
@@ -81,21 +87,27 @@
 //! Ferro refuses the first at parse, with a citation in the error message, and
 //! accepts the second in both modes.
 //!
-//! **One clause naming three symbols is enforced for one of them.**
-//! `checklist.md:16` says a `g.` reference "can not have nucleotides with
-//! additions like a `+`, `-`, or `*`". `g.*10del` is refused at parse;
-//! `g.266+2del` and `g.266-268del` are accepted and re-emitted.
+//! **One clause naming three symbols was enforced for one of them, and the one
+//! it enforced was an accident.** `checklist.md:16` says a `g.` reference "can
+//! not have nucleotides with additions like a `+`, `-`, or `*`". `g.*10del` is
+//! refused because no production matches it — a *grammar* refusal, in every
+//! mode, carrying no clause citation — while `g.266+2del` and `g.266-268del`
+//! reached the AST and were accepted and re-emitted. #1628 closed the second
+//! half with a real rule (`W4009`), keyed on `GenomePos::offset` and citing
+//! `background/numbering.md:6`, which states the prohibition in the definitional
+//! file rather than the checklist (and states it again at `:8` for `o.` and
+//! `:11` for `m.`, which is why the rule covers all three axes).
 //!
 //! # Where the 32 prohibition-violating OUTPUTS come from
 //!
-//! All of them are re-emissions. `prohibition_violating_outputs` decomposes as
-//! 8 × `checklist.md:16` (the `+`-offset and hyphen-range rows, whose output
-//! body still carries the offset) and 24 × `standards.md:39` (the `X` rows) —
-//! which is exactly the set of accepted rows whose *input* already violated one
-//! of the three textual checks. Ferro never manufactures a prohibition
-//! violation from a legal input; it propagates one. That matters for where a fix
-//! goes: an output-side filter would be treating the symptom, and the input gate
-//! is the whole of the defect.
+//! All of them were re-emissions, and **there are none left**.
+//! `prohibition_violating_outputs` decomposed as 24 × `standards.md:39` (the `X`
+//! rows, closed by #1627) and 8 × `checklist.md:16` (the `+`-offset and
+//! hyphen-range rows, closed by #1628) — exactly the set of accepted rows whose
+//! *input* already violated one of the three textual checks. Ferro never
+//! manufactured a prohibition violation from a legal input; it propagated one,
+//! which is why refusing the inputs drove the counter to **0** rather than
+//! needing an output-side filter.
 //!
 //! # Rulings recorded alongside this file
 //!
@@ -280,8 +292,10 @@ fn built() -> SpecCorpus {
 ///   `c.123-65_-50` is not, it is **incomplete**."
 /// - `checklist.md:16` — "genomic (`g.`) reference sequences start with
 ///   nucleotide 1 and can not have nucleotides with additions like a `+`, `-`,
-///   or `*`." — enforced for `*` only; see
-///   [`one_clause_names_three_offset_symbols_and_ferro_refuses_one`].
+///   or `*`." Only the `*` half is refused *here*, and by the grammar rather
+///   than by a rule; the `+`/`-` half is a mode-gated conformance refusal, so it
+///   is not an every-mode parse refusal and does not belong in this list. See
+///   [`the_clauses_three_offset_symbols_are_refused_alike`].
 ///
 /// The allele form is checked for each because a hygiene check that runs once
 /// per description rather than once per member stops firing exactly there, and
@@ -484,29 +498,37 @@ fn an_insertion_stating_a_length_denotes_no_sequence() {
 /// (`g.`) reference sequences start with nucleotide 1 and can not have
 /// nucleotides with additions like a `+`, `-`, or `*`." Are they enforced alike?
 ///
-/// **No: `*` is refused at parse, `+` and `-` are accepted and re-emitted.**
+/// **They are now. They were not.** Before #1628's parse/normalize half, `*` was
+/// refused and `+`/`-` were accepted *and re-emitted*, in all three modes — the
+/// 8 `checklist.md:16` rows that were the whole of
+/// `prohibition_violating_outputs`.
 ///
-/// **Ruling: refuse all three, at parse, in both modes.** The clause is absolute
-/// ("can not have") and it is rank-1 twice over, because the grammar half of
-/// rank-1 validity says the same thing — `docs/syntax.yaml`'s genomic position
-/// admits no offset, which is why `*` is already rejected. There is no reading on
-/// which `+` and `-` are legal here and `*` is not; the difference is an
-/// artifact of which spellings the parser happens to have a production for.
+/// **This test was a pinned defect and is now an adjudicated-correct guard.**
+/// The stage is the one `rulings[absolute-prohibition-enforcement-stage]` names:
+/// strict refuses at PARSE (`W4009`), lenient and silent accept the input and
+/// then fail at NORMALIZE, because a genomic accession carries no exon boundary
+/// for an offset to be measured from. `background/numbering.md:6` is the primary
+/// authority — it states the prohibition for `g.` in the definitional file, and
+/// `:8`/`:11` state it again for `o.` and `m.` — with `checklist.md:16` saying
+/// the same thing in the checklist's register.
 ///
-/// This is also the whole of the output-side defect for this clause: the 8
-/// `checklist.md:16` violations in `prohibition_violating_outputs` are these two
-/// shapes, alone and in an allele, on both cores.
+/// **The three symbols are still not symmetric, and that is worth keeping.**
+/// `*` and a leading `-` reach no production of the genomic position grammar, so
+/// they are refused as *syntax*, in every mode, and never carry `W4009`. Only
+/// `+` and a trailing `-` reach the AST and need a conformance rule. Reading the
+/// `*` refusal as enforcement is precisely what made this clause look
+/// one-third-done for as long as it did.
 #[test]
-fn one_clause_names_three_offset_symbols_and_ferro_refuses_one() {
+fn the_clauses_three_offset_symbols_are_refused_alike() {
     let core = at_core();
     let genomic = Frame::build(RefShape::Genomic, &core);
 
-    // `*` — refused, alone and in an allele. The allele case needs the control
-    // more than the lone one does: `g.[*10del;265del]` has a second member and
-    // allele brackets, so a bare `is_err()` there passes just as happily if the
-    // allele syntax or the sibling member is what failed, and the claim being
-    // made is specifically that the `*` is what does it. Dropping `*` from the
-    // same allele must therefore PARSE.
+    // `*` — refused by the GRAMMAR, alone and in an allele. The allele case
+    // needs the control more than the lone one does: `g.[*10del;265del]` has a
+    // second member and allele brackets, so a bare `is_err()` there passes just
+    // as happily if the allele syntax or the sibling member is what failed, and
+    // the claim being made is specifically that the `*` is what does it.
+    // Dropping `*` from the same allele must therefore PARSE.
     //
     // The messages are deliberately not pinned. Unlike the `:31` insertion
     // refusal, which names its clause (`DNA/insertion.md:95-101`), these two
@@ -522,56 +544,45 @@ fn one_clause_names_three_offset_symbols_and_ferro_refuses_one() {
          to the `*` — it could be the brackets or the sibling member"
     );
 
-    // `+` and `-` — accepted, both modes, both directions, alone and in an
-    // allele, and the offset survives into the output.
-    for (input, allele, three_prime_allele, five_prime_allele, clause) in [
+    // `+` and a trailing `-` — refused by the CONFORMANCE RULE, in every mode,
+    // both directions, alone and in an allele.
+    for (input, allele, clause) in [
         (
             "NC_TEST.1:g.266+2del",
             "NC_TEST.1:g.[266+2del;265del]",
-            "NC_TEST.1:g.[265del;266+2del]",
-            "NC_TEST.1:g.[256del;266+2del]",
-            "checklist.md:16 — a `g.` reference admits no `+` addition",
+            "numbering.md:6 / checklist.md:16 — a `g.` reference admits no `+` addition",
         ),
         (
             "NC_TEST.1:g.266-268del",
             "NC_TEST.1:g.[266-268del;265del]",
-            "NC_TEST.1:g.[265del;266-268del]",
-            "NC_TEST.1:g.[256del;266-268del]",
             "checklist.md:45 — `c.12-14del` is `Not correct`; on `g.` it has no \
-             intronic reading either, so checklist.md:16 also applies",
+             intronic reading either, so numbering.md:6 also applies",
         ),
     ] {
-        for direction in DIRECTIONS {
-            assert_eq!(
-                lenient(&genomic, input, direction).as_deref(),
-                Ok(input),
-                "PINNED DEFECT — {clause}. Correct behaviour: refuse at parse."
-            );
-            assert_eq!(
-                strict(&genomic, input, direction).as_deref(),
-                Ok(input),
-                "PINNED DEFECT — strict mode does not catch it either ({clause})"
-            );
+        for form in [input, allele] {
+            for direction in DIRECTIONS {
+                for (mode, produced) in [
+                    ("lenient", lenient(&genomic, form, direction)),
+                    ("strict", strict(&genomic, form, direction)),
+                    ("silent", silent(&genomic, form, direction)),
+                ] {
+                    let refusal = produced.unwrap_or_else(|e| {
+                        assert!(
+                            e.contains("W4009") && e.contains("numbering.md"),
+                            "{mode}'s refusal of `{form}` must cite the clause ({clause}); \
+                             got: {e}"
+                        );
+                        String::new()
+                    });
+                    assert!(
+                        refusal.is_empty(),
+                        "ADJUDICATED CORRECT, REGRESSED: {mode} mode emitted `{refusal}` for \
+                         `{form}` instead of refusing it ({clause}). Rule 1 of the README \
+                         ruleset is about OUTPUT and has no mode escape."
+                    );
+                }
+            }
         }
-        assert_eq!(
-            lenient(&genomic, allele, ShuffleDirection::ThreePrime).as_deref(),
-            Ok(three_prime_allele),
-            "PINNED DEFECT — the allele form is accepted too ({clause})"
-        );
-        assert_eq!(
-            lenient(&genomic, allele, ShuffleDirection::FivePrime).as_deref(),
-            Ok(five_prime_allele),
-            "PINNED DEFECT — and in the 5' direction ({clause})"
-        );
-
-        // The output-side half: the emitted description still carries the offset,
-        // so the prohibition is enforced on neither side.
-        assert_eq!(
-            violated_prohibition(three_prime_allele),
-            Some("checklist.md:16"),
-            "the re-emitted allele must still violate the clause, or this row does not \
-             belong to the 8 counted in `prohibition_violating_outputs`"
-        );
     }
 }
 
@@ -978,7 +989,6 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
         assert_eq!(
             lenient_accepted,
             BTreeMap::from([
-                (("checklist.md:16-genomic-has-no-offsets", "absolute"), 4),
                 (
                     (
                         "checklist.md:20-intron-needs-a-genomic-wrapper",
@@ -990,7 +1000,13 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
                     ("checklist.md:32-insertion-states-its-sequence", "absolute"),
                     24
                 ),
-                (("checklist.md:45-range-is-underscore", "absolute"), 4),
+                // `checklist.md:16-genomic-has-no-offsets` (4) and
+                // `checklist.md:45-range-is-underscore` (4) used to sit here and
+                // no longer do (#1628): every mode now refuses them. Strict at
+                // parse (`W4009`), lenient and silent at normalize, because a
+                // genomic accession carries no exon boundary for the offset to
+                // be measured from. See
+                // `the_clauses_three_offset_symbols_are_refused_alike`.
                 // `standards.md:39`'s 24 rows used to sit here and no longer do
                 // (#1627): every mode now refuses them. Strict at parse, lenient
                 // and silent at normalize. See
@@ -1029,12 +1045,15 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
         assert_eq!(
             strict_accepted,
             BTreeMap::from([
-                (("checklist.md:16-genomic-has-no-offsets", "absolute"), 4),
                 (
                     ("checklist.md:32-insertion-states-its-sequence", "absolute"),
                     24
                 ),
-                (("checklist.md:45-range-is-underscore", "absolute"), 4),
+                // The two genomic-offset clauses used to survive strict mode
+                // too, and no longer do (#1628): strict refuses them at PARSE,
+                // which is where the enforcement-stage ruling puts an
+                // input-conformance check. They are now absent from BOTH maps
+                // rather than only this one.
                 // `standards.md:39` used to survive strict mode too, and no
                 // longer does (#1627): strict refuses it at PARSE, which is
                 // where the enforcement-stage ruling puts an input-conformance
@@ -1100,10 +1119,13 @@ fn every_prohibition_violating_output_is_a_re_emitted_prohibited_input() {
         }
         assert_eq!(
             by_clause,
-            // `standards.md:39`'s 24 dropped out in #1627 — those rows no longer
-            // produce an output at all, in any mode, so there is nothing left to
-            // violate. `checklist.md:16`'s 8 are #1628's.
-            BTreeMap::from([("checklist.md:16", 8)]),
+            // `standards.md:39`'s 24 dropped out in #1627 and
+            // `checklist.md:16`'s 8 in #1628 — none of those rows produces an
+            // output at all any more, in any mode, so there is nothing left to
+            // violate. The counter is now EMPTY, which is the end state this
+            // test was written to reach: ferro emits no description that
+            // violates a prohibition the spec states in as many words.
+            BTreeMap::new(),
             "the clause decomposition of the violating outputs moved ({direction:?})"
         );
         assert_eq!(
@@ -1162,21 +1184,21 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
 /// nothing away, while re-emitting the prohibited spelling is a rule-1
 /// violation whatever mode produced it.
 ///
-/// **`#[ignore]`d because ferro does not do this yet**, not because the answer
-/// is in doubt. Today all four clauses below are accepted in all three modes and
-/// re-emitted verbatim, with an empty warning vector — measured over the 56
-/// corpus rows they account for. Closing that is **#1630** for the strict gate,
-/// **#1627** for the `ins6`/`X` pass-through and **#1628** for the `g.` offsets,
-/// and this test is their shared acceptance criterion: delete the `#[ignore]`
-/// and move the pinned expectations in the three tests above.
+/// **`#[ignore]`d because ONE of its four rows is still open.** Three are now
+/// closed — `standards.md:39`'s `delinsX` by #1627, and both `g.`-offset rows by
+/// #1628 — leaving `checklist.md:33`'s `ins6`, which is #1627's remaining half.
+/// Delete the `#[ignore]` once that lands; the other three rows already pass and
+/// are guarded individually by
+/// [`an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`] and
+/// [`the_clauses_three_offset_symbols_are_refused_alike`].
 ///
-/// Note the `g.` offset rows are the ones no un-normalizability argument
-/// reaches. `ins6` and `delinsX` denote nothing (`Denotation::Inexpressible`,
-/// and `to_spdi` refuses both by name), so a lenient mode that failed when it
-/// could not normalize would refuse them for that reason alone. `g.266+2del`
-/// does denote a sequence — because `to_spdi` silently **discards** the offset
-/// and answers for `g.266del` — so it needs a real check, and the disagreement
-/// between the two halves of ferro is a confluence defect on its own (#1628).
+/// The `g.` offset rows were the ones no un-normalizability argument reached.
+/// `ins6` and `delinsX` denote nothing (`Denotation::Inexpressible`, and
+/// `to_spdi` refuses both by name), so a lenient mode that failed when it could
+/// not normalize would refuse them for that reason alone. `g.266+2del` appeared
+/// to denote a sequence only because `to_spdi` silently **discarded** the offset
+/// and answered for `g.266del`; that half is closed by #1641 and #1734, and the
+/// normalize half by the `W4009` rule, so both now refuse rather than disagree.
 #[test]
 #[ignore = "decided target, not yet implemented — see #1630, #1627, #1628"]
 fn the_decided_target_is_a_mode_gated_refusal() {

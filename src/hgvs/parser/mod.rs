@@ -177,6 +177,10 @@ pub fn parse_hgvs_with_config(
     // Same, for the `n.-N` numbering-zone rule (#1748). Its `n.*N` sibling is
     // NOT here: that one is refused unconditionally, from `parse_variant`.
     let noncoding_zone_action = config.action_for(ErrorType::NonCodingPositionOutsideTranscript);
+    // Same, for the genomic-family offset rule (#1628). `g.*10` and a leading
+    // `g.-100` are NOT here: neither matches any production, so the grammar
+    // refuses both in every mode before this point.
+    let genomic_offset_action = config.action_for(ErrorType::GenomicPositionOffset);
 
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
@@ -232,6 +236,20 @@ pub fn parse_hgvs_with_config(
     apply_noncoding_zone_rule(
         &variant,
         noncoding_zone_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
+    // Apply the genomic-family offset conformance rule on the parsed AST
+    // (#1628). Same seam and same shape as the three above: `background/
+    // numbering.md:6`/`:8`/`:11` say a `g.`/`o.`/`m.` nucleotide number does not
+    // include a `+` or `-`, and there is no exon boundary on such an accession
+    // for one to be measured from. Mode-gated here per
+    // `rulings[absolute-prohibition-enforcement-stage]`; the OUTPUT half is
+    // unconditional and lives in `Normalizer::normalize_core_checked`.
+    apply_genomic_offset_rule(
+        &variant,
+        genomic_offset_action,
         &preprocess_result.preprocessed,
         &mut warnings,
     )?;
@@ -317,6 +335,64 @@ fn apply_noncoding_zone_rule(
             msg: format!(
                 "[{}] {}",
                 ErrorType::NonCodingPositionOutsideTranscript.code(),
+                found.refusal()
+            ),
+            diagnostic: None,
+        }),
+    }
+}
+
+/// Enforce `background/numbering.md:6`/`:8`/`:11` on a parsed variant (#1628).
+///
+/// The three genomic-family axes are numbered in three consecutive bullets and
+/// each bullet ends the same way: nucleotide numbers based on a genomic (`:6`),
+/// circular (`:8`) or mitochondrial (`:11`) reference sequence "do not include
+/// `+`, `-`, `*`, or other prefixes". `checklist.md:16` says it of `g.` in the
+/// checklist's register and `checklist.md:45` supplies the shape that actually
+/// occurs — a range written with `-` where the separator is `_`.
+///
+/// **The stage is mode-dependent**, per the decided
+/// `rulings[absolute-prohibition-enforcement-stage]`: strict validates input
+/// conformance and so fails here, at parse; lenient and silent do not, and
+/// accept — lenient with a `W4009` warning, silent without — and then fail at
+/// *normalize*, because a genomic accession carries no exon boundary for the
+/// offset to be measured from (see `Normalizer::normalize_core_checked`).
+///
+/// There is no repair arm, so this returns `Result<(), _>` like
+/// [`apply_alignment_only_symbol_rule`] rather than a rewritten variant. Both
+/// available repairs invent a variant the caller did not describe: dropping the
+/// offset answers for `g.266del`, which is the silent flattening #1641 and
+/// #1734 were filed to stop, and reading `g.266-268del` as a range guesses a
+/// three-base deletion out of a one-base one.
+fn apply_genomic_offset_rule(
+    variant: &HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<(), FerroError> {
+    let Some(found) = crate::hgvs::genomic_offsets::genomic_axis_offset(variant) else {
+        return Ok(());
+    };
+
+    match action {
+        ResolvedAction::Accept | ResolvedAction::SilentCorrect => Ok(()),
+        ResolvedAction::WarnCorrect => {
+            warnings.push(CorrectionWarning::new(
+                ErrorType::GenomicPositionOffset,
+                format!("{}; normalization will refuse it", found.refusal()),
+                None,
+                source.to_string(),
+                // No correction is derivable, so the "corrected" text is the
+                // input itself; the refusal comes at normalize.
+                source.to_string(),
+            ));
+            Ok(())
+        }
+        ResolvedAction::Reject => Err(FerroError::Parse {
+            pos: 0,
+            msg: format!(
+                "[{}] {}",
+                ErrorType::GenomicPositionOffset.code(),
                 found.refusal()
             ),
             diagnostic: None,

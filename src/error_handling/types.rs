@@ -623,6 +623,46 @@ pub enum ErrorType {
     /// it is `E1003 InvalidPosition`, refused at the grammar in every mode.
     /// See #1748.
     NonCodingPositionOutsideTranscript,
+    /// A description states a `+`/`-` offset on a **genomic-family** position —
+    /// the `g.`, `o.` and `m.` axes.
+    ///
+    /// `background/numbering.md` numbers those three axes in three consecutive
+    /// bullets and ends each with the same sentence: nucleotide numbers based on
+    /// a genomic (`:6`), circular (`:8`) or mitochondrial (`:11`) reference
+    /// sequence "**do not include** `+`, `-`, `*`, or other prefixes".
+    /// `checklist.md:16` says the same of `g.` in the checklist's register, and
+    /// `checklist.md:45` supplies the shape that actually occurs — a range
+    /// written with `-` where the separator is `_`, which it marks
+    /// `Not correct`.
+    ///
+    /// An intronic `c.100+2` is anchored to an exon boundary from the
+    /// transcript's exon table. A genomic accession has none — it *is* the
+    /// sequence — so `g.266+2` measures an offset from nothing and names no
+    /// nucleotide. That is why `hgvs_to_spdi` (#1641) and the VCF writer (#1734)
+    /// were both made to refuse rather than silently drop the offset, which had
+    /// them answer for `g.266del` instead.
+    ///
+    /// Enforcement follows the decided
+    /// `rulings[absolute-prohibition-enforcement-stage]`: **strict rejects at
+    /// parse**; lenient and silent accept at parse — lenient with this warning,
+    /// silent without — and then **fail at normalize**, because there is no base
+    /// for the offset to name. There is no auto-correction: dropping the offset
+    /// answers for a different nucleotide, and rewriting `g.266-268del` as the
+    /// range `g.266_268del` guesses a three-base deletion out of a one-base one.
+    ///
+    /// The check is AST-keyed, on `GenomePos::offset`, never a scan of the
+    /// rendered description — an accession carries `-`, and a repeat count can
+    /// be spelled `CAG[(54-68)]`.
+    ///
+    /// **An override on this code moves the PARSE stage only**, exactly as for
+    /// `AlignmentOnlySymbolInDescription`: `Normalizer::normalize_core_checked`
+    /// refuses unconditionally and consults no config, because rule 1 of the
+    /// README ruleset is about *output* conformance and no per-code override may
+    /// trade it.
+    ///
+    /// The code is `W4009` rather than the next free `W4008`, which
+    /// [`Self::NonCodingPositionOutsideTranscript`] holds. See #1628 and #1630.
+    GenomicPositionOffset,
 }
 
 impl ErrorType {
@@ -676,6 +716,7 @@ impl ErrorType {
             ErrorType::InsertionWithoutInsertedSequence => "W3027",
             ErrorType::AlignmentOnlySymbolInDescription => "W3028",
             ErrorType::NonCodingPositionOutsideTranscript => "W4008",
+            ErrorType::GenomicPositionOffset => "W4009",
             ErrorType::MembersCoalescedFromReportedForm => "W5005",
         }
     }
@@ -735,6 +776,7 @@ impl ErrorType {
         ErrorType::TranscriptFlankNotDescribable,
         ErrorType::IntronicOnBareTranscript,
         ErrorType::NonCodingPositionOutsideTranscript,
+        ErrorType::GenomicPositionOffset,
         ErrorType::IncompleteCdsStartReference,
         ErrorType::MembersCoalescedFromReportedForm,
     ];
@@ -848,6 +890,10 @@ impl ErrorType {
                  (numbering.md:52 numbers this axis from the first to the last nucleotide only; \
                  the `*N` sibling is E1003, refused in every mode)"
             }
+            ErrorType::GenomicPositionOffset => {
+                "description states a `+`/`-` offset on a genomic-family (`g.`/`m.`/`o.`) \
+                 position, which has no exon boundary to be measured from"
+            }
             ErrorType::MembersCoalescedFromReportedForm => {
                 "separately-reported variants were coalesced into fewer members"
             }
@@ -960,6 +1006,11 @@ impl ErrorType {
             // `numbering.md:52` denies the zone rather than the spelling, so
             // there is no conformant coordinate to correct to.
             ErrorType::NonCodingPositionOutsideTranscript => false,
+            // Both available repairs invent a variant the caller did not
+            // describe: dropping the offset answers for a different nucleotide,
+            // and reading `g.266-268del` as a range guesses a three-base
+            // deletion out of a one-base one.
+            ErrorType::GenomicPositionOffset => false,
             // Nothing to correct: the coalesced form is the canonical one. This
             // records provenance the string deliberately does not carry.
             ErrorType::MembersCoalescedFromReportedForm => false,
@@ -1055,6 +1106,7 @@ impl ErrorType {
             | ErrorType::InsertionWithoutInsertedSequence
             | ErrorType::AlignmentOnlySymbolInDescription
             | ErrorType::NonCodingPositionOutsideTranscript
+            | ErrorType::GenomicPositionOffset
             | ErrorType::MembersCoalescedFromReportedForm => true,
         }
     }
@@ -1162,6 +1214,10 @@ impl ErrorType {
             ErrorType::NonCodingPositionOutsideTranscript => (
                 "NR_037639.1:n.-5A>G (numbering.md:52 numbers n. from 1 to the last base)",
                 "(no auto-correct; name the nucleotide on a reference that contains it)",
+            ),
+            ErrorType::GenomicPositionOffset => (
+                "NC_000001.11:g.266+2del (a g. position admits no offset, numbering.md:6)",
+                "(no auto-correct; give a plain number, or use a transcript accession)",
             ),
         }
     }
@@ -1624,6 +1680,7 @@ mod tests {
             ErrorType::InsertionWithoutInsertedSequence,
             ErrorType::AlignmentOnlySymbolInDescription,
             ErrorType::NonCodingPositionOutsideTranscript,
+            ErrorType::GenomicPositionOffset,
             ErrorType::MembersCoalescedFromReportedForm,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1679,6 +1736,7 @@ mod tests {
                 | ErrorType::InsertionWithoutInsertedSequence
                 | ErrorType::AlignmentOnlySymbolInDescription
                 | ErrorType::NonCodingPositionOutsideTranscript
+                | ErrorType::GenomicPositionOffset
                 | ErrorType::MembersCoalescedFromReportedForm => {}
             }
             assert!(

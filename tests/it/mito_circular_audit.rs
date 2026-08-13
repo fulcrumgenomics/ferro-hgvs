@@ -547,36 +547,52 @@ fn audit_mt_accession_mt_round_trips_today() {
 // -----------------------------------------------------------------------------
 // Scenario 11 — coding-style position decorations on `m.`.
 //
-// mtDNA has no introns conventionally and no UTRs (`m.` has no `+`,
-// `-`, or `*` per `numbering.md` line 7). Ferro today nonetheless
-// accepts `m.100+1A>G` and `m.100-1A>G` (intronic-style offsets),
-// because the genome-position parser is shared with `g.` and does not
-// know `m.` should reject them. `m.*100A>G` (UTR-style) is rejected,
-// fortuitously, because `*` is not in the `m.`-position grammar.
-// F1 may want to reject `+`/`-` offsets explicitly.
+// mtDNA has no introns conventionally and no UTRs: `background/numbering.md:11`
+// says nucleotide numbers based on a mitochondrial reference sequence "do not
+// include" `+`, `-`, `*`, or other prefixes. (This comment cited "line 7"; the
+// mitochondrial bullet is `:11` at spec checkout `6f85311`.)
+//
+// **The audit's finding is closed by #1628, and the two tests below are kept
+// unchanged on purpose.** `m.100+1A>G` still parses on the BARE `parse_hgvs`
+// entry, which applies no `ErrorConfig` at all (#1632), so both assertions are
+// still true. What changed is everything downstream: `parse_hgvs_with_config`
+// refuses in strict (`W4009`), and `normalize` refuses in every mode, because a
+// mitochondrial accession carries no exon boundary for the offset to be
+// measured from. See `genomic_axis_offset_prohibition`.
+//
+// `m.*100A>G` (UTR-style) is rejected fortuitously, because `*` is not in the
+// `m.`-position grammar — a grammar accident rather than a conformance rule,
+// which is exactly why the `+`/`-` half needed one.
 // -----------------------------------------------------------------------------
 
-/// `m.100+1A>G` (intronic-style positive offset) parses today.
+/// `m.100+1A>G` (intronic-style positive offset) still parses on the BARE
+/// entry, which applies no mode. Strict parse and every mode's normalize refuse
+/// it (#1628) — see `genomic_axis_offset_prohibition`.
 #[test]
 fn audit_mt_intronic_plus_offset_silently_accepted_today() {
     let input = "NC_012920.1:m.100+1A>G";
     let variant = parse_hgvs(input).unwrap_or_else(|e| {
         panic!(
-            "PINNED: m. intronic-style `+` offset parses today even though \
-             mtDNA has no introns. Got Err({e})."
+            "PINNED: m. intronic-style `+` offset still parses on the BARE entry, \
+             which applies no ErrorConfig (#1632). The conformance refusal lives at \
+             `parse_hgvs_with_config` (strict) and at normalize (every mode), #1628. \
+             Got Err({e})."
         )
     });
     assert_eq!(format!("{}", variant), input);
 }
 
-/// `m.100-1A>G` (intronic-style negative offset) parses today.
+/// `m.100-1A>G` (intronic-style negative offset) still parses on the BARE
+/// entry, for the same reason and with the same downstream refusals (#1628).
 #[test]
 fn audit_mt_intronic_minus_offset_silently_accepted_today() {
     let input = "NC_012920.1:m.100-1A>G";
     let variant = parse_hgvs(input).unwrap_or_else(|e| {
         panic!(
-            "PINNED: m. intronic-style `-` offset parses today even though \
-             mtDNA has no introns. Got Err({e})."
+            "PINNED: m. intronic-style `-` offset still parses on the BARE entry, \
+             which applies no ErrorConfig (#1632). The conformance refusal lives at \
+             `parse_hgvs_with_config` (strict) and at normalize (every mode), #1628. \
+             Got Err({e})."
         )
     });
     assert_eq!(format!("{}", variant), input);

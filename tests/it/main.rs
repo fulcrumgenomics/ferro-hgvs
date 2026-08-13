@@ -127,6 +127,7 @@ mod gene_selector_roundtrip;
 mod generated_fixture_ci_wiring;
 mod generator_completeness;
 mod genome_ring_join;
+mod genomic_axis_offset_prohibition;
 mod gnomad_validation;
 mod grammar_conformance;
 mod handler_integration_tests;

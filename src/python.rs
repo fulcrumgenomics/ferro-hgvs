@@ -4873,6 +4873,14 @@ pub enum PyErrorType {
     // parser cannot resolve (#1748). Numbered after 47 so the existing
     // discriminants are unchanged.
     NonCodingPositionOutsideTranscript = 48,
+    // 49 is W4009 GenomicPositionOffset — the description states a `+`/`-`
+    // offset on a genomic-family (`g.`/`m.`/`o.`) position, which
+    // `background/numbering.md:6`/`:8`/`:11` say "do not include" one. Strict
+    // rejects at parse; lenient warns and silent is quiet, and both then fail at
+    // normalize since a genomic accession carries no exon boundary for the
+    // offset to be measured from (#1628). Numbered after 48 so the existing
+    // discriminants are unchanged.
+    GenomicPositionOffset = 49,
 }
 
 native_enum_pymethods! {
@@ -4926,6 +4934,7 @@ native_enum_pymethods! {
         46 => MembersCoalescedFromReportedForm,
         47 => AlignmentOnlySymbolInDescription,
         48 => NonCodingPositionOutsideTranscript,
+        49 => GenomicPositionOffset,
     },
 }
 
@@ -4990,6 +4999,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::NonCodingPositionOutsideTranscript => {
                 PyErrorType::NonCodingPositionOutsideTranscript
             }
+            ErrorType::GenomicPositionOffset => PyErrorType::GenomicPositionOffset,
         }
     }
 }
@@ -5055,6 +5065,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::NonCodingPositionOutsideTranscript => {
                 ErrorType::NonCodingPositionOutsideTranscript
             }
+            PyErrorType::GenomicPositionOffset => ErrorType::GenomicPositionOffset,
         }
     }
 }
