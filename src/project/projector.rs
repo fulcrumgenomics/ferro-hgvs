@@ -2696,6 +2696,42 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Tx(v) => {
                 let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
                 let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
+                // A 3'-downstream (`n.*N`) endpoint is refused here, as
+                // `project_noncoding_direct` already refuses one, because the pivot
+                // below can neither honour it nor carry it (#1768).
+                //
+                // The two guards are NOT identical and must not be described as
+                // such: `project_noncoding_direct` reshapes `r.` into `TxPos`
+                // before its check, so it refuses `*N` on both axes
+                // unconditionally. Here the axes part company — `r.*N` on a
+                // CODING transcript is `c.*N` and projects correctly — so the
+                // `r.` half is transcript-dependent and is guarded further
+                // down, once `is_coding` is known.
+                //
+                // `TxPos::downstream` states `*N` as "N bases after the transcript
+                // end", but the reshape immediately under this guard folds it into
+                // `CdsPos.utr3`, which means "N bases after the STOP CODON" — two
+                // different positions on any transcript with a 3'UTR. Measured on a
+                // 15-base transcript whose CDS ends at tx 12,
+                // `NC_000001.11(NM_UTR.1):n.*1del` came back as `c.*1del` /
+                // `n.13del`: reinterpreted onto the CDS axis, and the marker gone
+                // from the `n.` axis it was written on. On a NON-coding transcript
+                // the same input is worse — `map_cnr_position_to_genome`'s
+                // non-coding branch never reads `utr3` at all, so `n.*5` maps to
+                // exactly the genome position `n.5` does.
+                //
+                // Nothing downstream can repair either case: the transcript axis is
+                // rebuilt from the mapped genome coordinate, and both `TxPos::new`
+                // and the CDS→`n.` derivation emit a plain `n.<base>`. So refuse,
+                // rather than renumber silently.
+                if s.downstream || e.downstream {
+                    return Err(FerroError::UnsupportedProjection {
+                        reason: "cannot project 3'-downstream (`*N`) positions on an n. input: \
+                                 the genome pivot has no transcript-axis representation for \
+                                 them and would silently renumber the position"
+                            .to_string(),
+                    });
+                }
                 let to_cds = |p: TxPos| CdsPos {
                     base: p.base,
                     offset: p.offset,
@@ -2875,6 +2911,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    input `base` is the 1-based tx_pos directly; convert it to the
         //    0-based form cdot exposes and use `CdotTranscript::tx_to_genome`.
         let is_coding = cdot_tx.cds_start.is_some() && cdot_tx.cds_end.is_some();
+
+        // The `r.` half of #1768's refusal, which can only be asked here.
+        //
+        // The `n.` guard above is unconditional because `n.*N` never has a
+        // referent. `r.*N` is not the same claim: on a CODING transcript the
+        // `r.` axis IS the `c.` axis, so `r.*1` genuinely means `c.*1` and
+        // projects correctly (`project_to_genomic_still_accepts_a_downstream_r_position`).
+        // On a NON-coding transcript there is no stop codon for `*N` to be
+        // relative to, and the non-coding branch of `map_cnr_position_to_genome`
+        // never reads `utr3` at all — so `r.*5` and `r.5` returned the SAME
+        // genomic coordinate (measured: both `NC_000001.11(NCGENE):g.1004del`),
+        // which is the identical "two descriptions, one answer" defect the `n.`
+        // guard refuses. `project_noncoding_direct` already refuses `*N` on both
+        // axes; this is what makes the pivot path agree with it rather than
+        // renumber what the other declines.
+        //
+        // It sits here rather than beside the `n.` guard because the axis alone
+        // does not decide it — `is_coding` is not known until the cdot record is
+        // resolved, immediately above.
+        if !is_coding && (start_cds.utr3 || end_cds.utr3) {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "cannot project 3'-downstream (`*N`) positions on a {axis_label} input \
+                     against non-coding transcript {transcript_id}: it has no stop codon for \
+                     `*N` to be relative to, and the non-coding mapping would silently \
+                     renumber the position as an in-transcript one"
+                ),
+            });
+        }
+
         // The poly-A 3'UTR fallback inside `map_cnr_position_to_genome` is a
         // `c.*`-only refinement (#797): it reinterprets a `c.*` 3'UTR endpoint
         // that lands in the transcript's post-transcriptional poly-A tail.
@@ -10873,6 +10939,241 @@ mod tests {
                 s.contains(":g.1012A>G"),
                 "expected NC_000001.11...:g.1012A>G for c.*1A>G, got: {}",
                 s
+            );
+        }
+
+        /// #1768: an `n.*N` endpoint on the genome-pivot path must be REFUSED,
+        /// not silently reinterpreted onto the CDS axis.
+        ///
+        /// `TxPos::downstream` states `*N` as "N bases after the transcript end";
+        /// `CdsPos::utr3` states it as "N bases after the stop codon". The pivot's
+        /// `TxPos` → `CdsPos` reshape equates the two, and on any transcript with a
+        /// 3'UTR they name different bases. `NM_UTR.1` is 15 bases with the CDS at
+        /// tx 4..12 (1-based), so before this guard the measured result was:
+        ///
+        /// ```text
+        /// in : NC_000001.11(NM_UTR.1):n.*1del
+        /// out: g. = NC_000001.11(UTRGENE):g.1012del
+        ///      c. = NC_000001.11(NM_UTR.1):c.*1del
+        ///      n. = NC_000001.11(NM_UTR.1):n.13del      <-- marker dropped, renumbered
+        /// ```
+        ///
+        /// i.e. the `*` was read as a CDS-relative marker and then dropped entirely
+        /// from the axis it was authored on. The transcript axis is rebuilt from the
+        /// mapped genome coordinate, so no later step can restore it — which is why
+        /// this refuses rather than repairs, matching `project_noncoding_direct`.
+        #[test]
+        fn project_to_genomic_refuses_downstream_n_position_on_a_coding_transcript() {
+            let (projector, provider) = make_utr_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            // `n.*1` is not obtainable from `parse_hgvs` in every mode, so build the
+            // AST directly — `TxPos::downstream` is public API and a caller can hand
+            // this shape in.
+            let tx = TxVariant {
+                accession: parse_accession("NM_UTR.1").with_genomic_context(nc_parent()),
+                gene_symbol: Some("UTRGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    TxInterval::point(TxPos::downstream(1)),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            };
+            let input = HgvsVariant::Tx(tx);
+
+            let err = vp
+                .project_to_genomic(&input)
+                .expect_err("an n.*N endpoint must be refused on the genome-pivot path");
+            match err {
+                FerroError::UnsupportedProjection { ref reason } => assert!(
+                    reason.contains("3'-downstream (`*N`)"),
+                    "expected the 3'-downstream refusal, got {reason:?}"
+                ),
+                other => panic!("expected UnsupportedProjection, got {other:?}"),
+            }
+
+            // The whole multi-axis projection declines too — this is where the
+            // renumbered `n.13del` used to surface.
+            let err = vp
+                .project_variant(&input, "NM_UTR.1")
+                .expect_err("project_variant must not report a renumbered n. axis");
+            assert!(
+                matches!(err, FerroError::UnsupportedProjection { .. }),
+                "expected UnsupportedProjection from project_variant, got {err:?}"
+            );
+
+            // Scoped to the marker, not to the axis: the same edit at the plain
+            // transcript position `n.13` (which IS `c.*1` here) still projects.
+            let plain = {
+                let mut v = input.clone();
+                if let HgvsVariant::Tx(t) = &mut v {
+                    t.loc_edit.location = TxInterval::point(TxPos::new(13));
+                }
+                v
+            };
+            let g = vp
+                .project_to_genomic(&plain)
+                .expect("a plain n. position must still project");
+            assert!(
+                g.to_string().contains("g.1012del"),
+                "expected g.1012del for n.13del, got {g}"
+            );
+        }
+
+        /// #1768, the non-coding half — and the worse of the two, because the
+        /// reinterpretation is exact.
+        ///
+        /// `map_cnr_position_to_genome`'s non-coding branch never reads `utr3` at
+        /// all: it takes `base` as a 1-based transcript position and maps it. So
+        /// before this guard `n.*5del` and `n.5del` on `NR_TEST.1` produced the
+        /// same measured genomic form, `NC_000001.11(NCGENE):g.1004del` — the
+        /// issue's "`n.*5` is silently reinterpreted as `n.5`", literally.
+        ///
+        /// Asserted through `project_to_genomic` rather than `project_variant`: the
+        /// non-coding branch of the multi-axis rebuild is separately unreachable
+        /// (the g.→c. step declines with `TranscriptNotOverlapping` for a
+        /// transcript with no CDS), so the pivot is where this input's behaviour is
+        /// observable.
+        #[test]
+        fn project_to_genomic_refuses_downstream_n_position_on_a_noncoding_transcript() {
+            let (projector, provider) = make_noncoding_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let mk = |loc: TxInterval| {
+                HgvsVariant::Tx(TxVariant {
+                    accession: parse_accession("NR_TEST.1").with_genomic_context(nc_parent()),
+                    gene_symbol: Some("NCGENE".to_string()),
+                    loc_edit: LocEdit::new(
+                        loc,
+                        NaEdit::Deletion {
+                            sequence: None,
+                            length: None,
+                        },
+                    ),
+                })
+            };
+
+            let err = vp
+                .project_to_genomic(&mk(TxInterval::point(TxPos::downstream(5))))
+                .expect_err("an n.*N endpoint must be refused on a non-coding transcript too");
+            match err {
+                FerroError::UnsupportedProjection { ref reason } => assert!(
+                    reason.contains("3'-downstream (`*N`)"),
+                    "expected the 3'-downstream refusal, got {reason:?}"
+                ),
+                other => panic!("expected UnsupportedProjection, got {other:?}"),
+            }
+
+            // The position the input was being silently read as still projects.
+            let g = vp
+                .project_to_genomic(&mk(TxInterval::point(TxPos::new(5))))
+                .expect("a plain n. position must still project");
+            assert!(
+                g.to_string().contains("g.1004del"),
+                "expected g.1004del for n.5del, got {g}"
+            );
+        }
+
+        /// #1768, the `r.` half — the case the axis-scoped guard above cannot
+        /// reach, because it depends on the transcript rather than on the axis.
+        ///
+        /// On a CODING transcript `r.*N` genuinely means `c.*N` and must keep
+        /// projecting (pinned by the test directly below). On a NON-coding one
+        /// there is no stop codon for `*N` to be relative to, and
+        /// `map_cnr_position_to_genome`'s non-coding branch never reads `utr3`
+        /// — so before this guard `r.*5del` and `r.5del` on `NR_TEST.1` both
+        /// produced `NC_000001.11(NCGENE):g.1004del`, byte-identical. That is
+        /// the same "two descriptions, one answer" defect the `n.` guard
+        /// refuses, on the sibling arm of the same `match`.
+        ///
+        /// `project_noncoding_direct` already refuses `*N` on BOTH axes (its
+        /// `to_tx` reshape folds `RnaPos::utr3` into `TxPos::downstream` before
+        /// the guard), so without this the two paths disagreed about `r.*N`.
+        #[test]
+        fn project_to_genomic_refuses_downstream_r_position_on_a_noncoding_transcript() {
+            use crate::hgvs::interval::RnaInterval;
+            use crate::hgvs::location::RnaPos;
+            use crate::hgvs::variant::RnaVariant;
+
+            let (projector, provider) = make_noncoding_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let mk = |utr3: bool, base: i64| {
+                HgvsVariant::Rna(RnaVariant {
+                    accession: parse_accession("NR_TEST.1").with_genomic_context(nc_parent()),
+                    gene_symbol: Some("NCGENE".to_string()),
+                    loc_edit: LocEdit::new(
+                        RnaInterval::point(RnaPos {
+                            base,
+                            offset: None,
+                            utr3,
+                        }),
+                        NaEdit::Deletion {
+                            sequence: None,
+                            length: None,
+                        },
+                    ),
+                })
+            };
+
+            let err = vp
+                .project_to_genomic(&mk(true, 5))
+                .expect_err("an r.*N endpoint must be refused on a non-coding transcript");
+            match err {
+                FerroError::UnsupportedProjection { ref reason } => assert!(
+                    reason.contains("3'-downstream (`*N`)")
+                        && reason.contains("non-coding transcript"),
+                    "expected the non-coding 3'-downstream refusal, got {reason:?}"
+                ),
+                other => panic!("expected UnsupportedProjection, got {other:?}"),
+            }
+
+            // The position `r.*5` was silently being read as. It still projects,
+            // so the guard is scoped to the marker and has not disabled the axis.
+            let g = vp
+                .project_to_genomic(&mk(false, 5))
+                .expect("a plain r. position must still project");
+            assert!(
+                g.to_string().contains("g.1004del"),
+                "expected g.1004del for r.5del, got {g}"
+            );
+        }
+
+        /// The guard is `n.`-only. An `r.*N` input is a different claim — on a
+        /// coding transcript the `r.` axis IS the `c.` axis (`background/
+        /// numbering.md` L58/L61, pinned by #469/#1177), so `r.*1` genuinely means
+        /// `c.*1` and must keep projecting.
+        #[test]
+        fn project_to_genomic_still_accepts_a_downstream_r_position() {
+            use crate::hgvs::interval::RnaInterval;
+            use crate::hgvs::location::RnaPos;
+            use crate::hgvs::variant::RnaVariant;
+
+            let (projector, provider) = make_utr_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+
+            let rna = HgvsVariant::Rna(RnaVariant {
+                accession: parse_accession("NM_UTR.1").with_genomic_context(nc_parent()),
+                gene_symbol: Some("UTRGENE".to_string()),
+                loc_edit: LocEdit::new(
+                    RnaInterval::point(RnaPos {
+                        base: 1,
+                        offset: None,
+                        utr3: true,
+                    }),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            });
+            let g = vp
+                .project_to_genomic(&rna)
+                .expect("r.*1 must still project — it is the c.*1 axis");
+            assert!(
+                g.to_string().contains("g.1012del"),
+                "expected g.1012del for r.*1del, got {g}"
             );
         }
 
