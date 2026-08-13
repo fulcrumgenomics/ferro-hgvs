@@ -38,3 +38,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # release-plz determines the next version by walking history one
+          # commit at a time with `git checkout <sha>`, running `cargo package`
+          # at each. Every commit before #1750 still tracks the four bulk
+          # fixtures through Git LFS, and the account's LFS budget is
+          # exhausted, so stepping across that boundary makes git run the
+          # smudge filter, fail the download, and ABORT THE CHECKOUT PART-WAY
+          # — leaving 34 files from the older commit in the tree. release-plz
+          # reads that error as "there are no other commits", stops walking,
+          # and its final `git checkout main` then dies on the dirty tree.
+          #
+          # The failure surfaces as a git error naming an unrelated file
+          # (`.github/workflows/ci.yml`, the only one of the 34 that has since
+          # changed on main), which is why it looks nothing like an LFS
+          # problem. It was silent before that: the truncated walk analysed 4-8
+          # commits instead of ~90, so the version bump was computed from a
+          # fraction of the cycle while the job still reported success.
+          #
+          # Skipping the smudge leaves those paths as pointer files, which is
+          # harmless here: they are `exclude`d from the package in Cargo.toml,
+          # so they never enter the comparison release-plz is making.
+          GIT_LFS_SKIP_SMUDGE: "1"
