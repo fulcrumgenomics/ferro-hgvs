@@ -4629,3 +4629,116 @@ fn axis_genomic_idempotent() {
         failures.join("\n")
     );
 }
+
+// The `n.` axis had no counterpart to the guard above, and the asymmetry was
+// not a decision — it is simply where the genomic work stopped.
+//
+// That matters more than a missing test usually does, because the two axes are
+// produced by different code. The genomic axis is normalized inside
+// `project_variant`; the non-coding axis is re-framed by
+// `frame_projection_owned` and fanned out across overlapping transcripts by
+// `project_variant_all`, which is a path the genomic guard never touches. So a
+// fix to one says nothing about the other, and "the projector normalizes its
+// axes" was true of `g.` and unverified of `n.`.
+//
+// The contract asserted is the same one `axis_genomic_idempotent` asserts and
+// is the weakest thing worth having: whatever the projector hands a caller must
+// already be what bare normalization would produce. A caller that normalizes a
+// projected axis — which is the obvious defensive thing to do — must not see
+// the string change under them.
+
+#[test]
+fn axis_noncoding_idempotent() {
+    let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
+        eprintln!("axis_noncoding_idempotent: skipping — no manifest");
+        return;
+    };
+    let mut tested = 0usize;
+    let mut failures = Vec::new();
+    for case in &fixture().cases {
+        if !case.to_test {
+            continue;
+        }
+        // Mirror `axis_noncoding`'s routing exactly, for the same reason that
+        // test gives: the `n.` rows are projections onto *overlapping*
+        // transcripts, so the axis is only reachable through the fan-out. Taking
+        // a single `project_variant` here would test a different population and
+        // silently exercise fewer rows.
+        let Ok(results) = projector.project_variant_all(
+            &(match parse_hgvs(&case.input) {
+                Ok(v) => v,
+                Err(_) => continue,
+            }),
+        ) else {
+            continue;
+        };
+        for projected in results.iter().filter_map(|r| r.noncoding.as_ref()) {
+            let n1 = format!("{projected}");
+            tested += 1;
+            match renormalize_once(&normalizer, &n1) {
+                Ok(n2) if n2 != n1 => failures.push(format!("{} : {n1} -> {n2}", case.input)),
+                Err(e) => failures.push(format!("{} : {n1} -> {e}", case.input)),
+                _ => {}
+            }
+        }
+    }
+    eprintln!(
+        "axis_noncoding_idempotent: {tested} tested, {} non-idempotent",
+        failures.len()
+    );
+    // Honest-zero discipline: a fan-out that stopped producing `n.` axes would
+    // otherwise report zero failures and read as a pass.
+    assert!(tested > 0, "exercised no cases");
+
+    // Pinned at its measured value with a tripwire, never at zero. The residue
+    // is real and is filed as #1712; re-pinning it to zero would assert a fix
+    // nobody has written, and `#[ignore]`ing the test would leave a guard that
+    // never guards — this repository has already lost one that way.
+    //
+    // Failing in *either* direction is the point. More rows is a regression;
+    // fewer means something was fixed and this pin went stale without anyone
+    // noticing, which is how a partial fix comes to read as a complete one.
+    //
+    // The 21 fall into three shapes, and they are not equally serious:
+    //
+    // * 16 re-render as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
+    //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization runs on the
+    //   re-normalization that did not run on the projection.
+    // * 4 re-partition into members — `n.309delinsCTGA` ->
+    //   `n.[308_309insCT;310dup]`, all four from cross-reference `delins`
+    //   inputs (the #422 family).
+    // * 1 is NOT 3'-shifted, asserted separately below.
+    assert_eq!(
+        failures.len(),
+        NONCODING_NON_IDEMPOTENT,
+        "the non-coding non-idempotency residue moved (#1712). Update the pin \
+         and the shape breakdown together, and say which direction it moved:\n{}",
+        failures.join("\n")
+    );
+
+    // Called out by name because it is the only one of the 21 that is a rule 2
+    // miss rather than a re-spelling: the output is simply not 3'-shifted, on a
+    // user-facing axis, and README rule 2 names the 3' rule in its own scope.
+    // Buried inside the aggregate it would survive a fix to the other twenty
+    // without anyone noticing it had.
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.contains(NONCODING_NOT_THREE_PRIME_SHIFTED)),
+        "the one non-3'-shifted row is gone from the residue. If it was fixed, \
+         drop this assertion and lower the pin; do not leave both in place:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The measured non-idempotency residue on the `n.` axis — see #1712.
+///
+/// Measured at `origin/main` `9fb126ba` against the prepared GRCh38 reference:
+/// 681 axes tested, 21 non-idempotent. The genomic control
+/// ([`axis_genomic_idempotent`]) reads 214 tested / 0 non-idempotent on the same
+/// run, which is what isolates this to the non-coding path rather than to
+/// normalization generally.
+const NONCODING_NON_IDEMPOTENT: usize = 21;
+
+/// The one row in that residue whose output is not 3'-shifted (#1712).
+const NONCODING_NOT_THREE_PRIME_SHIFTED: &str = "LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del";
