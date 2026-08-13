@@ -56,14 +56,43 @@ const REPORTED: usize = 10;
 ///
 /// The counters are counts over a partition of the cases, so summing them is
 /// exact; the two lists are capped samples for the failure message. Returning
-/// them rather than mutating shared state is what makes the sequences
-/// independent.
+/// one of these rather than mutating shared state is what makes the sequences
+/// independent, and [`SweepTally::absorb`] is the one place the fold lives.
+///
+/// It is the **union** of what the three sweeps in this file tally, so two
+/// fields are used by one sweep each and stay zero elsewhere: `residual` by the
+/// genomic two-member sweep (its `dup`+`del`+5' shape), and
+/// `input_declined`/`by_cause` by the three-member sweep. One struct with two
+/// idle fields beats three near-identical ones with three copies of the fold.
+#[derive(Default)]
 struct SweepTally {
     checked: usize,
     residual: usize,
     skipped: usize,
+    input_declined: usize,
+    by_cause: std::collections::BTreeMap<&'static str, usize>,
     overlapping: Vec<String>,
     changed: Vec<String>,
+}
+
+impl SweepTally {
+    /// Fold one sequence's tally in, preserving sweep order.
+    ///
+    /// The caps are re-applied by the caller after the whole concatenation, so
+    /// this appends rather than truncating: each task already kept only its own
+    /// first [`REPORTED`], and truncating the in-order concatenation yields the
+    /// set the serial loop's global cap kept.
+    fn absorb(&mut self, other: SweepTally) {
+        self.checked += other.checked;
+        self.residual += other.residual;
+        self.skipped += other.skipped;
+        self.input_declined += other.input_declined;
+        for (cause, count) in other.by_cause {
+            *self.by_cause.entry(cause).or_default() += count;
+        }
+        self.overlapping.extend(other.overlapping);
+        self.changed.extend(other.changed);
+    }
 }
 
 /// Nine `T` at positions 1-9 — a tract long enough to canonicalise to a repeat.
@@ -693,22 +722,25 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
                 skipped,
                 overlapping,
                 changed,
+                ..SweepTally::default()
             }
         })
         .collect();
 
-    let (mut checked, mut residual, mut skipped) = (0usize, 0usize, 0usize);
-    let mut overlapping: Vec<String> = Vec::new();
-    let mut changed: Vec<String> = Vec::new();
+    let mut total = SweepTally::default();
     for tally in per_sequence {
-        checked += tally.checked;
-        residual += tally.residual;
-        skipped += tally.skipped;
-        overlapping.extend(tally.overlapping);
-        changed.extend(tally.changed);
+        total.absorb(tally);
     }
-    overlapping.truncate(REPORTED);
-    changed.truncate(REPORTED);
+    total.overlapping.truncate(REPORTED);
+    total.changed.truncate(REPORTED);
+    let SweepTally {
+        checked,
+        residual,
+        overlapping,
+        changed,
+        skipped,
+        ..
+    } = total;
 
     // Per seed, not absolute (#1295): the seed count is now a knob, so a fixed
     // floor would either fail at the default prefix or be vacuous at the full
@@ -1258,208 +1290,238 @@ fn sweep_one_transcript_axis(accession: &str, axis: &str) {
     /// 1-based inclusive CDS end within the 20-base transcript: six codons.
     const CDS_END: u64 = 18;
 
-    let mut checked = 0usize;
-    let mut skipped = 0usize;
-    let mut overlapping: Vec<String> = Vec::new();
-    let mut changed: Vec<String> = Vec::new();
-
     let seeds = sweep_seeds(48);
-    for seq in sweep_sequences(seeds) {
-        // All three transcript axes share the generator.
-        //
-        // `r.` was excluded until #1471 on two grounds, both of which were
-        // measured and neither of which held:
-        //
-        // * *"its `U`/`T` alphabet makes the payload construction below a
-        //   different problem"* — it does not. The parser accepts the
-        //   DNA-alphabet payloads this generator already builds and renders
-        //   them in the RNA alphabet on output, so not one line below changes:
-        //   `NR_TEST.1:r.5_6insAA` parses as `r.5_6insaa` and `r.5T>A` as
-        //   `r.5u>a`. The oracle needs no adjustment either — `apply_with`
-        //   applies an `r.` description to the same bases as its `n.` twin
-        //   (verified byte-identical), because `hgvs_to_spdi` folds the
-        //   alphabet.
-        // * *"`issue_1235_transcript_axes.rs` pins that axis by hand"* — it
-        //   does, with 13 `r.` cases including a non-coding one, but they are
-        //   substitutions and `delins`. Those reach `canonicalize_from_sequence`
-        //   and never the *repair* passes, so none of them produces two
-        //   junction-occupying members shifting onto one junction.
-        //
-        // That second gap is what #1453 fell through: on a non-coding `r.`
-        // record every repair routed through `respell_at_gap` was a silent
-        // no-op, so `r.[9dup;10dup;11dup]` normalized to `r.[9dup;11dup;11dup]`
-        // — one interbase point claimed twice, denoting no sequence. It was
-        // invisible to this suite and to two of the three seam oracles: the
-        // output is well-formed, so `FERRO_ASSERT_REPARSE` accepts it, and every
-        // coordinate is in range, so `FERRO_ASSERT_IN_BOUNDS` does too. Only the
-        // apply oracle distinguishes it, as `CoincidentInsertions`.
-        //
-        // Verified against the defect rather than assumed: with #1465's fix
-        // reverted, this arm fails at **four** seeds on the earliest shapes it
-        // emits — `r.[2dup;4dup] -> r.[9dup;9dup]` and nine more, the collector's
-        // cap. (The 849-output figure quoted in #1453 and #1471 comes from a
-        // purpose-built 63 nt census in #1465, not from this sweep's 20-mers;
-        // the two corpora are not comparable and only the *direction* carries
-        // over.)
-        //
-        // **Non-coding `r.` only, and coding `r.` is a deliberate remaining
-        // gap** — not a covered one. It would be convenient to say `c.` already
-        // sweeps it, since `axis_frame` gives both `reading_frame: true`, but
-        // that is only true of the frame: the two still take different code
-        // paths (`build_rna_merged` vs `build_cds_merged`, and
-        // `cds_relative_gap(Region::Rna)` vs `(Region::Cds)`), so a coding `r.`
-        // defect could hide exactly the way the non-coding one did.
-        //
-        // The reason to stop here is cost, stated plainly: each axis is +50% on
-        // what is already the slowest test in the suite. Non-coding `r.` buys a
-        // *measured* gap — 849 corrupt outputs — and coding `r.` buys an
-        // unmeasured one. Worth adding if a defect ever turns up there, or if
-        // this sweep is made cheaper.
-        // Built once per (sequence, axis) and cloned per case. `SyntheticBuilder`
-        // pads, maps to a genomic contig and reverse-complements on demand, so
-        // constructing one inside the innermost loop dominated the test:
-        // measured at 39.8s for the 4-seed prefix before hoisting, against
-        // 18.3s for the far larger genomic sweep beside it.
-        // Keyed on the *accession*, not the axis, because that is what the
-        // builders actually decide: `cds` names its transcript `NM_TEST.1` and
-        // `noncoding` names its own `NR_TEST.1`, and every description below is
-        // built as `{accession}:{axis}.…`. Testing `axis == "c"` instead would
-        // route the coding `r.` row named in the gap note above — which is
-        // `("NM_TEST.1", "r")` — to an `NR_TEST.1` provider, so every lookup
-        // would fail to resolve and normalization would hand the input straight
-        // back: a sweep that is green because it checked nothing, with the
-        // axis label in every assertion message still reading `r.`.
-        // `every_transcript_axis_has_its_own_sweep` does not reach this choice,
-        // so an unrecognized accession is loud rather than defaulted.
-        let axis_provider = match accession {
-            "NM_TEST.1" => SyntheticBuilder::cds(&seq, 1, CDS_END, Strand::Plus).build(),
-            "NR_TEST.1" => SyntheticBuilder::noncoding(&seq, Strand::Plus).build(),
-            other => panic!(
-                "no reference shape is wired for `{other}` (sweeping the `{axis}.` axis); add \
+
+    // One rayon task per drawn sequence — see the genomic two-member sweep
+    // above for why this is byte-identical rather than merely equivalent.
+    // Parallelizing only ONE sweep in this file was measured as a wash: the
+    // `Exhaustive sweeps` job runs several at once, so the parallel one simply
+    // took cores from its serial siblings (job 1m42s -> 1m46s, with two
+    // siblings newly crossing the SLOW line). They have to go together.
+    let per_sequence: Vec<SweepTally> = sweep_sequences(seeds)
+        .into_par_iter()
+        .map(|seq| {
+            let mut checked = 0usize;
+            let mut skipped = 0usize;
+            let mut overlapping: Vec<String> = Vec::new();
+            let mut changed: Vec<String> = Vec::new();
+            // All three transcript axes share the generator.
+            //
+            // `r.` was excluded until #1471 on two grounds, both of which were
+            // measured and neither of which held:
+            //
+            // * *"its `U`/`T` alphabet makes the payload construction below a
+            //   different problem"* — it does not. The parser accepts the
+            //   DNA-alphabet payloads this generator already builds and renders
+            //   them in the RNA alphabet on output, so not one line below changes:
+            //   `NR_TEST.1:r.5_6insAA` parses as `r.5_6insaa` and `r.5T>A` as
+            //   `r.5u>a`. The oracle needs no adjustment either — `apply_with`
+            //   applies an `r.` description to the same bases as its `n.` twin
+            //   (verified byte-identical), because `hgvs_to_spdi` folds the
+            //   alphabet.
+            // * *"`issue_1235_transcript_axes.rs` pins that axis by hand"* — it
+            //   does, with 13 `r.` cases including a non-coding one, but they are
+            //   substitutions and `delins`. Those reach `canonicalize_from_sequence`
+            //   and never the *repair* passes, so none of them produces two
+            //   junction-occupying members shifting onto one junction.
+            //
+            // That second gap is what #1453 fell through: on a non-coding `r.`
+            // record every repair routed through `respell_at_gap` was a silent
+            // no-op, so `r.[9dup;10dup;11dup]` normalized to `r.[9dup;11dup;11dup]`
+            // — one interbase point claimed twice, denoting no sequence. It was
+            // invisible to this suite and to two of the three seam oracles: the
+            // output is well-formed, so `FERRO_ASSERT_REPARSE` accepts it, and every
+            // coordinate is in range, so `FERRO_ASSERT_IN_BOUNDS` does too. Only the
+            // apply oracle distinguishes it, as `CoincidentInsertions`.
+            //
+            // Verified against the defect rather than assumed: with #1465's fix
+            // reverted, this arm fails at **four** seeds on the earliest shapes it
+            // emits — `r.[2dup;4dup] -> r.[9dup;9dup]` and nine more, the collector's
+            // cap. (The 849-output figure quoted in #1453 and #1471 comes from a
+            // purpose-built 63 nt census in #1465, not from this sweep's 20-mers;
+            // the two corpora are not comparable and only the *direction* carries
+            // over.)
+            //
+            // **Non-coding `r.` only, and coding `r.` is a deliberate remaining
+            // gap** — not a covered one. It would be convenient to say `c.` already
+            // sweeps it, since `axis_frame` gives both `reading_frame: true`, but
+            // that is only true of the frame: the two still take different code
+            // paths (`build_rna_merged` vs `build_cds_merged`, and
+            // `cds_relative_gap(Region::Rna)` vs `(Region::Cds)`), so a coding `r.`
+            // defect could hide exactly the way the non-coding one did.
+            //
+            // The reason to stop here is cost, stated plainly: each axis is +50% on
+            // what is already the slowest test in the suite. Non-coding `r.` buys a
+            // *measured* gap — 849 corrupt outputs — and coding `r.` buys an
+            // unmeasured one. Worth adding if a defect ever turns up there, or if
+            // this sweep is made cheaper.
+            // Built once per (sequence, axis) and cloned per case. `SyntheticBuilder`
+            // pads, maps to a genomic contig and reverse-complements on demand, so
+            // constructing one inside the innermost loop dominated the test:
+            // measured at 39.8s for the 4-seed prefix before hoisting, against
+            // 18.3s for the far larger genomic sweep beside it.
+            // Keyed on the *accession*, not the axis, because that is what the
+            // builders actually decide: `cds` names its transcript `NM_TEST.1` and
+            // `noncoding` names its own `NR_TEST.1`, and every description below is
+            // built as `{accession}:{axis}.…`. Testing `axis == "c"` instead would
+            // route the coding `r.` row named in the gap note above — which is
+            // `("NM_TEST.1", "r")` — to an `NR_TEST.1` provider, so every lookup
+            // would fail to resolve and normalization would hand the input straight
+            // back: a sweep that is green because it checked nothing, with the
+            // axis label in every assertion message still reading `r.`.
+            // `every_transcript_axis_has_its_own_sweep` does not reach this choice,
+            // so an unrecognized accession is loud rather than defaulted.
+            let axis_provider = match accession {
+                "NM_TEST.1" => SyntheticBuilder::cds(&seq, 1, CDS_END, Strand::Plus).build(),
+                "NR_TEST.1" => SyntheticBuilder::noncoding(&seq, Strand::Plus).build(),
+                other => panic!(
+                    "no reference shape is wired for `{other}` (sweeping the `{axis}.` axis); add \
                  one to this match rather than letting the row fall through to a transcript \
                  whose accession the descriptions never name"
-            ),
-        };
-        for first_start in 2..=11usize {
-            for first_len in 1..=2usize {
-                let first_end = first_start + first_len - 1;
-                let span = if first_len == 1 {
-                    format!("{first_start}")
-                } else {
-                    format!("{first_start}_{first_end}")
-                };
-                // Same payload rule as the genomic sweeps: excluding both
-                // flanking reference bases keeps the `ins` entry from
-                // denoting the `dup` beside it.
-                let first_base = seq.as_bytes()[first_start - 1] as char;
-                let first_next = seq.as_bytes()[first_start] as char;
-                let first_payload = ['A', 'C', 'G', 'T']
-                    .into_iter()
-                    .find(|b| *b != first_base && *b != first_next)
-                    .expect("four bases, at most two excluded");
-                let inserted: String = std::iter::repeat_n(first_payload, first_len).collect();
-                let firsts = [
-                    format!("{span}del"),
-                    format!("{span}dup"),
-                    format!("{first_start}_{}ins{inserted}", first_start + 1),
-                ];
-                for first in firsts {
-                    for second_start in first_end + 2..=(CDS_END as usize - 1) {
-                        let base = seq.as_bytes()[second_start - 1] as char;
-                        let alt = if base == 'A' { 'G' } else { 'A' };
-                        let next_base = seq.as_bytes()[second_start] as char;
-                        let second_payload = ['A', 'C', 'G', 'T']
-                            .into_iter()
-                            .find(|b| *b != base && *b != next_base)
-                            .expect("four bases, at most two excluded");
-                        for second in [
-                            format!("{second_start}del"),
-                            format!("{second_start}{base}>{alt}"),
-                            format!("{second_start}dup"),
-                            format!("{second_start}_{}ins{second_payload}", second_start + 1),
-                        ] {
-                            // Everything that depends only on the *description*
-                            // is hoisted out of the direction loop below. The
-                            // input string, its parse and the bases it denotes
-                            // are all properties of the description, not of the
-                            // shuffle direction, and computing them per
-                            // direction did each of them exactly twice.
-                            let input = format!("{accession}:{axis}.[{first};{second}]");
-                            let variant = parse_hgvs(&input).expect("generated input parses");
-                            // Lazily, and at most once: a case both directions
-                            // decline must stay as cheap as it was.
-                            let mut input_applied: Option<Option<String>> = None;
-                            for direction in
-                                [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
-                            {
-                                // Deliberately built per case rather than once
-                                // per (sequence, axis). Hoisting it is strictly
-                                // less work and IS faster in the unoptimized
-                                // test profile, but it measured **14% slower**
-                                // on this test under the `soak` profile CI's
-                                // `sweeps` job actually uses — 11.54s -> 13.16s,
-                                // three reps a side at CV <= 0.5%. The
-                                // direction-invariant hoisting above (the
-                                // description, its parse, its applied sequence)
-                                // is kept: that is where the duplicated work was.
-                                let normalizer = Normalizer::with_config(
-                                    axis_provider.clone(),
-                                    NormalizeConfig::default()
-                                        .with_direction(direction)
-                                        .allow_crossing_boundaries(),
-                                );
-                                let Ok(normalized) = normalizer.normalize(&variant) else {
-                                    // A refusal is a legitimate answer here —
-                                    // the transcript axes decline shapes the
-                                    // genomic axis accepts — and says nothing
-                                    // about sequence preservation.
-                                    skipped += 1;
-                                    continue;
-                                };
-                                let output = format!("{normalized}");
-                                checked += 1;
+                ),
+            };
+            for first_start in 2..=11usize {
+                for first_len in 1..=2usize {
+                    let first_end = first_start + first_len - 1;
+                    let span = if first_len == 1 {
+                        format!("{first_start}")
+                    } else {
+                        format!("{first_start}_{first_end}")
+                    };
+                    // Same payload rule as the genomic sweeps: excluding both
+                    // flanking reference bases keeps the `ins` entry from
+                    // denoting the `dup` beside it.
+                    let first_base = seq.as_bytes()[first_start - 1] as char;
+                    let first_next = seq.as_bytes()[first_start] as char;
+                    let first_payload = ['A', 'C', 'G', 'T']
+                        .into_iter()
+                        .find(|b| *b != first_base && *b != first_next)
+                        .expect("four bases, at most two excluded");
+                    let inserted: String = std::iter::repeat_n(first_payload, first_len).collect();
+                    let firsts = [
+                        format!("{span}del"),
+                        format!("{span}dup"),
+                        format!("{first_start}_{}ins{inserted}", first_start + 1),
+                    ];
+                    for first in firsts {
+                        for second_start in first_end + 2..=(CDS_END as usize - 1) {
+                            let base = seq.as_bytes()[second_start - 1] as char;
+                            let alt = if base == 'A' { 'G' } else { 'A' };
+                            let next_base = seq.as_bytes()[second_start] as char;
+                            let second_payload = ['A', 'C', 'G', 'T']
+                                .into_iter()
+                                .find(|b| *b != base && *b != next_base)
+                                .expect("four bases, at most two excluded");
+                            for second in [
+                                format!("{second_start}del"),
+                                format!("{second_start}{base}>{alt}"),
+                                format!("{second_start}dup"),
+                                format!("{second_start}_{}ins{second_payload}", second_start + 1),
+                            ] {
+                                // Everything that depends only on the *description*
+                                // is hoisted out of the direction loop below. The
+                                // input string, its parse and the bases it denotes
+                                // are all properties of the description, not of the
+                                // shuffle direction, and computing them per
+                                // direction did each of them exactly twice.
+                                let input = format!("{accession}:{axis}.[{first};{second}]");
+                                let variant = parse_hgvs(&input).expect("generated input parses");
+                                // Lazily, and at most once: a case both directions
+                                // decline must stay as cheap as it was.
+                                let mut input_applied: Option<Option<String>> = None;
+                                for direction in
+                                    [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
+                                {
+                                    // Deliberately built per case rather than once
+                                    // per (sequence, axis). Hoisting it is strictly
+                                    // less work and IS faster in the unoptimized
+                                    // test profile, but it measured **14% slower**
+                                    // on this test under the `soak` profile CI's
+                                    // `sweeps` job actually uses — 11.54s -> 13.16s,
+                                    // three reps a side at CV <= 0.5%. The
+                                    // direction-invariant hoisting above (the
+                                    // description, its parse, its applied sequence)
+                                    // is kept: that is where the duplicated work was.
+                                    let normalizer = Normalizer::with_config(
+                                        axis_provider.clone(),
+                                        NormalizeConfig::default()
+                                            .with_direction(direction)
+                                            .allow_crossing_boundaries(),
+                                    );
+                                    let Ok(normalized) = normalizer.normalize(&variant) else {
+                                        // A refusal is a legitimate answer here —
+                                        // the transcript axes decline shapes the
+                                        // genomic axis accepts — and says nothing
+                                        // about sequence preservation.
+                                        skipped += 1;
+                                        continue;
+                                    };
+                                    let output = format!("{normalized}");
+                                    checked += 1;
 
-                                let Some(want) = input_applied
-                                    .get_or_insert_with(|| {
-                                        apply_parsed_with(&axis_provider, &seq, &variant)
-                                    })
-                                    .as_deref()
-                                else {
-                                    // An *input* that does not apply is a case
-                                    // this sweep cannot speak for. Counted
-                                    // separately from an unconvertible output,
-                                    // which is a failure.
-                                    skipped += 1;
-                                    checked -= 1;
-                                    continue;
-                                };
-                                // Both collections are capped at ten, matching
-                                // the two sweeps above. The assertions below
-                                // fire on `is_empty()`, so every failure past
-                                // the tenth changes nothing about the verdict
-                                // and only makes the panic output harder to
-                                // read — and a broad regression on the full
-                                // corpus would otherwise accumulate a string
-                                // per case.
-                                match apply_with(&axis_provider, &seq, &output) {
-                                    None if overlapping.len() < 10 => overlapping
-                                        .push(format!("{input} [{direction:?}] -> {output}")),
-                                    None => {}
-                                    Some(got) if got != want && changed.len() < 10 => {
-                                        changed.push(format!(
-                                            "{input} [{direction:?}] -> {output} \
+                                    let Some(want) = input_applied
+                                        .get_or_insert_with(|| {
+                                            apply_parsed_with(&axis_provider, &seq, &variant)
+                                        })
+                                        .as_deref()
+                                    else {
+                                        // An *input* that does not apply is a case
+                                        // this sweep cannot speak for. Counted
+                                        // separately from an unconvertible output,
+                                        // which is a failure.
+                                        skipped += 1;
+                                        checked -= 1;
+                                        continue;
+                                    };
+                                    // Both collections are capped at ten, matching
+                                    // the two sweeps above. The assertions below
+                                    // fire on `is_empty()`, so every failure past
+                                    // the tenth changes nothing about the verdict
+                                    // and only makes the panic output harder to
+                                    // read — and a broad regression on the full
+                                    // corpus would otherwise accumulate a string
+                                    // per case.
+                                    match apply_with(&axis_provider, &seq, &output) {
+                                        None if overlapping.len() < REPORTED => overlapping
+                                            .push(format!("{input} [{direction:?}] -> {output}")),
+                                        None => {}
+                                        Some(got) if got != want && changed.len() < REPORTED => {
+                                            changed.push(format!(
+                                                "{input} [{direction:?}] -> {output} \
                                              (want {want}, got {got})"
-                                        ))
+                                            ))
+                                        }
+                                        Some(_) => {}
                                     }
-                                    Some(_) => {}
                                 }
                             }
                         }
                     }
                 }
             }
-        }
+            SweepTally {
+                checked,
+                skipped,
+                overlapping,
+                changed,
+                ..SweepTally::default()
+            }
+        })
+        .collect();
+
+    let mut total = SweepTally::default();
+    for tally in per_sequence {
+        total.absorb(tally);
     }
+    total.overlapping.truncate(REPORTED);
+    total.changed.truncate(REPORTED);
+    let SweepTally {
+        checked,
+        skipped,
+        overlapping,
+        changed,
+        ..
+    } = total;
 
     // Per seed, for the reason recorded on the floor in the first sweep above.
     // This is the SAME per-axis floor the combined test applied to each axis, so
@@ -1682,15 +1744,6 @@ fn no_three_member_allele_normalizes_to_a_different_sequence() {
         }
     }
 
-    let mut checked = 0usize;
-    let mut input_declined = 0usize;
-    let mut overlapping: Vec<String> = Vec::new();
-    let mut changed: Vec<String> = Vec::new();
-    // Per-cause tallies for the *input* declines, so the share below is
-    // decomposable rather than another single opaque number.
-    let mut by_cause: std::collections::BTreeMap<&'static str, usize> =
-        std::collections::BTreeMap::new();
-
     // 16 rather than the 48 its neighbours use. Each seed here carries roughly
     // three times their cases, so 16 seeds is comparable *total* coverage — and
     // at 48 this one test was 411s in CI's sweeps job, against 183s for all three
@@ -1698,110 +1751,129 @@ fn no_three_member_allele_normalizes_to_a_different_sequence() {
     // whose buckets are all currently zero, not a ceiling: raise it if a
     // three-member defect ever turns up in a sequence beyond the sixteenth.
     let seeds = sweep_seeds(16);
-    for seq in sweep_sequences(seeds) {
-        // One provider and one normalizer per direction per sequence. The
-        // innermost loop used to build `genomic_provider(&seq)` three times per
-        // case — for the input apply, the normalizer and the output apply.
-        let template = genomic_provider(&seq);
-        let normalizers =
-            [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime].map(|direction| {
-                (
-                    direction,
-                    Normalizer::with_config(
-                        template.clone(),
-                        NormalizeConfig::default()
-                            .with_direction(direction)
-                            .allow_crossing_boundaries(),
-                    ),
-                )
-            });
-        // Even positions only, and the bound says 8 rather than 9 because
-        // `step_by(2)` from 2 can never reach an odd endpoint — writing `..=9`
-        // named a position this loop does not visit. Sampling every other
-        // position is deliberate (the third member's loop below multiplies this
-        // one), but the range should not claim coverage it does not provide.
-        for first_start in (2..=8usize).step_by(2) {
-            let first_base = seq.as_bytes()[first_start - 1] as char;
-            let first_next = seq.as_bytes()[first_start] as char;
-            let first_payload = ['A', 'C', 'G', 'T']
-                .into_iter()
-                .find(|b| *b != first_base && *b != first_next)
-                .expect("four bases, at most two excluded");
-            let firsts = [
-                format!("{first_start}del"),
-                format!("{first_start}dup"),
-                format!("{first_start}_{}ins{first_payload}", first_start + 1),
-            ];
-            for first in &firsts {
-                // Second and third members walk the remaining positions, each
-                // separated from its predecessor by at least one unchanged base
-                // so every case starts as three genuinely separate members.
-                for second_start in first_start + 2..=14usize {
-                    let second_base = seq.as_bytes()[second_start - 1] as char;
-                    let second_alt = if second_base == 'A' { 'G' } else { 'A' };
-                    for second in [
-                        format!("{second_start}del"),
-                        format!("{second_start}{second_base}>{second_alt}"),
-                        format!("{second_start}dup"),
-                    ] {
-                        // `..=19` is right here, unlike the `first_start` loop
-                        // above: `second_start` walks every integer, so when it
-                        // is odd this range is odd-valued and 19 IS visited.
-                        for third_start in (second_start + 2..=19usize).step_by(2) {
-                            let third_base = seq.as_bytes()[third_start - 1] as char;
-                            let third_alt = if third_base == 'A' { 'G' } else { 'A' };
-                            for third in [
-                                format!("{third_start}del"),
-                                format!("{third_start}{third_base}>{third_alt}"),
-                            ] {
-                                // The description, its parse and the bases it
-                                // denotes do not depend on the shuffle direction,
-                                // so each is computed once per case rather than
-                                // once per direction. A parse failure is folded
-                                // into the `ApplyFailure` the string-taking oracle
-                                // would have reported for it, so the tallying below
-                                // is unchanged — including that it counts a
-                                // declined input once *per direction*, which is the
-                                // quantity the share assertion is written against.
-                                let input = format!("TEMPLATE:g.[{first};{second};{third}]");
-                                let parsed =
-                                    parse_hgvs(&input).map_err(|_| ApplyFailure::Unparseable);
-                                let input_applied =
-                                    parsed.as_ref().map_err(|c| *c).and_then(|variant| {
-                                        apply_parsed_reason(&template, &seq, variant)
-                                    });
-                                for (direction, normalizer) in &normalizers {
-                                    let want = match &input_applied {
-                                        Ok(want) => want.as_str(),
-                                        Err(cause) => {
-                                            // An input this sweep cannot speak
-                                            // for. Tallied by cause so the share
-                                            // asserted below can be read.
-                                            *by_cause.entry(cause_name(*cause)).or_default() += 1;
-                                            input_declined += 1;
-                                            continue;
-                                        }
-                                    };
-                                    let variant = parsed
-                                        .as_ref()
-                                        .expect("a parse failure is reported as a decline above");
-                                    let Ok(normalized) = normalizer.normalize(variant) else {
-                                        input_declined += 1;
-                                        *by_cause.entry("normalize-declined").or_default() += 1;
-                                        continue;
-                                    };
-                                    let output = format!("{normalized}");
-                                    checked += 1;
 
-                                    match apply_reason(&template, &seq, &output) {
-                                        Ok(got) if got == want => {}
-                                        Ok(got) => changed.push(format!(
-                                            "{input} [{direction:?}] -> {output} \
+    // One rayon task per drawn sequence — see the genomic two-member sweep
+    // above for why this is byte-identical rather than merely equivalent.
+    // Parallelizing only ONE sweep in this file was measured as a wash: the
+    // `Exhaustive sweeps` job runs several at once, so the parallel one simply
+    // took cores from its serial siblings (job 1m42s -> 1m46s, with two
+    // siblings newly crossing the SLOW line). They have to go together.
+    let per_sequence: Vec<SweepTally> = sweep_sequences(seeds)
+        .into_par_iter()
+        .map(|seq| {
+            let mut checked = 0usize;
+            let mut input_declined = 0usize;
+            let mut overlapping: Vec<String> = Vec::new();
+            let mut changed: Vec<String> = Vec::new();
+            // Per-cause tallies for the *input* declines, so the share below is
+            // decomposable rather than another single opaque number.
+            let mut by_cause: std::collections::BTreeMap<&'static str, usize> =
+                std::collections::BTreeMap::new();
+            // One provider and one normalizer per direction per sequence. The
+            // innermost loop used to build `genomic_provider(&seq)` three times per
+            // case — for the input apply, the normalizer and the output apply.
+            let template = genomic_provider(&seq);
+            let normalizers =
+                [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime].map(|direction| {
+                    (
+                        direction,
+                        Normalizer::with_config(
+                            template.clone(),
+                            NormalizeConfig::default()
+                                .with_direction(direction)
+                                .allow_crossing_boundaries(),
+                        ),
+                    )
+                });
+            // Even positions only, and the bound says 8 rather than 9 because
+            // `step_by(2)` from 2 can never reach an odd endpoint — writing `..=9`
+            // named a position this loop does not visit. Sampling every other
+            // position is deliberate (the third member's loop below multiplies this
+            // one), but the range should not claim coverage it does not provide.
+            for first_start in (2..=8usize).step_by(2) {
+                let first_base = seq.as_bytes()[first_start - 1] as char;
+                let first_next = seq.as_bytes()[first_start] as char;
+                let first_payload = ['A', 'C', 'G', 'T']
+                    .into_iter()
+                    .find(|b| *b != first_base && *b != first_next)
+                    .expect("four bases, at most two excluded");
+                let firsts = [
+                    format!("{first_start}del"),
+                    format!("{first_start}dup"),
+                    format!("{first_start}_{}ins{first_payload}", first_start + 1),
+                ];
+                for first in &firsts {
+                    // Second and third members walk the remaining positions, each
+                    // separated from its predecessor by at least one unchanged base
+                    // so every case starts as three genuinely separate members.
+                    for second_start in first_start + 2..=14usize {
+                        let second_base = seq.as_bytes()[second_start - 1] as char;
+                        let second_alt = if second_base == 'A' { 'G' } else { 'A' };
+                        for second in [
+                            format!("{second_start}del"),
+                            format!("{second_start}{second_base}>{second_alt}"),
+                            format!("{second_start}dup"),
+                        ] {
+                            // `..=19` is right here, unlike the `first_start` loop
+                            // above: `second_start` walks every integer, so when it
+                            // is odd this range is odd-valued and 19 IS visited.
+                            for third_start in (second_start + 2..=19usize).step_by(2) {
+                                let third_base = seq.as_bytes()[third_start - 1] as char;
+                                let third_alt = if third_base == 'A' { 'G' } else { 'A' };
+                                for third in [
+                                    format!("{third_start}del"),
+                                    format!("{third_start}{third_base}>{third_alt}"),
+                                ] {
+                                    // The description, its parse and the bases it
+                                    // denotes do not depend on the shuffle direction,
+                                    // so each is computed once per case rather than
+                                    // once per direction. A parse failure is folded
+                                    // into the `ApplyFailure` the string-taking oracle
+                                    // would have reported for it, so the tallying below
+                                    // is unchanged — including that it counts a
+                                    // declined input once *per direction*, which is the
+                                    // quantity the share assertion is written against.
+                                    let input = format!("TEMPLATE:g.[{first};{second};{third}]");
+                                    let parsed =
+                                        parse_hgvs(&input).map_err(|_| ApplyFailure::Unparseable);
+                                    let input_applied =
+                                        parsed.as_ref().map_err(|c| *c).and_then(|variant| {
+                                            apply_parsed_reason(&template, &seq, variant)
+                                        });
+                                    for (direction, normalizer) in &normalizers {
+                                        let want = match &input_applied {
+                                            Ok(want) => want.as_str(),
+                                            Err(cause) => {
+                                                // An input this sweep cannot speak
+                                                // for. Tallied by cause so the share
+                                                // asserted below can be read.
+                                                *by_cause.entry(cause_name(*cause)).or_default() +=
+                                                    1;
+                                                input_declined += 1;
+                                                continue;
+                                            }
+                                        };
+                                        let variant = parsed.as_ref().expect(
+                                            "a parse failure is reported as a decline above",
+                                        );
+                                        let Ok(normalized) = normalizer.normalize(variant) else {
+                                            input_declined += 1;
+                                            *by_cause.entry("normalize-declined").or_default() += 1;
+                                            continue;
+                                        };
+                                        let output = format!("{normalized}");
+                                        checked += 1;
+
+                                        match apply_reason(&template, &seq, &output) {
+                                            Ok(got) if got == want => {}
+                                            Ok(got) => changed.push(format!(
+                                                "{input} [{direction:?}] -> {output} \
                                              (want {want}, got {got})"
-                                        )),
-                                        Err(cause) => overlapping.push(format!(
-                                            "{input} [{direction:?}] -> {output} ({cause:?})"
-                                        )),
+                                            )),
+                                            Err(cause) => overlapping.push(format!(
+                                                "{input} [{direction:?}] -> {output} ({cause:?})"
+                                            )),
+                                        }
                                     }
                                 }
                             }
@@ -1809,8 +1881,31 @@ fn no_three_member_allele_normalizes_to_a_different_sequence() {
                     }
                 }
             }
-        }
+            SweepTally {
+                checked,
+                input_declined,
+                by_cause,
+                overlapping,
+                changed,
+                ..SweepTally::default()
+            }
+        })
+        .collect();
+
+    let mut total = SweepTally::default();
+    for tally in per_sequence {
+        total.absorb(tally);
     }
+    total.overlapping.truncate(REPORTED);
+    total.changed.truncate(REPORTED);
+    let SweepTally {
+        checked,
+        input_declined,
+        by_cause,
+        overlapping,
+        changed,
+        ..
+    } = total;
 
     const CASES_PER_SEED_FLOOR: usize = 2_000;
     let floor = CASES_PER_SEED_FLOOR * seeds as usize;
