@@ -5,14 +5,23 @@
 //!
 //! # Coordinate System
 //!
-//! This module handles mixed coordinate systems from cdot:
+//! This module handles mixed coordinate systems, and the basis depends on the
+//! **layer** a value was read from, not merely on the field's name. The rows
+//! below are labelled by layer for that reason.
 //!
-//! | Field | Basis | Notes |
-//! |-------|-------|-------|
-//! | cdot genomic (genome_start/genome_end) | 0-based | Half-open `[start, end)` |
-//! | cdot transcript (tx_start/tx_end) | 1-based | Inclusive |
-//! | cdot CDS (cds_start/cds_end) | 0-based | Half-open |
-//! | Mutalyzer cache coordinates | Mixed | Follows mutalyzer conventions |
+//! | Layer | Field | Basis | Notes |
+//! |-------|-------|-------|-------|
+//! | internal [`CdotTranscript`] | genomic (`genome_start`/`genome_end`) | 0-based | Half-open `[start, end)` |
+//! | internal [`CdotTranscript`] | transcript (`tx_start`/`tx_end`) | 0-based | Half-open `[start, end)`, since #742 |
+//! | internal [`CdotTranscript`] | CDS (`cds_start`/`cds_end`) | 0-based | Half-open `[start, end)` |
+//! | raw cdot JSON | transcript (`tx_start`/`tx_end`) | 1-based | Inclusive; normalized away by `crate::data::cdot` before this module sees it |
+//! | GenBank flat file | all | 1-based | Inclusive; converted in `parse_genbank_record`* |
+//! | Mutalyzer cache | all | 0-based | Half-open, so internal-cdot values copy through verbatim |
+//!
+//! The internal rows are what every function here is handed. Reading the raw
+//! cdot row as if it described them is what #1738 fixed and #1763 corrected the
+//! residue of: `hgvs_pos_to_index` asserts a valid 1-based position, and the
+//! first exon of every internal transcript has `tx_start == 0`.
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
@@ -611,10 +620,23 @@ fn load_fasta_sequences_parallel<P: AsRef<Path>>(
 
 /// Build mutalyzer-compatible annotations JSON from cdot transcript data.
 ///
-/// Coordinate conversion:
-/// - cdot exon coordinates are 1-indexed, inclusive (GenBank-style)
-/// - mutalyzer expects 0-indexed, half-open coordinates
-/// - Convert: start = cdot_start - 1, end = cdot_end (no change for half-open)
+/// # Coordinate basis: internal cdot, NOT GenBank
+///
+/// The [`CdotTranscript`] handed to this function is ferro's **internal**
+/// normalized form (see `crate::data::cdot`), whose transcript coordinates —
+/// the `tx_start`/`tx_end` pair in each exon, and `cds_start`/`cds_end` — are
+/// already **0-based half-open** `[start, end)`, as of #742. Mutalyzer wants
+/// 0-based half-open too, so **no basis conversion is owed here**: the values
+/// are copied through verbatim.
+///
+/// This is deliberately different from the GenBank-sourced blocks in this file
+/// (`parse_genbank_record`, `parse_genbank_record_full`), which read 1-based
+/// inclusive coordinates off a flat-file record and therefore *do* subtract one.
+/// Each conversion site in this file names its source format for that reason.
+///
+/// Applying the GenBank `-1` here is not a rounding error but a hard failure:
+/// `hgvs_pos_to_index` asserts its argument is a valid 1-based position, and the
+/// first exon of every transcript has `tx_start == 0`.
 ///
 /// mol_type is set based on accession prefix:
 /// - NM_/XM_ = mRNA (coding transcripts)
@@ -642,16 +664,14 @@ fn build_annotations_from_cdot(
         ("mRNA", "mRNA", true) // Default to mRNA for unknown types
     };
 
-    // Build exon features from cdot exon data
-    // cdot exons (internal format): [genome_start, genome_end, tx_start, tx_end]
-    // tx_start and tx_end are 1-indexed inclusive, convert to 0-indexed half-open
+    // Build exon features from internal-cdot exon data:
+    //   [genome_start, genome_end, tx_start, tx_end]
+    // tx_start/tx_end are already 0-based half-open (see this function's docs),
+    // which is exactly what mutalyzer wants, so both are copied through as-is.
     let mut exon_features: Vec<serde_json::Value> = Vec::new();
     for (i, exon) in tx.exons.iter().enumerate() {
-        // Convert 1-indexed inclusive to 0-indexed half-open:
-        // - start: subtract 1 (1-indexed -> 0-indexed)
-        // - end: keep as-is (inclusive -> exclusive)
-        let tx_start = hgvs_pos_to_index(exon[2]); // 1-indexed → 0-indexed
-        let tx_end = exon[3] as usize; // Don't subtract 1 for half-open end
+        let tx_start = exon[2] as usize;
+        let tx_end = exon[3] as usize;
         exon_features.push(json!({
             "type": "exon",
             "location": {
@@ -669,7 +689,8 @@ fn build_annotations_from_cdot(
     let mut mrna_features: Vec<serde_json::Value> = Vec::new();
 
     if is_coding && tx.cds_start.is_some() && tx.cds_end.is_some() {
-        // cdot CDS positions (start_codon/stop_codon) are 0-indexed
+        // Internal-cdot CDS positions (start_codon/stop_codon) are 0-based
+        // half-open in transcript space — again no conversion is owed.
         let cds_start = tx.cds_start.map(|p| p as usize).unwrap_or(0);
         let cds_end = tx.cds_end.map(|p| p as usize).unwrap_or(seq_len);
         let protein_id = tx
@@ -1164,6 +1185,11 @@ pub fn fetch_legacy_transcript_versions(
 }
 
 /// Parse a GenBank record to extract sequence and CDS info.
+///
+/// Source format: **GenBank**, whose CDS `start..end` span is 1-based inclusive.
+/// The returned `cds_start`/`cds_end` are converted to 0-based indices, so both
+/// endpoints take a `-1`. Do not carry that conversion over to the
+/// internal-cdot blocks in this file, which are already 0-based half-open.
 fn parse_genbank_record(genbank: &str) -> Option<(String, Option<usize>, Option<usize>, String)> {
     let mut sequence = String::new();
     let mut in_origin = false;
@@ -1225,7 +1251,10 @@ fn parse_genbank_record(genbank: &str) -> Option<(String, Option<usize>, Option<
         return None;
     }
 
-    // Convert to 0-indexed (1-based → 0-based)
+    // Source format: GenBank flat file, whose CDS span is 1-based INCLUSIVE, so
+    // both endpoints are genuinely 1-based positions and both take the `-1`.
+    // (Contrast the internal-cdot blocks in this file, which are already 0-based
+    // half-open and take no conversion — see `build_annotations_from_cdot`.)
     cds_start = cds_start.map(|p| hgvs_pos_to_index(p as u64));
     cds_end = cds_end.map(|p| hgvs_pos_to_index(p as u64));
 
@@ -2840,61 +2869,247 @@ fn build_nc_annotations_with_selectors(
 }
 
 /// Calculate genomic CDS coordinates from transcript CDS and exon mapping.
+///
+/// # Coordinate basis: internal cdot, NOT GenBank
+///
+/// Both the `cds_start`/`cds_end` arguments and the exons' `tx_start`/`tx_end`
+/// are internal-cdot transcript coordinates: **0-based half-open**. No basis
+/// conversion is owed on the transcript side, so containment is a plain
+/// `[t_start, t_end)` test. See `build_annotations_from_cdot`'s docs for why
+/// the GenBank `-1` must not be applied here.
+///
+/// The genomic side is HGVS-value-based half-open, so the last base of an exon
+/// is `g_end - 1` — which is where transcript position `t_start` lands on the
+/// minus strand. Placing a single position is the inverse of
+/// `data::cdot::genomic_to_tx_pos`.
+///
+/// # Only INCLUSIVE endpoints may be placed
+///
+/// That pointwise inverse is order-*preserving* on the plus strand and
+/// order-*reversing* on the minus, so an exclusive endpoint does not survive
+/// it: on the minus strand `cds_end` lands one base **below** the last coding
+/// base rather than one above the first. Both inclusive endpoints —
+/// `cds_start` and `cds_end - 1` — are therefore placed, and the half-open
+/// genomic span is recovered afterwards as `(min, max + 1)`, which means the
+/// same thing on either strand. See #1763.
 fn calculate_genomic_cds(
     tx: &CdotTranscript,
     cds_start: u64,
     cds_end: u64,
 ) -> Option<(usize, usize)> {
-    // cds_start and cds_end are in transcript coordinates (0-indexed)
-    // We need to map them to genomic coordinates using the exon boundaries
+    // An empty CDS names no base, so there is nothing to place. This also keeps
+    // `cds_end - 1` from underflowing when `cds_end == 0`.
+    let cds_last = cds_end.checked_sub(1).filter(|last| *last >= cds_start)?;
 
     // Sort exons by transcript position
     let mut exons: Vec<_> = tx.exons.iter().collect();
     exons.sort_by_key(|e| e[2]); // Sort by tx_start
 
-    let mut g_cds_start: Option<usize> = None;
-    let mut g_cds_end: Option<usize> = None;
+    let mut g_cds_first: Option<usize> = None;
+    let mut g_cds_last: Option<usize> = None;
+
+    // Map a transcript position inside `exon` onto its genomic coordinate.
+    let genomic_of = |exon: &[u64; 4], tx_pos: u64| -> Option<usize> {
+        let (g_start, g_end, t_start, t_end) = (exon[0], exon[1], exon[2], exon[3]);
+        if tx_pos < t_start || tx_pos >= t_end {
+            return None;
+        }
+        let offset = tx_pos - t_start;
+        match tx.strand {
+            crate::reference::Strand::Plus => Some((g_start + offset) as usize),
+            crate::reference::Strand::Minus => {
+                Some((g_end.checked_sub(1)?.checked_sub(offset)?) as usize)
+            }
+            crate::reference::Strand::Unknown => None,
+        }
+    };
 
     for exon in &exons {
-        let g_start = exon[0] as usize;
-        let g_end = exon[1] as usize;
-        let t_start = exon[2]; // 1-indexed in cdot
-        let t_end = exon[3]; // 1-indexed in cdot
-
-        // Convert to 0-indexed transcript coordinates (1-based → 0-based)
-        let t_start_0 = hgvs_pos_to_index(t_start) as u64;
-        let t_end_0 = hgvs_pos_to_index(t_end) as u64;
-
-        // Check if CDS start falls in this exon
-        if g_cds_start.is_none() && cds_start >= t_start_0 && cds_start <= t_end_0 {
-            let offset = (cds_start - t_start_0) as usize;
-            if tx.strand == crate::reference::Strand::Plus {
-                g_cds_start = Some(g_start + offset);
-            } else {
-                g_cds_start = Some(g_end - offset);
-            }
+        if g_cds_first.is_none() {
+            g_cds_first = genomic_of(exon, cds_start);
         }
-
-        // Check if CDS end falls in this exon
-        if g_cds_end.is_none() && cds_end >= t_start_0 && cds_end <= t_end_0 {
-            let offset = (cds_end - t_start_0) as usize;
-            if tx.strand == crate::reference::Strand::Plus {
-                g_cds_end = Some(g_start + offset);
-            } else {
-                g_cds_end = Some(g_end - offset);
-            }
+        if g_cds_last.is_none() {
+            g_cds_last = genomic_of(exon, cds_last);
         }
     }
 
-    match (g_cds_start, g_cds_end) {
-        (Some(s), Some(e)) => {
-            if s < e {
-                Some((s, e))
-            } else {
-                Some((e, s))
-            }
-        }
+    match (g_cds_first, g_cds_last) {
+        // Both endpoints are inclusive here, so the half-open span runs one
+        // past the higher of the two whichever strand supplied it.
+        (Some(first), Some(last)) => Some((first.min(last), first.max(last) + 1)),
         _ => None,
+    }
+}
+
+/// Guards for the internal-cdot coordinate basis, kept beside the two functions
+/// that read it rather than at the end of this 4,000-line file.
+#[cfg(test)]
+mod cdot_coordinate_basis_tests {
+    use super::*;
+    use crate::reference::Strand;
+
+    /// Build a two-exon plus-strand transcript in the **internal** cdot
+    /// convention: genomic coordinates HGVS-value-based half-open, transcript
+    /// coordinates 0-based half-open — so the first exon's `tx_start` is `0`.
+    ///
+    /// This mirrors `crate::convert::mapper`'s
+    /// `test_cdot_tx_coordinates_are_0_based`, which asserts `exons[0][2] == 0`
+    /// against real cdot data.
+    fn zero_based_two_exon_transcript() -> CdotTranscript {
+        CdotTranscript {
+            gene_name: Some("TESTGENE".to_string()),
+            contig: "NC_000017.11".to_string(),
+            strand: Strand::Plus,
+            // [genome_start, genome_end, tx_start(0-based), tx_end(0-based excl)]
+            exons: vec![[1000, 1073, 0, 73], [2000, 2050, 73, 123]],
+            cds_start: Some(10),
+            cds_end: Some(100),
+            exon_cigars: Vec::new(),
+            gene_id: Some("HGNC:0000".to_string()),
+            protein: Some("NP_000000.1".to_string()),
+            cds_start_incomplete: false,
+        }
+    }
+
+    #[test]
+    fn exon_features_read_internal_cdot_tx_coordinates_as_zero_based() {
+        let tx = zero_based_two_exon_transcript();
+        let annotations = build_annotations_from_cdot("NM_000000.1", 123, &tx);
+
+        let features = annotations["features"][0]["features"][0]["features"]
+            .as_array()
+            .expect("transcript features array");
+        let exons: Vec<&serde_json::Value> =
+            features.iter().filter(|f| f["type"] == "exon").collect();
+        assert_eq!(exons.len(), 2, "both exons should be emitted");
+
+        // The internal format is already 0-based half-open, so the first exon
+        // spans [0, 73) verbatim — no basis conversion is owed.
+        assert_eq!(exons[0]["location"]["start"]["position"], 0);
+        assert_eq!(exons[0]["location"]["end"]["position"], 73);
+        assert_eq!(exons[1]["location"]["start"]["position"], 73);
+        assert_eq!(exons[1]["location"]["end"]["position"], 123);
+    }
+
+    #[test]
+    fn genomic_cds_mapping_reads_internal_cdot_tx_coordinates_as_zero_based() {
+        let tx = zero_based_two_exon_transcript();
+        // cds_start/cds_end are transcript coordinates, 0-based. Exon 1 covers
+        // tx [0, 73) at genome 1000.., so tx 10 -> genome 1010 and tx 20 -> 1020.
+        let (g_start, g_end) =
+            calculate_genomic_cds(&tx, 10, 20).expect("CDS falls inside the first exon");
+        assert_eq!((g_start, g_end), (1010, 1020));
+    }
+
+    /// On the minus strand transcript position `t_start` sits at the exon's
+    /// LAST genomic base, `g_end - 1` — the inverse of
+    /// `data::cdot::genomic_to_tx_pos`, which reads `g_end - 1 - genomic_pos`.
+    ///
+    /// That pointwise inverse is order-*reversing*, so the CDS's exclusive
+    /// `cds_end` must not be pushed through it: the base to place is the last
+    /// coding base, `cds_end - 1`. For CDS `tx [10, 20)` on an exon covering
+    /// genome `[1000, 1073)` = `tx [0, 73)`, the first coding base is
+    /// tx 10 -> g 1062 and the last is tx 19 -> g 1053, so the half-open
+    /// genomic span is `[1053, 1063)`.
+    #[test]
+    fn genomic_cds_mapping_walks_a_minus_strand_exon_from_its_far_end() {
+        let mut tx = zero_based_two_exon_transcript();
+        tx.strand = Strand::Minus;
+
+        let (lo, hi) = calculate_genomic_cds(&tx, 10, 20).expect("CDS falls inside the first exon");
+        assert_eq!((lo, hi), (1053, 1063), "result is returned low-to-high");
+    }
+
+    /// A geometrically real minus-strand transcript: transcript coordinates
+    /// increase as genomic coordinates *decrease*, so the exon holding
+    /// `tx [0, 50)` is the genomically higher of the two. Flipping only the
+    /// strand field of [`zero_based_two_exon_transcript`] does not produce this
+    /// shape, which is why the minus-strand span defect survived a test that
+    /// did.
+    fn minus_strand_two_exon_transcript() -> CdotTranscript {
+        CdotTranscript {
+            gene_name: Some("TESTGENE".to_string()),
+            contig: "NC_000017.11".to_string(),
+            strand: Strand::Minus,
+            // [genome_start, genome_end, tx_start(0-based), tx_end(0-based excl)]
+            exons: vec![[2000, 2050, 0, 50], [1000, 1073, 50, 123]],
+            cds_start: Some(10),
+            cds_end: Some(100),
+            exon_cigars: Vec::new(),
+            gene_id: Some("HGNC:0000".to_string()),
+            protein: Some("NP_000000.1".to_string()),
+            cds_start_incomplete: false,
+        }
+    }
+
+    /// End-to-end: the CDS feature emitted for a minus-strand transcript must
+    /// cover its first and last coding base and no more.
+    ///
+    /// CDS `tx [10, 100)`. The first coding base is tx 10, which falls in the
+    /// exon covering `genome [2000, 2050)` = `tx [0, 50)`, so it is
+    /// `2050 - 1 - 10 = 2039`. The last coding base is tx 99, in the exon
+    /// covering `genome [1000, 1073)` = `tx [50, 123)`, so it is
+    /// `1073 - 1 - (99 - 50) = 1023`. The half-open genomic span is therefore
+    /// `[1023, 2040)`.
+    ///
+    /// Mapping the *exclusive* `cds_end` through the order-reversing inverse
+    /// instead yields `(1022, 2039)` — one base low at both ends, dropping the
+    /// last coding base and claiming one base past the first.
+    #[test]
+    fn genomic_cds_span_on_a_minus_strand_covers_its_first_and_last_coding_base() {
+        let tx = minus_strand_two_exon_transcript();
+
+        assert_eq!(
+            calculate_genomic_cds(&tx, 10, 100),
+            Some((1023, 2040)),
+            "half-open genomic span spanning the first and last coding base"
+        );
+
+        // And end-to-end, through the only caller: the emitted CDS feature is
+        // in genomic space, so it carries the span verbatim.
+        let annotations =
+            build_nc_annotations_with_selectors("NC_000017.11", 100_000, &[("NM_000000.1", &tx)]);
+        let features = annotations["features"][0]["features"][0]["features"]
+            .as_array()
+            .expect("transcript features array");
+        let cds = features
+            .iter()
+            .find(|f| f["type"] == "CDS")
+            .expect("a coding transcript with a CDS emits a CDS feature");
+        assert_eq!(cds["location"]["start"]["position"], 1023);
+        assert_eq!(cds["location"]["end"]["position"], 2040);
+        assert_eq!(cds["location"]["strand"], -1);
+    }
+
+    /// A CDS flush with the transcript's 3' end names a real last base, so it
+    /// must be placed rather than declined. `cds_end == 123` on a 123-base
+    /// transcript is the exclusive end; the last coding base is tx 122, the
+    /// final base of the second exon.
+    #[test]
+    fn genomic_cds_mapping_places_a_cds_flush_with_the_transcript_end() {
+        let tx = zero_based_two_exon_transcript();
+        // Exon 2 covers genome [2000, 2050) = tx [73, 123), so tx 122 -> 2049
+        // and the half-open span ends at 2050.
+        assert_eq!(calculate_genomic_cds(&tx, 10, 123), Some((1010, 2050)));
+    }
+
+    /// An empty CDS names no base, so there is nothing to place. Without the
+    /// guard, `cds_end - 1` would underflow (`cds_end == 0`) or invert the span
+    /// (`cds_start == cds_end`).
+    #[test]
+    fn genomic_cds_mapping_declines_a_cds_that_names_no_base() {
+        let tx = zero_based_two_exon_transcript();
+        assert!(calculate_genomic_cds(&tx, 0, 0).is_none());
+        assert!(calculate_genomic_cds(&tx, 10, 10).is_none());
+    }
+
+    /// A transcript position past the last exon still has no genomic
+    /// coordinate: `cds_end == 200` on a 123-base transcript names a last base
+    /// (tx 199) that no exon covers.
+    #[test]
+    fn genomic_cds_mapping_declines_a_position_past_the_last_exon() {
+        let tx = zero_based_two_exon_transcript();
+        assert!(calculate_genomic_cds(&tx, 10, 200).is_none());
     }
 }
 
