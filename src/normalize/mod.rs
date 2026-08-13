@@ -73,7 +73,6 @@ use crate::hgvs::interval::{CdsInterval, Interval, ProtInterval};
 use crate::hgvs::location::{
     AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
 };
-use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
     Accession, AllelePhase, AlleleVariant, CdsVariant, GenomeVariant, HgvsVariant, LocEdit,
@@ -383,12 +382,13 @@ fn check_tx_pos_past_end(
     None
 }
 
-/// Check if a TxPos has an unknown (?) offset sentinel value
+/// Check if a TxPos has an unknown (?) offset sentinel value.
+///
+/// Delegates to [`TxPos::has_unknown_offset`] so the predicate has one
+/// definition. It used to be spelled out here as well, and a rule written in
+/// several places is how they drift apart.
 fn has_unknown_offset_tx(pos: &TxPos) -> bool {
-    matches!(
-        pos.offset,
-        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
-    )
+    pos.has_unknown_offset()
 }
 
 /// If `pos.base` lies past the contig length on a mitochondrial accession,

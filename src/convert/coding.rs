@@ -43,7 +43,13 @@ pub fn validate_cds_pos(pos: &CdsPos, transcript: &Transcript) -> Result<(), Fer
     } else if pos.base < 0 {
         // 5' UTR position
         let utr5_length = (cds_start - 1) as i64;
-        if pos.base.abs() > utr5_length {
+        // `unsigned_abs` for the same reason as the offset checks below:
+        // `i64::MIN.abs()` overflows, and `CdsPos`'s fields are public, so a
+        // library caller can hand this a magnitude no parse can produce
+        // (`parse_cds_pos` negates a `digit1`, whose minimum is
+        // `-i64::MAX`). `utr5_length` is non-negative by construction, so
+        // `max(0)` only makes the `u64` comparison well-typed (#1767).
+        if pos.base.unsigned_abs() > utr5_length.max(0) as u64 {
             return Err(FerroError::InvalidCoordinates {
                 msg: format!(
                     "5' UTR position {} is out of range (min -{})",
@@ -61,9 +67,20 @@ pub fn validate_cds_pos(pos: &CdsPos, transcript: &Transcript) -> Result<(), Fer
         });
     }
 
+    // An unknown offset (`c.100+?` / `c.100-?`) is not a distance, so it is not
+    // a coordinate this can validate — say so rather than reporting it as an
+    // out-of-range number (#1767).
+    if pos.has_unknown_offset() {
+        return Err(FerroError::InvalidCoordinates {
+            msg: "Unknown intronic offset (`+?` / `-?`) denotes no transcript coordinate"
+                .to_string(),
+        });
+    }
+
     // Validate intronic offset if present
     if let Some(offset) = pos.offset {
-        if offset.abs() > 1_000_000 {
+        // `unsigned_abs` because `i64::MIN.abs()` overflows (#1767).
+        if offset.unsigned_abs() > 1_000_000 {
             // Sanity check for very large offsets
             return Err(FerroError::InvalidCoordinates {
                 msg: format!("Intronic offset {} is unreasonably large", offset),

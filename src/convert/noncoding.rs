@@ -36,11 +36,22 @@ pub fn validate_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<(), Ferro
         });
     }
 
+    // An unknown offset (`n.100+?` / `n.100-?`) is not a distance, so it is
+    // not a coordinate this can validate — say so rather than reporting it as
+    // an out-of-range number (#1767).
+    if pos.has_unknown_offset() {
+        return Err(FerroError::InvalidCoordinates {
+            msg: "Unknown intronic offset (`+?` / `-?`) denotes no transcript coordinate"
+                .to_string(),
+        });
+    }
+
     // Check if offset is within bounds (intronic positions)
     if let Some(offset) = pos.offset {
         // For non-coding transcripts, offsets are typically not used
-        // but we still validate they're reasonable
-        if offset.abs() > 100000 {
+        // but we still validate they're reasonable. `unsigned_abs` because
+        // `i64::MIN.abs()` overflows.
+        if offset.unsigned_abs() > 100_000 {
             return Err(FerroError::InvalidCoordinates {
                 msg: format!("Offset {} is unreasonably large", offset),
             });
@@ -121,14 +132,20 @@ impl IntronicConsequence {
         }
     }
 
-    /// Create from a CDS position with intronic offset
+    /// Create from a CDS position with intronic offset.
+    ///
+    /// Returns `None` for an unknown offset (`c.100+?` / `c.100-?`): every
+    /// variant of this enum states a distance from the exon boundary, and the
+    /// sentinels denote a position unbounded in one direction, so there is no
+    /// distance to state (#1767). `is_intronic` is satisfied by a sentinel, so
+    /// this guard is what keeps it out — not the check above.
     pub fn from_cds_pos(pos: &CdsPos) -> Option<Self> {
-        if !pos.is_intronic() {
+        if !pos.is_intronic() || pos.has_unknown_offset() {
             return None;
         }
 
         let offset = pos.offset?;
-        let abs_offset = offset.abs();
+        let abs_offset = offset.unsigned_abs();
 
         Some(if offset > 0 {
             // 5' end of intron (splice donor side)
@@ -159,14 +176,17 @@ impl IntronicConsequence {
         })
     }
 
-    /// Create from a transcript position with intronic offset
+    /// Create from a transcript position with intronic offset.
+    ///
+    /// Declines an unknown offset (`n.100+?` / `n.100-?`) for the same reason
+    /// as [`IntronicConsequence::from_cds_pos`] (#1767).
     pub fn from_tx_pos(pos: &TxPos) -> Option<Self> {
-        if !pos.is_intronic() {
+        if !pos.is_intronic() || pos.has_unknown_offset() {
             return None;
         }
 
         let offset = pos.offset?;
-        let abs_offset = offset.abs();
+        let abs_offset = offset.unsigned_abs();
 
         Some(if offset > 0 {
             if abs_offset <= 2 {
@@ -247,9 +267,18 @@ pub enum IntronicRegion {
 }
 
 impl IntronicRegion {
-    /// Create from an offset value
+    /// Create from a *measured* offset value.
+    ///
+    /// The argument is a distance from the exon boundary, so the unknown-offset
+    /// sentinels are out of domain: screen them with
+    /// [`CdsPos::has_unknown_offset`] / [`TxPos::has_unknown_offset`] before
+    /// calling, as [`IntronicRegion::from_cds_pos`] and
+    /// [`IntronicRegion::from_tx_pos`] do. The magnitude is taken with
+    /// `unsigned_abs`, so no input can overflow it (#1767); a sentinel passed
+    /// here anyway lands in `DeepIntronic`, which is a distance claim its input
+    /// does not support.
     pub fn from_offset(offset: i64) -> Self {
-        let abs_offset = offset.abs();
+        let abs_offset = offset.unsigned_abs();
         if abs_offset <= 2 {
             Self::CanonicalSpliceSite
         } else if abs_offset <= 20 {
@@ -261,13 +290,24 @@ impl IntronicRegion {
         }
     }
 
-    /// Create from a CDS position
+    /// Create from a CDS position.
+    ///
+    /// Returns `None` for an unknown offset — every variant of this enum names
+    /// a distance band, and a sentinel supports none of them (#1767).
     pub fn from_cds_pos(pos: &CdsPos) -> Option<Self> {
+        if pos.has_unknown_offset() {
+            return None;
+        }
         pos.offset.map(Self::from_offset)
     }
 
-    /// Create from a transcript position
+    /// Create from a transcript position.
+    ///
+    /// Declines an unknown offset, as [`IntronicRegion::from_cds_pos`] does.
     pub fn from_tx_pos(pos: &TxPos) -> Option<Self> {
+        if pos.has_unknown_offset() {
+            return None;
+        }
         pos.offset.map(Self::from_offset)
     }
 }

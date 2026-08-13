@@ -101,6 +101,27 @@ pub const OFFSET_UNKNOWN_POSITIVE: i64 = i64::MAX;
 /// Sentinel value for unknown negative offset (`-?` in HGVS notation)
 pub const OFFSET_UNKNOWN_NEGATIVE: i64 = i64::MIN;
 
+/// Whether a raw offset is one of the unknown-offset sentinels rather than a
+/// measured intronic distance.
+///
+/// The scalar form of [`CdsPos::has_unknown_offset`] /
+/// [`TxPos::has_unknown_offset`], for the entry points that take a bare `i64`.
+/// Those two methods delegate here so the rule has **one** definition — it was
+/// previously spelled out at each site, which is how such rules drift apart.
+///
+/// Anything measuring or classifying an offset must ask this first: the
+/// sentinels are `i64::MAX` / `i64::MIN`, so using one as a distance overflows
+/// (`i64::MIN.abs()` panics under `overflow-checks` and wraps to a *negative*
+/// value in release), and per the spec they denote a position unbounded in one
+/// direction, from which no distance can be derived at all (#1087, #1767).
+///
+/// [`CdsPos::has_unknown_offset`]: crate::hgvs::location::CdsPos::has_unknown_offset
+/// [`TxPos::has_unknown_offset`]: crate::hgvs::location::TxPos::has_unknown_offset
+#[inline]
+pub fn is_unknown_offset(offset: i64) -> bool {
+    offset == OFFSET_UNKNOWN_POSITIVE || offset == OFFSET_UNKNOWN_NEGATIVE
+}
+
 #[inline]
 fn parse_offset(input: &str) -> IResult<&str, i64> {
     let (input, sign) = alt((char('+'), char('-'))).parse(input)?;
