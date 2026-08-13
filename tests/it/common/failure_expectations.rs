@@ -318,7 +318,8 @@ pub fn bless(path: &Path, check: &FixtureCheck<'_>) -> BlessReport {
         panic!(
             "refusing to bless {}: the fixture produced 0 inputs, so this run \
              carries no evidence about the {} curated expected failure(s). \
-             Check that the fixture data is present (Git LFS) and re-run.",
+             Check that the fixture data is present \
+             (scripts/fetch-test-fixtures.sh) and re-run.",
             path.display(),
             snapshot.expected_failures.len()
         );

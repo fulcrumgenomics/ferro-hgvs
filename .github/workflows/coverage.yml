@@ -34,7 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          lfs: true
+          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
+          # The bulk corpora this run reads are fetched from the
+          # `test-fixtures-v1` release by the step below.
           submodules: true
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -78,7 +80,21 @@ jobs:
           # cache step at least runs first; here the hazardous order is the one
           # already written.
           cache-bin: "false"
+      # A separate workflow, so it cannot consume `ci.yml`'s `bulk-fixtures`
+      # artifact — it fetches the same four release assets itself. Unmetered, so
+      # the second fetch costs nothing that LFS used to charge for.
+      #
+      # `set -euo pipefail` is implied by the script's own `set -e`; a failed
+      # download, a digest mismatch or a missing asset exits non-zero and fails
+      # the job, which is required: the bulk suites skip green without their
+      # fixtures, so a quiet failure would drop that coverage from the coverage
+      # report while looking like a pass.
+      - name: Fetch and verify the bulk fixtures
+        run: scripts/fetch-test-fixtures.sh
       - name: Run coverage
+        env:
+          # Absence of a bulk fixture fails the run rather than skipping it.
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
           cargo llvm-cov --features dev --codecov --output-path codecov.json
           cargo llvm-cov report --html --output-dir coverage

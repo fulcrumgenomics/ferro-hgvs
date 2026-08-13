@@ -9,10 +9,12 @@
 //! multi-member cis alleles. Everything else exercises the per-member path.
 //!
 //! Those 592 are the only real-world evidence the repo has for that code path,
-//! and they currently sit inside Git-LFS corpora whose test modules *skip green*
+//! and they currently sit inside bulk corpora whose test modules *skip green*
 //! when the fixtures are absent (`clinvar_hgvs_tests`, `cmrg_exhaustive_tests`,
-//! `paraphase_exhaustive_tests` all `return` on a missing file). So on a
-//! checkout without LFS the evidence is silently invisible.
+//! `paraphase_exhaustive_tests` all `return` on a missing file). Those corpora
+//! are not in the git tree — they are release assets fetched by
+//! `scripts/fetch-test-fixtures.sh` — so on a checkout that has not fetched
+//! them the evidence is silently invisible.
 //!
 //! Extracting them into one small committed fixture makes the axis
 //! unconditional: `multi_member_cis_axis` reads the fixture, not the corpora,
@@ -28,8 +30,9 @@
 //!
 //! `--check` is a real gate here, unlike for the generated spec artifacts: the
 //! output **is** committed, so an absent or stale file is drift with a
-//! baseline to drift from. Requires the LFS fixtures; without them it reports
-//! which are missing and exits non-zero rather than writing a truncated file.
+//! baseline to drift from. Requires the bulk fixtures
+//! (`scripts/fetch-test-fixtures.sh`); without them it reports which are missing
+//! and exits non-zero rather than writing a truncated file.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -202,7 +205,8 @@ fn harvest() -> Result<Fixture, String> {
     if !missing.is_empty() {
         return Err(format!(
             "missing bulk corpora, so the harvest would be silently short: {}\n\
-             These are Git-LFS files; run `git lfs pull` and retry.",
+             These are release assets, not git objects; run \
+             `scripts/fetch-test-fixtures.sh` and retry.",
             missing.join(", ")
         ));
     }

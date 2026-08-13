@@ -5,9 +5,11 @@
 //! or the member-ordering rules. `examples/harvest_multi_member_cis.rs` swept
 //! all four bulk corpora for inputs that do: **592 out of 9 949 738 rows**.
 //! Those 592 are the entire real-world evidence base for that code path, and
-//! before this module they lived only inside Git-LFS corpora whose test suites
-//! *skip green* when the fixtures are absent — so on a checkout without LFS the
-//! evidence was silently invisible.
+//! before this module they lived only inside bulk corpora whose test suites
+//! *skip green* when the fixtures are absent — and those corpora are not in the
+//! git tree (they are release assets, fetched by
+//! `scripts/fetch-test-fixtures.sh`), so on a checkout that had not fetched them
+//! the evidence was silently invisible.
 //!
 //! The harvested fixture is committed, so this module runs everywhere.
 //!

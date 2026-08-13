@@ -124,8 +124,8 @@ Minimal commands to run a small comparison (for experienced users).
 > - For full ClinVar testing, see [Prepare All Tools](#prepare-all-tools)
 
 ```bash
-# Clone (skip large LFS files for faster setup)
-GIT_LFS_SKIP_SMUDGE=1 git clone <repo-url>
+# Clone (the large bulk corpora are NOT in the tree; see below)
+git clone <repo-url>
 cd ferro-hgvs
 
 # Build
@@ -1151,12 +1151,14 @@ The 1,983 normalize failures break down as:
 
 ## Troubleshooting
 
-### Clone is slow
+### The bulk ClinVar corpora are missing
 
-LFS objects are large. Skip them for faster setup:
+They are not in the git tree — they are hosted as assets on the
+`test-fixtures-v1` release, because Git LFS bandwidth is metered even on a
+public repository. Fetch and verify them with:
 
 ```bash
-GIT_LFS_SKIP_SMUDGE=1 git clone <repo-url>
+scripts/fetch-test-fixtures.sh
 ```
 
 ### Docker not found

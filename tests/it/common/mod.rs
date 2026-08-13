@@ -1,6 +1,10 @@
 //! Shared test infrastructure for ferro-hgvs integration tests.
 //!
 //! Exposed sub-modules:
+//! - `bulk_fixtures`: the one place that decides what an ABSENT bulk corpus
+//!   means. Those four fixtures are release assets rather than git objects, and
+//!   every suite reading them skips green without them, so
+//!   `FERRO_REQUIRE_BULK_FIXTURES` promotes the skip to a failure in CI.
 //! - `cis_apply_oracle`: the SPDI-based apply oracle the sibling-crossing
 //!   cis-allele tests use to check that normalization did not change the
 //!   sequence a description denotes, plus `sweep_sequences`, the deterministic
@@ -29,6 +33,7 @@
 //! a real signal.
 #![allow(dead_code)]
 
+pub mod bulk_fixtures;
 pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;

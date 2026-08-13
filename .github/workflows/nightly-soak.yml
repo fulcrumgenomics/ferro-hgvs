@@ -53,9 +53,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Neither `lfs: true` nor `submodules: true`, matching `test-build`
-          # and `test-build-soak` in ci.yml. This job only compiles: the 149 MB
-          # of LFS fixtures (`tests/fixtures/bulk/*.gz`,
-          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read at test
+          # and `test-build-soak` in ci.yml. Nothing in this repository is
+          # LFS-tracked any more in any case. This job only compiles: the 156 MB
+          # of bulk corpora (`tests/fixtures/bulk/`,
+          # `tests/fixtures/validation/`, now release assets) are read at test
           # RUNTIME by suites the archive's own consumers never select, and the
           # spec checkout is read at generator RUNTIME. Nothing under `src/` or
           # `tests/` names a path below either at compile time. Both were
@@ -144,13 +145,13 @@ jobs:
       # capture step below reads that tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, matching the `soak` job in ci.yml, which selects
-          # the same `test(proptest)` set. The 149 MB of LFS fixtures
-          # (`tests/fixtures/bulk/*.gz`,
-          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read only by
-          # the bulk-fixture and exhaustive suites, and neither proptest module
-          # touches them — so this was 149 MB fetched eight times a night for
-          # files nothing here opens.
+          # No `lfs: true` and no `bulk-fixtures` artifact, matching the `soak`
+          # job in ci.yml, which selects the same `test(proptest)` set. Nothing
+          # in this repository is LFS-tracked any more; the 156 MB of bulk
+          # corpora (`tests/fixtures/bulk/`, `tests/fixtures/validation/`, now
+          # release assets) are read only by the bulk-fixture and exhaustive
+          # suites, and neither proptest module touches them — so this was
+          # 149 MB fetched eight times a night for files nothing here opens.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1

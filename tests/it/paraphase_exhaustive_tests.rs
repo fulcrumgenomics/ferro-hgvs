@@ -44,9 +44,9 @@ struct ParaphaseCase<'a> {
 
 fn load_fixture_bytes() -> Option<Vec<u8>> {
     let path = "tests/fixtures/validation/paraphase_genes_exhaustive.json.gz";
-    if !std::path::Path::new(path).exists() {
-        return None;
-    }
+    // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
+    // which CI sets — see `common::bulk_fixtures`.
+    crate::common::bulk_fixtures::present_or_skip(path)?;
     // See cmrg_exhaustive_tests::load_fixture_bytes for why we
     // decompress to a Vec and use `from_slice`.
     let file = File::open(path).expect("Failed to open paraphase_genes_exhaustive.json.gz");
@@ -61,10 +61,9 @@ fn load_fixture_bytes() -> Option<Vec<u8>> {
 fn test_paraphase_exhaustive_benchmark() {
     let buf = match load_fixture_bytes() {
         Some(b) => b,
-        None => {
-            eprintln!("Skipping: paraphase_genes_exhaustive.json not found");
-            return;
-        }
+        // `load_fixture_bytes` has already reported the skip, or panicked
+        // under `FERRO_REQUIRE_BULK_FIXTURES`.
+        None => return,
     };
     let fixture: ParaphaseFixture<'_> =
         serde_json::from_slice(&buf).expect("Failed to parse paraphase_genes_exhaustive.json.gz");

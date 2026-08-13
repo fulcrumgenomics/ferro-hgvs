@@ -9,7 +9,8 @@
 #   cargo bench --bench projection      # g→c projection (v0.6.0+)
 # See scripts/perf/README.md for the full version-floor contract.
 #
-# Prereqs: critcmp (cargo install critcmp), git lfs (corpus), a quiet machine.
+# Prereqs: critcmp (cargo install critcmp), the corpus
+# (scripts/fetch-test-fixtures.sh), a quiet machine.
 set -euo pipefail
 
 # Fail fast on a missing dependency before spending minutes on benchmark
@@ -39,7 +40,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -f "$CORPUS" ] || { echo "missing corpus: $CORPUS (git lfs pull?)"; exit 1; }
+[ -f "$CORPUS" ] || { echo "missing corpus: $CORPUS (run scripts/fetch-test-fixtures.sh)"; exit 1; }
 cp "$BENCH_SRC" "${WORK}/benchmarks.rs"
 export FERRO_BENCH_CORPUS="$CORPUS"
 export CARGO_TARGET_DIR="$SHARED_TARGET"
