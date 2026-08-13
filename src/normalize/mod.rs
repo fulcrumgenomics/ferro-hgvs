@@ -154,9 +154,24 @@ fn intron_length_at_tx_boundary(
 /// this helper sees `CdsPos { base: 0, utr3: false }`. Special positions
 /// (pter/qter/cen, which also carry `base == 0`) are similarly skipped by
 /// the caller before reaching this helper. The arm is dead code in the
-/// W4004 path; kept here for parity with `Normalizer::cds_to_tx_pos` so
-/// this helper remains a drop-in replacement if a future caller needs it
-/// outside the bounds check.
+/// W4004 path; it is kept rather than deleted for the reason it was
+/// originally kept — parity with `Normalizer::cds_to_tx_pos`, so this
+/// helper stays a drop-in replacement if a future caller needs it outside
+/// the bounds check.
+///
+/// **That parity is what changed it.** The arm used to return
+/// `cds_start - 1`, mirroring what `cds_to_tx_pos` then did; `cds_to_tx_pos`
+/// now refuses, because `background/numbering.md:31` says there is no
+/// nucleotide `c.0`, so the mirror of it here is `None` — no transcript
+/// boundary — not a boundary derived from a position that names no
+/// nucleotide (#1796). Deleting the arm instead would be worse in both
+/// directions: `base == 0` would fall through to the final branch and
+/// evaluate `cds_start + 0 - 1` in `u64`, underflowing on the very value
+/// this note is about, and the helper would silently stop mirroring the
+/// method it exists to mirror. `None` is also already this helper's
+/// vocabulary for "not answerable", and its caller's contract for it is the
+/// conservative skip documented on `check_cds_pos_past_end` — which is the
+/// right outcome for a position no bounds check can be run against.
 fn cds_pos_to_tx_boundary(
     pos: &CdsPos,
     transcript: &crate::reference::transcript::Transcript,
@@ -173,11 +188,12 @@ fn cds_pos_to_tx_boundary(
         let signed = cds_start as i64 + pos.base;
         u64::try_from(signed).ok()
     } else if pos.base == 0 {
-        // Defensive parity with `cds_to_tx_pos`; see helper-level doc
-        // note. Unreachable from `check_cds_pos_past_end` because the
-        // caller short-circuits on `pos.is_unknown()` (which keys off
+        // Defensive parity with `cds_to_tx_pos`, which refuses this position;
+        // see the helper-level doc note. Unreachable from
+        // `check_cds_pos_past_end` because the caller short-circuits on
+        // `pos.is_unknown()` and `pos.is_special()` (both of which key off
         // `CDS_BASE_UNKNOWN == 0`).
-        Some(cds_start.saturating_sub(1))
+        None
     } else {
         // c.<N>: tx_boundary = cds_start + N - 1
         Some(cds_start + (pos.base as u64) - 1)
@@ -9346,7 +9362,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Convert an RNA position to a transcript-1 position.
     ///
     /// Mirrors `cds_to_tx_pos`. `r.*N` maps to `cds_end + N`, `r.-N` to
-    /// `cds_start + N` (HGVS skips the `0` gap).
+    /// `cds_start + N` (HGVS skips the `0` gap), and `r.0` — which that gap
+    /// means names no nucleotide — is refused, exactly as `cds_to_tx_pos`
+    /// refuses `c.0`. See the arm below and #1796.
     fn rna_to_tx_pos(
         &self,
         pos: &crate::hgvs::location::RnaPos,
@@ -9370,7 +9388,51 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ),
             })
         } else if pos.base == 0 {
-            Ok(cds_start.saturating_sub(1))
+            // The `r.` axis inherits `c.`'s numbering, so it inherits the gap.
+            // The inheritance is what carries a `c.`-axis clause onto this
+            // axis, so cite the lines that establish it rather than only the
+            // gap itself — `background/numbering.md:58`, "nucleotide numbering
+            // for an RNA reference sequence follows that of the associated
+            // coding or non-coding DNA reference sequence; nucleotide `r.123`
+            // relates to `c.123` or `n.123`", with `:61` naming the coding case
+            // this arm is reached on ("in a coding RNA reference sequence,
+            // nucleotide numbering ... follow[s] that of a coding DNA reference
+            // sequence"). `normalize_rna` already cites that same L58/L61 pair
+            // for this proposition. Only then does `:31` — "there is no
+            // nucleotide `c.0`" — reach here, and `r.0` names no nucleotide
+            // either. Refuse rather than answer with `cds_start - 1`, which is
+            // this axis's own `r.-1` and so a different position from the one
+            // asked about. Issue #1796.
+            //
+            // The non-coding half of `:58` needs no arm here: this function is
+            // only called with a resolved `cds_info` (`normalize_rna`'s
+            // `map_in` and `rna_pos_to_txpos` both branch on it first), and the
+            // no-CDS branch already declines `base < 1`, matching `:60`'s
+            // numbering from `r.1`. So the zone set is read off the reference,
+            // never assumed by the parser.
+            //
+            // This arm carried the same `Ok(cds_start.saturating_sub(1))` as
+            // `cds_to_tx_pos` and — unlike its twin — no comment at all, 2,700
+            // lines away from it. Both are load-bearing for a producer that
+            // #1777 fixes; see the fuller note on `cds_to_tx_pos`.
+            //
+            // `RnaPos` has no `special` field and the `utr3` branch above has
+            // already been taken, so `base == 0` is the whole condition here —
+            // and unlike `cds_to_tx_pos`'s twin, `r.{pos}` really does render
+            // as `r.0`, there being no unknown sentinel on this axis.
+            //
+            // Note this message reaches no caller: both call sites discard the
+            // `Err` (`normalize_rna`'s `map_in` and `rna_pos_to_txpos` both
+            // `.ok()` it) and fall back to leaving the description as authored.
+            // It is read only by `rna_to_tx_pos_refuses_a_zero_base`. Keep it
+            // accurate anyway — it is the half of the seam a maintainer
+            // comparing against #1747's mapper-side refusal will read.
+            Err(FerroError::ConversionError {
+                msg: format!(
+                    "cannot resolve r.{pos} to a transcript position: the RNA base is 0, \
+                     which names no nucleotide"
+                ),
+            })
         } else {
             Ok(cds_start + pos.base as u64 - 1)
         }
@@ -12168,10 +12230,52 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ),
             })
         } else if pos.base == 0 {
-            // c.0 is not a valid HGVS position, but historical inputs
-            // can land here. Preserve the legacy mapping (treat as the
-            // last 5'UTR base, equivalent to c.-1) rather than failing.
-            Ok(cds_start.saturating_sub(1))
+            // `background/numbering.md:31` states, inside the definition of the
+            // `c.` axis itself and alongside `-1` and `*1`: "there is no
+            // nucleotide `c.0`". That is an existence claim, not an
+            // input-hygiene rule — the coordinate names no nucleotide, so
+            // there is no transcript position to answer with. Refuse, which is
+            // what `CoordinateMapper::cds_to_tx` does on the mapper side of
+            // the same seam (#1746/#1747) and what `cds_to_protein` has always
+            // done. Issue #1796.
+            //
+            // This arm used to return `cds_start - 1` — this axis's own `c.-1`
+            // — on the stated ground that "historical inputs can land here".
+            // That premise is false: the parser refuses `c.0` outright (#269),
+            // so nothing a user writes reaches this. What reached it was
+            // ferro's own intermediate. `collapse_overlapping_cis_edits`
+            // computed a 5'-edge insertion anchor as `c.1 - 1 = c.0`, and
+            // `cds_start - 1` happens to be the right transcript coordinate
+            // for `c.-1`, so this arm silently repaired that producer's
+            // off-by-one — which is why removing it turned no test red while
+            // making `NM_TEST.1:c.[1A>G;1dup]` emit the malformed intermediate
+            // `c.?_1insG` to the user. The producer is #1772, fixed by #1777,
+            // which this change is stacked on; after it, nothing in the suite
+            // reaches this arm at all.
+            //
+            // Keyed on `base == 0` rather than on `is_unknown()`, deliberately.
+            // The two coincide at every reachable call site — `normalize_cds`
+            // resolves or refuses every special position before converting —
+            // but `is_unknown()` is false for a `pter`/`qter`/`cen` marker,
+            // which also carries `base == 0`, and such a position falling
+            // through to the arm below would evaluate `cds_start + 0 - 1` in
+            // `u64` and underflow. Base 0 names no nucleotide whatever put it
+            // there, so one predicate covers both and no arithmetic runs on a
+            // value that is not a coordinate.
+            // The rendering will usually NOT read `c.0`, and the message says so
+            // rather than asserting a spelling the reader cannot see.
+            // `CDS_BASE_UNKNOWN` *is* the integer 0, so an unknown position
+            // prints `c.?`; a `pter`/`qter`/`cen` marker carries base 0 too and
+            // prints as the marker. A literal `c.0` is the one occupant that
+            // cannot occur, the parser having refused it since #269.
+            Err(FerroError::ConversionError {
+                msg: format!(
+                    "cannot resolve c.{pos} to a transcript position: it carries CDS base 0, \
+                     which names no nucleotide. That value is shared by the `c.?` unknown \
+                     sentinel and by the pter/qter/cen markers, so the position above may not \
+                     render as `0`"
+                ),
+            })
         } else {
             Ok(cds_start + pos.base as u64 - 1)
         }
@@ -15164,6 +15268,203 @@ mod tests {
         };
         let result = normalizer.cds_to_tx_pos(&cds_pos, 10, Some(50));
         assert!(result.is_ok());
+    }
+
+    // ----------------------------------------------------------------------
+    // Issue #1796 — base 0 names no nucleotide, at all three conversion sites
+    // in this file. `background/numbering.md:31`: "there is no nucleotide
+    // `c.0`", stated inside the definition of the axis itself and alongside
+    // `-1` and `*1`, so it is an existence claim rather than an input-hygiene
+    // rule. These assert the REFUSAL, because the end-to-end strings these
+    // sites feed were already correct — the arms were silently repairing a
+    // producer's off-by-one (#1772, fixed by #1777), which is exactly why
+    // removing them turned no test red. See `tests/it/issue_1796_*` for the
+    // half a user sees.
+    // ----------------------------------------------------------------------
+
+    /// `cds_to_tx_pos` must refuse `c.0` rather than answer with `cds_start - 1`
+    /// — which is this axis's own `c.-1`, a *different* position from the one
+    /// asked about.
+    #[test]
+    fn cds_to_tx_pos_refuses_a_zero_base() {
+        let normalizer = Normalizer::new(MockProvider::with_test_data());
+        let zero = CdsPos {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: None,
+        };
+        let err = normalizer
+            .cds_to_tx_pos(&zero, 10, Some(50))
+            .expect_err("c.0 names no nucleotide, so it has no transcript position")
+            .to_string();
+        assert!(
+            err.contains("names no nucleotide"),
+            "the diagnostic must say why, not just that it failed; got: {err}"
+        );
+        // The refusal is not a widened 5'UTR refusal: the neighbours on both
+        // sides of the absent coordinate still convert, and to *different*
+        // transcript positions — `cds_start - 1` and `cds_start`. That pair is
+        // what the old arm collapsed, by handing `c.0` the answer for `c.-1`.
+        assert_eq!(
+            normalizer
+                .cds_to_tx_pos(&CdsPos::new(-1), 10, Some(50))
+                .expect("c.-1 is a real position"),
+            9
+        );
+        assert_eq!(
+            normalizer
+                .cds_to_tx_pos(&CdsPos::new(1), 10, Some(50))
+                .expect("c.1 is a real position"),
+            10
+        );
+    }
+
+    /// An offset does not make the base exist: `c.0+5` is anchored on a
+    /// position that names nothing, so there is nothing for the offset to be
+    /// measured from. Mirrors the guard `#1747` puts on `cds_to_tx`.
+    #[test]
+    fn cds_to_tx_pos_refuses_a_zero_base_carrying_an_offset() {
+        let normalizer = Normalizer::new(MockProvider::with_test_data());
+        let zero_with_offset = CdsPos {
+            base: 0,
+            offset: Some(5),
+            utr3: false,
+            special: None,
+        };
+        // `is_err()` alone would pass on any failure — including one from an
+        // unrelated arm — so pin the reason, as the sibling tests here do.
+        let err = normalizer
+            .cds_to_tx_pos(&zero_with_offset, 10, Some(50))
+            .expect_err("an offset does not make the anchor base exist")
+            .to_string();
+        assert!(
+            err.contains("names no nucleotide"),
+            "the refusal must be the base-0 one, not an incidental failure; got: {err}"
+        );
+    }
+
+    /// A special marker (`pter`/`qter`/`cen`) carries `base == 0` too, and is
+    /// resolved or refused by `normalize_cds` long before reaching here — so
+    /// this pins the arm's *predicate*, not a live path.
+    ///
+    /// It is worth pinning because it is the reason the arm keys on
+    /// `base == 0` and not on `CdsPos::is_unknown()`, which the reachable case
+    /// would otherwise suggest. `is_unknown()` is false when `special` is set,
+    /// so keying on it would drop a marker through to the final branch, where
+    /// `cds_start + 0 - 1` underflows in `u64`. Refusing covers both occupants
+    /// of the value and runs no arithmetic on either.
+    #[test]
+    fn cds_to_tx_pos_refuses_a_special_marker_rather_than_underflowing() {
+        let normalizer = Normalizer::new(MockProvider::with_test_data());
+        let pter = CdsPos {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: Some(crate::hgvs::location::SpecialPosition::Pter),
+        };
+        assert!(
+            !pter.is_unknown(),
+            "precondition: a marker is not `unknown`"
+        );
+        let err = normalizer
+            .cds_to_tx_pos(&pter, 10, Some(50))
+            .expect_err("a marker carries no numeric coordinate, so it has no transcript position")
+            .to_string();
+        assert!(
+            err.contains("names no nucleotide"),
+            "the refusal must be the base-0 one, not an incidental failure; got: {err}"
+        );
+        // A marker renders as `pter`, never as `0`, so the diagnostic must not
+        // claim the reader is looking at a zero. The message says which
+        // occupants share the value instead.
+        assert!(
+            err.contains("pter") && err.contains("markers"),
+            "the diagnostic must account for the rendering the caller sees; got: {err}"
+        );
+    }
+
+    /// The `r.` axis inherits `c.`'s numbering and so inherits the gap. This
+    /// arm is the one that carried no comment at all — 2,700 lines from its
+    /// `cds_` twin, under a doc saying only "Mirrors `cds_to_tx_pos`" — which
+    /// made it the copy most likely to be "cleaned up" into something wrong.
+    #[test]
+    fn rna_to_tx_pos_refuses_a_zero_base() {
+        let normalizer = Normalizer::new(MockProvider::with_test_data());
+        let err = normalizer
+            .rna_to_tx_pos(&crate::hgvs::location::RnaPos::new(0), 10, Some(50))
+            .expect_err("r.0 names no nucleotide, so it has no transcript position")
+            .to_string();
+        assert!(
+            err.contains("names no nucleotide"),
+            "the diagnostic must say why, not just that it failed; got: {err}"
+        );
+        // Same anti-widening control as the `c.` case above.
+        assert_eq!(
+            normalizer
+                .rna_to_tx_pos(&crate::hgvs::location::RnaPos::new(-1), 10, Some(50))
+                .expect("r.-1 is a real position"),
+            9
+        );
+        assert_eq!(
+            normalizer
+                .rna_to_tx_pos(&crate::hgvs::location::RnaPos::new(1), 10, Some(50))
+                .expect("r.1 is a real position"),
+            10
+        );
+    }
+
+    /// The free helper exists to mirror `cds_to_tx_pos`, so it mirrors the
+    /// refusal: `None`, which is already its vocabulary for "not answerable"
+    /// and its caller's contract for the conservative skip.
+    ///
+    /// Its `base == 0` arm documents itself as dead in the W4004 path, and it
+    /// is — `check_cds_pos_past_end` short-circuits on `is_unknown()` and
+    /// `is_special()`. It is pinned rather than deleted because deleting it
+    /// would drop `base == 0` into the final branch and underflow
+    /// `cds_start + 0 - 1` in `u64`, and because a helper whose whole
+    /// justification is parity silently losing that parity is the failure this
+    /// issue is about.
+    #[test]
+    fn cds_pos_to_tx_boundary_declines_a_zero_base() {
+        let transcript = crate::reference::transcript::Transcript {
+            id: "NM_TEST.1".to_string(),
+            gene_symbol: None,
+            strand: crate::reference::transcript::Strand::Plus,
+            sequence: None,
+            cds_start: Some(10),
+            cds_end: Some(50),
+            exons: vec![crate::reference::transcript::Exon::new(1, 1, 60)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: crate::reference::transcript::ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            cds_start_incomplete: false,
+            exon_cigars: Vec::new(),
+            cached_introns: std::sync::OnceLock::new(),
+        };
+        let zero = CdsPos {
+            base: 0,
+            offset: None,
+            utr3: false,
+            special: None,
+        };
+        assert_eq!(cds_pos_to_tx_boundary(&zero, &transcript), None);
+        // Parity with `cds_to_tx_pos` in both directions: the positions either
+        // side of the absent coordinate still answer, and answer the same
+        // transcript boundaries that method does.
+        assert_eq!(
+            cds_pos_to_tx_boundary(&CdsPos::new(-1), &transcript),
+            Some(9)
+        );
+        assert_eq!(
+            cds_pos_to_tx_boundary(&CdsPos::new(1), &transcript),
+            Some(10)
+        );
     }
 
     #[test]
