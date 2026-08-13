@@ -1333,41 +1333,343 @@ mod intronic_debug_tests {
         );
     }
 
-    /// Test that cdot tx coordinates are stored 0-based half-open.
+    /// A minimal cdot document spelled in cdot's own RAW conventions: genomic
+    /// bounds 0-based half-open (`alt_start` inclusive, `alt_end` exclusive)
+    /// and cDNA bounds 1-based **inclusive**.
     ///
-    /// On load, `from_genome_build` converts cdot's raw 1-based-inclusive tx bounds
-    /// into the engine's HGVS convention: tx 0-based half-open (the first exon starts
-    /// at position 0, not 1). This test verifies that conversion (#742).
+    /// | exon | raw genomic    | raw tx (1-based incl) | expected internal tx |
+    /// |------|----------------|-----------------------|----------------------|
+    /// | 1    | `[5000, 5100)` | `1..100`              | `[0, 100)`           |
+    /// | 2    | `[6000, 6050)` | `101..150`            | `[100, 150)`         |
+    ///
+    /// Two exons deliberately. The second is what makes the *half-open* half of
+    /// the claim testable at all: under 0-based half-open storage exon 2's
+    /// `tx_start` equals exon 1's `tx_end` exactly, where 1-based-inclusive
+    /// storage would leave it one higher.
+    ///
+    /// `start_codon`/`stop_codon` are deliberately ABSENT. `from_genome_build`
+    /// copies those through verbatim when they are present, so a fixture
+    /// carrying them would bypass the conversion under test and assert nothing
+    /// about the coordinate basis. Omitting them forces the genomic-CDS
+    /// fallback — the arm that has to reconcile raw genomic bounds against the
+    /// already-converted exon table, which is where #742's off-by-one lived.
+    const RAW_CDOT_BASIS_FIXTURE: &str = r#"{
+        "transcripts": {
+            "NM_BASIS_TEST.1": {
+                "gene_name": "BASISTEST",
+                "genome_builds": {
+                    "GRCh38": {
+                        "contig": "NC_000001.11",
+                        "strand": "+",
+                        "cds_start": 5010,
+                        "cds_end": 6041,
+                        "exons": [
+                            [5000, 5100, 1, 1, 100, "M100"],
+                            [6000, 6050, 2, 101, 150, "M50"]
+                        ]
+                    }
+                }
+            }
+        }
+    }"#;
+
+    /// cdot tx coordinates are stored 0-based half-open (#742).
+    ///
+    /// On load, `from_genome_build` converts cdot's raw 1-based-inclusive tx
+    /// bounds into the engine's HGVS convention: tx 0-based half-open, the
+    /// first exon starting at 0 rather than 1. Violating that convention is a
+    /// guaranteed panic on the first exon, so the guard must not be able to
+    /// stop running quietly.
+    ///
+    /// This runs on every machine, against a programmatically-built fixture.
+    /// Its predecessor asserted only when an operator-created
+    /// `benchmark-output/` symlink was present, and returned silently
+    /// otherwise — i.e. it asserted nothing on essentially every run,
+    /// including CI. The real-data cross-check lives on in
+    /// `cdot_tx_basis_cross_checked_against_real_cdot` below, which is an
+    /// addition to this test rather than a substitute for it.
     #[test]
-    fn test_cdot_tx_coordinates_are_0_based() {
+    fn cdot_tx_coordinates_are_0_based_half_open() {
+        use crate::data::cdot::CdotMapper;
+
+        let cdot = CdotMapper::from_reader_with_build(RAW_CDOT_BASIS_FIXTURE.as_bytes(), "GRCh38")
+            .expect("basis fixture should parse");
+        let tx = cdot
+            .get_transcript("NM_BASIS_TEST.1")
+            .expect("basis fixture defines NM_BASIS_TEST.1");
+
+        assert_eq!(tx.exons.len(), 2, "fixture should yield both exons");
+
+        // 0-based: raw tx 1..100 (1-based inclusive) becomes [0, 100).
+        let (first_start, first_end) = (tx.exons[0][2], tx.exons[0][3]);
+        assert_eq!(
+            (first_start, first_end),
+            (0, 100),
+            "exon 1 raw tx 1..100 (1-based inclusive) should convert to 0-based \
+             half-open [0, 100), got [{first_start}, {first_end})"
+        );
+
+        // 0-based: raw tx 101..150 becomes [100, 150).
+        let (second_start, second_end) = (tx.exons[1][2], tx.exons[1][3]);
+        assert_eq!(
+            (second_start, second_end),
+            (100, 150),
+            "exon 2 raw tx 101..150 (1-based inclusive) should convert to 0-based \
+             half-open [100, 150), got [{second_start}, {second_end})"
+        );
+
+        // Half-open: adjoining exons meet at one shared value. Under
+        // 1-based-inclusive storage exon 2 would start at exon 1's end + 1.
+        assert_eq!(
+            second_start, first_end,
+            "half-open tx bounds should adjoin: exon 2 tx_start ({second_start}) must equal \
+             exon 1 tx_end ({first_end}); a difference of 1 means the bounds are stored \
+             1-based inclusive"
+        );
+
+        // CDS start is 0-based inclusive in transcript space. The fixture's
+        // 5'UTR is 10 bases (raw genomic CDS start 5010 against an exon opening
+        // at raw genomic 5000), so c.1 sits at tx offset 10 — it would be 11 if
+        // the CDS bound were stored 1-based.
+        assert_eq!(
+            tx.cds_start,
+            Some(10),
+            "cds_start should be the 0-based tx offset of c.1 (10, after a 10-base 5'UTR)"
+        );
+
+        // `cds_end` is deliberately not asserted here. The genomic-CDS fallback
+        // applies a further `+ 1` to the mapped end whose correctness depends on
+        // whether cdot's raw genomic `cds_end` is inclusive or exclusive — the
+        // struct doc says exclusive while the arithmetic implies inclusive. That
+        // is a separate question from the coordinate basis this test pins, and
+        // pinning today's value here would cement whichever reading is wrong.
+    }
+
+    /// Why the real-cdot lookup did or did not produce a path.
+    ///
+    /// The three non-`Found` arms are kept apart on purpose: they call for
+    /// three different messages, and collapsing them into one `None` is how a
+    /// skip notice comes to state a condition that does not hold. Telling an
+    /// operator whose `benchmark-output/` symlink dangles or whose reference
+    /// directory is unreadable to "symlink benchmark-output/ to a prepared
+    /// reference" is wrong advice — they already did.
+    enum CdotLookup {
+        /// A `cdot-*.refseq.GRCh38.json` was found at this path.
+        Found(std::path::PathBuf),
+        /// The directory does not exist. The default-checkout and CI case, and
+        /// also what a dangling symlink reports (both surface as `NotFound`).
+        Absent,
+        /// The directory exists but could not be read — permissions, or an I/O
+        /// error. A wired-up-but-broken reference, not an absent one.
+        Unreadable(std::io::Error),
+        /// The directory was read and holds no matching cdot JSON.
+        NoMatch,
+    }
+
+    /// Locate a RefSeq GRCh38 cdot JSON under `dir` without pinning a cdot
+    /// release.
+    ///
+    /// Pattern-matching rather than naming a version is the point: the caller's
+    /// predecessor hardcoded `cdot-0.2.32.refseq.GRCh38.json`, so regenerating
+    /// the prepared reference at any newer cdot release (0.2.33 is current)
+    /// would have returned it to never running, silently.
+    ///
+    /// When several releases sit side by side the pick is the
+    /// **lexicographically last** filename, which is deterministic but is *not*
+    /// "the newest release" — `cdot-0.2.9.…` sorts after `cdot-0.2.32.…`.
+    /// Any real cdot answers the question this test asks, so the ordering only
+    /// has to be stable, not semantic.
+    fn locate_refseq_grch38_cdot(dir: &std::path::Path) -> CdotLookup {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return CdotLookup::Absent,
+            Err(err) => return CdotLookup::Unreadable(err),
+        };
+        let mut matches: Vec<std::path::PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("cdot-") && name.ends_with(".refseq.GRCh38.json")
+                    })
+            })
+            .collect();
+        matches.sort();
+        match matches.pop() {
+            Some(path) => CdotLookup::Found(path),
+            None => CdotLookup::NoMatch,
+        }
+    }
+
+    /// Cross-check the 0-based basis against a real prepared reference.
+    ///
+    /// Kept as an *addition* to `cdot_tx_coordinates_are_0_based_half_open`,
+    /// never as a substitute. It is not a gate — `benchmark-output/` is an
+    /// operator-created symlink to a prepared reference, absent in a default
+    /// checkout and in CI — so it names the specific condition it hit and
+    /// returns.
+    ///
+    /// **The skip notice does not reach a passing run's console.** Both
+    /// `cargo test` and `cargo nextest run` capture a test's stdout/stderr and
+    /// replay it only for failures, so the `eprintln!` below is visible only
+    /// under `--nocapture` / `--no-capture` (or nextest's
+    /// `--success-output immediate`). Do not read it as making the skip
+    /// self-announcing: what stops this test from being the silent no-op its
+    /// predecessor was is that the basis is now guarded unconditionally by
+    /// `cdot_tx_coordinates_are_0_based_half_open`, which needs no reference at
+    /// all. Turning the skip itself into a hard failure would need an opt-in
+    /// switch (an env var an operator sets when they expect the reference to be
+    /// wired), which is deliberately not added here.
+    ///
+    /// **Read what this does and does not cover.** `CdotMapper::load` prefers a
+    /// sibling `.rkyv` cache over the JSON, and a prepared reference normally
+    /// ships one, so on a *warm* reference this deserializes coordinates that
+    /// were converted at prepare time rather than re-running
+    /// `from_genome_build`. It therefore guards the prepared *artifact's*
+    /// stored basis — a mis-prepared or stale reference — and NOT the
+    /// conversion. Measured, not assumed: inverting the conversion to emit
+    /// 1-based leaves this test green while
+    /// `cdot_tx_coordinates_are_0_based_half_open` fails.
+    ///
+    /// That warm-reference reading is a description of the common case, not a
+    /// guarantee: `load` falls back to parsing the JSON whenever the sibling
+    /// `.rkyv` is missing *or older than the JSON* (its `cache_is_fresh`
+    /// check), and the fallback then writes a fresh multi-hundred-MB `.rkyv`
+    /// into the operator's reference directory as a side effect. So on a cold
+    /// or stale reference this test does pay the ~489 MiB parse, and re-running
+    /// it is cheap only from the second run on. That is the reason not to
+    /// *force* the JSON arm, and it is also why the fixture above — which
+    /// covers the conversion on every machine, in microseconds — is the
+    /// primary guard rather than this one.
+    ///
+    /// The fixture's own faithfulness was checked against this same file rather
+    /// than assumed: real cdot spells raw exon tx bounds 1-based **inclusive**
+    /// (adjacent exons read `…4521]`, `[4522…`) with the first exon's raw
+    /// `tx_start` at 1 — exactly the spelling `RAW_CDOT_BASIS_FIXTURE` uses.
+    ///
+    /// It asserts a structural invariant over a sample of real transcripts
+    /// rather than one accession's `cds_start`. The pinned
+    /// `NM_003742.4 cds_start == 127` it replaces was live external data that
+    /// upstream can revise, which would have failed this test for a reason
+    /// having nothing to do with the coordinate basis.
+    ///
+    /// Exon-to-exon tx contiguity is deliberately NOT asserted here: real cdot
+    /// carries genuine transcript-coordinate holes (58 of 474,818 GRCh38
+    /// multi-exon builds, 23–2718 bases), so contiguity is a property of the
+    /// fixture's geometry and not of cdot at large. `tx_start == 0` on the
+    /// first exon is universal, and is the discriminating one anyway — it reads
+    /// 1 under 1-based storage.
+    #[test]
+    fn cdot_tx_basis_cross_checked_against_real_cdot() {
         use crate::data::cdot::CdotMapper;
         use std::path::PathBuf;
 
-        // Load the real cdot data if available
-        let cdot_path = PathBuf::from("benchmark-output/cdot/cdot-0.2.32.refseq.GRCh38.json");
-        if !cdot_path.exists() {
-            // Skip test if cdot file is not available
-            return;
+        let cdot_dir = PathBuf::from("benchmark-output/cdot");
+        // Each arm states the condition it actually hit. A single "no cdot file
+        // found" message would misdiagnose the two broken-setup cases as an
+        // absent reference and hand the operator a fix they have already applied.
+        const SKIP_PREAMBLE: &str = "cdot_tx_basis_cross_checked_against_real_cdot: skipping — \
+             this is a cross-check only; the basis itself is guarded unconditionally by \
+             cdot_tx_coordinates_are_0_based_half_open.";
+        let cdot_path = match locate_refseq_grch38_cdot(&cdot_dir) {
+            CdotLookup::Found(path) => path,
+            CdotLookup::Absent => {
+                eprintln!(
+                    "{SKIP_PREAMBLE} {} does not exist (a dangling benchmark-output symlink \
+                     reports the same). To run it, symlink benchmark-output/ to a prepared \
+                     reference.",
+                    cdot_dir.display()
+                );
+                return;
+            }
+            CdotLookup::Unreadable(err) => {
+                eprintln!(
+                    "{SKIP_PREAMBLE} {} exists but could not be read: {err}. The reference is \
+                     wired up and BROKEN, not absent — re-linking benchmark-output/ will not \
+                     fix this.",
+                    cdot_dir.display()
+                );
+                return;
+            }
+            CdotLookup::NoMatch => {
+                eprintln!(
+                    "{SKIP_PREAMBLE} {} was read but holds no cdot-*.refseq.GRCh38.json. A \
+                     prepared reference should carry one; check that prepare completed and \
+                     that the RefSeq GRCh38 cdot was not stored gzipped-only.",
+                    cdot_dir.display()
+                );
+                return;
+            }
+        };
+
+        let cdot = CdotMapper::load(&cdot_path).unwrap_or_else(|err| {
+            panic!("failed to load real cdot at {}: {err}", cdot_path.display())
+        });
+
+        // A sample is enough: the invariant is per-transcript, and loading the
+        // full RefSeq cdot already dominates this test's cost.
+        //
+        // Sorted before sampling. `transcripts_on_contig` hands back
+        // `contig_index` order, which on the JSON arm is `HashMap` iteration
+        // order and therefore differs from process to process — an unsorted
+        // `take` would compare a different 200 transcripts on every run, so a
+        // failure would not reproduce and the covered set would be unknowable.
+        const SAMPLE_SIZE: usize = 200;
+        let mut accessions = cdot.transcripts_on_contig("NC_000001.11");
+        accessions.sort_unstable();
+        let attempted = accessions.len().min(SAMPLE_SIZE);
+        let mut checked = 0usize;
+        let mut unresolved: Vec<&str> = Vec::new();
+        let mut exonless: Vec<&str> = Vec::new();
+        for accession in accessions.iter().take(SAMPLE_SIZE) {
+            let Some(tx) = cdot.get_transcript(accession) else {
+                unresolved.push(*accession);
+                continue;
+            };
+            let Some(first_exon) = tx.exons.first() else {
+                exonless.push(*accession);
+                continue;
+            };
+            assert_eq!(
+                first_exon[2],
+                0,
+                "{accession}: first exon tx_start should be 0 (0-based half-open) in {}, got {}",
+                cdot_path.display(),
+                first_exon[2]
+            );
+            checked += 1;
         }
 
-        let cdot = CdotMapper::load(&cdot_path).expect("Failed to load cdot");
-        let tx = cdot
-            .get_transcript("NM_003742.4")
-            .expect("NM_003742.4 not in cdot");
-
-        // First exon should have tx_start = 0 (0-based, after the #742 conversion)
-        let first_exon = &tx.exons[0];
-        assert_eq!(
-            first_exon[2], 0,
-            "cdot tx_start for first exon should be 0 (0-based half-open), got {}",
-            first_exon[2]
+        // A zero denominator would let this report success having compared
+        // nothing — the same failure mode the silent `return` had.
+        assert!(
+            checked > 0,
+            "no transcripts checked from {} — expected transcripts on NC_000001.11, \
+             so this run proved nothing",
+            cdot_path.display()
         );
 
-        // CDS start should be 0-based (127 for NM_003742.4, which becomes 128 when converted to 1-based)
+        // ...and a near-zero denominator would let it report success having
+        // compared almost nothing, which `checked > 0` alone does not exclude:
+        // 199 of 200 could fall through the two `continue` arms and the test
+        // would still pass. Both arms are structurally unreachable — every
+        // accession `transcripts_on_contig` yields is a key of the very
+        // `transcripts` map `get_transcript` looks in first, and every cdot
+        // genome build deserializes with a non-empty exon list — so a drop here
+        // is information about the reference, not noise to absorb into the
+        // count. Account for it rather than letting it thin the sample
+        // silently.
         assert_eq!(
-            tx.cds_start,
-            Some(127),
-            "cdot cds_start should be 0-based (127 for NM_003742.4)"
+            checked,
+            attempted,
+            "compared {checked} of {attempted} sampled transcripts from {}: {} did not resolve \
+             via get_transcript ({unresolved:?}) and {} carried an empty exon table \
+             ({exonless:?}) — an unaccounted drop makes the comparison count meaningless",
+            cdot_path.display(),
+            unresolved.len(),
+            exonless.len()
         );
     }
 }
