@@ -1169,6 +1169,27 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // status quo rather than a ruling, pinned by
     // `defect_371_transcript_exit::a_mixed_allele_still_ships_a_manufactured_offset_bare`.
     ("junction-exit-wrapper-scope-in-a-mixed-allele", "undecided"),
+    // Whether `DNA/duplication.md:18`'s MUST binds on each MEMBER of a cis
+    // allele — requiring a partition that exposes a describable duplication —
+    // or on each CHANGE derived from the resulting sequence, ranking only the
+    // type label. **The label.** `:17` is the parent bullet that says when the
+    // `dup` label may be used at all, and `:18` is its sub-bullet, so the MUST
+    // ranks a label inside a scope its parent fixes; `background/glossary.md`
+    // supplies the second, definitional ground by making `:18`'s subject — "a
+    // variant" — a difference between two sequences rather than a member of a
+    // chosen spelling. Two grounds because a single lowercase-prose clause is
+    // weak authority, which is the calibration bar
+    // `exon-junction-dup-converge-from-the-far-side` set. Deliberately does NOT
+    // reach the `dup` half of the separation-zero carve-out in
+    // `delins-adjacent-members-when-both-consume-reference`, which is a
+    // different mechanism and stays exactly as that record left it. **Moves no
+    // row on the shipped default** — the shape is reachable only through the
+    // coalescing partitioner. Its falsifier is enforced rather than asserted, by
+    // `tests/it/duplication_label_not_partition.rs`.
+    (
+        "duplication-must-ranks-the-label-not-the-partition",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

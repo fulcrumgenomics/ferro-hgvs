@@ -105,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 26 records, 22 decided / 4 undecided
-//! 104 clause lines, of which 27 are named by more than one record
+//! 27 records, 23 decided / 4 undecided
+//! 111 clause lines, of which 27 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -114,6 +114,10 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/background/glossary.md:310
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
+//! docs/background/glossary.md:311
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
 //! docs/background/numbering.md:21
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //! docs/background/numbering.md:40
@@ -259,10 +263,15 @@
 //! docs/recommendations/DNA/delins.md:89  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:5
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:17
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:26
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
@@ -277,6 +286,10 @@
 //! docs/recommendations/DNA/duplication.md:148  [MULTI]
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//! docs/recommendations/DNA/insertion.md:5
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//! docs/recommendations/DNA/insertion.md:17
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //! docs/recommendations/DNA/inversion.md:5
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
 //! docs/recommendations/DNA/inversion.md:33
@@ -360,8 +373,11 @@
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/general.md:57
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //! docs/recommendations/general.md:58  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
@@ -460,6 +476,7 @@
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:148
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
@@ -487,6 +504,7 @@
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:58
@@ -813,7 +831,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (26, 22, 4),
+        (27, 23, 4),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
