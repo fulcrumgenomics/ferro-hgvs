@@ -1136,6 +1136,26 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "derivation-may-not-be-bounded-by-the-inputs-spelling",
         "decided",
     ),
+    // Which coordinate space a `c.`/`n.` number is written in, when the
+    // transcript's cdot exon table has a transcript-coordinate gap.
+    // **Decided at the FIRST precedence rank** — `background/numbering.md:21`
+    // anchors `c.1` on the reference sequence's own start codon and `:52`
+    // numbers `n.` "from the first to the last nucleotide of the reference
+    // sequence", so the axis is a count of the transcript's bases and `c.N` is
+    // `cds_start + N - 1` on the flat sequence. `CoordinateMapper` no longer
+    // walks the exon table for it. The gaps themselves are REAL (58 of 474,818
+    // GRCh38 multi-exon builds, 23-2718 bases) — the earlier attempt (#1665)
+    // was closed for arguing they were malformed, and this record deliberately
+    // does not repeat that. What settles it is that the gap belongs to cdot's
+    // GENOME ALIGNMENT: RefSeq gives `NM_033517.1` a contiguous exon table, a
+    // GenBank `CDS 1..5196`, and a 1731-aa `NP_277052.1` — all 39 bases longer
+    // than cdot's exon-covered span. Genome<->transcript mapping is untouched
+    // and stays exon- and CIGAR-aware. **Moves rows**, on gapped transcripts
+    // only: every `c.`/`n.` position 3' of a hole, and every SPDI triple built
+    // on one. Does NOT fix the sibling provider defect (cdot's gap-collapsed
+    // `start_codon`/`stop_codon` reaching a flat-space `cds_end`), which the
+    // record names and leaves open.
+    ("c-and-n-positions-are-flat-transcript-offsets", "decided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

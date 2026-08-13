@@ -82,11 +82,12 @@
 //! as this branch's delta — `contiguous-insertion-split-by-a-blocked-derivation`
 //! and `delins-recommendation-reach-when-the-input-arrives-split` — have landed
 //! on `main` in their turn and are now base as well, which is the same rot a
-//! second time. Measured against the merge base, what this branch adds is one
-//! record:
+//! second time. `rna-axis-alignment-only-symbol-reach` was the delta named here
+//! in its turn and has landed as well, which is the third instance. Measured
+//! against the merge base, what this branch adds is one record:
 //!
-//! - `rna-axis-alignment-only-symbol-reach` — ruled 2026-08-12 (#1715), with
-//!   `docs/background/standards.md:47-61` governing
+//! - `c-and-n-positions-are-flat-transcript-offsets` — ruled 2026-08-12
+//!   (#1619), with `docs/background/numbering.md:52` governing
 //!
 //! This paragraph used to predict that the pins below "will move once more on
 //! the next rebase", naming `codon-carve-out-shape-restriction` and
@@ -104,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 24 records, 21 decided / 3 undecided
-//! 99 clause lines, of which 26 are named by more than one record
+//! 25 records, 22 decided / 3 undecided
+//! 103 clause lines, of which 26 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -113,6 +114,14 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/background/numbering.md:21
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//! docs/background/numbering.md:40
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//! docs/background/numbering.md:44
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//! docs/background/numbering.md:52
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (governing)
 //! docs/background/standards.md:36  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
@@ -790,7 +799,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (24, 21, 3),
+        (25, 22, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"

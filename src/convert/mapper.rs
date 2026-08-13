@@ -22,6 +22,43 @@
 //! CDS positions can have intronic offsets (e.g., c.100+5, c.200-10).
 //! Use `*_with_intron()` methods to handle these cases.
 //!
+//! # The two frames, and which one `c.`/`n.` lives in
+//!
+//! The conversions above split into two frames that must not borrow each
+//! other's arithmetic. Getting that wrong is #1619.
+//!
+//! **The sequence frame — `cds_to_tx` / `tx_to_cds`.** A `c.` or `n.` position
+//! names a base of the transcript reference sequence and nothing else.
+//! `docs/background/numbering.md:21` anchors `c.1` on "the **`A`** of the `ATG`
+//! translation initiation (start) codon"; `:52` numbers `n.` "from the first to
+//! the last nucleotide of the reference sequence"; and `:40` states that a
+//! coding DNA reference sequence "**does not contain** intron or 5' and 3' gene
+//! flanking sequences". So the axis is a plain count of the transcript's own
+//! bases, and `c.N` is `cds_start + N - 1` on the flat sequence — the same
+//! bytes `ReferenceProvider::get_sequence` serves and the normalizer indexes.
+//! **These two methods therefore do not read the exon table at all.**
+//!
+//! Two shapes have each tried to make them read it, and both were wrong:
+//!
+//! - a CIGAR insertion, i.e. transcript bases absent from the genome. `c.`
+//!   counts them, so no adjustment (#944 — `NM_015120.4` `c.87` is `n.198`,
+//!   not `n.201`).
+//! - a transcript-coordinate gap, i.e. transcript bases that align to no exon.
+//!   `c.` counts those too (#1619 — `NM_033517.1` carries a real 39-base cdot
+//!   hole, and RefSeq annotates its CDS as the contiguous `1..5196` across it,
+//!   matching the 1731-aa `NP_277052.1`). Walking the exon list moved every
+//!   `c.` position on that accession, so `hgvs_to_spdi` and the normalizer
+//!   named different bases of the same transcript.
+//!
+//! **The genome frame — `genomic_to_tx` / `tx_to_genomic` and everything built
+//! on them.** Mapping between a contig and a transcript genuinely is exon- and
+//! CIGAR-aware, and stays so. That is where the exon table belongs, and where a
+//! gap correctly means "this transcript base aligns to nothing" rather than
+//! "renumber the positions after it".
+//!
+//! The composed conversions (`genomic_to_cds`, `cds_to_genomic`) are one step
+//! of each: exon-aware across genome↔tx, flat across tx↔CDS.
+//!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use crate::error::FerroError;
@@ -44,8 +81,12 @@ impl<'a> CoordinateMapper<'a> {
     /// CDS positions are relative to the start of the coding sequence,
     /// while transcript positions are absolute on the transcript.
     ///
-    /// This method is exon-aware: it properly maps CDS positions through
-    /// exon boundaries, accounting for gaps in cdot's coordinate system.
+    /// **This is a sequence-frame conversion and it does not consult the exon
+    /// table** — see the module's "two frames" note. `c.`/`n.` numbering counts
+    /// the transcript's own bases, so
+    /// `c.N` is `cds_start + N - 1` on the flat transcript, with no adjustment
+    /// for exon geometry, for a CIGAR insertion (#944), or for a
+    /// transcript-coordinate gap in the genome alignment (#1619).
     pub fn cds_to_tx(&self, pos: &CdsPos) -> Result<TxPos, FerroError> {
         let cds_start = self
             .transcript
@@ -62,17 +103,15 @@ impl<'a> CoordinateMapper<'a> {
             })?;
 
         let tx_base = if pos.utr3 {
-            // 3' UTR: *N = CDS_end + N
-            // For UTR, use exon-aware mapping from CDS end
-            self.cds_to_tx_exon_aware(cds_end as i64, pos.base)?
+            // 3' UTR: *N = cds_end + N
+            cds_end as i64 + pos.base
         } else if pos.base < 1 {
-            // 5' UTR: -N = CDS_start - N (where N is positive in HGVS but stored as negative)
-            // e.g., c.-3 means 3 bases before CDS start, so offset is -3
-            self.cds_to_tx_exon_aware(cds_start as i64, pos.base)?
+            // 5' UTR: -N = cds_start - N (N is positive in HGVS, stored negative),
+            // e.g. c.-3 is 3 bases before the CDS start.
+            cds_start as i64 + pos.base
         } else {
-            // Normal CDS position - use exon-aware mapping
-            // c.1 = cds_start (offset 0), c.2 = cds_start + 1 (offset 1), etc.
-            self.cds_to_tx_exon_aware(cds_start as i64, pos.base - 1)?
+            // Normal CDS position: c.1 = cds_start, c.2 = cds_start + 1, …
+            cds_start as i64 + pos.base - 1
         };
 
         Ok(TxPos {
@@ -82,103 +121,10 @@ impl<'a> CoordinateMapper<'a> {
         })
     }
 
-    /// Convert CDS position to tx position using exon-aware mapping
-    ///
-    /// This walks through exons, counting bases in the CDS to properly
-    /// handle gaps in cdot's coordinate system.
-    ///
-    /// # Arguments
-    /// * `start_tx` - Starting transcript position (e.g., cds_start)
-    /// * `offset` - Number of bases to offset from start (can be negative for 5' UTR)
-    fn cds_to_tx_exon_aware(&self, start_tx: i64, offset: i64) -> Result<i64, FerroError> {
-        // If no exon data or offset is 0, use simple calculation
-        if self.transcript.exons.is_empty() || offset == 0 {
-            return Ok(start_tx + offset);
-        }
-
-        // Sort exons by transcript position
-        let mut sorted_exons: Vec<_> = self.transcript.exons.iter().collect();
-        sorted_exons.sort_by_key(|e| e.start);
-
-        // Check if exons are contiguous (no gaps in tx coordinates)
-        // Most real transcripts from cdot are contiguous
-        let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
-        if !has_gaps {
-            // No tx-coordinate gaps: c./n. numbering and the transcript sequence
-            // both count every base — including bases inserted relative to the
-            // genome via a CIGAR `I` — so CDS<->tx on this pure-transcript axis is
-            // naive `start_tx + offset`, with NO CIGAR adjustment. Adjusting here
-            // was a genome-centric error that shifted every position 3' of an
-            // intra-exon insertion (#944; NM_015120.4 c.87 -> n.198, not n.201).
-            return Ok(start_tx + offset);
-        }
-
-        // Exons have gaps - use exon-aware mapping
-        if offset > 0 {
-            // Moving forward through exons
-            let mut remaining = offset;
-            let mut current_tx = start_tx as u64;
-
-            // Find which exon contains start_tx
-            let mut found_start = false;
-            for exon in &sorted_exons {
-                if current_tx >= exon.start && current_tx <= exon.end {
-                    // Start is in this exon
-                    found_start = true;
-                    let bases_in_exon = exon.end - current_tx;
-                    if remaining <= bases_in_exon as i64 {
-                        // Target is in this exon
-                        return Ok((current_tx + remaining as u64) as i64);
-                    }
-                    remaining -= bases_in_exon as i64;
-                    // Move to next exon's start (skip gap)
-                    current_tx = exon.end + 1;
-                } else if found_start && current_tx < exon.start {
-                    // We're in a gap, jump to this exon's start
-                    let bases_in_exon = exon.end - exon.start + 1;
-                    if remaining <= bases_in_exon as i64 {
-                        return Ok((exon.start + remaining as u64 - 1) as i64);
-                    }
-                    remaining -= bases_in_exon as i64;
-                    current_tx = exon.end + 1;
-                }
-            }
-            // If we get here, position is beyond all exons
-            Ok(current_tx as i64 + remaining - 1)
-        } else {
-            // Moving backward through exons (for 5' UTR)
-            let mut remaining = -offset;
-            let mut current_tx = start_tx as u64;
-
-            // Find which exon contains start_tx and go backward
-            let mut found_start = false;
-            for exon in sorted_exons.iter().rev() {
-                if current_tx >= exon.start && current_tx <= exon.end {
-                    found_start = true;
-                    let bases_before = current_tx - exon.start;
-                    if remaining <= bases_before as i64 {
-                        return Ok((current_tx - remaining as u64) as i64);
-                    }
-                    remaining -= bases_before as i64;
-                    current_tx = exon.start - 1;
-                } else if found_start && current_tx > exon.end {
-                    // We're in a gap, jump to this exon's end
-                    let bases_in_exon = exon.end - exon.start + 1;
-                    if remaining <= bases_in_exon as i64 {
-                        return Ok((exon.end - remaining as u64 + 1) as i64);
-                    }
-                    remaining -= bases_in_exon as i64;
-                    current_tx = exon.start - 1;
-                }
-            }
-            Ok(current_tx as i64 - remaining + 1)
-        }
-    }
-
     /// Convert transcript position to CDS position
     ///
-    /// This method is exon-aware: it properly maps tx positions to CDS positions
-    /// accounting for gaps in cdot's coordinate system.
+    /// The exact inverse of [`Self::cds_to_tx`], and on the same flat
+    /// sequence axis: no exon walk, no CIGAR adjustment.
     pub fn tx_to_cds(&self, pos: &TxPos) -> Result<CdsPos, FerroError> {
         let cds_start = self
             .transcript
@@ -196,138 +142,29 @@ impl<'a> CoordinateMapper<'a> {
         let base = pos.base;
 
         if base < cds_start {
-            // 5' UTR - count bases backward from CDS start through exons
-            let cds_offset = self.tx_to_cds_exon_aware(base, cds_start)?;
+            // 5' UTR: `c.-N`, N bases 5' of the CDS start.
             Ok(CdsPos {
-                base: cds_offset, // Will be negative for 5' UTR
+                base: base - cds_start, // negative for 5' UTR
                 offset: pos.offset,
                 utr3: false,
                 special: None,
             })
         } else if base > cds_end {
-            // 3' UTR - count bases forward from CDS end through exons
-            let cds_offset = self.tx_to_cds_exon_aware(base, cds_end)?;
+            // 3' UTR: `c.*N`, N bases 3' of the last CDS base.
             Ok(CdsPos {
-                base: cds_offset - 1, // Adjust for 3' UTR notation (*1, *2, etc.)
+                base: base - cds_end,
                 offset: pos.offset,
                 utr3: true,
                 special: None,
             })
         } else {
-            // Within CDS - use exon-aware mapping
-            let cds_pos = self.tx_to_cds_exon_aware(base, cds_start)?;
+            // Within the CDS.
             Ok(CdsPos {
-                base: cds_pos,
+                base: base - cds_start + 1,
                 offset: pos.offset,
                 utr3: false,
                 special: None,
             })
-        }
-    }
-
-    /// Convert tx position to CDS position using exon-aware mapping
-    ///
-    /// This counts actual exonic bases between start_tx and target_tx,
-    /// skipping any gaps in cdot's coordinate system.
-    ///
-    /// Returns the number of CDS bases from start to target (can be negative).
-    fn tx_to_cds_exon_aware(&self, target_tx: i64, start_tx: i64) -> Result<i64, FerroError> {
-        // If no exon data, use simple calculation
-        if self.transcript.exons.is_empty() {
-            // For 5' UTR (target < start), formula is target - start
-            // For CDS (target >= start), formula is target - start + 1
-            if target_tx >= start_tx {
-                return Ok(target_tx - start_tx + 1);
-            } else {
-                return Ok(target_tx - start_tx);
-            }
-        }
-
-        // Sort exons by transcript position
-        let mut sorted_exons: Vec<_> = self.transcript.exons.iter().collect();
-        sorted_exons.sort_by_key(|e| e.start);
-
-        // Check if exons are contiguous (no gaps in tx coordinates)
-        // Most real transcripts from cdot are contiguous
-        let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
-        if !has_gaps {
-            // Inverse of cds_to_tx_exon_aware on the pure-transcript axis: no CIGAR
-            // adjustment (#944 — CDS positions do NOT "follow genome alignment").
-            // target >= start => CDS; target < start => 5' UTR.
-            if target_tx >= start_tx {
-                return Ok(target_tx - start_tx + 1);
-            } else {
-                return Ok(target_tx - start_tx);
-            }
-        }
-
-        // Exons have gaps - use exon-aware counting
-        if target_tx >= start_tx {
-            // Counting forward
-            let mut cds_count: i64 = 0;
-            let mut counting = false;
-
-            for exon in &sorted_exons {
-                let exon_start = exon.start as i64;
-                let exon_end = exon.end as i64;
-
-                if !counting && exon_end >= start_tx && exon_start <= start_tx {
-                    // Start counting from here
-                    counting = true;
-                    let count_start = start_tx.max(exon_start);
-                    let count_end = target_tx.min(exon_end);
-                    if count_end >= count_start {
-                        cds_count += count_end - count_start + 1;
-                    }
-                    if target_tx <= exon_end {
-                        return Ok(cds_count);
-                    }
-                } else if counting {
-                    // Continue counting in subsequent exons
-                    if target_tx < exon_start {
-                        // Target is in a gap before this exon
-                        return Ok(cds_count);
-                    }
-                    let count_end = target_tx.min(exon_end);
-                    cds_count += count_end - exon_start + 1;
-                    if target_tx <= exon_end {
-                        return Ok(cds_count);
-                    }
-                }
-            }
-            Ok(cds_count)
-        } else {
-            // Counting backward (for 5' UTR)
-            let mut cds_count: i64 = 0;
-            let mut counting = false;
-
-            for exon in sorted_exons.iter().rev() {
-                let exon_start = exon.start as i64;
-                let exon_end = exon.end as i64;
-
-                if !counting && exon_start <= start_tx && exon_end >= start_tx {
-                    // Start counting backward from here
-                    counting = true;
-                    let count_end = start_tx.min(exon_end);
-                    let count_start = target_tx.max(exon_start);
-                    if count_end >= count_start {
-                        cds_count -= count_end - count_start + 1;
-                    }
-                    if target_tx >= exon_start {
-                        return Ok(cds_count + 1); // Adjust for 1-based
-                    }
-                } else if counting {
-                    if target_tx > exon_end {
-                        return Ok(cds_count);
-                    }
-                    let count_start = target_tx.max(exon_start);
-                    cds_count -= exon_end - count_start + 1;
-                    if target_tx >= exon_start {
-                        return Ok(cds_count + 1);
-                    }
-                }
-            }
-            Ok(cds_count)
         }
     }
 
@@ -1129,32 +966,32 @@ mod tests {
         assert!(mapper.tx_to_genomic(&TxPos::new(1)).is_err());
     }
 
-    /// A deliberately **malformed** transcript whose exons do not tile transcript
-    /// space: transcript positions 1, 95 and 194 fall in no exon.
+    /// A transcript whose exons do not tile transcript space: transcript
+    /// positions 1, 95 and 194 fall in no exon.
     ///
-    /// This is a synthetic stress case for `CoordinateMapper`'s exon-walking
-    /// arithmetic, not a model of any real annotation. The mapper must resolve
-    /// `c.`/`n.` positions by stepping through exonic bases rather than assuming
-    /// the flat `tx = cds_start + cds - 1`, and the holes below are what makes
-    /// the two answers differ — so the tests using it pin the walk, not the
-    /// shortcut.
+    /// Real cdot data does carry such holes — 58 of 474,818 GRCh38 multi-exon
+    /// builds (0.012%), the smallest of them 23 bases and none of them one base
+    /// — so the shape is not itself malformed. The **sizes** here are synthetic:
+    /// one base per junction, which is a shape upstream never produces. That is
+    /// deliberate and is now the point of the helper. Under the flat sequence
+    /// axis the gap size cannot affect a `c.`/`n.` answer at all, so a hole of
+    /// the least plausible size is the sharpest available check that nothing
+    /// reads the exon table on this path.
     ///
-    /// It does **not** describe cdot. This helper previously claimed to
-    /// "simulate how cdot encodes transcripts with virtual intron positions";
-    /// cdot has no such encoding. Its `cds_start_i`/`cds_end_i` are 1-based
-    /// inclusive coordinates on the *spliced* transcript, so consecutive exons
-    /// abut and introns occupy no transcript coordinate at all. Measured over
-    /// cdot-0.2.32.refseq.GRCh38, 474,818 multi-exon builds yield 58 with any
-    /// transcript-coordinate gap (0.012%), the smallest of them 23 bases, and
-    /// **none** with a one-base gap.
+    /// It does **not** describe cdot's *encoding*. This helper previously
+    /// claimed to "simulate how cdot encodes transcripts with virtual intron
+    /// positions"; cdot has no such encoding. Its `cds_start_i`/`cds_end_i` are
+    /// 1-based inclusive coordinates on the *spliced* transcript, and a hole
+    /// means transcript bases that align to no genomic exon — not extra
+    /// coordinates that `c.` numbering skips.
     ///
     /// The false claim was load-bearing: it was the stated justification for the
     /// one-base-per-junction holes that
     /// `tests/fixtures/sequences/normalization_transcripts.json` carried in every
     /// multi-exon record, which drifted `NM_000492.4:c.1520` ten bases 3' (#1619).
     /// `tests/it/normalization_transcripts_exon_contract.rs` now guards that
-    /// fixture; this helper stays malformed on purpose, and is scoped to the
-    /// seven tests below.
+    /// fixture; the three tests below use this helper to pin that the walk those
+    /// holes used to trigger is gone.
     fn make_transcript_with_gaps() -> Transcript {
         // Transcript with 3 exons and gaps between them
         // Exon 1: tx 2-94 (93 bases)
@@ -1188,99 +1025,60 @@ mod tests {
         }
     }
 
+    /// #1619: a `c.` position is `cds_start + N - 1` on the flat transcript.
+    /// The exon holes at tx 95 and 194 must change nothing — `c.81` is tx 194,
+    /// the very base that lies in a hole, because that base is in the
+    /// transcript sequence and `c.` numbering counts it.
     #[test]
-    fn test_cds_to_tx_with_gaps_within_exon() {
+    fn cds_to_tx_ignores_a_transcript_coordinate_gap() {
         let tx = make_transcript_with_gaps();
         let mapper = CoordinateMapper::new(&tx);
+        // cds_start = 114.
+        for (cds, expected_tx) in [
+            (1, 114),
+            (10, 123),
+            (80, 193),
+            (81, 194),
+            (82, 195),
+            (133, 246),
+        ] {
+            assert_eq!(
+                mapper.cds_to_tx(&CdsPos::new(cds)).unwrap().base,
+                expected_tx,
+                "c.{cds} must be the flat offset; the exon walk answered {}",
+                expected_tx + 1,
+            );
+        }
+    }
 
-        // CDS 1 = tx 114 (cds_start)
-        let result = mapper.cds_to_tx(&CdsPos::new(1)).unwrap();
-        assert_eq!(result.base, 114);
-
-        // CDS 10 = tx 123 (still within exon 2)
-        let result = mapper.cds_to_tx(&CdsPos::new(10)).unwrap();
-        assert_eq!(result.base, 123);
+    /// The inverse, on the same axis. tx 194 is a real transcript base and so
+    /// has a `c.` number (`c.81`); it is only the *genome* that has nothing
+    /// there.
+    #[test]
+    fn tx_to_cds_ignores_a_transcript_coordinate_gap() {
+        let tx = make_transcript_with_gaps();
+        let mapper = CoordinateMapper::new(&tx);
+        for (tx_base, expected_cds) in [
+            (114, 1),
+            (123, 10),
+            (193, 80),
+            (194, 81),
+            (195, 82),
+            (247, 134),
+        ] {
+            assert_eq!(
+                mapper.tx_to_cds(&TxPos::new(tx_base)).unwrap().base,
+                expected_cds,
+                "n.{tx_base} must be the flat CDS offset",
+            );
+        }
     }
 
     #[test]
-    fn test_cds_to_tx_with_gaps_at_exon_boundary() {
+    fn cds_tx_round_trip_across_a_transcript_coordinate_gap() {
         let tx = make_transcript_with_gaps();
         let mapper = CoordinateMapper::new(&tx);
 
-        // CDS 80 = tx 193 (last base of exon 2)
-        // 114 + 79 = 193
-        let result = mapper.cds_to_tx(&CdsPos::new(80)).unwrap();
-        assert_eq!(result.base, 193);
-
-        // CDS 81 = tx 195 (first base of exon 3, skipping gap at tx 194)
-        let result = mapper.cds_to_tx(&CdsPos::new(81)).unwrap();
-        assert_eq!(result.base, 195);
-
-        // CDS 82 = tx 196 (second base of exon 3)
-        let result = mapper.cds_to_tx(&CdsPos::new(82)).unwrap();
-        assert_eq!(result.base, 196);
-    }
-
-    #[test]
-    fn test_cds_to_tx_with_gaps_crossing_multiple_exons() {
-        let tx = make_transcript_with_gaps();
-        let mapper = CoordinateMapper::new(&tx);
-
-        // CDS 133 = tx 247 (last base of exon 3)
-        // CDS 81-133 is in exon 3 (53 bases)
-        // tx 195 + 52 = tx 247
-        let result = mapper.cds_to_tx(&CdsPos::new(133)).unwrap();
-        assert_eq!(result.base, 247);
-    }
-
-    #[test]
-    fn test_tx_to_cds_with_gaps_within_exon() {
-        let tx = make_transcript_with_gaps();
-        let mapper = CoordinateMapper::new(&tx);
-
-        // tx 114 = CDS 1
-        let result = mapper.tx_to_cds(&TxPos::new(114)).unwrap();
-        assert_eq!(result.base, 1);
-
-        // tx 123 = CDS 10
-        let result = mapper.tx_to_cds(&TxPos::new(123)).unwrap();
-        assert_eq!(result.base, 10);
-    }
-
-    #[test]
-    fn test_tx_to_cds_with_gaps_at_exon_boundary() {
-        let tx = make_transcript_with_gaps();
-        let mapper = CoordinateMapper::new(&tx);
-
-        // tx 193 = CDS 80 (last base of exon 2)
-        let result = mapper.tx_to_cds(&TxPos::new(193)).unwrap();
-        assert_eq!(result.base, 80);
-
-        // tx 195 = CDS 81 (first base of exon 3)
-        let result = mapper.tx_to_cds(&TxPos::new(195)).unwrap();
-        assert_eq!(result.base, 81);
-
-        // tx 196 = CDS 82
-        let result = mapper.tx_to_cds(&TxPos::new(196)).unwrap();
-        assert_eq!(result.base, 82);
-    }
-
-    #[test]
-    fn test_tx_to_cds_with_gaps_end_of_exon3() {
-        let tx = make_transcript_with_gaps();
-        let mapper = CoordinateMapper::new(&tx);
-
-        // tx 247 = CDS 133 (last base of exon 3)
-        let result = mapper.tx_to_cds(&TxPos::new(247)).unwrap();
-        assert_eq!(result.base, 133);
-    }
-
-    #[test]
-    fn test_cds_tx_roundtrip_with_gaps() {
-        let tx = make_transcript_with_gaps();
-        let mapper = CoordinateMapper::new(&tx);
-
-        // Test roundtrip for various CDS positions
         for cds_pos in [1, 10, 80, 81, 82, 100, 133] {
             let tx_pos = mapper.cds_to_tx(&CdsPos::new(cds_pos)).unwrap();
             let back = mapper.tx_to_cds(&tx_pos).unwrap();

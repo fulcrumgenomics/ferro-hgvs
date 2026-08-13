@@ -1196,12 +1196,14 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
             });
         }
         // r.*N and c.*N denote the same transcript position, so resolve r.*N
-        // through the same exon-aware `CoordinateMapper::cds_to_tx` the c.*N
-        // path (`resolve_cds_to_tx`) uses. A plain `cds_end + base` agrees with
-        // it only for a contiguous single-exon 3'UTR; a multi-exon 3'UTR with
-        // cdot tx-coordinate (CIGAR) gaps would otherwise land r.*N and c.*N at
-        // different transcript positions (#390-follow-up / #944). Requires a CDS
-        // end — non-coding transcripts have no 3'UTR anchor.
+        // through the same `CoordinateMapper::cds_to_tx` the c.*N path
+        // (`resolve_cds_to_tx`) uses, rather than open-coding `cds_end + base`
+        // here (#390-follow-up / #944). One conversion, one place: the two
+        // arms cannot drift apart, which is the property those issues are
+        // about. Since #1619 that conversion is the flat sequence-axis shift —
+        // `c.*N` counts the transcript's own bases, including any the exon
+        // table does not cover — so the two spellings agree by construction.
+        // Requires a CDS end — non-coding transcripts have no 3'UTR anchor.
         if transcript.cds_end.is_none() {
             return Err(ConversionError::MissingReferenceData {
                 description: format!(
@@ -1226,13 +1228,13 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
         // r.-N is the Nth base of the 5' UTR — numbered upstream from the start
         // codon, exactly mirroring c.-N (numbering.md:58/61: RNA numbering
         // follows the coding DNA reference, which includes c.-N). Resolve it
-        // through the same exon-aware `CoordinateMapper::cds_to_tx` the c.-N path
+        // through the same `CoordinateMapper::cds_to_tx` the c.-N path
         // (`resolve_cds_to_tx`) uses — via the equivalent `CdsPos` with base < 1 —
-        // so r.-N and c.-N always land at the same transcript/SPDI position. A
-        // plain `cds_start - base` would agree only for a contiguous single-exon
-        // 5'UTR; a multi-exon 5'UTR with cdot tx-coordinate (CIGAR) gaps needs the
-        // exon-aware walk. Requires a CDS start — non-coding transcripts have no
-        // 5'UTR anchor.
+        // so r.-N and c.-N always land at the same transcript/SPDI position.
+        // Routing both through one conversion is what guarantees that; since
+        // #1619 the conversion itself is the flat `cds_start - N` shift, on the
+        // transcript's own bases rather than on the exon table. Requires a CDS
+        // start — non-coding transcripts have no 5'UTR anchor.
         if transcript.cds_start.is_none() {
             return Err(ConversionError::MissingReferenceData {
                 description: format!(
@@ -1255,14 +1257,14 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
     }
     // Exonic r.N. On a CODING transcript r. numbering is CDS-relative (#469):
     // r.N denotes the same base as c.N (see `cds_pos_to_rna` in project/rna.rs),
-    // so resolve it through the exon-aware `CoordinateMapper::cds_to_tx` exactly
+    // so resolve it through the same `CoordinateMapper::cds_to_tx` exactly
     // like c.N and like the r.-N / r.*N branches above — otherwise r.N would be
     // treated as transcript-absolute and disagree with c.N by (cds_start - 1).
     // A NON-coding (NR_) transcript has no CDS anchor, so r.N IS the transcript
     // position directly. Either way, bound against the transcript length (#971).
     if transcript.cds_start.is_some() {
-        // Resolving a coding r.N CDS-relative needs a CDS end (the exon-aware
-        // `cds_to_tx` requires both anchors). A coding transcript missing its
+        // Resolving a coding r.N CDS-relative needs a CDS end (`cds_to_tx`
+        // requires both anchors). A coding transcript missing its
         // CDS end is malformed/partial annotation: decline with
         // `InvalidPosition` (which propagates past the
         // `resolve_rna_exonic_bounded` `MissingReferenceData` fallback) rather
@@ -3879,8 +3881,9 @@ mod tests {
 
     /// #944: r.*N and c.*N denote the same 3'UTR transcript position, so both
     /// must resolve to the same SPDI position. `resolve_rna_pos` now routes the
-    /// 3'UTR case through the same exon-aware `CoordinateMapper::cds_to_tx` the
-    /// c.*N path uses (previously it short-circuited with `cds_end + base`).
+    /// 3'UTR case through the same `CoordinateMapper::cds_to_tx` the c.*N path
+    /// uses (previously it short-circuited with its own `cds_end + base`), so
+    /// one conversion answers both spellings.
     #[test]
     fn r_star_and_c_star_resolve_to_same_spdi_position() {
         let provider = make_test_provider();
@@ -3897,21 +3900,30 @@ mod tests {
     }
 
     /// Build a transcript whose 3'UTR lives in a *separate exon across a
-    /// tx-coordinate gap*, so the exon-aware mapper and the old
-    /// `cds_end + base` short-circuit DISAGREE:
+    /// tx-coordinate gap*, so the `r.` and `c.` arms only agree if both take
+    /// the same route:
     ///
     /// - Exon 1: tx 1..35 (5'UTR tx 1-5, CDS tx 6-35; `cds_end` = 35 is the
     ///   last base of exon 1).
-    /// - Gap in tx coordinates: tx 36..39 do not exist (cdot-style alignment
-    ///   gap — `exon1.end + 1 (36) != exon2.start (40)`).
-    /// - Exon 2: tx 40..44 — the entire 3'UTR.
+    /// - Gap in the exon table: tx 36..39 are covered by no exon (cdot-style
+    ///   alignment gap — `exon1.end + 1 (36) != exon2.start (40)`). The stored
+    ///   sequence is 44 bases, so those four bases DO exist on the transcript;
+    ///   what they lack is a genomic counterpart.
+    /// - Exon 2: tx 40..44.
     ///
-    /// For `*1`, `CoordinateMapper::cds_to_tx` walks forward from `cds_end`
-    /// (35), finds it is the last base of exon 1, skips the tx 36-39 gap, and
-    /// lands on `exon2.start` = tx 40. The reverted `cds_end + base` path would
-    /// instead land on tx 36 (a nonexistent coordinate inside the gap). Thus
-    /// r.*1 and c.*1 only agree here if r.*N routes through the exon-aware
-    /// mapper — this is the fixture that makes the #944 test non-vacuous.
+    /// **#1619 decided which of those bases `*1` names, and it is tx 36.** The
+    /// `c.`/`n.`/`r.` axis counts the transcript's own bases
+    /// (`background/numbering.md:21`, `:52`), so `c.*1` is `cds_end + 1` on the
+    /// flat sequence. This fixture used to pin the opposite — the exon walk,
+    /// which skipped the four unaligned bases and answered tx 40 — and the doc
+    /// here called tx 36 "a nonexistent coordinate", which is the mistaken
+    /// premise the ruling `c-and-n-positions-are-flat-transcript-offsets`
+    /// overturns.
+    ///
+    /// The fixture stays, because the property it was built for is still the
+    /// live one and is still non-vacuous here: `r.*N` and `c.*N` must resolve
+    /// identically (#944), and on a single-exon transcript the two routes
+    /// coincide so any test there would pass either way.
     fn make_gapped_utr3_provider() -> MockProvider {
         let tx = Transcript::new(
             "NM_GAP.1".to_string(),
@@ -3936,16 +3948,16 @@ mod tests {
 
     /// #944 (non-vacuous): on a transcript whose 3'UTR sits in a separate exon
     /// across a tx-coordinate gap, r.*1 and c.*1 must STILL resolve to the same
-    /// SPDI position. The only way they agree is if r.*N is mapped through the
-    /// exon-aware `CoordinateMapper::cds_to_tx` (tx 40 → SPDI 39). The reverted
-    /// `cds_end + base` short-circuit would put r.*1 at tx 36 → SPDI 35, so this
-    /// test fails if the fix is reverted (unlike the single-exon sibling test,
-    /// where old and new code coincide).
+    /// SPDI position — the property #944 is about, and one a single-exon
+    /// fixture cannot test because both routes coincide there.
+    ///
+    /// #1619 fixes WHICH position that is: `*1` is `cds_end + 1` on the flat
+    /// transcript (tx 36 → SPDI 35), not the exon walk's tx 40.
     #[test]
     fn r_star_c_star_agree_across_exon_gap() {
         let provider = make_gapped_utr3_provider();
-        // cds_end = tx 35 is the last base of exon 1; the 3'UTR resumes at
-        // exon 2 (tx 40) across the tx 36-39 gap. So *1 = tx 40 → SPDI 0-based 39.
+        // cds_end = tx 35, so *1 is tx 36 → SPDI 0-based 35. tx 36-39 are
+        // transcript bases the exon table does not cover; `c.*N` counts them.
         let c = parse_hgvs("NM_GAP.1:c.*1A>G").unwrap();
         let r = parse_hgvs("NM_GAP.1:r.*1a>g").unwrap();
         let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
@@ -3955,9 +3967,9 @@ mod tests {
             "c.*1 and r.*1 must resolve to the same SPDI position across the exon gap"
         );
         assert_eq!(
-            c_spdi.position, 39,
-            "*1 must map through the tx 36-39 gap to exon 2 (tx 40) → SPDI 39, \
-             not the reverted cds_end+base tx 36 → SPDI 35"
+            c_spdi.position, 35,
+            "*1 is cds_end + 1 on the flat transcript (tx 36 → SPDI 35); the exon \
+             walk this replaced skipped the tx 36-39 bases and answered SPDI 39 (#1619)"
         );
     }
 
@@ -3991,8 +4003,8 @@ mod tests {
 
     /// #960: r.-N and c.-N denote the same 5'UTR transcript position, so both
     /// must resolve to the same SPDI position. `resolve_rna_pos` now routes the
-    /// 5'UTR case through the same exon-aware `CoordinateMapper::cds_to_tx` the
-    /// c.-N path uses (previously it fell through to `ensure_positive_tx` and was
+    /// 5'UTR case through the same `CoordinateMapper::cds_to_tx` the c.-N path
+    /// uses (previously it fell through to `ensure_positive_tx` and was
     /// rejected as a non-positive base).
     #[test]
     fn r_minus_and_c_minus_resolve_to_same_spdi_position() {
@@ -4010,19 +4022,21 @@ mod tests {
     }
 
     /// Build a transcript whose 5'UTR straddles a *tx-coordinate gap*, so the
-    /// exon-aware mapper and a plain `cds_start - base` short-circuit DISAGREE:
+    /// `r.` and `c.` arms only agree if both take the same route:
     ///
     /// - Exon 1: tx 1..5 — the upstream part of the 5'UTR.
-    /// - Gap in tx coordinates: tx 6..9 do not exist (`exon1.end + 1 (6) !=
-    ///   exon2.start (10)`).
+    /// - Gap in the exon table: tx 6..9 are covered by no exon (`exon1.end + 1
+    ///   (6) != exon2.start (10)`). The stored sequence is 44 bases, so those
+    ///   four are transcript bases with no genomic counterpart.
     /// - Exon 2: tx 10..44 — 5'UTR tx 10-11 then CDS from `cds_start` = tx 12.
     ///
-    /// For `c.-3`, `CoordinateMapper::cds_to_tx` walks backward from `cds_start`
-    /// (12): c.-1 = tx 11, c.-2 = tx 10 (start of exon 2), then skips the tx 6-9
-    /// gap and lands on `exon1.end` = tx 5. A plain `cds_start - 3` = tx 9 would
-    /// instead land inside the nonexistent gap. So r.-3 and c.-3 only agree here
-    /// if r.-N routes through the exon-aware mapper — the fixture that makes the
-    /// #960 test non-vacuous against a naive re-implementation.
+    /// **#1619 decided which base `c.-3` names, and it is tx 9** — three bases
+    /// 5' of `cds_start` on the flat transcript. This fixture used to pin the
+    /// exon walk's tx 5 and called tx 9 "inside the nonexistent gap"; the
+    /// ruling `c-and-n-positions-are-flat-transcript-offsets` overturns that
+    /// premise. The fixture stays because the #960 property — `r.-N` and `c.-N`
+    /// resolving identically — is still live and still untestable on a
+    /// single-exon transcript, where the two routes coincide.
     fn make_gapped_utr5_provider() -> MockProvider {
         let tx = Transcript::new(
             "NM_GAP5.1".to_string(),
@@ -4046,17 +4060,16 @@ mod tests {
     }
 
     /// #960 (non-vacuous): on a transcript whose 5'UTR straddles a tx-coordinate
-    /// gap, r.-3 and c.-3 must STILL resolve to the same SPDI position. The only
-    /// way they agree is if r.-N is mapped through the exon-aware
-    /// `CoordinateMapper::cds_to_tx` (tx 5 → SPDI 4). A naive `cds_start - base`
-    /// would put r.-3 at tx 9 → SPDI 8, so this test fails against such a
-    /// re-implementation (unlike the single-exon sibling test, where the two
-    /// coincide).
+    /// gap, r.-3 and c.-3 must STILL resolve to the same SPDI position — the
+    /// property #960 is about, and one a single-exon fixture cannot test.
+    ///
+    /// #1619 fixes WHICH position that is: `c.-3` is `cds_start - 3` on the
+    /// flat transcript (tx 9 → SPDI 8), not the exon walk's tx 5.
     #[test]
     fn r_minus_c_minus_agree_across_exon_gap() {
         let provider = make_gapped_utr5_provider();
-        // cds_start = tx 12 (exon 2); counting 3 bases upstream skips the tx 6-9
-        // gap to exon 1's last base (tx 5). So c.-3 / r.-3 = tx 5 → SPDI 4.
+        // cds_start = tx 12, so c.-3 / r.-3 is tx 9 → SPDI 0-based 8. tx 6-9 are
+        // transcript bases the exon table does not cover; `c.-N` counts them.
         let c = parse_hgvs("NM_GAP5.1:c.-3A>G").unwrap();
         let r = parse_hgvs("NM_GAP5.1:r.-3a>g").unwrap();
         let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
@@ -4066,9 +4079,9 @@ mod tests {
             "c.-3 and r.-3 must resolve to the same SPDI position across the exon gap"
         );
         assert_eq!(
-            c_spdi.position, 4,
-            "-3 must map through the tx 6-9 gap to exon 1 (tx 5) → SPDI 4, \
-             not the naive cds_start-base tx 9 → SPDI 8"
+            c_spdi.position, 8,
+            "-3 is cds_start - 3 on the flat transcript (tx 9 → SPDI 8); the exon \
+             walk this replaced skipped the tx 6-9 bases and answered SPDI 4 (#1619)"
         );
     }
 
