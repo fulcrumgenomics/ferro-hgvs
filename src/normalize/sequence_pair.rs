@@ -168,6 +168,12 @@ impl SequencePair {
     ///   alternate is ordinary input, and the comparison folds;
     /// * a bound that would leave the reference empty, or `start` past `end`.
     ///
+    /// A narrowing that removes **nothing** is accepted unconditionally, and
+    /// that is load-bearing rather than incidental: [`crate::Normalizer::reanchor`]
+    /// narrows to the intersection before it widens, so for a request that
+    /// *contains* this window the narrowing is exactly the no-op. Refusing it
+    /// made `reanchor` unable to widen any pure deletion (#1832).
+    ///
     /// Case is otherwise preserved: this method fetches nothing, so it cannot
     /// manufacture a mixed-case pair and has no reason to rewrite the caller's
     /// bases. [`crate::Normalizer::reanchor`], which does fetch, folds instead.
@@ -202,7 +208,23 @@ impl SequencePair {
         // The two sequences differ in length, so a 3' trim is counted from each
         // one's own end rather than from a shared index.
         let (ref_len, alt_len) = (self.reference.len(), self.alternate.len());
-        if head + tail >= ref_len || head + tail >= alt_len {
+        // `head + tail > 0` first, because the rest of this guard is about what
+        // a trim would *remove* and a no-op trim removes nothing.
+        //
+        // Without it, `alt_len == 0` makes the test read `0 >= 0` and refuses a
+        // request that was going to return `self` unchanged. That is not a
+        // corner case: `Normalizer::to_sequences(v, 0)` returns exactly that
+        // shape for any pure deletion, and `Normalizer::reanchor` narrows to the
+        // intersection before it widens — so a *widen* of such a pair arrived
+        // here as a no-op narrowing and was refused, making `reanchor`
+        // unreachable for the commonest window a caller holds (#1832). Even
+        // `reanchor(pair, pair.position, pair.end())` failed.
+        //
+        // The guard is still needed for `head + tail > 0`, and for two reasons
+        // rather than one: it stops a trim consuming an entire string, and it is
+        // what keeps the "matching bases only" comparison below from indexing
+        // `a[..head]` past the end of an empty alternate.
+        if head + tail > 0 && (head + tail >= ref_len || head + tail >= alt_len) {
             return Err(invalid(format!(
                 "trim_to({start}, {end}) on {} would leave nothing of the {ref_len}-base \
                  reference or the {alt_len}-base alternate",

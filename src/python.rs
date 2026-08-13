@@ -1355,6 +1355,10 @@ impl PySequencePair {
     /// point when the bound is a requirement and a footgun when it is
     /// arbitrary. The derivation reports it as `placement_bounded_by_window`.
     ///
+    /// A narrowing that removes nothing is always accepted, which
+    /// `Normalizer.reanchor` depends on: it narrows to the intersection before
+    /// it widens, so a request that contains this window narrows by a no-op.
+    ///
     /// Raises:
     ///     NormalizationError: for a bound that would widen the window, cut into
     ///         a base the two sequences disagree on, empty the reference, or put

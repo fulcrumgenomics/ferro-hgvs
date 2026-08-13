@@ -649,3 +649,52 @@ def test_a_pair_derives_from_itself():
         pair.derive(max_grid_cells=0)
     with pytest.raises(TypeError, match="unexpected keyword argument 'direction'"):
         pair.derive(direction="5prime")
+
+
+def test_reanchor_widens_a_pair_whose_alternate_is_empty(normalizer):
+    """#1832, through the binding rather than only in Rust.
+
+    ``reanchor`` narrows to the intersection before it widens, and delegated
+    that to ``trim_to``, whose emptiness guard read ``head + tail >= alt_len``
+    — ``0 >= 0`` on an empty alternate. So a *widen* arrived as a no-op
+    narrowing and was refused, and the shape it could not widen is what
+    ``to_sequences(v, 0)`` returns for any pure deletion.
+
+    Worth having here and not only in Rust: the binding is where the exception
+    mapping breaks, and the narrowing refusal now travels through a new
+    ``map_err`` on the Rust side, so nothing in the Rust tests can see whether
+    ``NormalizationError`` survived the re-wrap."""
+    # The whole 12-15 `A` run deleted, with no flanking matched base.
+    pair = ferro_hgvs.SequencePair("TEMPLATE", 12, "AAAA", "")
+    assert (pair.position, pair.end) == (12, 15)
+
+    identity = normalizer.reanchor(pair, start=12, end=15)
+    assert (identity.reference, identity.alternate) == ("AAAA", "")
+
+    widened = normalizer.reanchor(pair, start=9, end=20)
+    assert (widened.position, widened.end) == (9, 20)
+    assert widened.reference == SEQUENCE[8:20]
+    assert widened.alternate == SEQUENCE[8:11] + SEQUENCE[15:20]
+
+    # …and the derivation the widened window supports is the one the unwidened
+    # pair gives, which is why the refusal mattered rather than merely annoyed.
+    assert str(widened.derive().variant) == "TEMPLATE:g.12_15del"
+
+
+def test_reanchor_narrowing_refusal_names_the_callers_window(normalizer):
+    """The second half of #1832, and on the exact exception class.
+
+    A narrowing that would cut into the deleted block still refuses — there is
+    no alternate base to trim. What changed is the message: ``reanchor``
+    delegated to ``trim_to``, which named its own method and the *intersection*
+    coordinates, so ``reanchor(13, 20)`` reported ``trim_to(13, 15)`` — an end
+    the caller never passed."""
+    pair = ferro_hgvs.SequencePair("TEMPLATE", 12, "AAAA", "")
+    with pytest.raises(ferro_hgvs.NormalizationError) as excinfo:
+        normalizer.reanchor(pair, start=13, end=20)
+
+    message = str(excinfo.value)
+    assert "reanchor(13, 20)" in message, message
+    assert "[12, 15]" in message, message
+    # `trim_to`'s own reason is the accurate half and is kept, not replaced.
+    assert "would leave nothing" in message, message

@@ -2237,7 +2237,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// * a bound the provider cannot serve;
     /// * anything [`crate::SequencePair::trim_to`] refuses, for the narrowing
     ///   side — a cut through a base the two sequences disagree on, an emptied
-    ///   reference, `start` past `end`.
+    ///   reference, `start` past `end`. The *conditions* are `trim_to`'s; the
+    ///   **message** is not, because that method names itself and the
+    ///   intersection coordinates rather than the ones the caller passed. Its
+    ///   reason is kept and wrapped in this method's own request (#1832).
     pub fn reanchor(
         &self,
         pair: &crate::normalize::sequence_pair::SequencePair,
@@ -2293,7 +2296,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 pair.end()
             )));
         }
-        let narrowed = pair.trim_to(Some(overlap_start), Some(overlap_end))?;
+        // The same reasoning as the non-overlap branch above, applied to every
+        // other way the narrowing can fail: `trim_to`'s message names its own
+        // method and the *intersection* coordinates, so a `reanchor(13, 20)`
+        // came back as `trim_to(13, 15) …`, quoting an end the caller never
+        // passed. The underlying reason is kept — it is the accurate half — and
+        // the caller's own request is restored around it (#1832).
+        let narrowed = pair
+            .trim_to(Some(overlap_start), Some(overlap_end))
+            .map_err(|e| match e {
+                // Re-frame rather than nest. `trim_to` returns this same
+                // variant, and `FerroError`'s `Display` prepends the kind — so
+                // wrapping the whole rendered error produced "Invalid
+                // coordinates: reanchor(…): … failed: Invalid coordinates:
+                // trim_to(…)", with the kind and the accession each printed
+                // twice. Taking the inner `msg` keeps the reason, which is the
+                // accurate half, and states it once.
+                //
+                // The accession is deliberately not repeated here either: the
+                // reason carries it. The non-overlap branch above does name it,
+                // because that message stands alone and nests nothing.
+                FerroError::InvalidCoordinates { msg } => invalid(format!(
+                    "reanchor({start}, {end}): narrowing to the overlap with the pair's own \
+                     window [{}, {}] failed: {msg}",
+                    pair.position,
+                    pair.end()
+                )),
+                // Any other kind is passed through unchanged rather than
+                // flattened into `InvalidCoordinates`, which would lose the
+                // caller's ability to match on it.
+                other => other,
+            })?;
 
         // Both edges are read before either string moves — `end()` is derived
         // from `reference`, so consuming it first would make the 3' test consult
