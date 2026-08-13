@@ -524,23 +524,33 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v2/cis",
         input: "TEMPLATE:g.[37dup;41del]",
-        output: "TEMPLATE:g.[37dup;41del]",
-        // The 5' pass moves the duplication's anchor one base left, into the
-        // `AA` at 36-37. `dup` is 3'-anchored by general.md:41 in the shipped
-        // direction, so this is the one row where the reported spelling is not
-        // even a fixed point once the direction is flipped.
-        five_prime: "TEMPLATE:g.[36dup;41del]",
-        verdict: Verdict::Gap,
+        // CLOSED by #1616: the reported spelling now re-derives to its wanted
+        // form, and to the same string its `/span` sibling prints, so the pair
+        // converges. The `dup` is gone, which is also why the 5' anchor note
+        // this row used to carry is gone: there is no duplication left for the
+        // 5' pass to shift, and both directions print one string.
+        output: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,
-        // TRAP, see OPEN_GAPS. This row's members are three unchanged
-        // nucleotides apart (38, 39, 40), and the wanted form is what a
-        // re-partitioning across them produces — so the row can converge on
-        // #1420's own ask by violating `general.md:34`. Observed on an
-        // experimental partitioner arm, where it raised
-        // `reported_confluence_pairs`' 5' census from 0 to 1 on this row alone.
-        // `the_1420_v2_pair_does_not_converge_by_re_derivation` pins the string
-        // as forbidden; read it before flipping this verdict.
+        // THE TRAP THIS ROW CARRIED IS RESOLVED, not silently dropped — operator
+        // ruling, 2026-08-13. The note here read: "this row's members are three
+        // unchanged nucleotides apart (38, 39, 40), and the wanted form is what
+        // a re-partitioning across them produces — so the row can converge on
+        // #1420's own ask by violating `general.md:34`."
+        //
+        // That reads the separation off THE INPUT'S SPELLING (members at 37 and
+        // 41). `rulings[separation-is-a-property-of-the-spelling-not-of-the-\
+        // variant]` (decided) holds it is read off the partition re-derived from
+        // the resulting sequence. Read that way the output is TWO MEMBERS AT
+        // SEPARATION ONE, described individually across the unchanged 39 —
+        // exactly what `:34` asks for. **Nothing merged**, so the trap's
+        // premise does not hold here. The clause carrying the move is
+        // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`, whose
+        // scope paragraph forbids licensing merges — respected, for the same
+        // reason. The companion guard in `reported_confluence_pairs` was deleted
+        // in this change; its block comment carries the full reasoning.
         argument: "Wanted `[38T>A;40_41delinsTG]`. Reference 38-41 is `TTGC` \
                    and the result is `ATTG`, so 38 and 40-41 change and 39 \
                    does not (asserted in `reported_spans_change_the_columns_\
@@ -724,7 +734,11 @@ const REPORTED_ROWS: &[Row] = &[
 /// prints — and the 5' pass shifts that form's leading deletion one base left,
 /// which the substitution-plus-deletion form gave it no way to do. So the row
 /// joins its own `/cis` sibling here rather than arriving for a new reason.
-const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis"];
+///
+/// **`1420-v2/cis` was removed by #1616.** It was here because the 5' pass moved
+/// its duplication's anchor one base left; the row no longer prints a `dup` at
+/// all, so the two directions now print one string and there is nothing to move.
+const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span"];
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
@@ -779,15 +793,14 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis
 /// issue's wanted string, which is precisely how a defect gets banked as a fix.
 ///
 /// `1419-r3/cis` is no longer one of them — its `wanted` is now the spanning
-/// `delins`, which that arm does not produce — so the hazard is live on
+/// `delins`, which that arm does not produce — so the hazard was live on
 /// `1420-v2/cis` alone. The `1419-r3/cis` half is kept because the mechanism is
 /// what recurs, not the row.
 ///
 /// So lowering this constant requires naming, in the PR, **which clause carried
 /// the move** — not merely that the row now prints its wanted form. A row that
 /// converged with no clause behind it is a re-derivation and the count must not
-/// move. `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
-/// pins the `1420-v2` half of that as a forbidden string.
+/// move.
 ///
 /// **[`PAIR_STATES`] does not weaken any of this, and was written not to.** It
 /// makes `BothReach` *expressible*, which is a different thing from making it
@@ -796,7 +809,33 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis
 /// for together. [`the_pair_state_census_holds`] asserts the arithmetic between
 /// the two censuses — 0, 1 or 2 gap rows per pair by state, summing to this
 /// number — so neither can be moved to accommodate the other in silence.
-const OPEN_GAPS: usize = 12;
+///
+/// # 12 -> 11 (#1616): `1420-v2/cis`, and which clause carried it
+///
+/// **`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`** (decided)
+/// deleted the input-relative weight bound, so the block is re-derived from the
+/// resulting sequence rather than handed back. The stored spelling that moved is
+/// `TEMPLATE:g.[37dup;41del]` -> `TEMPLATE:g.[38T>A;40_41delinsTG]`, in **both**
+/// directions.
+///
+/// **And the re-derivation half of the dichotomy above does not apply**, which
+/// is the part that has to be argued rather than asserted. It was recorded here
+/// as the live hazard: the wanted form is "what a re-partitioning across bases
+/// the input left unchanged produces". That reads separation off the INPUT'S
+/// SPELLING; `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]`
+/// (decided) reads it off the re-derived partition, where the output is two
+/// members at separation one described individually — `general.md:34` satisfied,
+/// nothing merged. The destination is independently spec-correct on this row's
+/// own committed `argument`: `general.md:56` ranks substitution above
+/// duplication so 38 may not be a `dup`, and `delins.md:17` keeps the runs
+/// individual across the unchanged 39.
+///
+/// Operator ruling, 2026-08-13. The companion guard
+/// `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
+/// was deleted in the same change — it pinned this string as forbidden on the
+/// input-spelling reading, and two guards in one PR were giving opposite
+/// instructions for one event.
+const OPEN_GAPS: usize = 11;
 
 /// Every reported pair's [`PairState`], pinned per pair and in the table's own
 /// order.

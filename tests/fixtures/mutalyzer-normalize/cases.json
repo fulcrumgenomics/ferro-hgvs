@@ -1200,7 +1200,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1216,7 +1244,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1232,7 +1288,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1249,7 +1333,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1266,7 +1378,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1283,7 +1423,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1299,7 +1467,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1315,7 +1511,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1332,11 +1556,25 @@
         ]
       ],
       "to_test": true,
-      "spec_citation": {
-        "axis": "genomic",
-        "cluster": "inserted-inversion-854",
-        "note": "An inserted `<range>inv` segment in a delins/ins payload means the reverse-complement (inverted copy) of that range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro reverse-complements g.4300_4309 (GTCCTGTGCT -> AGCACAGGAC), keeps g.4310_4320 forward (CATTATCTGGC), then normalizes -- the deleted span ACGCCG and the insert AGCAC... share a leading A, trimmed -- yielding g.5208_5212delinsGCACAGGACCATTATCTGGC. mutalyzer leaves the segment forward (GTCCTGTGCT; inversion not applied) and so also skips the prefix trim; its output is spec-incorrect. ferro's output is the spec-correct value (#854).",
-        "section": "HGVS §Inserted inversion (reverse complement)"
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "cluster": "inserted-inversion-854",
+          "note": "An inserted `<range>inv` segment in a delins/ins payload means the reverse-complement (inverted copy) of that range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro reverse-complements g.4300_4309 (GTCCTGTGCT -> AGCACAGGAC), keeps g.4310_4320 forward (CATTATCTGGC), then normalizes -- the deleted span ACGCCG and the insert AGCAC... share a leading A, trimmed -- yielding g.5208_5212delinsGCACAGGACCATTATCTGGC. mutalyzer leaves the segment forward (GTCCTGTGCT; inversion not applied) and so also skips the prefix trim; its output is spec-incorrect. ferro's output is the spec-correct value (#854).",
+          "section": "HGVS §Inserted inversion (reverse complement)"
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ],
+      "accepted_divergence": {
+        "axis": "normalized",
+        "policy": "ferro-policy-1616-separation-one-genomic-split",
+        "cluster": "separation-one-genomic-split-1616",
+        "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
       }
     },
     {
@@ -1353,7 +1591,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1370,11 +1636,39 @@
         ]
       ],
       "to_test": true,
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
-        "note": "ferro renders the stop-encoding delins protein consequence capped at the change site p.(Arg53_Arg54delinsSerCysAlaAlaArgTer) (delins.md L27-28); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsSerCysAlaAlaArg). Spec-correct per #911 (fixed in #913)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
+          "note": "ferro renders the stop-encoding delins protein consequence capped at the change site p.(Arg53_Arg54delinsSerCysAlaAlaArgTer) (delins.md L27-28); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsSerCysAlaAlaArg). Spec-correct per #911 (fixed in #913)."
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1390,7 +1684,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1406,7 +1728,35 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsAlaGlnAspHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1616-separation-one-genomic-split",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
+        }
+      ],
+      "spec_citation": [
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1418,11 +1768,25 @@
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
       "to_test": true,
-      "spec_citation": {
-        "axis": "protein_description",
-        "section": "HGVS protein reference (bare NP)",
-        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
-        "cluster": "bare-np-protein"
+      "spec_citation": [
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+          "cluster": "bare-np-protein"
+        },
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ],
+      "accepted_divergence": {
+        "axis": "genomic",
+        "policy": "ferro-policy-1616-separation-one-genomic-split",
+        "cluster": "separation-one-genomic-split-1616",
+        "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
       }
     },
     {
@@ -1436,11 +1800,25 @@
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
       "to_test": true,
-      "spec_citation": {
-        "axis": "protein_description",
-        "section": "HGVS protein reference (bare NP)",
-        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
-        "cluster": "bare-np-protein"
+      "spec_citation": [
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+          "cluster": "bare-np-protein"
+        },
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ],
+      "accepted_divergence": {
+        "axis": "genomic",
+        "policy": "ferro-policy-1616-separation-one-genomic-split",
+        "cluster": "separation-one-genomic-split-1616",
+        "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
       }
     },
     {
@@ -1453,11 +1831,25 @@
       "genomic": "NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)",
       "to_test": true,
-      "spec_citation": {
-        "axis": "protein_description",
-        "section": "HGVS protein reference (bare NP)",
-        "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
-        "cluster": "bare-np-protein"
+      "spec_citation": [
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
+          "cluster": "bare-np-protein"
+        },
+        {
+          "axis": "genomic",
+          "section": "HGVS §Separated variants described individually",
+          "cluster": "separation-one-genomic-split-1616",
+          "note": "`general.md:34` and `DNA/delins.md:81` (\"preferably\") both state the individual form as the PREFERRED description for variants separated by one or more nucleotides. ferro emits it; mutalyzer merges. Graded as README rule 2 (preference) by rulings[separation-rule-force-modal-or-negation], NOT rule 1 (conformance) — both forms are conformant and no prohibition is engaged at separation one. Recorded alongside the accepted_divergence on the same axis, which is the bucket that takes effect; this citation carries the clause, not a claim that the stored mutalyzer value is wrong to keep."
+        }
+      ],
+      "accepted_divergence": {
+        "axis": "genomic",
+        "policy": "ferro-policy-1616-separation-one-genomic-split",
+        "cluster": "separation-one-genomic-split-1616",
+        "note": "ferro splits this genomic delins into the individual descriptions `general.md:34` prefers (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"); mutalyzer merges them into one spanning delins. BOTH FORMS ARE CONFORMANT — this is README RULE 2 (recommended form, best effort) per rulings[separation-rule-force-modal-or-negation], NOT rule 1. The prohibition line in this family is at separation ZERO (substitution.md L32, class=\"invalid\"); these rows are at separation one. The axis is genomic, so rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped] keeps DNA/delins.md:47's payload-coincidence carve-out out of reach — that record accepts this cost by name. rulings[delins-merge-vs-individual-gap-two-or-more] is scoped by direction to net DELETIONS and says of the other direction that the split form stays canonical; this family is a net INSERTION (6 reference bases replaced by 21), so nothing argues for merging. The `normalized`/`genomic` field here deliberately RETAINS MUTALYZER'S RECORDED ANSWER (validated against live mutalyzer 3.1.1 per comparator_provenance) — overwriting it would destroy the evidence of the divergence being disclosed, which is why this is registered as an accepted divergence rather than re-pinned. Movement is AWAY FROM THE REFERENCE IMPLEMENTATION (#1616)."
       }
     },
     {

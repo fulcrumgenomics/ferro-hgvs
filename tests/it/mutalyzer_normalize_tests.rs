@@ -4699,7 +4699,12 @@ fn axis_noncoding_idempotent() {
     // fewer means something was fixed and this pin went stale without anyone
     // noticing, which is how a partial fix comes to read as a complete one.
     //
-    // The 21 fall into three shapes, and they are not equally serious:
+    // **51 = 21 pre-existing + 30 that #1616 exposes, and the 30 split 29 / 1.**
+    // Never quote 51 as a single number: the two halves have different verdicts
+    // and merging them is how a defect gets buried in a residue.
+    //
+    // The pre-existing 21 fall into three shapes, and they are not equally
+    // serious:
     //
     // * 16 re-render as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
     //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization runs on the
@@ -4708,6 +4713,28 @@ fn axis_noncoding_idempotent() {
     //   `n.[308_309insCT;310dup]`, all four from cross-reference `delins`
     //   inputs (the #422 family).
     // * 1 is NOT 3'-shifted, asserted separately below.
+    //
+    // The 30 new rows, split by operator ruling (2026-08-13):
+    //
+    // * **29 are the PROJECTOR, not the normalizer** — every one of them on
+    //   `NG_008939.1`, counted directly off the residue rather than estimated.
+    //   The projector emits a spanning `delins` that the normalizer then
+    //   correctly splits — the
+    //   `n.192_197delinsGTCCTGTGCTCATTATCTGGC` ->
+    //   `n.[192_194delinsGTC;196C>T;198_199insGCTCATTATCTGGCT]` shape. That is
+    //   #1712's own thesis: pre-existing projector staleness that #1616 EXPOSES
+    //   rather than causes, and exposing a defect is not introducing one. The
+    //   re-normalized string is the better description of the two; what is
+    //   non-idempotent is the projector's output, which never went through the
+    //   split.
+    // * **1 is a genuine defect and is NOT projector staleness.**
+    //   `NG_012337.1(NM_012459.2):c.[10del;23_25del;36_37insAAT]` projects to
+    //   `n.[40del;53A>T;56T>C;58_66delinsAGCCTGAAT]` and re-normalizes to
+    //   `n.[40del;53A>T;56T>C;58_60del;63_64=;67_68insATA]` — note the
+    //   `63_64=`, a **stranded identity member**, the #1655/#1281 shape that
+    //   `tests/it/stranded_identity_member.rs` pins as a defect. Filed
+    //   separately as **#1829**; it is not fixed here, and it is disclosed as a
+    //   bug with an issue rather than as an acceptable output.
     assert_eq!(
         failures.len(),
         NONCODING_NON_IDEMPOTENT,
@@ -4733,12 +4760,27 @@ fn axis_noncoding_idempotent() {
 
 /// The measured non-idempotency residue on the `n.` axis — see #1712.
 ///
-/// Measured at `origin/main` `9fb126ba` against the prepared GRCh38 reference:
-/// 681 axes tested, 21 non-idempotent. The genomic control
+/// First measured at `origin/main` `9fb126ba` against the prepared GRCh38
+/// reference: 681 axes tested, 21 non-idempotent. The genomic control
 /// ([`axis_genomic_idempotent`]) reads 214 tested / 0 non-idempotent on the same
 /// run, which is what isolates this to the non-coding path rather than to
 /// normalization generally.
-const NONCODING_NON_IDEMPOTENT: usize = 21;
+///
+/// # Re-pinned 21 -> 51 by #1616, and the number MUST be quoted as a split
+///
+/// Operator ruling, 2026-08-13. The 30 new rows are **29 projector + 1 defect**,
+/// and the two halves have different verdicts:
+///
+/// * the **29** are the projector emitting a spanning `delins` that the
+///   normalizer then correctly splits — #1712's own thesis, pre-existing
+///   projector staleness that #1616 exposes rather than causes;
+/// * the **1** is a stranded identity member (`…;63_64=;…`), the #1655/#1281
+///   shape, filed separately as **#1829**.
+///
+/// Quoting "51" bare states that #1616 made the `n.` axis two and a half times
+/// less idempotent, which is not what was measured. The breakdown lives beside
+/// the assertion in [`axis_noncoding_idempotent`]; keep the two in step.
+const NONCODING_NON_IDEMPOTENT: usize = 51;
 
 /// The one row in that residue whose output is not 3'-shifted (#1712).
 const NONCODING_NOT_THREE_PRIME_SHIFTED: &str = "LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del";

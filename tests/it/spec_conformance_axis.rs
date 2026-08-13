@@ -137,6 +137,29 @@
 //! fix intact — it is now carried by `outputs_intronic_under_a_genomic_wrapper`,
 //! and it is still a claim about the code rather than about the corpus.
 //!
+//! # RE-BLESSED — #1616, and the row that retired with it
+//!
+//! `spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`
+//! is **deleted** by this change, and the reason belongs here because it is the
+//! same corpus. It held the `m4-all-del-p1-sep2` design's two spellings apart:
+//!
+//! | spelling | before | now |
+//! |---|---|---|
+//! | spanning `c.24_33delinsAATTTA` | `c.[24T>A;26_29del;32_33delinsTA]` | **unchanged** |
+//! | members `c.[24del;27del;30del;33del]` | `c.[24del;30_33delinsA]` | **`c.[24T>A;26_29del;32_33delinsTA]`** |
+//!
+//! Measured both strands, both outputs idempotent. Only the member side moved,
+//! onto the string the spanning side already printed — a convergence, so that
+//! design contributes to `converged` rather than to `split_two` in the censuses
+//! below, and the row was the last survivor of a six-row family (#1649 disposed
+//! of four the same way). The clause is
+//! `rulings[canonical-form-choice-when-both-legal]`.
+//!
+//! **Not a structural zero.** `spec_corpus::DENSE_SEPARATIONS` is still
+//! `[0, 1, 2, 3, 5, 8]`, so the generator still builds the `sep2` design the
+//! deleted row's doc warned could quietly stop existing (#1456/#1460/#1478).
+//!
+//! # RE-BLESSED (1 of 4) — #1599, the amino-acid precondition
 //! # RE-BLESSED (1 of 5) — #1599, the amino-acid precondition
 //!
 //! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus

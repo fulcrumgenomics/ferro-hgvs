@@ -626,6 +626,36 @@ pub enum Policy {
     /// divergence (#853/#920).
     #[serde(rename = "ferro-policy-853-refseq-transcript-sequence-authoritative")]
     RefseqTranscriptSequenceAuthoritative853,
+    /// ferro splits a genomic `delins` whose members are separated by one
+    /// unchanged nucleotide into the individual descriptions `general.md:34`
+    /// prefers; mutalyzer merges them into one spanning `delins`.
+    ///
+    /// **Rule 2, not rule 1.** Both forms are conformant.
+    /// `rulings[separation-rule-force-modal-or-negation]` grades `general.md:34`
+    /// as a README rule-2 preference (its modal governs the whole clause and its
+    /// "and not" names the excluded alternative rather than prohibiting it), so
+    /// this is a preferred-form divergence and not a conformance claim. The
+    /// prohibition line in this family sits at separation ZERO
+    /// (`substitution.md` L32, `class="invalid"`); these rows are at separation
+    /// one.
+    ///
+    /// The axis is genomic, so
+    /// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+    /// keeps `DNA/delins.md:47`'s payload-coincidence carve-out out of reach —
+    /// that record accepts this exact cost by name. Its sibling
+    /// `rulings[delins-merge-vs-individual-gap-two-or-more]` is scoped by
+    /// direction to net *deletions* and holds that in the other direction the
+    /// split form stays canonical; this family is a net *insertion* (6 reference
+    /// bases replaced by 21), so nothing argues for merging.
+    ///
+    /// **The `normalized`/`genomic` fields keep MUTALYZER'S recorded answer.**
+    /// They are its validated output (see `comparator_provenance`); overwriting
+    /// them with ferro's would destroy the evidence of the divergence being
+    /// disclosed. That is why this is an accepted divergence rather than a
+    /// re-pin, and why the XPASS guard is the thing that keeps it honest.
+    /// Movement is AWAY from the reference implementation (#1616).
+    #[serde(rename = "ferro-policy-1616-separation-one-genomic-split")]
+    SeparationOneGenomicSplit1616,
 }
 
 impl Policy {
@@ -634,6 +664,9 @@ impl Policy {
     pub fn as_str(self) -> &'static str {
         match self {
             Policy::GeneSymbolSelector121 => "ferro-policy-121-gene-symbol-selector",
+            Policy::SeparationOneGenomicSplit1616 => {
+                "ferro-policy-1616-separation-one-genomic-split"
+            }
             Policy::ShuffleAppliedCompoundAllele499 => {
                 "ferro-policy-499-shuffle-applied-compound-allele"
             }
@@ -1213,6 +1246,20 @@ pub enum SpecSection {
     /// reading frame), where it matches mutalyzer (#920).
     #[serde(rename = "HGVS §delins (one-amino-acid exception)")]
     DelinsOneAminoAcidException,
+    /// HGVS separated-variant description — `general.md:34` ("two variants
+    /// separated by one or more nucleotides should be described individually and
+    /// **not** as a 'delins'") and its restatement at `DNA/delins.md:81`, which
+    /// spells the same preference with "preferably".
+    ///
+    /// A ferro-internal label rather than a spec heading, for the reason
+    /// [`SpecSection::Prioritization`] records: the upstream submodule has no
+    /// stable anchor for it, so the human label is the catalog key. Graded as a
+    /// README **rule 2** preference by
+    /// `rulings[separation-rule-force-modal-or-negation]` — both the split and
+    /// the merged form are conformant, so this section must never be cited as a
+    /// conformance finding.
+    #[serde(rename = "HGVS §Separated variants described individually")]
+    SeparatedVariantsIndividually,
 }
 
 impl SpecSection {
@@ -1222,6 +1269,9 @@ impl SpecSection {
     pub fn as_str(self) -> &'static str {
         match self {
             SpecSection::Prioritization => "HGVS §Prioritization",
+            SpecSection::SeparatedVariantsIndividually => {
+                "HGVS §Separated variants described individually"
+            }
             SpecSection::ProteinReference => "HGVS protein reference (bare NP)",
             SpecSection::RefSeqGeneSelector => "HGVS §RefSeqGene transcript selection",
             SpecSection::SubstitutionConsequence => "HGVS §Substitution (no frameshift)",

@@ -818,142 +818,30 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 // The codon gate splits a spanning `delins` that its own members do not reach
 // ---------------------------------------------------------------------------
 
-/// **Question.** `general.md:35`'s exception has two conjuncts — *separated by
-/// one nucleotide* **and** *together affecting one amino acid* — and
-/// `coalesce_coding_frame_separation` shipped testing only the first. Restoring
-/// the second is a conformance fix. What does it cost?
-///
-/// **Six of the corpus's 3' families stop converging, and it is always the
-/// spanning-`delins` respelling that moves.** Promoted here because
-/// `spec_conformance_axis`'s 3' `converged` figure went 9,140 -> **9,139** — the
-/// one direction that census's own instruction forbids without a re-bless and a
-/// named test. Six is the gross figure; five other families *gained*
-/// convergence in the same change, which is where the net -1 comes from.
-///
-/// The six were three designs on each of the plus and minus coding multi-exon
-/// shapes, all on the `AT` core (`s00`):
-///
-/// ```text
-/// s00-c3{p,m}-m3-all-del-p1-sep3       s00-c3{p,m}-m4-all-del-p1-sep2
-/// s00-c3{p,m}-pair-del-del-p1-sep8
-/// ```
-///
-/// In every one the authored multi-member spelling is **unchanged** and the
-/// spanning `delins` — which used to merge its way down to the members' own
-/// answer — now stops at a finer partition, because at least one of the joins it
-/// used to make spans two codons. So this is not a case of two answers competing
-/// on the merits: the exception simply does not reach the pair, and
-/// `general.md:34`'s plain rule governs it.
-///
-/// **Four of those six have since re-converged and are no longer pinned here.**
-/// #1649 lets `merge`'s payload splitter express *deletion, retained reference,
-/// deletion* — the mirror of the two-insertion shape it already expressed — and
-/// with the finer partition available the spanning `delins` reaches its members'
-/// answer again on `m3-all-del-p1-sep3` and `pair-del-del-p1-sep8`, on both
-/// strands. That is a re-convergence rather than a competing answer: the two
-/// spellings now denote one sequence *and* produce one string, and
-/// `general.md:35` still does not reach either row — nothing was narrowed back to
-/// a shape test to get there. This test's own `assert_ne!` prescribed the
-/// remedy (lower `split_two`, raise `converged`, delete the row), and the
-/// `spec_conformance_axis` re-bless is in the same commit; see that module's
-/// third RE-BLESSED section for the row-id diff behind it.
-///
-/// **`s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and is what remains below.**
-/// Its spanning `delins` still stops where `general.md:34` puts it, so everything
-/// this test was promoted to say still holds for it.
-///
-/// **The members' side moved once, in #1716, and it moved toward this test's own
-/// clause.** It used to read `c.[24del;30_33delinsA]`; that `delins` spans
-/// `c.30..c.33`, i.e. codon 10 (28-30) and codon 11 (31-33), so it was itself a
-/// merge `general.md:35` cannot license — the per-member codon-frame predicate in
-/// `merge::merge_consecutive_edits` was testing its left anchor's right edge
-/// rather than the span it authorised. With the span tested, the pair stays
-/// individual and the answer is `c.[24del;30_31del;33del]`. The two spellings
-/// still disagree, so the row stays; only the fifth column below changed.
-///
-/// What remains unanswered is whether the *members'* answer is reachable from the
-/// `delins` at all under the restored precondition. What is **not** unanswered is
-/// the neighbouring record: `codon-carve-out-shape-restriction` is `decided`, and
-/// it runs the same way — WIDEN, the exception applies wherever its precondition
-/// holds, regardless of edit type, because edit type is a property of the
-/// spelling. So the predicate may not be narrowed back to a shape test in order
-/// to recover the rows it still costs.
-///
-/// **This is churn, not a rank-1 defect**, and that is asserted rather than
-/// claimed: both outputs are checked through `denotation_of` to denote the row's
-/// own bases. A fix that converges these must therefore choose between two legal
-/// descriptions, which is `canonical-form-choice-when-both-legal` — `decided`,
-/// and it says to derive from the resulting sequence rather than to preserve
-/// either previously-shipped string.
-///
-/// Named rather than left in the corpus for the usual reason: a later generator
-/// edit could stop emitting the `sep2` separation, or stop respelling a design as
-/// a spanning `delins` at all, and the regression would vanish with the rows
-/// (#1456/#1460/#1478).
-#[test]
-fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
-    let core = at_core();
-    // `(row id, the spanning-delins respelling, its output, the authored member
-    // spelling, the answer every member spelling reaches)`. Before #1599 the
-    // third column equalled the fifth here, which is what made the family
-    // converge.
-    //
-    // `m3-all-del-p1-sep3` and `pair-del-del-p1-sep8` used to sit alongside this
-    // row and were removed by #1649, which re-converged them — see the doc above.
-    let rows = [(
-        "m4-all-del-p1-sep2",
-        "NM_TEST.1:c.24_33delinsAATTTA",
-        "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
-        "NM_TEST.1:c.[24del;27del;30del;33del]",
-        // Was `c.[24del;30_33delinsA]` until #1716 — see the doc above.
-        "NM_TEST.1:c.[24del;30_31del;33del]",
-    )];
-
-    for strand in [Strand::Plus, Strand::Minus] {
-        let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
-        for (design, spanning, spanning_output, members, members_output) in rows {
-            // The half that did NOT move, asserted first so a future failure says
-            // which side drifted.
-            assert_eq!(
-                normalize_3prime(&frame, members),
-                members_output,
-                "{design} ({strand:?}): the authored member spelling's answer is the one #1716 \
-                 left it at, with every span the CODON-FRAME arm authorises inside one codon \
-                 — `c.30_31del` is a merged span and straddles codons 10/11, but it is the \
-                 strict-adjacency arm's, which `general.md:35` never gated — if this moved, \
-                 the divergence below has a different cause than the one recorded here"
-            );
-
-            let output = normalize_3prime(&frame, spanning);
-            assert_eq!(
-                output, spanning_output,
-                "{design} ({strand:?}): PINNED — the spanning delins stops at the partition \
-                 `general.md:34` gives it, because the join it used to make spans two codons \
-                 and `general.md:35`'s second conjunct (\"together affecting one amino acid\") \
-                 is unmet. On `main` this reached `{members_output}` and the family converged."
-            );
-            assert_ne!(
-                output, members_output,
-                "{design} ({strand:?}): this test exists because the two spellings DISAGREE. If \
-                 they now agree the family has converged again — lower `split_two` and raise \
-                 `converged` in `spec_conformance_axis` and delete this row"
-            );
-
-            // …and the disagreement is about spelling only. Without this the row
-            // would be equally consistent with a member having been dropped,
-            // which is a rank-1 defect and would have to be reported as one.
-            let denoted = denotation_of(frame.provider(), frame.served(), &output);
-            assert_eq!(
-                denoted,
-                denotation_of(frame.provider(), frame.served(), members_output),
-                "{design} ({strand:?}): the two outputs must denote the SAME bases — that is \
-                 what makes this a confluence failure rather than sequence loss"
-            );
-            assert!(
-                matches!(denoted, Denotation::Sequence(_)),
-                "{design} ({strand:?}): VACUOUS — both outputs must denote a real sequence for \
-                 the equality above to mean anything, got {denoted:?}"
-            );
-        }
-    }
-}
+// RETIRED by #1616 — `the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`.
+//
+// It held apart two spellings of one variant on the `m4-all-del-p1-sep2` design:
+// the spanning `NM_TEST.1:c.24_33delinsAATTTA` and the authored members
+// `NM_TEST.1:c.[24del;27del;30del;33del]`. The LAST SURVIVOR of a six-row family
+// — #1649 disposed of four the same way, and the doc prescribed this remedy in
+// advance ("lower `split_two`, raise `converged`, delete the row").
+//
+// MEASURED, BOTH STRANDS, before deleting:
+//   spanning -> NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]  (UNCHANGED — this is
+//               byte-identical to the row's own pinned `spanning_output`)
+//   members  -> NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]  (MOVED onto it)
+// Both outputs idempotent. So this is a convergence, not two rows drifting to a
+// new common string: only the member side moved, onto what the spanning side
+// already printed.
+//
+// Authority: `rulings[canonical-form-choice-when-both-legal]` (decided) — derive
+// from the resulting sequence and emit what falls out, preserving neither
+// previously-shipped string. What let the member spelling be re-derived at all is
+// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`.
+//
+// NOT A STRUCTURAL ZERO, and this was checked rather than assumed. The doc warned
+// the row was named rather than left in the corpus because "a later generator edit
+// could stop emitting the `sep2` separation ... and the regression would vanish
+// with the rows (#1456/#1460/#1478)". `spec_corpus::DENSE_SEPARATIONS` is still
+// `[0, 1, 2, 3, 5, 8]`, so the generator still builds the sep2 design and the
+// convergence is measured over a corpus that can still express the shape.

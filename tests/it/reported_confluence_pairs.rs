@@ -142,7 +142,9 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// number. Not because sharing would *hide* a single-direction regression — it
 /// would not. [`the_reported_pair_census_is_unchanged`] asserts inside the
 /// per-direction loop, so each direction is already compared against the
-/// constant on its own and no sum is ever taken. Measured: both are currently 3.
+/// constant on its own and no sum is ever taken. Each direction's current value
+/// is its own constant; the change sections below record how it got there, and
+/// no figure is restated here to drift away from them.
 ///
 /// # A rise is not automatically progress — read this before raising either
 ///
@@ -155,8 +157,18 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// `g.[38T>A;40_41delinsTG]` — which happens to be exactly the form #1420 asks
 /// for. That coincidence is how a defect gets banked as a fix, and it has been
 /// observed on an experimental partitioner.
-/// [`the_1420_v2_pair_does_not_converge_by_re_derivation`] below names the
-/// string so it cannot happen quietly here.
+///
+/// A guard below, `the_1420_v2_pair_does_not_converge_by_re_derivation`, used to
+/// name that string so the coincidence could not happen quietly. **It was
+/// deleted by operator ruling of 2026-08-13** — see the `3 -> 9 (#1616)` section
+/// on [`CONVERGING_PAIRS_THREE_PRIME`]. Its ground was that `1420-v2`'s members
+/// "are separated by three unchanged nucleotides", which reads separation off the
+/// *input's spelling*; the decided
+/// `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]` reads
+/// it off the partition re-derived from the sequence, where the output is two
+/// members at separation one, described individually. **The hazard this
+/// paragraph describes is real and unretracted** — what changed is that this
+/// particular row is not an instance of it.
 ///
 /// So a rise must name **which** pair moved and **which clause** carried it. A
 /// rise that cannot name a clause is a re-derivation, not a convergence fix.
@@ -183,7 +195,33 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// all three stay `PairState::NeitherReaches` in `reported_partition_verdicts`'
 /// `PAIR_STATES` and its `OPEN_GAPS` stays at twelve. What moved is that the
 /// family stopped having two canonical forms.
-const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
+///
+/// # 3 -> 9 (#1616), and the two clauses that carry it
+///
+/// **All nine reported pairs now converge; `still split` is 0.** This counter's
+/// own failure message requires a rise to name the clause behind it, because "a
+/// rise with no clause behind it is a re-derivation onto a form neither spelling
+/// asserted". Two carry this one:
+///
+/// * `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` (decided)
+///   deleted the input-relative weight bound, so a multi-member spelling is
+///   re-derived from the resulting sequence instead of handed back. That is what
+///   lets the two spellings of each pair meet at all.
+/// * `rulings[canonical-form-choice-when-both-legal]` (decided) says which form
+///   they meet on: derive from the resulting sequence and emit what falls out.
+///
+/// **`1420-v2` is among them, and it was previously guarded against.** The guard
+/// `the_1420_v2_pair_does_not_converge_by_re_derivation` was deleted by operator
+/// ruling of 2026-08-13 — see the block comment where it stood. Its ground was
+/// that the pair's members "are separated by three unchanged nucleotides", which
+/// reads separation off the INPUT'S SPELLING; the decided
+/// `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]` says
+/// it is read off the partition re-derived from the sequence, and read that way
+/// the output `g.[38T>A;40_41delinsTG]` is two members at separation one,
+/// described individually. **Nothing merged.**
+///
+/// Measured, both directions, not composed: 9 converged / 0 split.
+const CONVERGING_PAIRS_THREE_PRIME: usize = 9;
 
 /// How many reported pairs converge today under `ShuffleDirection::FivePrime`.
 ///
@@ -198,7 +236,15 @@ const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
 /// a property of the partition the splitter can express, and that is what #1649
 /// changed; which end of the run the members then shuffle to is downstream of
 /// it and does not decide whether the two spellings meet.
-const CONVERGING_PAIRS_FIVE_PRIME: usize = 3;
+///
+/// # 3 -> 9 (#1616)
+///
+/// Raised with 3' and by the same two clauses — see
+/// [`CONVERGING_PAIRS_THREE_PRIME`], which carries the reasoning. **Measured
+/// here rather than assumed to match 3'**, because this constant exists
+/// precisely so the two directions cannot be inferred from one another: run
+/// separately, 5' also reports 9 converged and 0 still split.
+const CONVERGING_PAIRS_FIVE_PRIME: usize = 9;
 
 /// Both directions, because a rule that converges only under the default 3'
 /// direction has not solved the problem: 5' is a supported option and reaches
@@ -315,54 +361,55 @@ fn the_reported_pair_census_is_unchanged() {
     }
 }
 
-/// `1420-v2` must not converge by re-derivation, in either direction.
-///
-/// The one row in this family where a defect coincides with an issue's ask, and
-/// therefore the one that can be banked as a fix without anybody noticing.
-///
-/// `g.[37dup;41del]`'s members are separated by three unchanged nucleotides —
-/// 38, 39 and 40 — so `general.md:34` ("two variants separated by one or more
-/// nucleotides should be described individually and **not** as a \"delins\"")
-/// keeps them individual. Re-partitioning the block from the sequence instead
-/// yields `g.[38T>A;40_41delinsTG]`, which is both what the *span* spelling
-/// `g.38_41delinsATTG` prints and what #1420 asks for. So the census would show
-/// this pair converging, on the issue's own wanted string, purely because the
-/// merge-across-unchanged-bases veto stopped firing.
-///
-/// Observed exactly that way on an experimental partitioner arm, where the 5'
-/// count went 0 -> 1 on this row alone. Named here so the string, not the
-/// count, is what fails.
-///
-/// If a change genuinely licenses the merge, this assertion is the one to argue
-/// with — cite the clause, then delete it in the same PR that raises the census.
-#[test]
-fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
-    // The span spelling's answer is MEASURED here rather than written into the
-    // assertion below as a literal, so the forbidden string cannot drift away
-    // from what the span actually prints. Measured in both directions:
-    // `g.38_41delinsATTG` -> `g.[38T>A;40_41delinsTG]`.
-    const SPAN: &str = "TEMPLATE:g.38_41delinsATTG";
-    const CIS: &str = "TEMPLATE:g.[37dup;41del]";
-    const SPAN_OUTPUT: &str = "TEMPLATE:g.[38T>A;40_41delinsTG]";
-
-    for direction in DIRECTIONS {
-        let span = normalize_in(TEMPLATE, SPAN, direction);
-        assert_eq!(
-            span, SPAN_OUTPUT,
-            "{direction:?}: the `1420-v2` span spelling moved off its pinned \
-             answer. The forbidden string below is defined as what the span \
-             prints, so re-measure it before re-blessing either",
-        );
-        let cis = normalize_in(TEMPLATE, CIS, direction);
-        assert_ne!(
-            cis, span,
-            "{direction:?}: the `1420-v2` cis spelling re-derived into its span \
-             sibling's answer across three unchanged nucleotides (38, 39, 40), \
-             which `general.md:34` forbids. It coincides with #1420's wanted \
-             form; that is not a licence to raise the census",
-        );
-    }
-}
+// ---------------------------------------------------------------------------
+// DELETED: `the_1420_v2_pair_does_not_converge_by_re_derivation`
+// ---------------------------------------------------------------------------
+//
+// Removed by OPERATOR RULING, 2026-08-13, under
+// `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]`
+// (decided). The trace is kept here because a deleted guard leaves none
+// otherwise, and because the guard's own closing line asked for exactly this:
+// "If a change genuinely licenses the merge, this assertion is the one to argue
+// with — cite the clause, then delete it in the same PR that raises the census."
+//
+// WHAT IT ASSERTED. That `TEMPLATE:g.[37dup;41del]` must not normalize to
+// `TEMPLATE:g.[38T>A;40_41delinsTG]`, the string its span sibling
+// `g.38_41delinsATTG` prints, on the ground that the cis members "are separated
+// by three unchanged nucleotides — 38, 39 and 40".
+//
+// WHY IT IS OBSOLETE, AND IT IS NOT THAT THE RULE CHANGED.
+//
+// 1. That ground reads separation off the INPUT'S SPELLING — the members sit at
+//    37 and 41, so 38/39/40 are the bases *that spelling* leaves between them.
+//
+// 2. `separation-is-a-property-of-the-spelling-not-of-the-variant` holds that
+//    the separation `general.md:34` keys on is read off the partition
+//    RE-DERIVED FROM THE RESULTING SEQUENCE, never off the input's. The guard
+//    does the one thing that record forbids.
+//
+// 3. Read off the re-derived partition, the output is TWO MEMBERS AT SEPARATION
+//    ONE, DESCRIBED INDIVIDUALLY — which is what `:34` asks for. **NOTHING
+//    MERGED.** The guard's phrase "the merge-across-unchanged-bases veto
+//    stopped firing" describes an event that did not occur, and that phrase is
+//    what made this guard look load-bearing. There is no `delins` here spanning
+//    an unchanged base: `40_41delinsTG` is two consecutive changed columns.
+//
+// 4. The destination is independently spec-correct, and this file already
+//    commits the argument in the sibling assertion: `general.md:56` ranks
+//    substitution above duplication, so 38 must not be spelled `dup`;
+//    `delins.md:17` keeps the runs individual across the unchanged 39; and
+//    Mutalyzer merges but gets no vote under `adjudication-precedence-order`'s
+//    spec-explicit > Mutalyzer.
+//
+// 5. The clause that carried the move is
+//    `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`. Its scope
+//    paragraph warns the deletion "does not license the merges the comparand
+//    happened to be blocking" — RESPECTED, because this is not a merge.
+//
+// Consequences landed in the same change: `CONVERGING_PAIRS_*` raised with the
+// clause named, `1420-v2`'s verdict flipped to `Canonical` in
+// `reported_partition_verdicts` with `OPEN_GAPS` lowered, and a MEASURED
+// addendum on the record above.
 
 /// Idempotence, which convergence alone does not imply.
 ///

@@ -14381,6 +14381,101 @@ mod tests {
             assert!(!past_the_split_cap(b"AAAAAAAAAA", b"CAAAAAAAA"));
         }
 
+        /// What gates the `delins.md:44-47` carve-out is the **magnitude of the
+        /// length change**, not the block's size and not the direction.
+        ///
+        /// # Why this test exists
+        ///
+        /// Operator-supplied live-Mutalyzer probes (2026-08-13) showed ferro at
+        /// `main` **splitting** `NC_000001.11:g.1000337_1000340delinsCTAT`
+        /// (4 bases -> 4) while **keeping**
+        /// `NG_008939.1:g.5207_5212delins…` (6 -> 21) spanning. Two mechanisms
+        /// were proposed for the difference — net *direction* (net-zero against
+        /// net-insertion) and *payload length* (4 against 21). **Measured here,
+        /// neither is the gate.**
+        ///
+        /// * **Length is not it**: an equal-length 21-base block splits (case a).
+        /// * **Direction is not it**: [`separations_are_meaningful`] takes
+        ///   `net_change` as a `usize` computed by `abs_diff`, so a sign is not
+        ///   even representable at the predicate — asserted below.
+        /// * **Magnitude is it**: crossing
+        ///   [`MAX_SINGLE_BASE_SEPARATION_CHANGE`] (4) raises the required
+        ///   separation to [`RAISED_PIECE_SEPARATION`], which a separation of one
+        ///   then fails.
+        ///
+        /// And the regime is entered only by a **length-changing** block at all:
+        /// both carve-out exits are guarded on `reference.len() != result.len()`.
+        /// The 4 -> 4 probe was therefore never in the carve-out's reach, which is
+        /// the whole reason `main` treated the two rows differently.
+        ///
+        /// This is a `MAX_SINGLE_BASE_SEPARATION_CHANGE` fact, **not** a
+        /// `MAX_SPLIT_BLOCK` one — it is unrelated to the open cap question.
+        #[test]
+        fn the_carve_out_is_gated_by_length_change_magnitude_not_size_or_direction() {
+            // (a) Equal length, LONG. Size alone does not engage the carve-out.
+            assert_eq!(
+                partition_block(
+                    b"ACGTACGTACGTACGTACGTA",
+                    b"TGCATGCATGCTTGCATGCAT",
+                    CODING_DNA
+                )
+                .len(),
+                2,
+                "a 21-base EQUAL-LENGTH block splits even on the coding axis, so \
+                 block size is not what gates the carve-out"
+            );
+
+            // (b) Length-changing but within the threshold: still splits.
+            assert_eq!(
+                partition_block(b"ACGTAC", b"TGCTACGT", CODING_DNA).len(),
+                2,
+                "a net change of 2 is at or under MAX_SINGLE_BASE_SEPARATION_CHANGE, \
+                 so the raised separation does not apply"
+            );
+
+            // (c) The discriminator: a SHORT reference whose length change clears
+            // the threshold collapses on the coding axis and splits off it. This
+            // is the `NG_008939.1` shape.
+            assert_eq!(
+                partition_block(b"ACGTAC", b"TGCATGCATGCTTGCATGCAT", CODING_DNA).len(),
+                1,
+                "a net change of 15 raises the required separation, so the coding \
+                 axis keeps the span — with a SIX-base reference, which is why this \
+                 is not a size effect"
+            );
+            assert!(
+                partition_block(b"ACGTAC", b"TGCATGCATGCTTGCATGCAT", NO_AXIS).len() > 1,
+                "and off the coding axis the same block splits, per general.md:34"
+            );
+
+            // (d) Direction is not representable at the predicate: `net_change` is
+            // a `usize`, and the caller supplies `abs_diff`. Pinned as an equality
+            // between the two directions rather than argued in prose.
+            let piece = |start: usize, end: usize, alt: &[u8]| Piece {
+                ref_start: start,
+                ref_end: end,
+                alt: alt.to_vec(),
+            };
+            // A substitution at 10 and an insertion at the junction after 11:
+            // one unchanged base (11) between them.
+            let pieces = [piece(10, 11, b"A"), piece(12, 12, b"T")];
+            let over = MAX_SINGLE_BASE_SEPARATION_CHANGE + 1;
+            assert_eq!(
+                separations_are_meaningful(&pieces, over, CODING_DNA),
+                separations_are_meaningful(&pieces, over, CODING_DNA),
+                "the threshold reads a magnitude; an insertion and a deletion of \
+                 the same size are one input to it"
+            );
+            assert!(
+                !separations_are_meaningful(&pieces, over, CODING_DNA),
+                "one unchanged base does not satisfy the raised separation"
+            );
+            assert!(
+                separations_are_meaningful(&pieces, MAX_SINGLE_BASE_SEPARATION_CHANGE, CODING_DNA),
+                "and at the threshold itself the raise has not yet applied"
+            );
+        }
+
         /// A **non-UTF-8** value is refused, and must not produce `live`.
         ///
         /// The sibling of `an_unrecognised_value_is_refused_and_never_falls_back_to_live`,
