@@ -227,8 +227,10 @@ const CONVERGING_PAIRS_THREE_PRIME: usize = 9;
 ///
 /// See [`CONVERGING_PAIRS_THREE_PRIME`] for why this is tracked separately
 /// rather than shared, and for why a rise in either direction has to name the
-/// clause that carried it. Measured: currently 3, same as 3' — the same three
-/// `1419-r*` pairs, raised from 0 by #1649.
+/// clause that carried it. This constant's current value is its own; the change
+/// sections below record how it got there, and no figure is restated here to
+/// drift away from them. #1649 raised it from 0 to 3 — the three `1419-r*`
+/// pairs, same as 3'.
 ///
 /// The two directions agreeing here is worth reading rather than skipping: the
 /// pairs converge under 5' on a *different* string in `1419-r3`'s case, because

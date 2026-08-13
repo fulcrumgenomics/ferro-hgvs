@@ -819,10 +819,11 @@ const FIVE_PRIME_MOVERS: &[&str] = &[
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
-/// Twelve of eighteen. It was nine — exactly one per pair — and #1419's three
-/// pairs now contribute **two** each, because neither of their spellings prints
-/// the wanted form any more — [`PairState::NeitherReaches`], which is where that
-/// combination is now expressed. See
+/// Eleven of eighteen. It was nine — exactly one per pair — then #1419's three
+/// pairs began contributing **two** each, because neither of their spellings
+/// prints the wanted form any more — [`PairState::NeitherReaches`], which is
+/// where that combination is now expressed — taking it to twelve. #1616 then
+/// closed `1420-v2`, which is the `12 -> 11` section below. See
 /// [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`].
 ///
 /// **This may only go down.** Up means a change has moved a row *away* from the
@@ -933,7 +934,7 @@ const OPEN_GAPS: usize = 11;
 /// Every reported pair's [`PairState`], pinned per pair and in the table's own
 /// order.
 ///
-/// **Every pair is listed, including the six in the unremarkable state.** That
+/// **Every pair is listed, including the five in the unremarkable state.** That
 /// is the difference between this and the `PAIRS_NO_SPELLING_REACHES` list it
 /// replaces, which named only the exceptional pairs and so could say nothing
 /// about the others: a pair leaving `OneReaches` was a failure of an assertion
@@ -949,14 +950,17 @@ const OPEN_GAPS: usize = 11;
 /// clause** that carried the move. A pair that converged with no clause behind
 /// it is a re-derivation and the census must not move.
 ///
-/// Today: three `NeitherReaches` (#1419's, for the reason on that variant) and
-/// six `OneReaches`. Nothing is `BothReach`; that is the state a fixed pair is
-/// in, and none is fixed.
+/// Today: three `NeitherReaches` (#1419's, for the reason on that variant),
+/// five `OneReaches`, and one `BothReach` — `1420-v2`, whose two spellings both
+/// print the wanted form as of #1616. That entry is not a ratchet: it is derived
+/// from the pair's two `verdict` fields, which moved in the same change under
+/// the clause [`OPEN_GAPS`]'s `12 -> 11 (#1616)` section names
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`).
 const PAIR_STATES: &[(&str, PairState)] = &[
     ("1419-r1", PairState::NeitherReaches),
     ("1419-r2", PairState::NeitherReaches),
     ("1419-r3", PairState::NeitherReaches),
-    ("1420-v2", PairState::OneReaches),
+    ("1420-v2", PairState::BothReach),
     ("1420-v3", PairState::OneReaches),
     ("1420-v4", PairState::OneReaches),
     ("1421-n1", PairState::OneReaches),
@@ -978,7 +982,7 @@ const PAIR_STATES: &[(&str, PairState)] = &[
 /// [`the_pair_state_census_holds`] and in [`PairState::gap_rows`]: neither
 /// compiles until the new variant is given an arm, and the census arm has
 /// nowhere to put its count until this tuple grows too.
-const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 6, 3);
+const PAIR_STATE_CENSUS: (usize, usize, usize) = (1, 5, 3);
 
 /// The state [`PAIR_STATES`] pins for one pair.
 ///
@@ -1197,8 +1201,8 @@ fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
 /// Every canonical row already prints the form its issue asks for.
 ///
 /// The other half of the same claim, and the one that makes `wanted` load-bearing
-/// rather than decorative: for six of the eighteen spellings ferro and the
-/// reporter agree outright — the other twelve are [`OPEN_GAPS`] — and that
+/// rather than decorative: for seven of the eighteen spellings ferro and the
+/// reporter agree outright — the other eleven are [`OPEN_GAPS`] — and that
 /// agreement is what a fix must not disturb.
 #[test]
 fn every_canonical_row_already_prints_its_wanted_form() {
@@ -1483,7 +1487,7 @@ fn the_pair_state_census_holds() {
 /// above reaches fewer rows than it does under 3' — which is exactly why the 5'
 /// answers are now pinned per row rather than left to a convergence count.
 ///
-/// **And it does not reach every gap row even under 3'.** There are twelve gap
+/// **And it does not reach every gap row even under 3'.** There are eleven gap
 /// rows now ([`OPEN_GAPS`]), and the three `1419-r*/span` rows are gap rows that
 /// ferro *splits* rather than returns — see [`PairState::NeitherReaches`], whose
 /// pairs this test exempts from the retention claim while still pinning each
