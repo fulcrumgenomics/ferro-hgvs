@@ -437,7 +437,7 @@ fn splits_into_members(rendered: &str) -> bool {
 /// c   LRG_199t1:c.145_147delinsTGG        1 member   frame -> `:18` fires
 /// r   LRG_199t1:r.(145_147delinsugg)      1 member   frame -> `RNA/delins.md:18`
 /// p   LRG_199p1:p.(Arg49Trp)              1 member   the consequence itself
-/// n   LRG_199t1:n.389_391delinsTGG        1 member   see the caveat below
+/// n   LRG_199t1:n.[389C>T;391C>G]         2 members  no frame -> `:17` governs
 /// g   LRG_199:g.[494841C>T;494843C>G]     2 members  no frame -> `:17` governs
 /// ```
 ///
@@ -446,33 +446,48 @@ fn splits_into_members(rendered: &str) -> bool {
 /// A DNA clause cannot scope an RNA axis; `DNA/delins.md` is jurisdiction over
 /// `g.`/`c.`/`n.`/`m.` and nothing else.
 ///
-/// **The `n.` row is pinned as OBSERVED, not as adjudicated.** `n.` declares a
-/// non-coding DNA reference and so carries no frame of its own, yet it renders
-/// merged here because [`VariantProjection::noncoding`] is derived from the `c.`
-/// form by CDS-offset arithmetic rather than normalized on its own axis —
-/// normalizing `LRG_199t1:n.389_391delinsTGG` directly yields
-/// `n.[389C>T;391C>G]`. Whether the projector or the normalizer is the wrong
-/// side of that is an open question and is deliberately not settled here.
+/// **The `n.` row was pinned as OBSERVED and is now ADJUDICATED — it splits.**
+/// This test's earlier revision recorded it as merged and said in as many words
+/// that "whether the projector or the normalizer is the wrong side of that is an
+/// open question and is deliberately not settled here". It has since been
+/// settled, by `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`
+/// (operator ruling on #1712, 2026-08-13): the **projector** was the wrong side,
+/// so it re-derives the `n.` axis on the `n.` reference instead of reframing the
+/// `c.` form's edit, and `LRG_199t1:n.389_391delinsTGG` becomes the
+/// `n.[389C>T;391C>G]` that normalizing it directly always yielded.
+///
+/// So the change to the pin below is a **re-blessing against a decided ruling**,
+/// not a red guard being loosened. The assertion is exactly as strict as it was
+/// — an exact list, not a floor — and it fails in both directions: an `n.` axis
+/// that went back to merging fails it, and so does a `c.`, `r.` or `p.` axis
+/// that started splitting.
+///
+/// The grounds are the same three this test already gives for `g.`, re-applied:
+/// `:42`'s second conjunct is unstatable on a reference declaring no reading
+/// frame, and `general.md:23`/`:28` make `n.` a mandatory claim that its
+/// reference is a non-coding DNA sequence. Read the record, not this comment.
 #[test]
 fn the_codon_delins_merges_only_on_an_axis_that_declares_a_frame() {
     let projector = slice_projector();
 
-    for (input, transcript, genomic) in [
+    for (input, transcript, genomic, noncoding) in [
         (
             "LRG_199t1:c.145_147delinsTGG",
             "LRG_199t1",
             "LRG_199:g.[494841C>T;494843C>G]",
+            "LRG_199t1:n.[389C>T;391C>G]",
         ),
         // `delins.md:19`'s example, whose stated purpose is to stop tools
         // predicting `p.[Lys79*;Lys79Asn]` for one Lys79Tyr change. That purpose
         // is served on the axes that translate: ferro's `p.` axis renders
         // `p.(Lys79Tyr)` and its `c.` axis keeps the single `delins`. The `g.`
-        // axis carries no such prediction to protect, which is the whole reason
-        // `:42`'s second conjunct cannot be stated there.
+        // and `n.` axes carry no such prediction to protect, which is the whole
+        // reason `:42`'s second conjunct cannot be stated on either.
         (
             "LRG_199t1:c.235_237delinsTAT",
             "LRG_199t1",
             "LRG_199:g.[499798A>T;499800G>T]",
+            "LRG_199t1:n.[479A>T;481G>T]",
         ),
     ] {
         let variant = parse_hgvs(input).unwrap_or_else(|e| panic!("{input} must parse: {e}"));
@@ -506,12 +521,14 @@ fn the_codon_delins_merges_only_on_an_axis_that_declares_a_frame() {
         // their own document's authority (`DNA/delins.md:18` and
         // `RNA/delins.md:18` state the same exception separately, the latter
         // with its own `r.142_144delinsugg` example); `p.` is the consequence
-        // itself. `g.` declares a genomic reference, where `:42`'s second
-        // conjunct — "together affecting one amino acid" — cannot be stated, so
-        // `DNA/delins.md:17` governs and the members stay individual.
+        // itself. `g.` and `n.` declare reference types that carry no reading
+        // frame — a linear genomic sequence and a non-coding DNA sequence,
+        // `general.md:26` and `:28` — so `:42`'s second conjunct ("together
+        // affecting one amino acid") cannot be stated on either, and
+        // `DNA/delins.md:17` governs both unopposed.
         //
-        // `n.` sits in this list as OBSERVED, not as ruled; see the caveat in
-        // this test's doc comment.
+        // `n.` joined this list by ruling, not by observation; see the doc
+        // comment above, and the record it names.
         let split: Vec<char> = axes
             .iter()
             .filter(|(_, rendered)| splits_into_members(rendered))
@@ -519,8 +536,8 @@ fn the_codon_delins_merges_only_on_an_axis_that_declares_a_frame() {
             .collect();
         assert_eq!(
             split,
-            vec!['g'],
-            "{input}: the genomic axis and only the genomic axis may render \
+            vec!['g', 'n'],
+            "{input}: the frameless axes and only the frameless axes may render \
              individual descriptions here; rendered {axes:?}"
         );
         // The exact string, not only the member count: a split that landed on
@@ -533,6 +550,21 @@ fn the_codon_delins_merges_only_on_an_axis_that_declares_a_frame() {
             Some(genomic),
             "the genomic axis of `{input}` must be the individual descriptions \
              `DNA/delins.md:17` asks for, re-coordinated"
+        );
+        // The same, on the axis this ruling moved. Pinned as the exact string
+        // for the same reason: the member count alone would be satisfied by a
+        // split at the wrong coordinates, and the whole ground for splitting
+        // here is that these are the members re-derived from the `n.`
+        // reference — the string bare normalization of the merged form already
+        // produced.
+        assert_eq!(
+            axes.iter()
+                .find(|(code, _)| *code == 'n')
+                .map(|(_, rendered)| rendered.as_str()),
+            Some(noncoding),
+            "the non-coding axis of `{input}` must be the individual \
+             descriptions `DNA/delins.md:17` asks for, in the transcript's own \
+             frame"
         );
     }
 }
@@ -586,12 +618,30 @@ fn a_bare_genomic_description_still_has_no_codon_frame() {
 /// axis as well:
 ///
 /// ```text
-/// tx:c.4_6delinsATA    ->  c. c.4_6delinsATA        n. r.  all ONE member
+/// tx:c.4_6delinsATA    ->  c. c.4_6delinsATA        r.  ONE member
+///                          n. n.[4C>A;6G>A]         <- frameless, see below
 /// REF:g.4_6delinsATA   ->  g. g.[4C>A;6G>A]         <- #79's scope, unchanged
-///                          c. c.4_6delinsATA        n. r.  all ONE member (was two)
+///                          c. c.4_6delinsATA        r.  ONE member (was two)
+///                          n. n.[4C>A;6G>A]         <- frameless, see below
 /// ```
 ///
 /// Both spellings denote the same bases and the same `p.(Leu2Ile)`.
+///
+/// **The `n.` rows were ONE member when this test was written, and are two
+/// now.** That is a re-blessing against
+/// `rulings[noncoding-axis-is-re-derived-on-its-own-reference]` (operator ruling
+/// on #1712, 2026-08-13), not a weakening: the projector now re-derives the
+/// `n.` axis on the `n.` reference instead of reframing the `c.` form's edit,
+/// and `n.` declares a non-coding DNA reference (`general.md:23`/`:28`) on which
+/// `DNA/delins.md:42`'s "together affecting one amino acid" cannot be stated.
+///
+/// **It does not touch what this test is about.** The question here is whether
+/// the split is a property of the *variant* or of the *authoring spelling*, and
+/// the answer is unchanged — every axis renders identically from the `c.` and
+/// the `g.` spelling. What moved is which axes split, on grounds that are the
+/// same for both columns; the property assertion below is restated as the
+/// agreement it always meant rather than as the constant zero it happened to
+/// be, so it still fails if the two columns ever disagree.
 ///
 /// **Be exact about which line was the defect, because one of them was not.**
 /// `REF:g.[4C>A;6G>A]` as the reported genomic axis of a *genomic* input is
@@ -639,34 +689,37 @@ fn the_same_codon_delins_renders_alike_whichever_axis_it_is_authored_on() {
     let coding = axis_map(&projector, "tx:c.4_6delinsATA");
     let genomic = axis_map(&projector, "REF:g.4_6delinsATA");
 
-    // The transcript spelling: the carve-out applies, so nothing splits.
+    // The transcript spelling: the carve-out applies on the framed axes, so
+    // `c.` and `r.` stay merged. `n.` is re-derived on its own frameless
+    // reference and splits — see the ruling named in the doc comment.
     assert_eq!(
         coding,
         vec![
             ('c', "tx:c.4_6delinsATA".to_string()),
-            ('n', "tx:n.4_6delinsATA".to_string()),
+            ('n', "tx:n.[4C>A;6G>A]".to_string()),
             ('r', "tx:r.(4_6delinsaua)".to_string()),
             ('p', "txp:p.(Leu2Ile)".to_string()),
         ],
-        "the transcript spelling is the control and must stay merged"
+        "the transcript spelling is the control: `c.` and `r.` merged, `n.` split"
     );
 
     // The genomic spelling of the same variant. The `g.` line is #79's scope and
     // stays split; the `c.`/`n.`/`r.` lines below it are re-derived against the
-    // transcript whose frame is known, so they now match the control above.
+    // transcript whose frame is known, so they match the control above
+    // axis-for-axis — which is the whole claim of this test.
     assert_eq!(
         genomic,
         vec![
             ('g', "REF:g.[4C>A;6G>A]".to_string()),
             ('c', "REF(tx):c.4_6delinsATA".to_string()),
-            ('n', "REF(tx):n.4_6delinsATA".to_string()),
+            ('n', "REF(tx):n.[4C>A;6G>A]".to_string()),
             ('r', "REF(tx):r.(4_6delinsaua)".to_string()),
             ('p', "txp:p.(Leu2Ile)".to_string()),
         ],
         "the transcript axes are rendered against a transcript whose reading frame \
-         ferro has in hand, so none of them may carry the form `DNA/delins.md:42` \
-         calls \"not correct\"; the reported `g.` line is the input's own \
-         normalization and stays as #79 left it"
+         ferro has in hand, so no axis that DECLARES that frame may carry the form \
+         `DNA/delins.md:42` calls \"not correct\"; the reported `g.` line is the \
+         input's own normalization and stays as #79 left it"
     );
 
     // Stated as the property too, so a later change that moves the strings but
@@ -676,19 +729,39 @@ fn the_same_codon_delins_renders_alike_whichever_axis_it_is_authored_on() {
     // comparable: the `g.` axis has no frame to consult when the caller wrote a
     // bare `g.` description, so including it would compare an axis that has the
     // frame against one that does not and the difference would prove nothing.
-    let transcript_splits = |axes: &[(char, String)]| {
+    //
+    // The comparison is between the two columns, not against zero. It was
+    // written as `== 0 && == 0` when every transcript axis was merged, and that
+    // spelling conflated two claims: "the two spellings agree", which is this
+    // test's subject, and "nothing splits", which is a fact about which axes
+    // declare a frame and is now decided elsewhere
+    // (`rulings[noncoding-axis-is-re-derived-on-its-own-reference]`). Only the
+    // first belongs here — asserting the second would make this test fail
+    // whenever that ruling is applied, which is what it just did.
+    let transcript_splits = |axes: &[(char, String)]| -> Vec<char> {
         axes.iter()
             .filter(|(code, rendered)| *code != 'g' && splits_into_members(rendered))
-            .count()
+            .map(|(code, _)| *code)
+            .collect()
     };
-    assert!(
-        transcript_splits(&coding) == 0 && transcript_splits(&genomic) == 0,
-        "one variant, two spellings, and its transcript axes must agree about member \
-         count ({} split from the `c.` spelling, {} from the `g.` one). Both are \
-         rendered against the same transcript and the same codon, so both must be \
-         zero.",
+    assert_eq!(
+        transcript_splits(&coding),
+        transcript_splits(&genomic),
+        "one variant, two spellings, and its transcript axes must agree about \
+         WHICH of them splits ({:?} from the `c.` spelling, {:?} from the `g.` \
+         one). Both are rendered against the same transcript and the same codon, \
+         so the authoring axis must make no difference.",
         transcript_splits(&coding),
         transcript_splits(&genomic)
+    );
+    // …and the set is not vacuous. Compared as the exact axis rather than as a
+    // count, so an equality between two empty vectors — which is what a
+    // projection that stopped rendering `n.` would produce — cannot pass.
+    assert_eq!(
+        transcript_splits(&coding),
+        vec!['n'],
+        "`n.` is the one transcript axis that declares no reading frame, so it \
+         is the one that must split; the framed `c.`/`r.` axes must not"
     );
 }
 

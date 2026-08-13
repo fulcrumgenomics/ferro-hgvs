@@ -421,7 +421,51 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     //   shipping path: the pass is gated on `PartitionRule::CanonicalCoalesced`
     //   while the shipped rule is `Live`. That is a separate change which #1649
     //   neither makes nor blocks, and it is deliberately not made here.
-    (Status::ProjectionSplitsSingleMember, 12),
+    //
+    // # 12 -> 18 (#1712), and it is the SAME move the paragraph above allows
+    //
+    // Six rows enter, and **every one of them is a `project-n` row** — which is
+    // the check to run before reading any further, because the ruling that
+    // causes this reaches exactly one axis:
+    //
+    // ```text
+    // project-n/LRG_199t1:c.145_147delinsTGG   -> LRG_199t1:n.[389C>T;391C>G]
+    // project-n/LRG_199t1:c.235_237delinsTAT   -> LRG_199t1:n.[479A>T;481G>T]
+    // project-n/NM_004006.2:c.145_147delinsTGG -> NM_004006.2:n.[389C>T;391C>G]
+    // project-n/c.235_237delinsTAT             -> NM_004006.2:n.[479A>T;481G>T]
+    // project-n/c.4375_4376delCGinsAGTT        -> NM_004006.2:n.[4619C>A;4620_4621insTT]
+    // project-n/c.4375_4376delinsAGTT          -> NM_004006.2:n.[4619C>A;4620_4621insTT]
+    // ```
+    //
+    // (The last two are two spellings of one input, so the six rows are five
+    // distinct variants.)
+    //
+    // `PASSING_CENSUS`'s `ProjectionPinned` falls by the same six (1167 ->
+    // 1161), so the pair still moves in equal and opposite steps and no row left
+    // the enumeration — the check the "driving this to zero is not the goal"
+    // paragraph asks for, applied.
+    //
+    // **OPERATOR RULING, 2026-08-13 —
+    // `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`.** The
+    // projector re-derives the `n.` axis on its own reference instead of
+    // reframing the form the `c.` frame chose, which closes the half
+    // `projection-codon-exception-is-decided-by-the-rendered-axis` parked. So
+    // these six rows are the `n.` analogue of the two `project-g/LRG_199t1`
+    // rows already sitting here, and they are here for the identical reason:
+    // `DNA/delins.md:42`'s antecedent is unstatable on a reference that
+    // declares no reading frame, so `:17` governs unopposed and the members
+    // stay individual.
+    //
+    // **Read this as the ruling's cost, not as a regression.** The parked
+    // record already recorded the same shape as its own accepted cost — the two
+    // `project-g` rows "KEEP sitting in `ProjectionSplitsSingleMember`, so a
+    // reader of that budget alone sees two rows parked in a divergence status
+    // indefinitely. That is the ruling and not a regression." Six more rows are
+    // now parked there on the same ground. Merging them back is what the ruling
+    // refuses; a change that takes this **below** 18 has merged something
+    // `DNA/delins.md:17` wanted split, which is the direction the paragraph
+    // above forbids.
+    (Status::ProjectionSplitsSingleMember, 18),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -525,7 +569,16 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // `NC_000023.11(NM_004006.2):c.1704+1del` / `:n.1948+1del` (and the `dup`
     // pair). Those are the same accession repair, on the axes that were already
     // rendering.
-    (Status::ProjectionPinned, 1167),
+    //
+    // 1167 -> 1161 (#1712), and it is a re-partition rather than a capability
+    // loss: the six rows are all `project-n`, they move to
+    // `ProjectionSplitsSingleMember`, and that status takes the matching +6
+    // (12 -> 18). Equal and opposite, as this pair must always be read — no row
+    // left the enumeration. The adjudication, the row list and why the rows are
+    // parked in a divergence status deliberately are recorded with that status
+    // in `DIVERGENCE_BUDGET`; the ruling is
+    // `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`.
+    (Status::ProjectionPinned, 1161),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
