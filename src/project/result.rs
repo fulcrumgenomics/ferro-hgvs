@@ -67,7 +67,9 @@ pub struct VariantProjection {
     pub coding: Option<HgvsVariant>,
     /// The `n.` (transcript-relative) representation on this transcript, when
     /// derivable. Populated for both coding transcripts (derived genome-free
-    /// from the `c.` form via CDS-offset arithmetic) and non-coding transcripts
+    /// from the `c.` form via CDS-offset arithmetic, then normalized on the
+    /// transcript's own reference (#1712), so a merge the `c.` reading frame
+    /// made can come back as a cis allele of its members) and non-coding transcripts
     /// (the same `Tx` form also carried in `coding`). `None` when no transcript
     /// coordinate is available (e.g. an empty allele).
     ///
