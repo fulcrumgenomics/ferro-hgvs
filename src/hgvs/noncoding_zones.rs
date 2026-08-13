@@ -127,12 +127,12 @@
 //! on user demand** — if someone reports a real `n.*N` corpus, the honest
 //! response is to move it onto the `n.-N` schedule, not to defend the refusal.
 //!
-//! An amendment to `rulings[absolute-prohibition-enforcement-stage]` recording
-//! this carve-out is **drafted and awaiting operator sign-off**; it is not
-//! written into the ledger here, because that record is a signed operator ruling
-//! and amending it is not this change's to make. `issue_1748_noncoding_axis_zones`
-//! carries the departure as a committed record in the meantime, so the next
-//! reader meets it as a disclosed decision rather than as a contradiction.
+//! The carve-out is **recorded in the ledger**, as the `AMENDMENT, 2026-08-12`
+//! section of `rulings[absolute-prohibition-enforcement-stage]`'s rationale, so
+//! the departure and the record it departs from sit in one place.
+//! `issue_1748_noncoding_axis_zones` pins its *shape* —
+//! `the_unconditional_arm_is_a_disclosed_departure` — so neither arm can be
+//! quietly moved onto the other's schedule without the amendment moving too.
 //!
 //! # What it is keyed on
 //!

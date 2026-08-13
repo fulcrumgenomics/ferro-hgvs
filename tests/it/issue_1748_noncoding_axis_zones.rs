@@ -103,12 +103,11 @@
 //! disclosed under rule 7, and **revisitable on user demand**: a real `n.*N`
 //! corpus is grounds to move it onto the `n.-N` schedule, not to defend it.
 //!
-//! An amendment to `rulings[absolute-prohibition-enforcement-stage]` recording
-//! the carve-out is drafted and **awaiting operator sign-off**. It is not written
-//! into the ledger by this change, because that record is a signed operator
-//! ruling. `the_unconditional_arm_is_a_disclosed_departure` below is the
-//! committed record in the meantime, so the next reader meets a disclosed
-//! decision rather than a contradiction.
+//! The carve-out is **recorded in the ledger**, as the `AMENDMENT, 2026-08-12`
+//! section of `rulings[absolute-prohibition-enforcement-stage]`'s rationale.
+//! `the_unconditional_arm_is_a_disclosed_departure` below pins its *shape*, so
+//! the reader meets a disclosed decision in both places and neither arm can be
+//! moved onto the other's schedule without the amendment moving too.
 //!
 //! # What this is NOT about — the coding axis
 //!
@@ -447,8 +446,8 @@ fn the_rna_axis_is_left_alone() {
 ///   scoping: that record rejected unconditional refusal because it "would newly
 ///   refuse inputs ferro accepts today, with no escape for a caller
 ///   round-tripping a real-world corpus", and for this shape there is no such
-///   caller — **0 of 103,762** committed `n.`-axis corpus rows. An amendment to
-///   that record is drafted and awaiting operator sign-off.
+///   caller — **0 of 103,762** committed `n.`-axis corpus rows. That record now
+///   carries the carve-out itself, as its `AMENDMENT, 2026-08-12` section.
 /// - `n.-N` — refused at **strict** parse only, as `W4008`, exactly as that
 ///   ruling schedules. **5 of 103,762** rows use it and NCBI publishes all five.
 ///
