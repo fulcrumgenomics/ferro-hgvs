@@ -1073,8 +1073,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fasta = dir.path().join("supp.fna");
         write_fasta(&fasta, &[("NM_000001.1", "GENEA", "AAAA")]);
-        // A hollow row is still a row: the key sets agree, so there is nothing to repair
-        // here. Usability is PR #1732's question and deliberately not this predicate's.
+        // A hollow row is still a row, so the key sets agree and this predicate is
+        // satisfied. Whether that row's DERIVED `sequence_length` is stale is PR #1732's
+        // question, and it is deliberately not a term here: re-deriving it from the FASTA
+        // rewrites only the sidecar, so it must not make a 1.3 GB artifact dirty.
         let meta = metadata(vec![hollow_row("NM_000001.1")]);
         // A complete artifact carries its index; without one the store is dirty, which
         // `a_missing_or_drifted_index_makes_the_store_dirty` pins separately.
@@ -1350,8 +1352,138 @@ mod tests {
 
         assert_eq!(headers(&fasta), vec!["NM_000001.1"]);
         assert_eq!(source.calls(), 0);
-        // Key sets already agreed, so this was the fixed point and nothing was rewritten.
-        assert_eq!(before, artifact_state(&fasta));
+        // Key sets already agreed, so the FASTA and its index were already the fixed point
+        // and neither is rewritten. The sidecar is: #1732 re-derives the hollow row's
+        // `sequence_length` from the FASTA, which is a **derived** field and therefore
+        // repairable with no source call — which is why `source.calls()` above is still 0.
+        // Pinned by `a_hollow_sidecar_row_is_repaired_from_the_fasta_without_a_fetch`.
+        assert_eq!(
+            before[..2],
+            artifact_state(&fasta)[..2],
+            "repairing a derived field must not rewrite the authoritative FASTA or its index"
+        );
+    }
+
+    #[test]
+    fn a_hollow_sidecar_row_is_repaired_from_the_fasta_without_a_fetch() {
+        // #1722's producer half, and the ruling it was fixed under: **never fetch to
+        // recover a value you can compute**. `sequence_length` is derived — every site
+        // that builds a row sets it to the length of the sequence it just wrote — so a
+        // hollow row whose accession is already in the FASTA is a stale derived field, not
+        // a missing fetch. All 116,572 hollow rows of the shipped artifact are in its
+        // FASTA, which is why #1791's presence-keyed resume filter admits none of them and
+        // why the repair has to be local.
+        let dir = tempfile::tempdir().unwrap();
+        let fasta = dir.path().join("supp.fna");
+        write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
+        std::fs::write(
+            metadata_path_for(&fasta),
+            serde_json::to_vec_pretty(&metadata(vec![hollow_row("NM_000001.1")])).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            sibling_with_suffix(&fasta, ".fai"),
+            "NM_000001.1\t10\t19\t10\t11\n",
+        )
+        .unwrap();
+
+        let source = FakeEfetch::new(&[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
+        fetch_fasta_to_file_with(&["NM_000001.1".to_string()], &fasta, false, &source).unwrap();
+
+        assert_eq!(
+            source.calls(),
+            0,
+            "a derived field is computed from the FASTA, never fetched"
+        );
+        let repaired: SupplementalMetadata =
+            serde_json::from_slice(&std::fs::read(metadata_path_for(&fasta)).unwrap()).unwrap();
+        let row = &repaired.transcripts["NM_000001.1"];
+        assert_eq!(
+            row.sequence_length, 10,
+            "the hollow row is no longer hollow"
+        );
+        assert_eq!(
+            row.cds_start, None,
+            "a CDS is sourced from GenBank and stays absent"
+        );
+    }
+
+    #[test]
+    fn a_repaired_sidecar_is_the_fixed_point_on_the_next_run() {
+        // The repair must converge, or every provisioning run rewrites a 24 MB sidecar for
+        // nothing. Seeded from the damaged state, as this module's fixed-point tests are.
+        let dir = tempfile::tempdir().unwrap();
+        let fasta = dir.path().join("supp.fna");
+        write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
+        std::fs::write(
+            metadata_path_for(&fasta),
+            serde_json::to_vec_pretty(&metadata(vec![hollow_row("NM_000001.1")])).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            sibling_with_suffix(&fasta, ".fai"),
+            "NM_000001.1\t10\t19\t10\t11\n",
+        )
+        .unwrap();
+        let source = FakeEfetch::new(&[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
+        let requested = vec!["NM_000001.1".to_string()];
+
+        fetch_fasta_to_file_with(&requested, &fasta, false, &source).unwrap();
+        let repaired = artifact_state(&fasta);
+
+        fetch_fasta_to_file_with(&requested, &fasta, false, &source).unwrap();
+
+        assert_eq!(
+            repaired,
+            artifact_state(&fasta),
+            "a repaired artifact is the fixed point; the second run writes no byte"
+        );
+        assert_eq!(source.calls(), 0);
+    }
+
+    #[test]
+    fn a_repair_survives_the_commit_that_runs_alongside_it() {
+        // The two repairs compose or they do not, and `commit` fills only *missing* rows
+        // (`or_insert_with`), so a row it already has is carried through as-is. That is
+        // what makes the ordering load-bearing: the derived lengths are re-derived BEFORE
+        // the commit, so the commit carries them out rather than preserving the hollow
+        // shape. Seeded from an artifact that is damaged in both ways at once — duplicate
+        // records AND hollow rows — because that is the only state where the interaction
+        // is observable.
+        let dir = tempfile::tempdir().unwrap();
+        let fasta = dir.path().join("supp.fna");
+        write_fasta(
+            &fasta,
+            &[
+                ("NM_000001.1", "GENEA", "ACGTACGTAC"),
+                ("NM_000002.1", "GENEB", "TTTT"),
+                ("NM_000001.1", "GENEA", "ACGTACGTAC"),
+            ],
+        );
+        std::fs::write(
+            metadata_path_for(&fasta),
+            serde_json::to_vec_pretty(&metadata(vec![
+                hollow_row("NM_000001.1"),
+                hollow_row("NM_000002.1"),
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let source = FakeEfetch::new(&[]);
+        fetch_fasta_to_file_with(
+            &["NM_000001.1".to_string(), "NM_000002.1".to_string()],
+            &fasta,
+            false,
+            &source,
+        )
+        .unwrap();
+
+        let committed: SupplementalMetadata =
+            serde_json::from_slice(&std::fs::read(metadata_path_for(&fasta)).unwrap()).unwrap();
+        assert_eq!(committed.transcripts["NM_000001.1"].sequence_length, 10);
+        assert_eq!(committed.transcripts["NM_000002.1"].sequence_length, 4);
+        assert_eq!(source.calls(), 0);
     }
 
     #[test]
@@ -1458,9 +1590,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fasta = dir.path().join("supp.fna");
         write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
+        // Seeded with a HEALTHY row, whose length already agrees with the FASTA, so the
+        // only thing this test can observe is the failed fetch. A hollow row here would
+        // also make #1732's derived-length repair fire, and the sidecar would move for a
+        // reason that has nothing to do with the property being pinned — that repair is
+        // orthogonal and has its own tests.
         std::fs::write(
             metadata_path_for(&fasta),
-            serde_json::to_vec_pretty(&metadata(vec![hollow_row("NM_000001.1")])).unwrap(),
+            serde_json::to_vec_pretty(&metadata(vec![annotated_row("NM_000001.1", (1, 9), 10)]))
+                .unwrap(),
         )
         .unwrap();
         std::fs::write(
