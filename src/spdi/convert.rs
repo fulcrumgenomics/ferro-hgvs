@@ -412,7 +412,16 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// The resulting SPDI uses the **same accession** as the HGVS variant — for
 /// `NM_000088.3:c.1A>G` the SPDI sequence is `NM_000088.3`, not the
 /// underlying genomic accession. This matches NCBI Variation Services'
-/// behavior: SPDI is positional on whichever accession is provided.
+/// behavior: SPDI is positional on whichever accession is provided. No axis is
+/// projected onto another.
+///
+/// The one thing that is *not* carried over verbatim is a **compound
+/// reference's genomic-context wrapper** on a transcript axis: for
+/// `NG_008939.1(NM_000532.5):c.156A>G` the SPDI sequence is `NM_000532.5`. That
+/// is not a projection either — it is the accession this function already
+/// resolved the position against, and naming the wrapper instead pointed every
+/// downstream fetch at the genomic parent. See [`transcript_axis_sequence`]. A
+/// `g.`/`m.`/`o.` description keeps its accession exactly as written.
 ///
 /// # Arguments
 ///
@@ -535,6 +544,46 @@ fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError
     )
 }
 
+/// The accession a **transcript-axis** (`c.`/`n.`/`r.`) SPDI is emitted on: the
+/// inner transcript, with any `NG_`/`NC_`/`LRG_` genomic-context wrapper
+/// stripped.
+///
+/// This is the same string the coordinate resolution already uses — see
+/// [`resolve_cds_to_tx`], which calls `accession.transcript_accession()`, reads
+/// that transcript's `cds_start`, and bounds the result against *that*
+/// transcript's length. So the number `emit_spdi_for_edit` receives is an offset
+/// on the transcript, and this makes the accession beside it say so.
+///
+/// **Why not `Display`.** `Accession`'s `Display` renders the compound form
+/// (`NG_008939.1(NM_000532.5)`), and that string is both the SPDI's `sequence`
+/// field and the key every short-form edit's reference fetch is made against.
+/// `MultiFastaProvider::resolve_name` reaches a record for it through the
+/// version-strip fallback — `"NG_008939.1(NM_000532.5)".split('.').next()` is
+/// `"NG_008939"` — so a **transcript** offset was read out of the **genomic
+/// parent**. Measured on the prepared reference:
+///
+/// ```text
+/// get_sequence("NG_008939.1",              191, 197) = CACACA   (the parent)
+/// get_sequence("NG_008939.1(NM_000532.5)", 191, 197) = CACACA   <-- same record
+/// get_sequence("NM_000532.5",              191, 197) = ACGCCG   <-- the 191's own frame
+/// ```
+///
+/// Splitting the label from the fetch key would not close it: the SPDI's
+/// `sequence` field *is* the fetch key for every downstream consumer
+/// ([`crate::spdi::apply_to_reference`], and `fetch_window` inside
+/// [`crate::spdi::compare_denoted_sequences`]), so a compound label just moves
+/// the wrong fetch one hop out. The compound spelling is also not a valid SPDI
+/// sequence in the first place — it is HGVS syntax, not an accession, and SPDI's
+/// `sequence` must be the accession the position is an offset on.
+///
+/// **Genomic axes deliberately keep `Display`.** On a `g.`/`m.`/`o.` description
+/// the coordinates are the *parent's*, so stripping the wrapper here would name
+/// the transcript for a genomic offset — the same defect with the frames
+/// swapped. Those paths are untouched.
+fn transcript_axis_sequence(accession: &Accession) -> String {
+    accession.transcript_accession()
+}
+
 /// Convert a non-coding transcript (`n.`) variant to SPDI without consulting
 /// a provider. The SPDI is emitted on the transcript accession.
 ///
@@ -546,7 +595,7 @@ fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError
     let start_tx = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
     let end_tx = tx_end_for_simple_path(&variant.loc_edit.location, start_tx, "n")?;
     emit_spdi_for_edit(
-        variant.accession.to_string(),
+        transcript_axis_sequence(&variant.accession),
         start_tx,
         end_tx,
         edit,
@@ -566,7 +615,7 @@ fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionErr
     let start_pos = rna_pos_for_simple_path(&variant.loc_edit.location, "r")?;
     let end_pos = rna_end_for_simple_path(&variant.loc_edit.location, start_pos, "r")?;
     emit_spdi_for_edit(
-        variant.accession.to_string(),
+        transcript_axis_sequence(&variant.accession),
         start_pos,
         end_pos,
         edit,
@@ -757,7 +806,7 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         .unwrap_or(*start_cds);
     let (start_tx, end_tx) = resolve_cds_to_tx(&variant.accession, start_cds, &end_cds, provider)?;
     emit_spdi_for_edit(
-        variant.accession.to_string(),
+        transcript_axis_sequence(&variant.accession),
         start_tx,
         end_tx,
         edit,
@@ -792,7 +841,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         resolve_tx_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
     emit_spdi_for_edit(
-        variant.accession.to_string(),
+        transcript_axis_sequence(&variant.accession),
         start_tx,
         end_tx,
         edit,
@@ -827,7 +876,7 @@ fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         resolve_rna_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
     emit_spdi_for_edit(
-        variant.accession.to_string(),
+        transcript_axis_sequence(&variant.accession),
         start_tx,
         end_tx,
         edit,
