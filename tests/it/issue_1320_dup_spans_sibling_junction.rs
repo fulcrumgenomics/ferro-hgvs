@@ -89,11 +89,43 @@ fn a_junction_at_the_dups_five_prime_end_is_left_alone_beside_a_third_member() {
     // merging it. `264_265dup` and the insertion share a junction at 264, which
     // `junction_rank` already orders, so the predicate must *not* re-spell the
     // dup here — doing so would undo #1301.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
+    //
+    // Was `NC_TEST.1:g.[264_265insCA;264_265dup;270del]`; now
+    // `NC_TEST.1:g.[264_265insCAAA;270del]` — the same single insertion the
+    // sibling test above already pins without the third member, so the third
+    // member no longer blocks the derivation.
+    //
+    // LICENSED BY `duplication-must-ranks-the-label-not-the-partition` (decided,
+    // operator ruling 2026-08-13), which names this test by its full path. It is
+    // one of the two rows that record classes as inside
+    // `contiguous-insertion-split-by-a-blocked-derivation`'s STATED reach rather
+    // than merely compatible with it: that record's REPRESENTATION EFFECT
+    // paragraph predicted this geometry by description in advance — "any stored
+    // allele whose members are a junction-adjacent `ins`+`dup` pair sitting
+    // beside a third member far enough away to block the derivation" moves "to a
+    // single insertion" — and names the pinned
+    // `[264_265insCA;264_265dup;270del]` as that geometry with the third member
+    // 5 nt clear. So this is a predicted gap closing, not a discovered move.
+    //
+    // The `dup` is not lost to a MUST being ignored. `duplication.md:18` is
+    // applied per piece of the partition re-derived from the resulting sequence,
+    // and the single `CAAA` insertion is not a copy of the reference bases
+    // immediately 5' of its insertion point, so `:18` never fires on it.
+    //
+    // WHAT IS NO LONGER GUARDED HERE. The 5'-boundary predicate this test was
+    // written for — that `junction_rank` already orders a dup sharing its
+    // insertion's junction, so re-spelling would undo #1301 — is not exercised by
+    // a one-member output. It stays covered by
+    // `the_pair_without_the_swallowed_sibling_still_uses_the_repeat` and
+    // `a_deletion_colliding_with_a_dups_bases_still_respells`, which the sibling
+    // test above already names for the same reason.
     let output = assert_padded_preserving(
         "GCATGAAAAT",
         "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCAAA;270del]");
 }
 
 #[test]
@@ -117,11 +149,36 @@ fn two_duplications_sharing_a_start_keep_both_dup_spellings_beside_a_third_membe
     // restored by a third member the derivation will not merge them with.
     // `258dup`'s junction is 258 and `258_259dup` starts there; a `>=` test
     // would re-spell the wider one and lose both pinned forms.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
+    //
+    // Was `NC_TEST.1:g.[258dup;258_259dup;268del]`; now
+    // `NC_TEST.1:g.[258_259insAGA;268del]`. The third member no longer blocks the
+    // derivation, so the pair collapses to the single insertion the sibling test
+    // `two_insertions_sharing_a_start_merge_into_one_member` already pins without
+    // it.
+    //
+    // LICENSED BY `duplication-must-ranks-the-label-not-the-partition` (decided,
+    // 2026-08-13). This is the `dup`+`dup`-sharing-a-start shape that record
+    // names as the one "no decided record had reasoned about at all" before it —
+    // so unlike its `issue_1301`/`issue_1320` siblings this row is *supplied* by
+    // that ruling rather than predicted by an earlier one. Its twin is
+    // `issue_1261_cis_member_order::two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_member`,
+    // which moves identically over the same core.
+    //
+    // `duplication.md:18` is not deviated from: applied per piece of the
+    // re-derived partition, the single `AGA` insertion is not a copy of the
+    // reference bases immediately 5' of its insertion point, so the MUST does not
+    // fire on it.
+    //
+    // The `>=` regression this test names is no longer reachable through this
+    // input, for the same reason as its sibling above; the note there records
+    // where that coverage still lives.
     let output = assert_padded_preserving(
         "CAGTATGCAGGCAA",
         "NC_TEST.1:g.[258_259insA;259_260insAG;268del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[258dup;258_259dup;268del]");
+    assert_eq!(output, "NC_TEST.1:g.[258_259insAGA;268del]");
 }
 
 #[test]

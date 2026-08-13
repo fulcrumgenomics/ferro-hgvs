@@ -66,16 +66,62 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     // a coincidental one this periodic `ACGT` fixture could plausibly produce —
     // which would let the very defect this file guards against pass as a fix.
     //
-    // The expected answer is fully determined: the block is equal-length, so
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), AND THIS IS THE LARGEST
+    // SINGLE-ROW MOVE IN THE CHANGE: 2 MEMBERS -> 21
+    //
+    // The old expectation was two members split at the unchanged base, and the
+    // reasoning given for it was that "the block is equal-length, so
     // `best_alignment` short-circuits to a positional comparison with no gap to
-    // place and no alignment choice to make. Every column differs except index
-    // 19, giving exactly two pieces split at that base.
-    let first: String = replacement.chars().take(19).collect();
-    let second: String = replacement.chars().skip(20).collect();
-    let expected = format!("NC_TEST.1:g.[1_19delins{first};21_40delins{second}]");
+    // place and no alignment choice to make". That short-circuit is
+    // `partition_block`'s — the `live` arm. `partition_block_canonical` does not
+    // short-circuit; it searches for a genuinely minimal alignment, and on this
+    // fixture a GAPPED one wins outright.
+    //
+    // WHY, ARITHMETICALLY. The core is `ACGT` x10 and the payload is that with
+    // A<->C and G<->T swapped, i.e. `CATG` x10, with index 19 restored. Read
+    // position-wise, 39 of 40 columns differ: cost 39. Delete the leading `A`
+    // instead and the frames line up — core[1..] = `CGTACGT…` against payload
+    // `CATGCAT…` matches every other position — so the same block is 1 deletion,
+    // 19 substitutions and 1 insertion: cost 21. The minimal alignment is the
+    // gapped one, and it is minimal by a wide margin rather than by a tie.
+    //
+    // WHY THE 21 MEMBERS ARE NOT MERGED BACK. Under the gapped alignment the
+    // separations are real unchanged bases, and `general.md:34` says two variants
+    // separated by one or more nucleotides "should be described individually".
+    // The clause that would recommend the span instead is `DNA/delins.md:47`, and
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided)
+    // scopes it to the coding DNA axis — this is a `g.` row, so `:47` does not
+    // reach it and nothing competes with `:34`. `general.md:35`'s one-amino-acid
+    // exception cannot apply either: a genomic reference declares no reading
+    // frame, so its second conjunct is unstatable.
+    //
+    // THIS IS A COST THE RULING STATED IN ADVANCE, not a surprise. The axis-scope
+    // record names it in terms: what the scope costs is "`g.` rows in the
+    // payload-coincidence stratum that the ungated pass would have merged".
+    // `separations_are_meaningful` — the guard this file's module docs describe —
+    // lives in `partition_block` and guards only length-changing blocks; it is not
+    // on the canonical path at all, where `:47` is implemented instead by the
+    // `c.`-scoped coalescing pass. So an equal-length `g.` block has no merge
+    // guard on either arm, and on this arm it now has a gapped alignment to
+    // expose.
+    //
+    // THE FILE'S OWN THESIS IS UNCHANGED. Its title is that a delins must split at
+    // its unchanged bases regardless of length, and this row still asserts exactly
+    // that — more strongly than before. What is no longer true is the *sentence*
+    // about equal-length blocks having no alignment choice to make; that was a
+    // property of one partitioner, not of the shape.
+    //
+    // Pinned as a literal rather than rebuilt from `replacement`, because the
+    // answer is no longer a simple function of it — deriving the expected string
+    // would mean reimplementing the aligner in the test, which is how a pin stops
+    // being independent evidence.
+    // The `\` continuations below elide the newline and the following
+    // indentation, so this is one unbroken description.
+    let expected = "NC_TEST.1:g.[1del;3G>A;5A>G;7G>A;9A>G;11G>A;13A>G;15G>A;17A>G;19G>A;\
+                    21A>T;23G>A;25A>G;27G>A;29A>G;31G>A;33A>G;35G>A;37A>G;39G>A;40_41insG]";
     assert_eq!(
         out, expected,
-        "a 40 nt delins with an unchanged interior base must split at exactly that base"
+        "a 40 nt delins must split at the unchanged bases of its MINIMAL alignment"
     );
 }
 
@@ -112,19 +158,57 @@ fn a_long_net_deletion_stays_one_spanning_delins() {
     // `1_51`, `2_52`, or a payload with something spliced onto it would all
     // pass while the guard under test had stopped working.
     //
-    // The expected answer is fully determined. The block reaches the aligner,
-    // whose proposed split `separations_are_meaningful` then refuses — every gap
-    // between consecutive pieces is one base wide, against the
-    // `RAISED_PIECE_SEPARATION` this block's net change requires — so
-    // `partition_block` returns the whole block as one piece. (Before #1271 the
-    // same single piece came from a 32 nt bound instead; the outcome pinned here
-    // is the same either way, which is why this assertion did not move.) Neither
-    // endpoint trims, because the
-    // core begins `A`/ends `T` while the payload begins `T`/ends `G`. So the
-    // span is the full core and the payload is untouched.
-    let expected = format!("NC_TEST.1:g.1_{}delins{replacement}", core.len());
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835) — AND THE TITLE OF THIS
+    // TEST IS NOW WRONG FOR A REASON WORTH READING
+    //
+    // On the `live` arm the block reached the aligner, whose proposed split
+    // `separations_are_meaningful` refused — every gap between consecutive pieces
+    // is one base wide, against the `RAISED_PIECE_SEPARATION` this block's net
+    // change requires — so `partition_block` returned the whole block as one
+    // piece. That guard is `partition_block`'s and is not on the canonical path,
+    // so under the new default the block splits into fourteen pure deletions.
+    //
+    // LICENSED TWICE OVER, and both legs are worth stating because either alone
+    // would settle it.
+    //
+    // (1) THE AXIS. `DNA/delins.md:47` is what recommends the spanning form for a
+    // payload-coincidence split, and `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    // (decided) scopes it to the coding DNA axis. This is a `g.` row, so `:47`
+    // does not reach it and `general.md:34` governs unqualified. Note the doc
+    // above says raising the bound "turned one correct protein consequence into
+    // three bogus ones" — that is `:47`'s own stated ground, and the axis ruling's
+    // reasoning is precisely that it has nothing to bite on off the coding axis:
+    // a genomic reference predicts no protein consequence, correctly or
+    // otherwise. The comment describes the `c.`-sited original
+    // (`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`), which is a different row on a
+    // different axis and is unaffected.
+    //
+    // (2) THE MECHANISM, which would settle it even on a `c.` axis. Every one of
+    // the fourteen members below is a PURE DELETION — no member supplies a base.
+    // `delins-recommendation-reach-when-the-input-arrives-split` (decided,
+    // operator ruling 2026-08-12) rules that `:47` reaches a split only where an
+    // INSERTED SEQUENCE re-aligned, i.e. where some derived member supplies bases
+    // while consuming a different number of reference bases. "A split of pure
+    // deletions inserts nothing, so nothing re-aligned, so `general.md:34`/`:17`
+    // govern it unqualified." That is this row exactly.
+    //
+    // WHY THIS DIFFERS FROM `:44-47`'s OWN EXAMPLE, which merges. The record
+    // records that `c.850_901delinsTTCCTCGATGCCTG` derives to
+    // `c.[850_866del;870_880del;887_892del;895_896delinsC;899_901del]`, whose
+    // `895_896delinsC` consumes two reference bases to place one — gap-bearing, so
+    // it merges. This fixture's periodic `ACGT` core against `TTCCTCGATGCCTG`
+    // happens to derive with no gap-bearing member at all, so the same rule sends
+    // it the other way. The two outcomes are consistent; the sequences differ.
+    //
+    // The test name is left as it is so the history stays greppable, but read the
+    // assertion rather than the name: this row now pins that a long net deletion
+    // SPLITS on a genomic reference.
+    let expected = "NC_TEST.1:g.[1_3del;5_7del;9del;11_13del;15del;17del;20del;22_23del;\
+                    25_26del;28_29del;31_33del;35del;37_38del;40_52del]";
     assert_eq!(
         out, expected,
-        "a 52 nt -> 14 nt delins must stay one spanning member with its payload intact"
+        "a 52 nt -> 14 nt net deletion on a genomic reference splits at its \
+         unchanged bases: `delins.md:47` is coding-axis-scoped, and every member \
+         here is a pure deletion so `:46`'s re-alignment mechanism never occurred"
     );
 }

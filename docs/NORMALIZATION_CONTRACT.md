@@ -68,7 +68,7 @@ about whether their ruling is already live in shipped output or is implemented o
 candidate arm, so the answer depends on the default — and that default is currently in motion.
 
 **As generated, the shipped default — what `FERRO_PARTITION` unset selects — is
-`live`.** That sentence is not written by hand: the generator reads the arm out of
+`canonical-coalesced`.** That sentence is not written by hand: the generator reads the arm out of
 `src/normalize/merge.rs`, so a change to the default fails this document's own test until it
 is regenerated, and cannot leave a stale claim behind. See
 [README.md, *Comparing normalization rules*](../README.md#comparing-normalization-rules-ferro_partition)

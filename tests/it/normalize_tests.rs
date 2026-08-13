@@ -4815,16 +4815,43 @@ mod issue_160_revcomp_inv_subspans {
         // ref bases at 1099-1103: T G C T C
         //   1099 T>A ; 1100 G>A ; 1101 C>G ; 1102 T>C ; 1103 C>T
         // The interior 3-nt sub-run 1100_1102 (GCT→AGC) is a revcomp
-        // (revcomp("GCT")="AGC"), but all five positions differ so this is ONE
-        // contiguous change. revcomp("TGCTC")="GAGCA" != "AAGCT", so the whole
-        // run is not an inversion and the revcomp sub-run may not be carved
-        // out (issue #1034). It stays a single delins.
+        // (revcomp("GCT")="AGC"), but revcomp("TGCTC")="GAGCA" != "AAGCT", so the
+        // whole run is not an inversion and the revcomp sub-run may not be carved
+        // out (issue #1034). It is not: there is no `inv` in the output.
+        //
+        // #1835 — RE-PINNED BY THE PARTITION DEFAULT FLIP. Was the spanning
+        // `g.1099_1103delinsAAGCT`; now `g.[1099delinsAA;1103del]`.
+        //
+        // THE #1034 DEFECT IS NOT BACK. That defect is an `inv` being carved out
+        // of a contiguous run, and neither member here is an `inv`. What moved is
+        // the alignment, not the typing.
+        //
+        // WHY THE RUN IS NO LONGER CONTIGUOUS. "All five positions differ" is true
+        // only of the position-wise reading, which is what `partition_block`
+        // used. The minimal alignment is gapped and much cheaper: write `AA` in
+        // place of the single `T` at 1099, keep `GCT` at 1100-1102 untouched, and
+        // delete the `C` at 1103 — two members against five substitutions, and the
+        // result is `AA` + `GCT` = `AAGCT`, the same payload. Under that alignment
+        // 1100-1102 are genuinely unchanged bases, so this is not one contiguous
+        // change at all.
+        //
+        // WHY IT IS NOT MERGED BACK. `general.md:34` describes members separated by
+        // unchanged nucleotides individually; `DNA/delins.md:47` would recommend
+        // the span instead, but `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+        // (decided) scopes `:47` to the coding DNA axis and this is a `g.` row.
+        // `general.md:35`'s exception needs a reading frame a genomic reference
+        // does not declare. Derivation from the resulting sequence is
+        // `canonical-form-choice-when-both-legal`.
+        //
+        // The two sibling tests above are unmoved and are the contrast worth
+        // keeping: `TCC` -> `GAG` at 1150_1152 has no cheaper gapped alignment, so
+        // it stays one spanning `delins` from both input spellings.
         let provider = provider_with_genomic("NC_000001.11", 1099, "TGCTC");
         let result = normalize_to_string(
             provider,
             "NC_000001.11:g.[1099T>A;1100G>A;1101C>G;1102T>C;1103C>T]",
         );
-        assert_eq!(result, "NC_000001.11:g.1099_1103delinsAAGCT");
+        assert_eq!(result, "NC_000001.11:g.[1099delinsAA;1103del]");
     }
 
     #[test]

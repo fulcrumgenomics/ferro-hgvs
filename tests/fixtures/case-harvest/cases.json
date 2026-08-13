@@ -153,66 +153,66 @@
     },
     {
       "input": "NG_008660.1:g.58604_58617delinsC",
-      "expected": "NG_008660.1:g.58604_58617delinsC",
+      "expected": "NG_008660.1:g.[58604del;58606_58617del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. Same open ruling as the row above. Carried additionally because it exercises an NG_ genomic parent, so it keeps the committed slice honest about the placement path as well as the base path."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. Same open ruling as the row above. Carried additionally because it exercises an NG_ genomic parent, so it keeps the committed slice honest about the placement path as well as the base path. #1835 PARTITION DEFAULT FLIP: re-pinned from `NG_008660.1:g.58604_58617delinsC`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000019.10:g.45553632_45553643delinsG",
-      "expected": "NC_000019.10:g.45553632_45553643delinsG",
+      "expected": "NC_000019.10:g.[45553632del;45553634_45553643del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 12 bp span collapsing to one base; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 12 bp span collapsing to one base; fixed point on both binaries. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000019.10:g.45553632_45553643delinsG`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000009.12:g.106927023_106927043delinsA",
-      "expected": "NC_000009.12:g.106927023_106927043delinsA",
+      "expected": "NC_000009.12:g.[106927023_106927025del;106927027_106927043del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 21 bp span, the longest of the collapsing group; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 21 bp span, the longest of the collapsing group; fixed point on both binaries. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000009.12:g.106927023_106927043delinsA`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
-      "expected": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
+      "expected": "NG_005905.2:g.[172248delinsGT;172251delinsTGCT;172253_172254insCCTGGCACTG]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The expanding direction -- a 6 bp reference span replaced by 20 bp -- so the pin covers both directions of length change, not just collapses. Second NG_ parent in the corpus."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The expanding direction -- a 6 bp reference span replaced by 20 bp -- so the pin covers both directions of length change, not just collapses. Second NG_ parent in the corpus. #1835 PARTITION DEFAULT FLIP: re-pinned from `NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000002.12:g.166052896_166052909delinsTGTG",
-      "expected": "NC_000002.12:g.166052896_166052909delinsTGTG",
+      "expected": "NC_000002.12:g.[166052896del;166052898_166052903delinsG;166052906_166052909del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000002.12:g.166052896_166052909delinsTGTG`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000012.12:g.4517618_4518810delinsTCATAA",
-      "expected": "NC_000012.12:g.4517618_4518810delinsTCATAA",
+      "expected": "NC_000012.12:g.[4517618_4517622del;4517624_4518489del;4518497_4518812del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 1,193 bp reference span -- by far the largest in the corpus, and the row that makes the committed slice carry a kilobase-scale genomic window. Worth having precisely because a length-gated change (see #1460's MAX_SPLIT_BLOCK blindness) is structurally invisible to a corpus of 20-mers."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 1,193 bp reference span -- by far the largest in the corpus, and the row that makes the committed slice carry a kilobase-scale genomic window. Worth having precisely because a length-gated change (see #1460's MAX_SPLIT_BLOCK blindness) is structurally invisible to a corpus of 20-mers. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000012.12:g.4517618_4518810delinsTCATAA`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000002.11:g.47639670_47639673delinsTT",
-      "expected": "NC_000002.11:g.[47639670_47639671del;47639673G>T]",
+      "expected": "NC_000002.11:g.[47639670_47639671delinsT;47639673del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. CORRECTION TO A PRIOR AUDIT: that audit recorded this row as returning itself. It does not, and never did -- it splits, identically on a pre-#1535 binary and on the main tip. The reference span reads AGTG and the split is sequence-equivalent to the input. Also the only GRCh37 primary contig in the corpus, so it keeps the build-selection path covered."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. CORRECTION TO A PRIOR AUDIT: that audit recorded this row as returning itself. It does not, and never did -- it splits, identically on a pre-#1535 binary and on the main tip. The reference span reads AGTG and the split is sequence-equivalent to the input. Also the only GRCh37 primary contig in the corpus, so it keeps the build-selection path covered. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000002.11:g.[47639670_47639671del;47639673G>T]`. Both the old and the new form are two members separated by the same unchanged base, so `general.md:34` is satisfied by each and no clause selects between them; `canonical-form-choice-when-both-legal` (decided) assigns the choice to the derivation. Stability pin only."
     },
     {
       "input": "NC_000013.10:g.100809575_100810031inv",
@@ -270,12 +270,12 @@
     },
     {
       "input": "NM_006420.3:c.[242C>A;247_249delinsTT]",
-      "expected": "NM_006420.3:c.[242del;245G>A;249A>T]",
+      "expected": "NM_006420.3:c.[242C>A;247_249delinsTT]",
       "citation": {
         "clause": "docs/recommendations/protein/frameshift.md:24",
         "quote": "downstream of the frameshift are not described unless they change the amino acid sequence or length of the shifted reading frame"
       },
-      "note": "STABILITY PIN PLUS A CORRECTED DIAGNOSIS. A prior audit suspected a denotation bug here and cited delins.md:19. It is not a denotation bug: c.242..249 reads CAAGGGTA, and both the input and ferro's output yield AAAGGTT -- verified sequence-equivalent. So this is a representation question, not a correctness one. The clause that actually bears on it is protein/frameshift.md:24, since the input's first member is a frame-shifting deletion and what follows it downstream is what the two spellings disagree about. Whether ferro's form is the right representation has NOT been adjudicated, so this row asserts stability only and must not be read as endorsement."
+      "note": "STABILITY PIN PLUS A CORRECTED DIAGNOSIS. A prior audit suspected a denotation bug here and cited delins.md:19. It is not a denotation bug: c.242..249 reads CAAGGGTA, and both the input and ferro's output yield AAAGGTT -- verified sequence-equivalent. So this is a representation question, not a correctness one. The clause that actually bears on it is protein/frameshift.md:24, since the input's first member is a frame-shifting deletion and what follows it downstream is what the two spellings disagree about. Whether ferro's form is the right representation has NOT been adjudicated, so this row asserts stability only and must not be read as endorsement. #1835 PARTITION DEFAULT FLIP: re-pinned from `NM_006420.3:c.[242del;245G>A;249A>T]` to the authored spelling, which is what the re-derivation happens to yield here — NOT the input being preserved. `derivation-may-not-be-bounded-by-the-inputs-spelling` (decided) removed the input-relative bound; that the derived form coincides with the input on this row is a property of the sequence. The representation question the note above records is still unadjudicated, and this row still asserts stability only."
     },
     {
       "input": "NM_000500.9:c.[710T>A;713T>A]",
@@ -309,7 +309,7 @@
     },
     {
       "input": "NC_000017.11:g.80110044_80110047delinsGTTGG",
-      "expected": "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
+      "expected": "NC_000017.11:g.[80110044delinsGT;80110047A>G]",
       "citation": {
         "clause": "docs/recommendations/DNA/delins.md:16",
         "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
@@ -319,7 +319,7 @@
         "kind": "adjacent-members",
         "summary": "a dup-shaped split still emits members at separation 0 (delins.md:16), surviving #1537"
       },
-      "note": "LIVE DEFECT #1542. The reference span reads CTGA and the output is sequence-equivalent to the input. Under sep = next.start - prev.end - 1 the members at 80110044 and 80110045 are at separation 0, which delins.md:16 forbids. #1537 fixed three sibling rows of this family and did not reach this one because of the dup shape. THE SEPARATION READING IS ITSELF PART OF THE OPEN QUESTION: the adjacency depends on treating a dup as occupying the position it duplicates. Read as zero-width -- an interbase reading -- the pair is not adjacent and this row is not a violation at all. The expected string above records today's output so movement is still detected; it is not an endorsement. This is the ONLY row exempted from the corpus-wide separation-0 check, and it is exempt because it is the reproducer for it."
+      "note": "LIVE DEFECT #1542. The reference span reads CTGA and the output is sequence-equivalent to the input. Under sep = next.start - prev.end - 1 the members at 80110044 and 80110045 are at separation 0, which delins.md:16 forbids. #1537 fixed three sibling rows of this family and did not reach this one because of the dup shape. THE SEPARATION READING IS ITSELF PART OF THE OPEN QUESTION: the adjacency depends on treating a dup as occupying the position it duplicates. Read as zero-width -- an interbase reading -- the pair is not adjacent and this row is not a violation at all. The expected string above records today's output so movement is still detected; it is not an endorsement. This is the ONLY row exempted from the corpus-wide separation-0 check, and it is exempt because it is the reproducer for it. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]`. THE OUTPUT NO LONGER PUTS TWO MEMBERS AT SEPARATION 0 — `80110044delinsGT` and `80110047A>G` are two unchanged bases apart. DO NOT READ THAT AS #1542 BEING FIXED. The row has stopped REACHING the defect because the whole block is now re-partitioned from the resulting sequence and no `dup`-shaped split is produced at all; the open question the note above states — how a `dup`'s extent is read for the purpose of `sep = next.start - prev.end - 1` — is untouched, and the code path that produced the touching pair is still there for any input that still reaches it. The `defect` field, this row's place in the red set and the `#[ignore]` on `the_dup_shaped_split_does_not_touch` are therefore all left as they are. Closing #1542 needs the ruling, not this re-pin."
     }
   ]
 }

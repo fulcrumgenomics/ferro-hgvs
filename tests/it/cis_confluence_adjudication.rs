@@ -452,19 +452,59 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
 
     assert_eq!(denotes(&provider, spanning), denotes(&provider, authored));
 
-    // `c.10_12` and `c.13` would be adjacent — no unchanged nucleotide between
-    // them — so `delins.md:16` asks for the single delins this input already
-    // was, and `substitution.md:32` marks the split invalid by name.
+    // # #1835 — THE CLASS CONVERGES, ON THE AUTHORED PARTITION
+    //
+    // Both spellings now reach `c.[9dup;13del]`. The residue the second assertion
+    // below used to record — "the other spelling still keeps its own partition,
+    // so the class remains divergent" — is closed, and closed by the mechanism
+    // that comment names: `separation-is-a-property-of-the-spelling-not-of-the-variant`
+    // is decided and says the separation is read off the partition re-derived from
+    // the resulting sequence. The default arm now re-derives it.
+    //
+    // WHY THIS DOES NOT CONTRADICT THIS RECORD, which is the question to answer
+    // before accepting the re-pin, because the old expectation was labelled
+    // ADJUDICATED-CORRECT rather than observed.
+    //
+    // The record's ruling is scoped, and its scope is stated in two conjuncts:
+    // two members with NO unchanged nucleotide between them, BOTH consuming
+    // reference bases. Its authority, `DNA/substitution.md:32`, marks exactly that
+    // shape invalid — of `LRG_199t1:c.79_80delinsTT` it says "the description
+    // `c.[79G>T;80C>T]` is not correct". The forbidden output is the FLUSH SPLIT.
+    //
+    // The re-derived partition meets neither conjunct. `9dup` inserts at the
+    // junction 9|10 and `13del` removes c.13, so `c.10_12` sits unchanged between
+    // them — separation 3, not 0 — and a `dup` consumes no reference bases at all.
+    // So `substitution.md:32` has nothing to say about it, `general.md:34` governs
+    // the separated pair and asks for the individual description given, and
+    // `DNA/duplication.md:18` REQUIRES the `dup` label on a copy of the base
+    // immediately 5' of the insertion point. Ferro emits neither the form the
+    // record forbids nor a form any cited clause forbids.
+    //
+    // What ferro has stopped emitting is the spanning form the record called
+    // correct. That is a rule-6 choice between conformant descriptions, which
+    // `canonical-form-choice-when-both-legal` (decided) assigns to the
+    // derivation: `c.10_13` reads `AATA` against a payload of `TAAT`, a
+    // one-position rotation whose minimal alignment is one inserted base and one
+    // deleted base (cost 2) rather than three substitutions (cost 3). The spanning
+    // `delins` is not a minimal alignment of this block at all; it is a merge over
+    // one.
+    //
+    // The block is equal-length, so `delins.md:47` cannot merge the pair back —
+    // `delins-merge-vs-individual-gap-two-or-more` is scoped to the net-deletion
+    // direction.
     assert_eq!(
         normalized(&provider, spanning),
-        "NM_TEST.1:c.10_13delinsTAAT",
-        "adjudicated CORRECT against `DNA/substitution.md:32`; fixed by #1537, closing #1524"
+        "NM_TEST.1:c.[9dup;13del]",
+        "the re-derived partition is separated and carries a `dup`, so \
+         `DNA/substitution.md:32`'s flush-split prohibition does not reach it"
     );
-    // The other spelling of the same variant still keeps its own partition, so
-    // the class remains divergent. That residue is not this record's — it is
-    // `separation-is-a-property-of-the-spelling-not-of-the-variant`, whose
-    // ruling is decided and whose implementation is #1617.
     assert_eq!(normalized(&provider, authored), "NM_TEST.1:c.[9dup;13del]");
+    // Stated as its own assertion: the class converged, and that is the point.
+    assert_eq!(
+        normalized(&provider, spanning),
+        normalized(&provider, authored),
+        "the two spellings of one variant must converge"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -491,11 +531,47 @@ fn a_dup_flush_against_a_del_is_left_alone() {
     let provider = provider();
     let authored = "NM_TEST.1:c.[9T>A;13_20dup;24_31del;34_35insCACCAAAA]";
 
+    // # #1835 — THE `dup` IS GONE, BY RE-DERIVATION RATHER THAN BY A MERGE
+    //
+    // Was `c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]`; now
+    // `c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]`.
+    //
+    // READ THE MECHANISM BEFORE READING THIS AS THE CARVE-OUT BEING OVERRIDDEN.
+    // The carve-out above says the adjacency ruling does not reach a `dup` flush
+    // against a `del`, because MERGING them into one `delins` would destroy the
+    // duplication. Ferro has not merged them: the output is four members, not one
+    // `delins`. The `dup` is absent because the whole block was re-partitioned
+    // from the resulting sequence and no piece of the new partition is a tandem
+    // copy of the bases immediately 5' of its insertion point — so
+    // `DNA/duplication.md:18` never fires, rather than firing and being overruled.
+    //
+    // `duplication-must-ranks-the-label-not-the-partition` (decided, operator
+    // ruling 2026-08-13) draws exactly this line and says which side each
+    // mechanism falls on. It rules that `:18` ranks a LABEL for a change and does
+    // not require that the edit set be partitioned so as to expose one, applied
+    // per piece of the re-derived partition. And it states its own limit in terms:
+    // the `dup` half of `delins-adjacent-members-when-both-consume-reference`'s
+    // carve-out "is untouched and stays exactly as that record left it … It is a
+    // DIFFERENT MECHANISM: merging two ADJACENT MEMBERS AT SEPARATION ZERO into
+    // one `delins`, which destroys a `dup` that the members themselves carry. This
+    // record is about WHOLE-BLOCK RE-DERIVATION, where no member survives to be
+    // destroyed because the partition is recomputed from the resulting sequence."
+    // This row is the second mechanism.
+    //
+    // The ruling's falsifier is enforced rather than asserted: no emitted pure
+    // `ins` member may have a payload equal to the reference bases immediately 5'
+    // of its junction, which would make it a duplication mislabelled — see
+    // `tests/it/duplication_label_not_partition.rs`. The two `ins` members here
+    // are subject to it.
+    //
+    // The class also converges under the enumeration
+    // (`cis_adjudication_enumeration::the_dup_flush_carve_out_class_partitions_as_measured`):
+    // five outputs on the `live` arm, one here.
     assert_eq!(
         normalized(&provider, authored),
-        "NM_TEST.1:c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]",
-        "separation 0 between `16_23dup` and `24_31del`, and `DNA/duplication.md:18` \
-         competes — outside the scope of the adjacency ruling, not a deviation from it"
+        "NM_TEST.1:c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]",
+        "the block is re-partitioned from the resulting sequence, so no member \
+         survives that `DNA/duplication.md:18` could rank as a duplication"
     );
 }
 
@@ -544,16 +620,55 @@ fn a_spanning_delins_and_its_aligned_split_are_two_fixed_points() {
 
     assert_eq!(denotes(&provider, spanning), denotes(&provider, split));
 
-    // `:47` recommends this one.
-    assert_eq!(normalized(&provider, spanning), "NM_TEST.1:c.9_17delinsA");
-    // `:17` and `general.md:34` demand this one — the members are two unchanged
-    // nucleotides apart, and `general.md:35`'s codon exception needs a gap of
-    // exactly one, so it cannot rescue either side here.
+    // # #1835 — THE QUESTION THIS ROW WAITED ON IS DECIDED, AND THE PAIR IS NOW
+    // ONE FIXED POINT
+    //
+    // The doc above says what is unsettled: "whether the scope reaches a spelling
+    // that arrives already split, so that `c.[9_12del;14_17del]` ought to converge
+    // on the delins too". That was settled by
+    // `delins-recommendation-reach-when-the-input-arrives-split` (decided,
+    // operator ruling 2026-08-12) — and settled AGAINST the delins.
+    //
+    // The ruling: `delins.md:47` reaches a payload-coincidence split ONLY where an
+    // inserted sequence re-aligned — operationally, where some member of the split
+    // derived from the sequence supplies bases while consuming a DIFFERENT number
+    // of reference bases. `:46` states the mechanism in those terms ("parts of the
+    // **inserted sequence** 'align'"), so a split that inserts nothing cannot be
+    // what `:47` is speaking about.
+    //
+    // Here the derived partition is `c.[9del;11_17del]` — TWO PURE DELETIONS.
+    // Nothing is supplied, nothing re-aligned, so `general.md:34` and
+    // `delins.md:17` govern unqualified and the members are described
+    // individually. Both spellings reach it, so the pair is one fixed point rather
+    // than two.
+    //
+    // NOTE THE CONVERGED FORM IS NEITHER OF THE TWO THAT WERE PINNED. That is the
+    // ruling working, not a third answer arriving unbidden: the spanning form is
+    // withdrawn by the scope, and `c.[9_12del;15_18del]` was never adjudicated
+    // canonical — it was ferro preserving the partition it was handed, which
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant` (decided)
+    // forbids. `c.[9del;11_17del]` is what the sequence yields when neither
+    // spelling is preserved.
+    //
+    // The whole enumerated space agrees:
+    // `cis_adjudication_enumeration::the_spanning_versus_split_class_partitions_as_measured`
+    // shows all 880 spellings on this one form, where it was 864 / 16 split by
+    // provenance.
+    let from_spanning = normalized(&provider, spanning);
+    let from_split = normalized(&provider, split);
     assert_eq!(
-        normalized(&provider, split),
-        "NM_TEST.1:c.[9_12del;15_18del]",
-        "pinned as an observation: whether `delins-merge-vs-individual-gap-two-or-more`'s \
-         scope reaches a spelling that arrives already split is not settled"
+        from_spanning, "NM_TEST.1:c.[9del;11_17del]",
+        "the spanning spelling is re-derived: `delins.md:47` does not reach a split \
+         of pure deletions"
+    );
+    assert_eq!(
+        from_split, "NM_TEST.1:c.[9del;11_17del]",
+        "and the already-split spelling is re-derived rather than preserved"
+    );
+    assert_eq!(
+        from_spanning, from_split,
+        "one variant, one normalized string — if these diverge again the residue \
+         this row was written for has re-opened"
     );
 }
 

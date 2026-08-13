@@ -153,14 +153,43 @@ const TX_CONTIG: &str = "chr_synth";
 /// against `cis_confluence_axis`'s 334/344 — the `n.` and `r.` axes gain in the
 /// same proportion as the `c.` one, which is what a partitioner change should
 /// look like and what an axis-scoped carve-out would not.
+/// # Re-blessed by the partition default flip (#1835) — and the licence here is
+/// NOT the one the `c.` axis uses
+///
+/// `converged` **4 179 -> 5 635**, `split_two` 1 420 -> 1, `split_three` and
+/// `split_more` to 0. `declined`, `underdetermined` and `sequence_changed` stay
+/// **0**, so the ratchet is satisfied and no class converged onto other bases.
+///
+/// **Read which half of the new default is doing the work, because it is easy to
+/// cite the wrong record here.** `CanonicalCoalesced` is two things: the
+/// canonical partitioner, and the `delins.md:44-47` coalescing pass on top of
+/// it. The pass is **`c.`-only** — `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+/// is decided and puts `g.`/`m.`/`o.`/`n.`/`r.` outside `:47` entirely, so on the
+/// two axes this file measures the coalescing arm is *identical to* `Canonical`
+/// and contributes nothing. Every class gained here is gained by deriving the
+/// partition from the resulting sequence instead of from the input's spelling,
+/// which is `canonical-form-choice-when-both-legal` and
+/// `derivation-may-not-be-bounded-by-the-inputs-spelling` — both decided, both
+/// axis-neutral.
+///
+/// So a reader must not cite `:47` for this movement, and must not read the
+/// movement as evidence that the axis scope leaks. The scope is what makes the
+/// residues here differ from the `c.` axis's, not what closed the gap.
+///
+/// The chronology entry above — "that this fires on `n.` at all is the finding",
+/// with the four censuses moving in proportion to the `c.` one — is the same
+/// observation one change earlier, and it holds again: `n.` and `r.` gain
+/// 1 456 and 1 456 against `cis_confluence_axis`'s 2 910, which is what an
+/// axis-neutral partitioner change looks like on a corpus half the size.
 const N_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_179,
-    split_two: 1_420,
-    split_three: 33,
-    split_more: 4,
+    // #1835: the partition default flip — see the section above.
+    converged: 5_635,
+    split_two: 1,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -178,14 +207,35 @@ const N_THREE_PRIME: Census = Census {
 /// twin with identical `split_*` deltas. The `r.` and `n.` axes tracking each
 /// other exactly is the cross-check this pair of pins exists for: the alphabet
 /// differs and the partition does not.
+/// **Re-blessed by the partition default flip (#1835): 4 177 -> 5 633**, with
+/// `split_two` 1 422 -> 3 and the two higher arities to 0. See [`N_THREE_PRIME`]
+/// for the licensing, and in particular for why `delins.md:47` must **not** be
+/// cited on this axis.
+///
+/// **The `n.`/`r.` twins stop tracking each other exactly, by two classes**, and
+/// that is worth flagging because their agreement has been offered as a
+/// cross-check in every entry above. `n.` keeps one divergent class here and `r.`
+/// keeps three; at 5' the same pair reads 0 and 2.
+///
+/// **The cause is not measured, and is deliberately not guessed at here.** The
+/// obvious hypothesis is the alphabet — an `r.` payload is spelled in lower-case
+/// `acgu`, so a coincidence test could in principle land differently — but
+/// nothing in this change measured that, and the two censuses have tracked each
+/// other exactly through four previous re-blesses, so the divergence is new
+/// information rather than a known asymmetry. What *is* asserted is what the
+/// ratchet asserts: both figures moved down, `sequence_changed` is 0 on both, and
+/// the residue is two classes rather than a family. If a later change needs the
+/// mechanism, dump the divergent class ids on the two axes and diff them; do not
+/// cite this comment as though it had.
 const R_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_177,
-    split_two: 1_422,
-    split_three: 33,
-    split_more: 4,
+    // #1835: the partition default flip — see `N_THREE_PRIME`.
+    converged: 5_633,
+    split_two: 3,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -202,14 +252,25 @@ const R_THREE_PRIME: Census = Census {
 /// than the 3' does, the same asymmetry [`N_THREE_PRIME`]'s history records: the
 /// finer partition is chosen before the shift, so the members are shuffled
 /// independently afterwards and only some of those landings coincide.
+/// **Re-blessed by the partition default flip (#1835): 4 183 -> 5 636**, i.e.
+/// every class, with all three divergence figures at 0. See [`N_THREE_PRIME`]
+/// for the licensing.
+///
+/// This is the second of the four censuses to reach total convergence — the
+/// other is `cis_confluence_axis::FIVE_PRIME`, on the `g,c` corpus. Both are 5'.
+/// The 3' direction keeps a residue on both corpora, which is the same
+/// direction-asymmetry every entry above records, read at its limit: the
+/// partition is chosen before the shift, so a class whose two spellings land
+/// apart can only do so in the direction that walks toward the ambiguity.
 const N_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_183,
-    split_two: 1_415,
-    split_three: 36,
-    split_more: 2,
+    // #1835: the partition default flip — see `N_THREE_PRIME`.
+    converged: 5_636,
+    split_two: 0,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -225,14 +286,24 @@ const N_FIVE_PRIME: Census = Census {
 /// exactly at +172. All four censuses in this file move monotonically — every
 /// `converged` up, every divergence figure down — so the ratchet is satisfied in
 /// the direction it was written for on both axes and both directions.
+/// **Re-blessed by the partition default flip (#1835): 4 181 -> 5 634**, with
+/// `split_two` 1 417 -> 2 and the higher arities to 0. See [`N_THREE_PRIME`] for
+/// the licensing and [`R_THREE_PRIME`] for the `n.`/`r.` residue difference,
+/// which appears at 5' as 0 against 2 and is likewise not explained here.
+///
+/// All four censuses in this file still move monotonically — every `converged`
+/// up, every divergence figure down — so the ratchet is satisfied in the
+/// direction it was written for, on both axes and both directions, by the
+/// largest margin it has ever taken.
 const R_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_181,
-    split_two: 1_417,
-    split_three: 36,
-    split_more: 2,
+    // #1835: the partition default flip — see `N_THREE_PRIME`.
+    converged: 5_634,
+    split_two: 2,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };

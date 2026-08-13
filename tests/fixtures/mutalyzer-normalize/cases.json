@@ -98,6 +98,12 @@
       "title": "Inserted inversion (reverse complement) not applied by mutalyzer",
       "spec_section": "HGVS §Inserted inversion (reverse complement)",
       "note": "An `<range>inv` segment in an ins/delins payload inserts the reverse complement (inverted copy) of the range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro applies the inversion and normalizes the delins; mutalyzer leaves the segment forward (inversion not applied). ferro's output is the spec-correct value. #854."
+    },
+    {
+      "id": "canonical-coalesced-default-1835",
+      "title": "canonical-coalesced default re-derives a shared-base delins into dup + delins",
+      "spec_section": "recommendations/general.md:157-160; DNA/delins.md:44-47",
+      "note": "#1835 makes `canonical-coalesced` the shipped partition rule. On `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` and its two sibling spellings the 2-base reference span and 5-base payload share a base, so deriving from the resulting sequence exposes `g.[28293dup;28295delinsCCC]` where mutalyzer emits the spanning `g.28294_28295delinsATCCC`. Both denote the same bases, so this is a representation choice and not a sequence disagreement. `rulings[canonical-form-choice-when-both-legal]` (decided) requires deriving the description from the resulting sequence rather than preserving a spelling, and `rulings[adjudication-precedence-order]` records that mutalyzer is not an authority: its normalizer minimizes a weighted description length with constants dated 2014 and states no separation rule, so a disagreement of this shape is two objectives meeting. Mutalyzer's answers are retained in the corpus as evidence and are never overwritten."
     }
   ],
   "cases": [
@@ -245,12 +251,26 @@
           "cluster": "noncoding-overlap-enumeration-646"
         }
       ],
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-763-transcript-set-enumeration",
-        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
-        "cluster": "transcript-set-enumeration-763"
-      }
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-763-transcript-set-enumeration",
+          "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+          "cluster": "transcript-set-enumeration-763"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "noncoding",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -260,12 +280,20 @@
         "input not for test_description_to_model_to_description"
       ],
       "input": "NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]",
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-763-transcript-set-enumeration",
-        "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
-        "cluster": "transcript-set-enumeration-763"
-      },
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-763-transcript-set-enumeration",
+          "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
+          "cluster": "transcript-set-enumeration-763"
+        },
+        {
+          "axis": "noncoding",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ],
       "coding_protein_descriptions": [
         [
           "NG_007485.1(NM_058195.3):c.204_205delinsATCCC",
@@ -326,12 +354,32 @@
           "cluster": "noncoding-overlap-enumeration-646"
         }
       ],
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-763-transcript-set-enumeration",
-        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
-        "cluster": "transcript-set-enumeration-763"
-      }
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-763-transcript-set-enumeration",
+          "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+          "cluster": "transcript-set-enumeration-763"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "noncoding",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [

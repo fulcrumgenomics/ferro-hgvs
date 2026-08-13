@@ -95,11 +95,47 @@ fn two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_memb
     // (`protein_members_sharing_a_start_render_in_end_order`), which cannot
     // cross-check against SPDI — so this is the case that keeps the nucleotide
     // half of the key honest.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
+    //
+    // The answer was `TEMPLATE:g.[258dup;258_259dup;268del]` — the two
+    // duplications surviving the derivation and being sorted. Under the
+    // canonical-coalesced default the group IS derived, and the pair collapses
+    // to the same single insertion the test above pins:
+    // `TEMPLATE:g.[258_259insAGA;268del]`.
+    //
+    // LICENSED BY `duplication-must-ranks-the-label-not-the-partition` (decided,
+    // operator ruling 2026-08-13), which names THIS TEST by its full path as one
+    // of the six rows it authorises under `FERRO_PARTITION=canonical-coalesced`.
+    // Its ruling is that `DNA/duplication.md:18`'s MUST ranks a *label* for a
+    // change, not a *partition* that exposes one: `:17` is the clause fixing when
+    // `dup` "may only be used" at all and `:18` is its sub-bullet, and
+    // `background/glossary.md:310-311` makes `:18`'s subject — "a variant" — a
+    // difference between two sequences, an object prior to any spelling. Applied
+    // per piece of the partition re-derived from the resulting sequence, the
+    // single `AGA` insertion is not a copy of the reference bases immediately 5'
+    // of its insertion point, so `:18` never fires on it and no MUST is being
+    // deviated from.
+    //
+    // The record singles this shape out as the one it *supplies* rather than
+    // merely licenses: the `dup`+`dup`-sharing-a-start geometry "no decided record
+    // had reasoned about at all" before it.
+    //
+    // WHAT THE TEST STILL GUARDS, which is why it is re-pinned rather than
+    // deleted. `assert_ordered_and_preserving` is unchanged, so the sequence is
+    // still cross-checked against SPDI and the members are still asserted
+    // ascending. What it no longer exercises is the shared-start *tie*, because
+    // there is now one member where there were two. That tie is still covered on
+    // the protein axis by `protein_members_sharing_a_start_render_in_end_order`,
+    // and the paragraph above's point — that the protein axis cannot cross-check
+    // against SPDI — is now a real gap rather than one this test closes. It is
+    // recorded here rather than papered over; closing it needs a nucleotide shape
+    // whose members survive the derivation, which this core no longer supplies.
     let output = assert_ordered_and_preserving(
         "CAGTATGCAGGCAA",
         "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
     );
-    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup;268del]");
+    assert_eq!(output, "TEMPLATE:g.[258_259insAGA;268del]");
 }
 
 #[test]

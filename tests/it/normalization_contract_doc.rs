@@ -136,22 +136,59 @@ fn shipped_default_partition_arm() -> String {
     let arm = body
         .lines()
         .take_while(|line| !line.starts_with('}'))
-        .find(|line| line.contains("None") && line.contains("PartitionRule::"))
+        .find(|line| line.contains("None"))
         .unwrap_or_else(|| {
             panic!(
-                "no match arm in `partition_rule_from_env` maps `None` to a `PartitionRule` — the \
-                 unset case moved, so the shipped default can no longer be read from \
+                "no match arm in `partition_rule_from_env` handles `None` — the unset case moved, \
+                 so the shipped default can no longer be read from \
                  {PARTITION_SOURCE_RELATIVE_PATH}"
             )
         });
 
-    let variant = arm
-        .split_once("PartitionRule::")
-        .expect("the arm was selected for containing this token")
-        .1
-        .chars()
-        .take_while(char::is_ascii_alphanumeric)
-        .collect::<String>();
+    // The arm may name the variant directly (`None => Ok(PartitionRule::Live)`)
+    // or, since #1835, name a CONSTANT that holds it
+    // (`None | Some("") => Ok(DEFAULT_PARTITION_RULE)`). Both are resolved
+    // here, and the indirection is followed rather than special-cased away:
+    // the point of deriving this from source is that the document cannot
+    // publish a default the code no longer has, and a scraper that only
+    // understood the literal form would fail closed on a refactor that changed
+    // nothing about the value. It still fails closed on anything it cannot
+    // resolve — the `expect` below has no fallback.
+    let variant = match arm.split_once("PartitionRule::") {
+        Some((_, rest)) => rest
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect::<String>(),
+        None => {
+            let constant = arm
+                .rsplit_once("Ok(")
+                .map(|(_, rest)| {
+                    rest.chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the `None` arm of `partition_rule_from_env` names neither a \
+                         `PartitionRule::` variant nor a constant this can resolve: {arm:?}"
+                    )
+                });
+            let decl = format!("const {constant}: PartitionRule = PartitionRule::");
+            let rest = source
+                .split_once(&decl)
+                .map(|(_, rest)| rest)
+                .unwrap_or_else(|| {
+                    panic!(
+                    "the `None` arm returns `{constant}`, but no `{decl}…` declaration exists in \
+                     {PARTITION_SOURCE_RELATIVE_PATH} — the shipped default cannot be derived"
+                )
+                });
+            rest.chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect::<String>()
+        }
+    };
     assert!(
         !variant.is_empty(),
         "could not read a variant name out of the `None` arm: {arm:?}"

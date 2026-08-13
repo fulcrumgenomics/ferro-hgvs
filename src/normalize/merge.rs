@@ -16044,7 +16044,7 @@ mod tests {
         #[test]
         fn the_refusal_survives_the_read_so_an_entry_point_can_report_it() {
             // The process this suite runs in has the variable unset — pinned by
-            // `the_suite_runs_on_the_live_rule` — so the accessor is `None`
+            // `the_suite_runs_on_the_default_rule` — so the accessor is `None`
             // here, and that is the production reading it must give.
             assert_eq!(
                 partition_switch_startup_error(),
@@ -16059,8 +16059,8 @@ mod tests {
             assert!(message.contains("live"));
         }
 
-        /// This suite's expectations are the live rule's, and the cached read
-        /// agrees with the pure mapping above.
+        /// This suite's expectations are the **default** rule's, and the cached
+        /// read agrees with the pure mapping above.
         ///
         /// Every other test in this file asserts a *shipped* representation, and
         /// switching the rule moves dozens of them at once (measured: 36 under
@@ -16068,13 +16068,23 @@ mod tests {
         /// It therefore **fails by design** during a deliberate
         /// `FERRO_PARTITION=…` bake-off run — that failure is the message
         /// "you are not measuring the shipped rule", not a defect.
+        ///
+        /// **This is also the flip's own positive control**, and the sharpest one
+        /// available: it reads the arm identity out of the process rather than
+        /// inferring it from an output string, so it cannot be satisfied by a
+        /// second arm that happens to agree on the probe. Before the flip it
+        /// read `Live`; it failed with `left: CanonicalCoalesced, right: Live`,
+        /// which is what established that the default had moved and *where to*.
+        /// Asserting [`DEFAULT_PARTITION_RULE`] rather than the arm by name is
+        /// deliberate — the pin then tracks the constant that defines the
+        /// default instead of becoming a second, drifting copy of it.
         #[test]
-        fn the_suite_runs_on_the_live_rule() {
+        fn the_suite_runs_on_the_default_rule() {
             assert!(
                 std::env::var_os("FERRO_PARTITION").is_none(),
-                "this suite's expectations are the live rule's; FERRO_PARTITION must be unset"
+                "this suite's expectations are the default rule's; FERRO_PARTITION must be unset"
             );
-            assert_eq!(partition_rule(), PartitionRule::Live);
+            assert_eq!(partition_rule(), DEFAULT_PARTITION_RULE);
         }
 
         /// The canonical arm produces pieces that denote the block, so the arm is

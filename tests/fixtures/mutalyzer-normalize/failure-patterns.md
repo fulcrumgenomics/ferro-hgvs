@@ -237,6 +237,21 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---|---|---|---|
 | `NG_008939.1:g.5207_5212delins[4300_4309inv;4310_4320]` | genomic | spec_citation | — | — |
 
+### canonical-coalesced default re-derives a shared-base delins into dup + delins
+
+Spec: `recommendations/general.md:157-160; DNA/delins.md:44-47`
+
+#1835 makes `canonical-coalesced` the shipped partition rule. On `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` and its two sibling spellings the 2-base reference span and 5-base payload share a base, so deriving from the resulting sequence exposes `g.[28293dup;28295delinsCCC]` where mutalyzer emits the spanning `g.28294_28295delinsATCCC`. Both denote the same bases, so this is a representation choice and not a sequence disagreement. `rulings[canonical-form-choice-when-both-legal]` (decided) requires deriving the description from the resulting sequence rather than preserving a spelling, and `rulings[adjudication-precedence-order]` records that mutalyzer is not an authority: its normalizer minimizes a weighted description length with constants dated 2014 and states no separation rule, so a disagreement of this shape is two objectives meeting. Mutalyzer's answers are retained in the corpus as evidence and are never overwritten.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | genomic | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | noncoding | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | normalized | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | genomic | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | noncoding | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | noncoding | accepted_divergence | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -345,9 +360,9 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 19 | 0 | 0 | 0 | 0 |
-| genomic | 19 | 0 | 0 | 0 | 5 |
+| genomic | 21 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
-| noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 28 | 0 | 1 | 0 | 18 |
+| noncoding | 3 | 0 | 0 | 0 | 8 |
+| normalized | 29 | 0 | 1 | 0 | 18 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

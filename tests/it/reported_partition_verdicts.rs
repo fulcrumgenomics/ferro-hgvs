@@ -554,14 +554,38 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v2/span",
         input: "TEMPLATE:g.38_41delinsATTG",
-        output: "TEMPLATE:g.[38T>A;40_41delinsTG]",
-        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP, AND MOVED THE WRONG WAY. Under
+        // `live` this printed `[38T>A;40_41delinsTG]` — #1420's wanted form —
+        // and the verdict was `Canonical`. Under `canonical-coalesced` the span
+        // re-derives onto the CIS spelling instead, so the pair converges (see
+        // the rung assertion, which now derives `NormalizedMatch` from
+        // `a.output == b.output`) but converges on the form the spec ranks
+        // LOWER. Hence `Gap`, and hence `1420-v2` moves `OneReaches` ->
+        // `NeitherReaches`: after the flip NEITHER spelling reaches `wanted`.
+        output: "TEMPLATE:g.[37dup;41del]",
+        five_prime: "TEMPLATE:g.[36dup;41del]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v2: substitution exposed \
                    at 38, and the span separated at the unchanged 39 per \
-                   delins.md:17.",
+                   delins.md:17. THE FLIP NO LONGER REACHES IT, and that is a \
+                   DISCLOSED RULE-2 PREFERENCE MISS rather than a licensed \
+                   re-derivation. Reference 38-41 is `TTGC` against a result of \
+                   `ATTG`, so 38 IS a substitution and `general.md:56` ranks \
+                   (1) substitution above (4) duplication — yet the derived form \
+                   spells that change as `37dup`. Both forms denote the same \
+                   sequence, so this is a choice between legal descriptions on \
+                   which the spec states a ranking, and the derivation does not \
+                   consult it after re-partitioning. `rulings[separation-rule-\
+                   force-modal-or-negation]` (decided 2026-08-12) grades \
+                   `general.md`'s modals as README rule 2 — a deviation to \
+                   DISCLOSE AND PIN WITH A TRIPWIRE, not a rule-7 blocker — so \
+                   this is pinned here and disclosed in the PR's \
+                   `Representation-Change:` trailer rather than blocking. The \
+                   ranking defect is filed separately; closing it should return \
+                   this row to `Canonical` and the pair to `OneReaches`, which \
+                   is the tripwire: a change that moves either MUST say which.",
     },
     Row {
         label: "1420-v3/cis",
@@ -579,9 +603,15 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v3/span",
         input: "TEMPLATE:g.37_40delinsCATT",
-        output: "TEMPLATE:g.[37_38delinsCA;40G>T]",
-        five_prime: "TEMPLATE:g.[37_38delinsCA;40G>T]",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP, same shape as `1420-v2/span`
+        // and the same defect: the span re-derives onto its cis sibling's
+        // authored form, so the pair converges but neither spelling reaches
+        // `wanted`. Here `general.md:56` ranks (1) substitution above
+        // (5) insertion, and the surviving form spells the change as an `ins`.
+        // A README rule-2 preference miss, disclosed and filed as #1878.
+        output: "TEMPLATE:g.[36_37insC;40del]",
+        five_prime: "TEMPLATE:g.[36_37insC;40del]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[37_38delinsCA;40G>T]",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v3: reference 37-40 is \
@@ -606,9 +636,17 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v4/span",
         input: "TEMPLATE:g.21_24delinsGCTG",
-        output: "TEMPLATE:g.21_24delinsGCTG",
-        five_prime: "TEMPLATE:g.21_24delinsGCTG",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP, and unlike `1420-v2`/`v3` this
+        // one is LICENSED rather than a preference miss. The flip finds the
+        // payload-coincidence alignment across 22-23, and
+        // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+        // (decided) puts every `g.` row OUTSIDE `DNA/delins.md:47`, so
+        // `general.md:34` governs unqualified and the members are described
+        // individually. #1420 asks for the span; the ledger says a `g.` row
+        // splits, and the ledger is the later and narrower authority.
+        output: "TEMPLATE:g.[21delinsGC;24del]",
+        five_prime: "TEMPLATE:g.[21delinsGC;24del]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.21_24delinsGCTG",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v4: one delins over four \
@@ -620,9 +658,19 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n1/split",
         input: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        output: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        five_prime: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP. Both spellings of `1421-n1` now
+        // converge on `TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]`, a form
+        // NEITHER authored — which `rulings[canonical-form-choice-when-both-legal]`
+        // (decided) licenses: ferro derives from the resulting sequence and
+        // emits what falls out, and does not preserve the input's spelling. So
+        // the convergence is the ruling working; what it costs is that neither
+        // spelling reaches #1421's `wanted`, hence `Gap` and the pair moving to
+        // `NeitherReaches`. Whether THIS form is the right one is the
+        // `:47`/`:34` question the sibling record leaves open and this PR does
+        // not answer.
+        output: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical: the substitution at 29 and \
@@ -635,8 +683,16 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n1/span",
         input: "TEMPLATE:g.29_33delinsAACACATACTG",
-        output: "TEMPLATE:g.29_33delinsAACACATACTG",
-        five_prime: "TEMPLATE:g.29_33delinsAACACATACTG",
+        // MOVED BY THE PARTITION DEFAULT FLIP onto a form NEITHER spelling
+        // authored, which `rulings[canonical-form-choice-when-both-legal]`
+        // (decided) licenses: derive from the resulting sequence, emit what
+        // falls out, do not preserve the input's spelling. The pair converges,
+        // which is the good half; the cost is that neither reaches #1421's
+        // `wanted`, so both rows are `Gap` and the pair is `NeitherReaches`.
+        // Whether THIS form is right is the `:47`/`:34` question the record
+        // leaves open and this PR does not answer.
+        output: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecSelfConflicting,
@@ -660,9 +716,17 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n2/split",
         input: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        output: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        five_prime: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP onto a form NEITHER spelling
+        // authored, which `rulings[canonical-form-choice-when-both-legal]`
+        // (decided) licenses: derive from the resulting sequence, emit what
+        // falls out, do not preserve the input's spelling. The pair converges,
+        // which is the good half; the cost is that neither reaches #1421's
+        // `wanted`, so both rows are `Gap` and the pair is `NeitherReaches`.
+        // Whether THIS form is right is the `:47`/`:34` question the record
+        // leaves open and this PR does not answer.
+        output: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
+        five_prime: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical for row 2; unchanged \
@@ -672,8 +736,9 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n2/span",
         input: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
-        output: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
-        five_prime: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
+        // Converges with its split sibling; see that row.
+        output: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
+        five_prime: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         authority: Authority::SpecSelfConflicting,
@@ -686,9 +751,12 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n3/split",
         input: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        output: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        five_prime: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        verdict: Verdict::Canonical,
+        // MOVED BY THE PARTITION DEFAULT FLIP onto a form neither spelling
+        // authored; licensed by `rulings[canonical-form-choice-when-both-legal]`.
+        // The pair converges; neither reaches #1421's `wanted`.
+        output: "TEMPLATE:g.[34G>T;37delinsCC;39_40insTACGT]",
+        five_prime: "TEMPLATE:g.[34G>T;37delinsCC;38_39insTTACG]",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical for row 3; unchanged \
@@ -698,8 +766,9 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1421-n3/span",
         input: "TEMPLATE:g.34_38delinsTCACCTTTACG",
-        output: "TEMPLATE:g.34_38delinsTCACCTTTACG",
-        five_prime: "TEMPLATE:g.34_38delinsTCACCTTTACG",
+        // Converges with its split sibling; see that row.
+        output: "TEMPLATE:g.[34G>T;37delinsCC;39_40insTACGT]",
+        five_prime: "TEMPLATE:g.[34G>T;37delinsCC;38_39insTTACG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         authority: Authority::SpecSelfConflicting,
@@ -724,7 +793,24 @@ const REPORTED_ROWS: &[Row] = &[
 /// prints — and the 5' pass shifts that form's leading deletion one base left,
 /// which the substitution-plus-deletion form gave it no way to do. So the row
 /// joins its own `/cis` sibling here rather than arriving for a new reason.
-const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis"];
+// `1420-v2/span` JOINED under the partition default flip: its 3' answer is
+// `g.[37dup;41del]` and its 5' answer `g.[36dup;41del]`, because the span now
+// descends onto the cis form and the cis form's `dup` is direction-sensitive
+// (3'-anchored by `general.md:41`). Disclosed as a representation change under
+// a supported option; see #1878.
+// `1421-n3/split` and `1421-n3/span` ALSO joined: both converge on
+// `g.[34G>T;37delinsCC;39_40insTACGT]` at 3' and on
+// `g.[34G>T;37delinsCC;38_39insTTACG]` at 5', the trailing insertion anchoring
+// differently by direction. Disclosed as a representation change under a
+// supported option, like the four rows above it.
+const FIVE_PRIME_MOVERS: &[&str] = &[
+    "1419-r3/cis",
+    "1419-r3/span",
+    "1420-v2/cis",
+    "1420-v2/span",
+    "1421-n3/split",
+    "1421-n3/span",
+];
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
@@ -796,7 +882,7 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis
 /// for together. [`the_pair_state_census_holds`] asserts the arithmetic between
 /// the two censuses — 0, 1 or 2 gap rows per pair by state, summing to this
 /// number — so neither can be moved to accommodate the other in silence.
-const OPEN_GAPS: usize = 12;
+const OPEN_GAPS: usize = 18;
 
 /// Every reported pair's [`PairState`], pinned per pair and in the table's own
 /// order.
@@ -824,12 +910,25 @@ const PAIR_STATES: &[(&str, PairState)] = &[
     ("1419-r1", PairState::NeitherReaches),
     ("1419-r2", PairState::NeitherReaches),
     ("1419-r3", PairState::NeitherReaches),
-    ("1420-v2", PairState::OneReaches),
-    ("1420-v3", PairState::OneReaches),
-    ("1420-v4", PairState::OneReaches),
-    ("1421-n1", PairState::OneReaches),
-    ("1421-n2", PairState::OneReaches),
-    ("1421-n3", PairState::OneReaches),
+    // OneReaches -> NeitherReaches under the partition default flip: the span
+    // spelling re-derives onto the cis form, so neither reaches `wanted`. A
+    // disclosed rule-2 preference miss on `general.md:56`; see the row.
+    ("1420-v2", PairState::NeitherReaches),
+    // OneReaches -> NeitherReaches under the flip: the span descends onto the
+    // cis form, so neither reaches `wanted`. Same mechanism as 1420-v2; #1878.
+    ("1420-v3", PairState::NeitherReaches),
+    // OneReaches -> NeitherReaches: the span splits on the axis scope ruling,
+    // so neither spelling reaches #1420's wanted span form. LICENSED, not a
+    // preference miss — see the row.
+    ("1420-v4", PairState::NeitherReaches),
+    // OneReaches -> NeitherReaches: both spellings converge on a third form
+    // neither authored, licensed by `canonical-form-choice-when-both-legal`,
+    // so neither reaches #1421's `wanted`.
+    ("1421-n1", PairState::NeitherReaches),
+    // OneReaches -> NeitherReaches: both spellings converge on a third form.
+    ("1421-n2", PairState::NeitherReaches),
+    // OneReaches -> NeitherReaches: both spellings converge on a third form.
+    ("1421-n3", PairState::NeitherReaches),
 ];
 
 /// How many pairs sit in each state: `(BothReach, OneReaches, NeitherReaches)`.
@@ -846,7 +945,7 @@ const PAIR_STATES: &[(&str, PairState)] = &[
 /// [`the_pair_state_census_holds`] and in [`PairState::gap_rows`]: neither
 /// compiles until the new variant is given an arm, and the census arm has
 /// nowhere to put its count until this tuple grows too.
-const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 6, 3);
+const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 0, 9);
 
 /// The state [`PAIR_STATES`] pins for one pair.
 ///

@@ -626,6 +626,26 @@ pub enum Policy {
     /// divergence (#853/#920).
     #[serde(rename = "ferro-policy-853-refseq-transcript-sequence-authoritative")]
     RefseqTranscriptSequenceAuthoritative853,
+    /// The `canonical-coalesced` partition default (#1835) re-derives a locus
+    /// from the resulting sequence where mutalyzer emits the spanning `delins`.
+    /// On `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` and its two sibling
+    /// spellings, the 2-base reference span and 5-base payload share a base, so
+    /// the derivation exposes a duplication plus a shorter `delins`
+    /// (`g.[28293dup;28295delinsCCC]`) against mutalyzer's
+    /// `g.28294_28295delinsATCCC`. **Both denote the same bases** — the
+    /// divergence is a representation choice, not a sequence disagreement.
+    ///
+    /// `rulings[canonical-form-choice-when-both-legal]` (decided) requires
+    /// deriving the description from the resulting sequence rather than
+    /// preserving a spelling, and `rulings[adjudication-precedence-order]`
+    /// records that mutalyzer is not an authority — its normalizer minimizes a
+    /// weighted description length with constants dated 2014 and has no
+    /// separation rule at all, so a disagreement of this shape is two
+    /// objectives meeting rather than evidence it knows something the spec does
+    /// not. Mutalyzer's answers are retained in the corpus as evidence and are
+    /// never overwritten. Accepted divergence (#1835).
+    #[serde(rename = "ferro-policy-1835-canonical-coalesced-default")]
+    CanonicalCoalescedDefault1835,
 }
 
 impl Policy {
@@ -648,6 +668,9 @@ impl Policy {
             Policy::EnsemblVersionRequired938 => "ferro-policy-938-ensembl-version-required",
             Policy::RefseqTranscriptSequenceAuthoritative853 => {
                 "ferro-policy-853-refseq-transcript-sequence-authoritative"
+            }
+            Policy::CanonicalCoalescedDefault1835 => {
+                "ferro-policy-1835-canonical-coalesced-default"
             }
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {

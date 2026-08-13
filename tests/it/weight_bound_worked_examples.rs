@@ -236,34 +236,64 @@ fn the_two_spellings_denote_the_same_sequence() {
     );
 }
 
-/// Example 2 is non-confluent: one variant, two stable normalized strings.
+/// Example 2 CONVERGES (#1835) — one variant, one normalized string.
 ///
-/// **Assert-then-flip**, and the flip is the point. `delins.md:47` recommends
-/// the spanning form, the decided ruling
-/// `delins-merge-vs-individual-gap-two-or-more` scopes itself to exactly this
-/// shape, and Mutalyzer merges it — so the expected convergence is on
-/// [`SPANNING_DELINS`].
+/// # The assert-then-flip fired, and it flipped the OTHER WAY
+///
+/// This row used to pin a non-confluence and carried an instruction for closing
+/// it: "confirm they agree on [`SPANNING_DELINS`] (`DNA/delins.md:47`, and the
+/// decided ruling `delins-merge-vs-individual-gap-two-or-more`)". **Do not follow
+/// that instruction.** The two spellings now agree, so the defect is indeed
+/// fixed — but they agree on the SPLIT, and two decided rulings postdating that
+/// sentence say that is the correct side. Each is sufficient on its own:
+///
+/// * **`delins-payload-coincidence-carve-out-is-coding-dna-scoped`** scopes
+///   `delins.md:47` to the coding DNA axis. `TEMPLATE:g.` is genomic, so `:47`
+///   never reaches this row and `general.md:34` governs unqualified — members
+///   separated by unchanged nucleotides are described individually. `:47`'s own
+///   stated ground is preventing "incorrect predictions for the consequences on
+///   protein level", which has nothing to bite on where no protein is predicted.
+/// * **`delins-merge-vs-individual-gap-two-or-more`** — the very record the old
+///   instruction cited — was later scoped BY DIRECTION to the net-deletion case
+///   and "does **not** reach net insertions, where the split form stays
+///   canonical". This row replaces a 5 nt span with an 11 nt payload: a net
+///   insertion, so the record does not reach it either.
+///
+/// So the old sentence named the right authorities and the wrong side of both,
+/// because both were scoped after it was written. Left in place above rather than
+/// deleted, because the mistake is instructive: a failure message that tells you
+/// which way to re-pin is only as current as the ledger it was copied from.
+///
+/// **Mutalyzer merging it is not authority here.** `adjudication-precedence-order`
+/// records why Mutalyzer is not a spec oracle — it minimizes a weighted
+/// description length with constants dated 2014 and has no separation rule at
+/// all, so a separation disagreement is two objectives meeting rather than
+/// evidence.
+///
+/// The converged form is not the input's spelling either, which is what
+/// `canonical-form-choice-when-both-legal` requires: the answer is derived from
+/// the resulting sequence, and neither authored spelling survives it.
 #[test]
 fn one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split() {
+    /// What both spellings now reach. Neither authored form.
+    const CONVERGED: &str = "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]";
+
     let from_span = oracle::normalize(SEQ, SPANNING_DELINS);
     let from_split = oracle::normalize(SEQ, SEPARATED_MEMBERS);
 
     assert_eq!(
-        from_span, SPANNING_DELINS,
-        "the spanning spelling is a fixed point"
+        from_span, CONVERGED,
+        "the spanning spelling is re-derived rather than preserved"
     );
     assert_eq!(
-        from_split, SEPARATED_MEMBERS,
-        "the separated spelling is also a fixed point: re-deriving it yields the \
-         span, which weighs 11 against the input's 9, and the weight bound \
-         refuses anything heavier than the input's spelling"
+        from_split, CONVERGED,
+        "and the separated spelling reaches the same form"
     );
-    assert_ne!(
+    assert_eq!(
         from_span, from_split,
-        "if these now agree the defect is FIXED — confirm they agree on \
-         {SPANNING_DELINS} (`DNA/delins.md:47`, and the decided ruling \
-         `delins-merge-vs-individual-gap-two-or-more`), flip these expectations, \
-         and declare the representation change"
+        "the two spellings of one variant must converge. If they have diverged \
+         again this is a confluence regression, not a re-pin: see \
+         `confluence-gate-is-apply-equality-on-every-determined-axis`"
     );
 }
 

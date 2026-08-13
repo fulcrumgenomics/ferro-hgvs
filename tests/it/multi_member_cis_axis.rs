@@ -702,6 +702,52 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 /// taken with the input's unchanged bases — it is what the sequence supports and
 /// what the splitter previously could not spell. `sequence_changed` staying **0**
 /// across all 592 rows is the check that no member was lost buying it.
+/// # #1835 — 401 -> 407, and each of the six was checked before re-blessing
+///
+/// The failure message this replaces says a rise is "good news" and then warns
+/// that "convergence onto the *wrong* form is a regression that raises this
+/// figure". So the six were measured individually against both arms rather than
+/// re-blessed on the count. `ferro normalize --error-mode lenient` over the
+/// prepared reference, default arm against `FERRO_PARTITION=live`:
+///
+/// ```text
+/// NM_000448.2:c.[2119G>C;519delT]                     unchanged  c.[519del;2119G>C]
+/// NM_000536.3:c.[1403_1406delATCT;1A>G]               unchanged  c.[1A>G;1403_1406del]
+/// NM_000548.3:c.[3623_3647del;3745_3756dup]           unchanged  c.[3623_3647del;3749_3760dup]
+/// NM_004826.3:c.[344_355delACCTGGACGCCA;716dupA]      unchanged  c.[344_355del;716dup]
+/// NM_000518.5:c.[385_388delinsCCACA;397_407del]       MOVED      c.385_407delinsCCACACCTATCAG
+/// NM_002617.4:c.[13del;22_28delinsACCTGCGCCGCC]       MOVED      c.[13del;21_22insA;24delinsTGCG;28delinsCC]
+/// ```
+///
+/// **Four of the six do not move at all.** Their own output is byte-identical on
+/// both arms, so what changed is the *respelling's* output — which is the whole
+/// point of this counter, since `respelling_converged` asks whether a row and its
+/// spanning-`delins` respelling agree. Four rows converged by their respelling
+/// coming to them, which cannot be convergence onto a wrong form: the form was
+/// already there and is unchanged.
+///
+/// **The two that moved went in OPPOSITE directions, and that is the check that
+/// they are right.** Both are `c.` rows, so `DNA/delins.md:47` reaches them and
+/// `delins-merge-vs-individual-gap-two-or-more` applies — but that record is
+/// scoped to the **net-deletion** direction and, per
+/// `delins-recommendation-reach-when-the-input-arrives-split`, to splits carrying
+/// a gap-bearing member:
+///
+/// * `NM_000518.5` replaces a 23 nt span with 13 nt — a net deletion — and its
+///   derived split carries `385_388delinsCCACA`, four reference bases placing
+///   five, so a gap-bearing member. Both conditions hold, `:47` reaches it, and it
+///   MERGES to the spanning form.
+/// * `NM_002617.4` replaces a 7 nt span with 12 nt — a net **insertion**. The
+///   record "does not reach net insertions, where the split form stays canonical",
+///   so `:47` is silent and `general.md:34` describes the members individually. It
+///   SPLITS further.
+///
+/// One merging and one splitting under one arm is what a correctly-scoped rule
+/// looks like from the outside; a rule that merged both, or split both, would be
+/// the thing to worry about.
+///
+/// `sequence_changed` stays **0** across all 592 rows, so nothing was bought by
+/// losing a member.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
     declined: 0,
@@ -709,7 +755,8 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     unwindowed: 96,
     sequence_changed: 0,
     respellable: 461,
-    respelling_converged: 401,
+    // #1835: see the section above — six rows started converging, none stopped.
+    respelling_converged: 407,
 };
 
 /// The rows behind `respelling_converged`, by input, sorted.
@@ -979,6 +1026,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_000448.2:c.[1229G>A;1863delG]",
     "NM_000448.2:c.[1681C>T;1815G>C]",
     "NM_000448.2:c.[1871G>A;2182T>C]",
+    "NM_000448.2:c.[2119G>C;519delT]",
     "NM_000452.2:c.[728T>C;785C>T]",
     "NM_000477.7:c.[1030G>A;67C>T]",
     "NM_000482.4:c.[1008G>T;1134_1145dup]",
@@ -1020,6 +1068,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_000518.4:c.[34G>A;364G>A]",
     "NM_000518.4:c.[364G>C;79G>A]",
     "NM_000518.4:c.[424C>G;433A>T]",
+    "NM_000518.5:c.[385_388delinsCCACA;397_407del]",
     "NM_000518.5:c.[70G>T;79G>A]",
     "NM_000520.4:c.[574G>C;598G>A]",
     "NM_000527.4:c.[1268T>C;829G>A]",
@@ -1027,8 +1076,10 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_000527.4:c.[932A>G;939C>G]",
     "NM_000530.6:c.[241C>T;337G>T]",
     "NM_000530.6:c.[341T>C;346A>C;382G>A]",
+    "NM_000536.3:c.[1403_1406delATCT;1A>G]",
     "NM_000540.2:c.[14344G>A;14928C>G]",
     "NM_000540.2:c.[8026C>T;8360C>G]",
+    "NM_000548.3:c.[3623_3647del;3745_3756dup]",
     "NM_000553.4:c.[375A>T;403A>G]",
     "NM_000558.3:c.[235A>G;239C>G]",
     "NM_000559.2:c.[227C>T;409G>T]",
@@ -1108,6 +1159,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_002292.3:c.[4140C>A;4177C>T]",
     "NM_002474.3:c.[3791T>C;3824G>T]",
     "NM_002501.3:c.[346C>T;348G>A]",
+    "NM_002617.4:c.[13del;22_28delinsACCTGCGCCGCC]",
     "NM_002691.4:c.[2052G>C;2816C>G]",
     "NM_002693.3:c.[1760C>T;752C>T]",
     "NM_002977.3:c.[2794A>C;2971G>T]",
@@ -1126,6 +1178,7 @@ const CONVERGED_ROWS: &[&str] = &[
     "NM_004752.3:c.[1136T>A;751C>G]",
     "NM_004771.4:c.[1046C>T;911C>G]",
     "NM_004826.3:c.[1252C>T;590G>A]",
+    "NM_004826.3:c.[344_355delACCTGGACGCCA;716dupA]",
     "NM_004959.4:c.[368G>C;386C>T]",
     "NM_004992.3:c.[1155_1200del;987_988del]",
     "NM_005035.4:c.[1696C>T;3578C>T]",

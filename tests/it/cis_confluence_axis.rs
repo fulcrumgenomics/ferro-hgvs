@@ -127,12 +127,17 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **74.2% of designed classes converge** (8 361 of 11 272). The 2 911 that do
-/// not are the measurement this module exists to make: nothing in the repo
-/// could state that number before, because only 650 real rows reach the
-/// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
-/// over the respellable ones of those, which is what a corpus of far-apart
-/// members looks like.
+/// **100.0% of designed classes converge** (11 271 of 11 272). The 1 that does
+/// not is the measurement this module exists to make: nothing in the repo could
+/// state that number before, because only 650 real rows reach the partitioner at
+/// all — and `multi_member_cis_axis` measures convergence over the respellable
+/// ones of those, which is what a corpus of far-apart members looks like.
+///
+/// **Read the percentage as rounded, not as exact.** 11 271 of 11 272 is
+/// 99.991 %, and the guard below rounds to the nearest tenth, so the headline
+/// says 100.0 while one class still diverges. The residual is named in the
+/// re-bless section below; a reader who needs "all of them" should read the
+/// count, which is the figure the guard actually asserts.
 ///
 /// # This headline was wrong for four movements of the pin
 ///
@@ -313,16 +318,55 @@ const CDS_END: u64 = 63;
 /// merge across `c.9..c.18`, i.e. codons 3 to 6, which `general.md:34` says to
 /// describe individually. Agreement is lost; correctness is not. `declined`,
 /// `underdetermined` and `sequence_changed` are all still 0.
+/// # Re-blessed by the partition default flip (#1835), and this is the largest
+/// move this pin has ever taken
+///
+/// `converged` **8 361 -> 11 271** and every divergence figure falls to its
+/// floor: `split_two` 2 834 -> 1, `split_three` 68 -> 0, `split_more` 9 -> 0.
+/// Divergence is 2 911 classes under `live` and **1** under the new default, so
+/// the ratchet this pin is written for — divergence only ever down, `converged`
+/// only ever up — is satisfied in the strongest direction it admits. `declined`,
+/// `underdetermined` and `sequence_changed` are all still **0**, which is the
+/// triple read first: no class converged onto a different sequence, so this is
+/// agreement being gained and not correctness being spent.
+///
+/// **The figure is not derived here — it is the one a decided operator ruling
+/// already published.** `delins-recommendation-reach-when-the-input-arrives-split`
+/// records, in its own CONFLUENCE IS NOT A GROUND paragraph, that over this very
+/// 11 272-class corpus "divergent classes fall from 2 911 under `live` to 1
+/// under `canonical-coalesced`, the spanning-vs-split family (1 756 classes)
+/// closes entirely, and cross-class disagreements go 16 -> 0", and it attributes
+/// those figures to "the PARTITION DEFAULT, not to this ruling". This change is
+/// that default. So the re-bless is the ledger's own measurement arriving, not a
+/// new claim.
+///
+/// **Why converging thousands of classes is not itself the argument.** That same
+/// paragraph is explicit that confluence is *not* a ground for the ruling:
+/// `coalesce_payload_alignment_split` runs last on pieces already derived from
+/// the sequence, so each equivalence class reaches one answer whichever way the
+/// arm is set. What the arm decides is **which form** that answer takes, and the
+/// forms are licensed one family at a time by the records this PR cites — the
+/// `c.`-axis payload-coincidence scope, the gap-bearing-insert scope, and
+/// `duplication-must-ranks-the-label-not-the-partition`. Reading the convergence
+/// gain as the licence would be reading a count as a property, which is the one
+/// move this file's own module docs forbid.
+///
+/// **The single surviving 3' divergence is `s06-g-m4-sep1-p1-all-dup`**, which
+/// reaches `g.[265dup;267_271A[7];271_272insA]` and `g.[265dup;267_271A[8]]` —
+/// a repeat-notation disagreement over whether a trailing copy is spelled into
+/// the tract count or beside it. Neither spelling is a partition this change
+/// touches; `delins-adjacent-members-when-both-consume-reference` already
+/// records the adjacent repeat-expansion shape as outside its reach, and the
+/// same holds here. The 5' direction has no residue at all.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_361,
-    // #1716: one class (`s03-c-m3-sep1-p8-rot2`) moved from two outputs to
-    // three — see the section above.
-    split_two: 2_834,
-    split_three: 68,
-    split_more: 9,
+    // #1835: the partition default flip — see the section above.
+    converged: 11_271,
+    split_two: 1,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -383,15 +427,36 @@ const THREE_PRIME: Census = Census {
 /// as at 3', and no asymmetry this time because the merge the fix declines is
 /// decided before either shuffle. See `THREE_PRIME` for the class's two forms and
 /// for why losing this agreement is not losing correctness.
+/// # Re-blessed by the partition default flip (#1835), to total convergence
+///
+/// `converged` **8 367 -> 11 272**, i.e. every class, with all three divergence
+/// figures at **0**. See `THREE_PRIME` for the licensing, which is shared: the
+/// ledger record `delins-recommendation-reach-when-the-input-arrives-split`
+/// published these figures against the partition default before this change
+/// existed, and the per-family licences are the records this PR cites rather
+/// than the convergence gain itself.
+///
+/// **The asymmetry finally disappears, and that is the reading to trust.** Every
+/// entry above records the two directions moving by slightly different amounts,
+/// always for the same reason: the partition is chosen before the shift, so two
+/// members are then shuffled independently and only some landings coincide. Here
+/// the 5' direction converges completely while the 3' keeps one class. That is
+/// the same mechanism read from the other end — the residue is
+/// `s06-g-m4-sep1-p1-all-dup`, a repeat-notation class whose two spellings differ
+/// in which end of an ambiguous tract a trailing copy lands on, so it is visible
+/// only to the direction that walks toward it.
+///
+/// `sequence_changed` remains **0** in both directions, so nothing converged onto
+/// different bases.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_367,
-    // #1716: see `THREE_PRIME` — one class moved from two outputs to three.
-    split_two: 2_825,
-    split_three: 75,
-    split_more: 5,
+    // #1835: the partition default flip — see `THREE_PRIME`.
+    converged: 11_272,
+    split_two: 0,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };

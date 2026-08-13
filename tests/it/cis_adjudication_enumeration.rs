@@ -70,12 +70,18 @@
 //! # Arms
 //!
 //! `FERRO_PARTITION` is read once per process, so a single test process sees one
-//! partitioner. These tests assert the **shipping** (`live`) arm, which is what
-//! CI runs; under any other arm they enumerate and count exactly as before but
-//! assert only the arm-independent facts (the space's size, and that every member
-//! of it denotes one sequence). That is deliberate: the size assertions are what
-//! make a structurally-collapsed enumeration fail loudly rather than pass as an
-//! empty green.
+//! partitioner. These tests assert the **default** arm, which is what CI runs;
+//! under any explicitly-named arm — including `live` — they enumerate and count
+//! exactly as before but assert only the arm-independent facts (the space's size,
+//! and that every member of it denotes one sequence). That is deliberate: the
+//! size assertions are what make a structurally-collapsed enumeration fail loudly
+//! rather than pass as an empty green.
+//!
+//! **The default arm is `canonical-coalesced` since #1835; it was `live`.** The
+//! predicate that decides this used to be called `shipping_arm` and treated unset
+//! and `live` as the same thing, because they were. See [`default_arm`] for why
+//! that inverted silently at the flip and had to be corrected rather than
+//! re-pinned around.
 //!
 //! Running the other arms is one command per arm and the output is the `report`
 //! line plus its buckets:
@@ -85,19 +91,26 @@
 //!   -E 'test(cis_adjudication_enumeration)' --no-capture
 //! ```
 //!
-//! **One thing that fell out of doing so, recorded because it is a question for
-//! an operator rather than a defect to fix here.** Re-measure it rather than
-//! quoting this paragraph. Every class in this module collapses to a single
-//! output under `canonical` and under `canonical-coalesced`, including the two
-//! that are divergent under `live` — but for two of those classes the single
-//! output the candidate arms pick is a *third* form, named by no decided record:
-//! the adjacent-members class lands on the authored `[dup;del]` partition rather
-//! than on the spanning `delins` that
-//! `delins-adjacent-members-when-both-consume-reference` adjudicates correct, and
-//! the spanning-versus-split class lands on a partition matching neither of the
-//! two fixed points `cis_confluence_adjudication` pins. Converging a class is not
-//! the same as converging it on the adjudicated form, and only the enumeration
-//! makes the difference visible.
+//! **The paragraph that used to sit here has come true, and it is now the
+//! default.** It read: "a question for an operator rather than a defect to fix
+//! here … every class in this module collapses to a single output under
+//! `canonical` and under `canonical-coalesced`, including the two that are
+//! divergent under `live` — but for two of those classes the single output the
+//! candidate arms pick is a *third* form, named by no decided record". #1835 made
+//! `canonical-coalesced` the default, so those are the partitions asserted below.
+//! Re-measured on the default arm, all three classes collapse to one output:
+//! adjacent-members to `c.[9dup;13del]` (1 076 spellings), the `dup`-flush
+//! carve-out to `c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]` (1 166), and
+//! spanning-versus-split to `c.[9del;11_17del]` (880).
+//!
+//! **"Converging a class is not the same as converging it on the adjudicated
+//! form" still stands, and is the thing to read the per-class notes for.** Each
+//! test below now states why the form it converges on violates no cited clause —
+//! in every case because the ruling that names a different form is SCOPED, and
+//! the re-derived partition does not meet its scope. That is an argument about
+//! reach, not a claim that the old forms were wrong. It is exactly the argument
+//! that has to be checked rather than assumed, and only the enumeration makes the
+//! difference visible.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -713,16 +726,32 @@ fn cartesian(choices: &[Vec<String>]) -> Vec<Vec<String>> {
 // Arm reporting
 // ---------------------------------------------------------------------------
 
-/// Whether this process is running the shipping partitioner.
+/// Whether this process is running the **default** partitioner.
 ///
 /// `FERRO_PARTITION` is read once per process by the library, so a test cannot
-/// choose its own arm. The convergence expectations below are the `live` arm's;
-/// under any other arm the enumeration still runs and its size is still asserted,
-/// but the per-arm output partition is printed rather than asserted.
-fn shipping_arm() -> bool {
+/// choose its own arm. The output partitions below are the default arm's; under
+/// any explicitly-named arm the enumeration still runs and its size is still
+/// asserted, but the per-arm output partition is printed rather than asserted.
+///
+/// # This predicate INVERTED at the #1835 default flip, and it did so silently
+///
+/// It used to be called `shipping_arm` and admitted `live` alongside unset,
+/// because those two selected the same rule — "the shipping partitioner" and
+/// "the `live` arm" named one thing. The flip separated them: unset now selects
+/// `canonical-coalesced`. The old body therefore kept returning `true` while the
+/// arm underneath it changed, so it asserted the `live` arm's pinned partitions
+/// against the new default's output and reported that as three moved partitions.
+/// That is a correct failure, but it names the wrong cause, so the predicate is
+/// corrected here rather than left to be re-diagnosed.
+///
+/// `live` is now excluded deliberately. It is an explicitly-named arm like any
+/// other, and a bake-off run with `FERRO_PARTITION=live` must print its partition
+/// rather than be asserted against the default's — otherwise every arm comparison
+/// this module exists to support fails by construction.
+fn default_arm() -> bool {
     match std::env::var("FERRO_PARTITION") {
         Err(_) => true,
-        Ok(value) => value.trim().is_empty() || value.trim() == "live",
+        Ok(value) => value.trim().is_empty(),
     }
 }
 
@@ -770,39 +799,54 @@ fn report(class: &str, enumeration: &Enumeration, buckets: &BTreeMap<String, Vec
     }
 }
 
-/// Assert that a two-way partition falls **exactly** along the dimension the
-/// spellings came from.
+/// Assert that provenance predicts **nothing** — one output, reached from both
+/// dimensions.
 ///
-/// This is the sharpest statement the enumeration can make about a divergent
-/// class: not "it splits into two" but "it splits by provenance, with nothing
-/// crossing". That is the mechanism
-/// `separation-is-a-property-of-the-spelling-not-of-the-variant` names — ferro
-/// preserving the partition it was handed — asserted rather than described.
-fn assert_partition_is_by_provenance(
-    class: &str,
-    buckets: &BTreeMap<String, Vec<String>>,
-    from_spanning: &str,
-    from_members: &str,
-) {
-    for (output, inputs) in buckets {
-        for input in inputs {
-            let expected = if is_multi_member(input) {
-                from_members
-            } else {
-                from_spanning
-            };
-            assert_eq!(
-                output,
-                expected,
-                "[{class}] {input} crossed: a {} spelling reached {output}",
-                if is_multi_member(input) {
-                    "multi-member"
-                } else {
-                    "spanning"
-                }
-            );
-        }
-    }
+/// # This replaced its own inverse at the #1835 default flip
+///
+/// It used to be `assert_partition_is_by_provenance`, and it made the sharpest
+/// statement available about a *divergent* class: not "it splits into two" but
+/// "it splits by provenance, with nothing crossing" — ferro preserving the
+/// partition it was handed, which is the mechanism
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant` names. Under the
+/// default arm no class in this module is divergent any more, so that helper had
+/// no callers left and would have been deleted as dead code, taking the property
+/// with it.
+///
+/// Inverting it keeps the same question being asked. The record is decided
+/// *against* preserving the handed partition, so "provenance predicts the output"
+/// is now the failure and "provenance predicts nothing" the requirement.
+///
+/// **Both dimensions must be present**, which is the half that stops this being
+/// weaker than the check it replaces. `buckets.len() == 1` alone is satisfied by
+/// an enumeration that generated only spanning spellings — a structural collapse
+/// passing as convergence, which is this repository's recurring failure. So the
+/// single bucket is required to contain at least one spelling from dimension (a)
+/// and one from dimension (b).
+fn assert_no_provenance_split(class: &str, buckets: &BTreeMap<String, Vec<String>>) {
+    assert_eq!(
+        buckets.len(),
+        1,
+        "[{class}] provenance is deciding the partition again — the class reached \
+         {} outputs where it must reach one. That is ferro preserving the spelling \
+         it was handed, which \
+         `separation-is-a-property-of-the-spelling-not-of-the-variant` forbids. \
+         Buckets: {:?}",
+        buckets.len(),
+        buckets
+            .iter()
+            .map(|(output, inputs)| (output.clone(), inputs.len()))
+            .collect::<Vec<_>>()
+    );
+    let inputs = buckets.values().next().expect("one bucket");
+    let multi = inputs.iter().filter(|input| is_multi_member(input)).count();
+    assert!(
+        multi > 0 && multi < inputs.len(),
+        "[{class}] the single bucket holds {multi} multi-member spellings of {} — \
+         convergence is vacuous unless BOTH dimensions reached it, so this is a \
+         structurally-collapsed enumeration rather than a converged class",
+        inputs.len()
+    );
 }
 
 /// Every **output** must denote the class's own sequence.
@@ -919,7 +963,7 @@ fn the_separation_class_converges_over_its_whole_description_space() {
         SEPARATION_CODING_SPELLINGS,
         "the enumerated space changed size — see the structural audit before re-pinning"
     );
-    if shipping_arm() {
+    if default_arm() {
         assert_converges("separation/c.", &buckets, "NM_TEST.1:c.[9_10del;13del]");
     }
 }
@@ -969,7 +1013,7 @@ fn the_separation_class_converges_over_its_whole_description_space_on_real_coord
     );
 
     assert_eq!(enumeration.len(), SEPARATION_GENOMIC_SPELLINGS);
-    if shipping_arm() {
+    if default_arm() {
         assert_converges(
             "separation/g.",
             &buckets,
@@ -1022,21 +1066,47 @@ fn the_adjacent_members_class_partitions_as_measured() {
     );
 
     assert_eq!(enumeration.len(), ADJACENT_MEMBERS_SPELLINGS);
-    if shipping_arm() {
+    if default_arm() {
+        // #1835: the class CONVERGES. It was a clean bipartition by provenance —
+        // 1 040 spanning spellings on `c.10_13delinsTAAT`, 36 multi-member ones
+        // on `c.[9dup;13del]` — and all 1 076 now reach the second.
+        //
+        // THE RESIDUE THIS CLASS EXISTED TO SHOW IS GONE. The doc above describes
+        // it as "ferro preserving the partition it was handed", and names
+        // `separation-is-a-property-of-the-spelling-not-of-the-variant` as the
+        // record that owns it. That record is decided and says the separation is
+        // read off the partition re-derived from the resulting sequence, never off
+        // the input's spelling — which is precisely what the default arm now does,
+        // so the record is satisfied rather than merely cited.
+        //
+        // WHY THE CONVERGED FORM VIOLATES NO CLAUSE, which is the question
+        // `assert_partition` cannot ask. The form
+        // `delins-adjacent-members-when-both-consume-reference` adjudicates
+        // correct is the spanning `c.10_13delinsTAAT`, and ferro no longer emits
+        // it — but read that record's SCOPE. It rules that two members with NO
+        // unchanged nucleotide between them, BOTH consuming reference bases, are
+        // one `delins`; its authority is `DNA/substitution.md:32`, which marks the
+        // flush split `c.[79G>T;80C>T]` invalid by name. The re-derived partition
+        // meets neither conjunct: `9dup` and `13del` are separated by the
+        // unchanged `c.10_12`, and a `dup` consumes no reference. So the record
+        // does not reach this partition, and the flush split it forbids is not
+        // what ferro emits. `general.md:34` governs the separated pair and asks
+        // for exactly the individual description given, while
+        // `DNA/duplication.md:18` REQUIRES the `dup` label on the inserted copy.
+        //
+        // The block is equal-length (`AATA` -> `TAAT`, a one-position rotation),
+        // so `delins.md:47`'s net-deletion scope excludes it and nothing merges
+        // the pair back.
         assert_partition(
             "adjacent-members",
             &buckets,
-            &[
-                ("NM_TEST.1:c.10_13delinsTAAT", 1_040),
-                ("NM_TEST.1:c.[9dup;13del]", 36),
-            ],
+            &[("NM_TEST.1:c.[9dup;13del]", 1_076)],
         );
-        assert_partition_is_by_provenance(
-            "adjacent-members",
-            &buckets,
-            "NM_TEST.1:c.10_13delinsTAAT",
-            "NM_TEST.1:c.[9dup;13del]",
-        );
+        // The provenance bipartition is not asserted any more: there is one
+        // bucket, so there are no two sides to be split by provenance. Asserted
+        // instead is that provenance no longer predicts anything, which is the
+        // positive form of the same fact.
+        assert_no_provenance_split("adjacent-members", &buckets);
     }
 }
 
@@ -1092,20 +1162,42 @@ fn the_dup_flush_carve_out_class_partitions_as_measured() {
     );
 
     assert_eq!(enumeration.len(), DUP_FLUSH_SPELLINGS);
-    if shipping_arm() {
+    if default_arm() {
+        // #1835: FIVE outputs collapse to ONE. This is the largest confluence
+        // gain in the module and it closes the finding the doc above calls
+        // "bigger than the pinned point": that this class's multi-member
+        // spellings reached four different outputs "differing in edit type and
+        // not merely in position — a `dup`+`del` form, a `dup`+two-substitution
+        // form, an `inv`-bearing form, and a single wide `delins`".
+        //
+        // That doc also predicted this exact outcome, in its last sentence: "All
+        // three sequence-first arms collapse it to one output." The default is
+        // now one of those arms.
+        //
+        // WHAT THE RECORD SAID, AND WHY THIS DOES NOT CROSS IT.
+        // `delins-adjacent-members-when-both-consume-reference`'s SCOPE paragraph
+        // declines to rule on a `dup` flush against a `del`, on the ground that
+        // merging them into one `delins` would destroy a duplication
+        // `DNA/duplication.md:18` requires. Ferro does not do that here: the
+        // output is four members, not one `delins`, so nothing was merged and no
+        // `dup` was destroyed by a merge. The `dup` is absent because the
+        // partition was RE-DERIVED from the resulting sequence and no piece of the
+        // new partition is a tandem copy of its own 5' flank.
+        //
+        // That distinction is the one `duplication-must-ranks-the-label-not-the-partition`
+        // (decided, operator ruling 2026-08-13) draws in terms. It rules that
+        // `:18` ranks a LABEL for a change rather than requiring a partition that
+        // exposes one, and it says explicitly which mechanism it does NOT reach:
+        // "merging two ADJACENT MEMBERS AT SEPARATION ZERO into one `delins`,
+        // which destroys a `dup` that the members themselves carry … This record
+        // is about WHOLE-BLOCK RE-DERIVATION, where no member survives to be
+        // destroyed because the partition is recomputed from the resulting
+        // sequence." This class is the second mechanism, so it is governed rather
+        // than carved out.
         assert_partition(
             "dup-flush-carve-out",
             &buckets,
-            &[
-                ("NM_TEST.1:c.9_30delinsAAATATATTTTAATATTTTAATAAAACACC", 630),
-                ("NM_TEST.1:c.[9T>A;16_23dup;24T>A;27_30delinsCACC]", 112),
-                ("NM_TEST.1:c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]", 388),
-                (
-                    "NM_TEST.1:c.[9T>A;25_26inv;28_30delinsAAT;34_35insCACCAAAA]",
-                    28,
-                ),
-                ("NM_TEST.1:c.[9T>A;25_30delinsTTTAATAAAACACC]", 8),
-            ],
+            &[("NM_TEST.1:c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]", 1_166)],
         );
     }
 }
@@ -1163,21 +1255,33 @@ fn the_spanning_versus_split_class_partitions_as_measured() {
     );
 
     assert_eq!(enumeration.len(), SPANNING_VS_SPLIT_SPELLINGS);
-    if shipping_arm() {
+    if default_arm() {
+        // #1835: the class CONVERGES — all 880 spellings on `c.[9del;11_17del]`,
+        // where it was 864 spanning against 16 split, bipartitioned by provenance.
+        //
+        // THE OPEN QUESTION THIS CLASS WAITED ON IS DECIDED, AND THIS IS THE SIDE
+        // IT WAS DECIDED ON. The doc above names
+        // `delins-merge-vs-individual-gap-two-or-more` and says "whose scope on an
+        // input that arrives already split is what is open". That was closed by
+        // `delins-recommendation-reach-when-the-input-arrives-split` (decided,
+        // operator ruling 2026-08-12): `delins.md:47` reaches a payload-coincidence
+        // split ONLY where an inserted sequence re-aligned — operationally, where
+        // some derived member supplies bases while consuming a different number of
+        // reference bases. Here the re-derived partition is `[9del;11_17del]`, TWO
+        // PURE DELETIONS. Nothing is supplied, so `:46`'s mechanism cannot have
+        // occurred, and `general.md:34` / `delins.md:17` govern unqualified: the
+        // members are described individually.
+        //
+        // So the converged form is neither of the two fixed points the sibling
+        // module pinned, and that is the ruling working rather than a third answer
+        // arriving unbidden — the spanning form is withdrawn by the scope, and the
+        // authored split was never canonical, only preserved.
         assert_partition(
             "spanning-vs-split",
             &buckets,
-            &[
-                ("NM_TEST.1:c.9_17delinsA", 864),
-                ("NM_TEST.1:c.[9_12del;15_18del]", 16),
-            ],
+            &[("NM_TEST.1:c.[9del;11_17del]", 880)],
         );
-        assert_partition_is_by_provenance(
-            "spanning-vs-split",
-            &buckets,
-            "NM_TEST.1:c.9_17delinsA",
-            "NM_TEST.1:c.[9_12del;15_18del]",
-        );
+        assert_no_provenance_split("spanning-vs-split", &buckets);
     }
 }
 

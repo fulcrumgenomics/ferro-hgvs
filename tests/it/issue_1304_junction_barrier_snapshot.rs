@@ -109,8 +109,45 @@ fn a_third_member_clear_of_the_tract_keeps_the_pair_barred() {
     // stubbing `clamp_sibling_crossing_junctions` to return immediately turns
     // this output into `g.[261_262dup;265dup;270del]` — the `insGA` swept past
     // its sibling — and restoring the mechanism turns it back.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), AND THE BARRIER
+    // COVERAGE IS LOST WITH IT
+    //
+    // Was `NC_TEST.1:g.[260_261insGA;261_262insA;270del]`; now
+    // `NC_TEST.1:g.[262_263insGAA;270del]` — the same single insertion
+    // `the_pair_alone_merges_instead_of_staying_barred` above already pins
+    // WITHOUT the third member. The third member has stopped blocking the
+    // derivation, so the device this whole test rests on no longer works.
+    //
+    // LICENSED BY `contiguous-insertion-split-by-a-blocked-derivation` (decided).
+    // Its ruling is that `general.md:34` is stated over "two variants" and a
+    // locus like this one carries ONE: aligning the reference against the denoted
+    // sequence leaves a single contiguous 3 nt insertion (`GAA`). So `:34` never
+    // reached this pair, and the two-member spelling survived "because a
+    // derivation was blocked, not because a clause requires it". The record
+    // verified that by applying both spellings through `hgvs_to_spdi`,
+    // independently of the normalizer — and `assert_padded_preserving` re-checks
+    // the same equality on every run here.
+    //
+    // THIS IS THE THIRD ROW IN THIS FILE TO STOP GUARDING THE BARRIER, and the
+    // sequence is worth reading as a whole because it is now complete. The
+    // comment on `the_pair_alone_merges_instead_of_staying_barred` records that
+    // *it* stopped bounding the barrier when #1235 made the pair merge, and moved
+    // the coverage HERE by adding a third member. That escape has now closed too:
+    // with the output at one insertion, stubbing
+    // `clamp_sibling_crossing_junctions` cannot change it, so the "fails both
+    // ways" paragraph above is stale as a claim about the default arm. The one
+    // row that still goes red when the mechanism is removed is
+    // `a_moved_sibling_shape_now_merges_from_the_sequence`; if that row ever
+    // merges too, this file guards nothing and the loss must be replaced rather
+    // than re-pinned again.
+    //
+    // Recorded as a real coverage loss, not papered over. The barrier is still
+    // reachable under `FERRO_PARTITION=live`, which is part of why that arm stays
+    // selectable by name; re-establishing it on the default arm needs a shape
+    // whose members survive the derivation, which this core does not supply.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[262_263insGAA;270del]");
 }
 
 #[test]
@@ -118,8 +155,20 @@ fn the_barred_pair_does_not_depend_on_authored_order() {
     // The barrier reads both snapshots, so its answer must not depend on the
     // order the members were written in — the same independence the #1261/#1301
     // discriminators carry. Same allele as above, authored backwards.
+    //
+    // #1835: was `NC_TEST.1:g.[260_261insGA;261_262insA;270del]`; now the merged
+    // `NC_TEST.1:g.[262_263insGAA;270del]`, for the reason recorded on the row
+    // above.
+    //
+    // THE INDEPENDENCE PROPERTY SURVIVES, and is arguably strengthened. What this
+    // row asserts is that the two authored orders reach the SAME output, and they
+    // still do — keep this string identical to the row above, since their
+    // equality is the whole test. Authored order is now irrelevant for a stronger
+    // reason than before: the answer is derived from the resulting sequence, which
+    // is order-invariant by construction, rather than from a barrier reading two
+    // snapshots. It is no longer evidence about the barrier specifically.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[270del;261_262insA;260_261insGA]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[262_263insGAA;270del]");
 }
 
 #[test]
