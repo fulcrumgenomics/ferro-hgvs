@@ -178,10 +178,11 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// the form the sequence supports is now spellable and both spellings reach it.
 ///
 /// **This is a convergence, not a closure, and the distinction is the whole
-/// reason `PAIRS_NO_SPELLING_REACHES` is a separate constant.** The string the
-/// three pairs converge on is still not the spanning `delins` the decided chain
-/// wants, so all three stay listed there and `OPEN_GAPS` stays at twelve. What
-/// moved is that the family stopped having two canonical forms.
+/// reason that census lives in the other module.** The string the three pairs
+/// converge on is still not the spanning `delins` the decided chain wants, so
+/// all three stay `PairState::NeitherReaches` in `reported_partition_verdicts`'
+/// `PAIR_STATES` and its `OPEN_GAPS` stays at twelve. What moved is that the
+/// family stopped having two canonical forms.
 const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
 
 /// How many reported pairs converge today under `ShuffleDirection::FivePrime`.

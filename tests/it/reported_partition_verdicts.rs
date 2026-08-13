@@ -32,8 +32,9 @@
 //!
 //! # Convention: characterization, not `#[ignore]`
 //!
-//! Nine of the eighteen rows below print something the cited recommendation
-//! argues against. They are pinned **as they behave today**, with the wanted
+//! Twelve of the eighteen rows below print something the cited recommendation
+//! argues against ([`OPEN_GAPS`], which records why the count rose from nine).
+//! They are pinned **as they behave today**, with the wanted
 //! answer written into the row, rather than being expressed as an `#[ignore]`d
 //! test of the wanted answer.
 //!
@@ -47,6 +48,41 @@
 //!
 //! [`OPEN_GAPS`] counts the disagreeing rows so the count cannot drift away from
 //! the table: closing one means editing a row *and* the census, deliberately.
+//!
+//! # The pair model has three states, and all three are sayable
+//!
+//! A reported pair reaches its [`Row::wanted`] form from **both** spellings,
+//! from **one**, or from **neither**. That is [`PairState`], census-pinned per
+//! pair in [`PAIR_STATES`] and measured by
+//! [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`].
+//!
+//! It used to have two, and the missing one was the state that means *fixed*.
+//! The old `each_pair_reaches_its_canonical_form_from_exactly_one_spelling`
+//! asserted `a.verdict != b.verdict` — "a pair is one canonical spelling and one
+//! gap" — which is `OneReaches` mistaken for a structural fact, and a
+//! `PAIRS_NO_SPELLING_REACHES` exemption list was bolted on beside it to carry
+//! the pairs where both rows are `Gap`. `BothReach` had no expression at all,
+//! so the remedy that test's own failure message prescribed — *"flip this row's
+//! verdict to Canonical, lower OPEN_GAPS"* — fired the `assert_ne!` twenty lines
+//! above it. Two independent changes were blocked on exactly that, and neither
+//! was a fix to this module: #1616's half of it, and an `authority`-only relabel
+//! of the `1421-n*` rows (#1802).
+//!
+//! **Making the third state sayable is deliberately not an auto-ratchet.** A
+//! pair changing state is still a **four-place** edit — this pair's
+//! [`PAIR_STATES`] entry, [`PAIR_STATE_CENSUS`], the affected rows' `verdict`
+//! fields and [`OPEN_GAPS`] — that has to name the clause that carried it, for
+//! the reason [`OPEN_GAPS`] gives at length: a row can reach its `wanted`
+//! string by *re-derivation* rather than by a licensed fix. Nothing here moves
+//! a census on its own — [`the_pair_state_census_holds`] ties [`PAIR_STATES`]
+//! to the `verdict` column, to [`PAIR_STATE_CENSUS`] and, arithmetically, to
+//! [`OPEN_GAPS`], so a state that moves without all four being edited fails.
+//!
+//! **And it is a claim about reaching `wanted`, never about convergence.**
+//! Whether the two spellings agree *with each other* is `reported_confluence_pairs`'
+//! subject and is counted there. The two came apart at #1649 and stayed apart:
+//! all three of today's `NeitherReaches` pairs have converged, on a string that
+//! is still not their `wanted` one.
 //!
 //! # The reference
 //!
@@ -160,8 +196,9 @@
 //! carries weight. The third, `1419-r3/span`, is a `Gap` row that **neither**
 //! direction returns verbatim: #1649 moved it off `[19T>G;22_33del]` onto the
 //! two-deletion form its `/cis` sibling prints, and the 5' pass then shifts
-//! that form's leading deletion one base left. It is named in
-//! [`PAIRS_NO_SPELLING_REACHES`] for the retention exemption that follows.
+//! that form's leading deletion one base left. Its pair is
+//! [`PairState::NeitherReaches`] in [`PAIR_STATES`], which is what carries the
+//! retention exemption that follows.
 
 use crate::common::cis_apply_oracle::{normalize, normalize_in, provider};
 use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
@@ -184,6 +221,99 @@ enum Verdict {
     Canonical,
     /// Ferro prints something else, and the row records what was wanted.
     Gap,
+}
+
+/// How many of a pair's two spellings reach the form the pair is measured
+/// against.
+///
+/// The closed enumeration the two-state model lacked — see the module docs for
+/// what it replaces and why. Every combination of the two rows' [`Verdict`]s
+/// names a variant, so there is no state this declines to express and no
+/// exemption list beside it.
+///
+/// **This is a statement about [`Row::wanted`], not about convergence.**
+/// `reported_confluence_pairs` owns "do the two spellings agree"; this module
+/// owns "does it reach `wanted`". The two have come apart — every
+/// [`PairState::NeitherReaches`] pair below has converged — and keeping them in
+/// separate modules is what makes that visible rather than confusing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairState {
+    /// Both spellings print it.
+    ///
+    /// This is what a **fixed** pair looks like: the canonical form has stopped
+    /// being a function of how the variant was written, which is the defect
+    /// #1419/#1420/#1421 report. No pair is in this state today; it is a state
+    /// rather than a failure so that arriving in it is expressible.
+    ///
+    /// Arriving here is still not automatically progress — see [`OPEN_GAPS`] on
+    /// re-derivation. The state is sayable; banking it as a fix still requires
+    /// naming the clause.
+    BothReach,
+    /// Exactly one spelling prints it.
+    ///
+    /// The reported defect as filed, and the state six of the nine pairs are
+    /// in. It is what the retired `assert_ne!(a.verdict, b.verdict)` read as a
+    /// structural fact about every pair.
+    OneReaches,
+    /// Neither spelling prints it.
+    ///
+    /// Absorbs the former `PAIRS_NO_SPELLING_REACHES` list, whose doc recorded
+    /// why it had to exist — and that reasoning is now this variant's
+    /// definition. Applying the decided chain moved #1419's `wanted` onto the
+    /// spanning delins, and ferro prints that for neither spelling: the cis
+    /// spelling is returned verbatim as its own two-deletion form, and the span
+    /// spelling is *split* into the del-plus-sub form. So both rows are `Gap`,
+    /// and one of them is a `Gap` row that does **not** retain its input.
+    ///
+    /// Two consequences the rest of the module keys on, both inherited
+    /// unchanged. There is no canonical sibling whose output a gap row's
+    /// `wanted` could be compared against, so
+    /// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`] has nothing
+    /// to say here. And retention is not the property to assert for the whole
+    /// pair, so [`every_gap_row_is_returned_exactly_as_authored`] pins the
+    /// measured output instead — for the `/cis` half, which does still retain
+    /// its input, that is a strictly weaker pin taken deliberately rather than a
+    /// dropped one.
+    ///
+    /// Leaving this state means a spelling started reaching the wanted form. A
+    /// pair merely agreeing with itself is not that: all three of today's have
+    /// converged as of #1649 (`reported_confluence_pairs`'
+    /// `CONVERGING_PAIRS_THREE_PRIME` and `_FIVE_PRIME` are both **3**, not 0,
+    /// and [`every_reported_pair_is_still_one_variant_by_equivalence`] pins
+    /// `NormalizedMatch` for these three against the denotational rung for the
+    /// other six) and all three stay here, because the string they converge on
+    /// is not the spanning delins the decided chain requires. That ratchet
+    /// belongs in the module that owns it, and it is there.
+    NeitherReaches,
+}
+
+impl PairState {
+    /// The state a pair's two pinned verdicts put it in.
+    ///
+    /// Total over the verdict pair, which is the property the two-state model
+    /// lacked: there is no combination of verdicts this declines to name, so a
+    /// pair cannot reach a shape the model has to be extended to describe.
+    fn from_verdicts(a: Verdict, b: Verdict) -> Self {
+        match (a, b) {
+            (Verdict::Canonical, Verdict::Canonical) => Self::BothReach,
+            (Verdict::Gap, Verdict::Gap) => Self::NeitherReaches,
+            _ => Self::OneReaches,
+        }
+    }
+
+    /// How many of a pair's two rows are `Gap` in this state.
+    ///
+    /// The arithmetic bridge between the per-pair census and [`OPEN_GAPS`],
+    /// which counts rows. Asserted in [`the_pair_state_census_holds`] so a pair
+    /// cannot change state while the row count stands still, or the other way
+    /// round.
+    fn gap_rows(self) -> usize {
+        match self {
+            Self::BothReach => 0,
+            Self::OneReaches => 1,
+            Self::NeitherReaches => 2,
+        }
+    }
 }
 
 /// What backs the [`Row::wanted`] form, under the project's precedence policy
@@ -224,10 +354,16 @@ struct Row {
     verdict: Verdict,
     /// The output **the issue asks for**, in the issue's own terms — the string
     /// its "canonical"/"expected" column names for this spelling. For a
-    /// [`Verdict::Canonical`] row this equals [`Row::output`]; for a
-    /// [`Verdict::Gap`] row it is the sibling spelling's output, which is the
-    /// family's defining shape and is asserted rather than assumed by
-    /// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`].
+    /// [`Verdict::Canonical`] row this equals [`Row::output`].
+    ///
+    /// For a [`Verdict::Gap`] row it is the sibling spelling's output **only in
+    /// a [`PairState::OneReaches`] pair**, where that is the family's defining
+    /// shape and is asserted rather than assumed by
+    /// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`]. In a
+    /// [`PairState::NeitherReaches`] pair both rows are `Gap`, there is no
+    /// canonical sibling, and `wanted` is the decided chain's spanning delins —
+    /// which is why that test skips those pairs rather than asserting an
+    /// identity that does not hold.
     wanted: &'static str,
     /// What backs [`Row::wanted`]. Both spellings of a pair share one value:
     /// the authority is a property of the shape, not of how it was written.
@@ -244,7 +380,7 @@ struct Row {
 /// both denote the same sequence. The defect is that the canonical form is
 /// reachable from one spelling and not from the other, and you cannot state that
 /// without both halves. See
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`].
+/// [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`].
 const REPORTED_ROWS: &[Row] = &[
     // -- #1419 -- a net deletion spelled as two deletions, versus as one span.
     //
@@ -594,8 +730,9 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis
 ///
 /// Twelve of eighteen. It was nine — exactly one per pair — and #1419's three
 /// pairs now contribute **two** each, because neither of their spellings prints
-/// the wanted form any more. See
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`].
+/// the wanted form any more — [`PairState::NeitherReaches`], which is where that
+/// combination is now expressed. See
+/// [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`].
 ///
 /// **This may only go down.** Up means a change has moved a row *away* from the
 /// cited recommendation — with one exception, taken here and named so it cannot
@@ -651,46 +788,78 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span", "1420-v2/cis
 /// converged with no clause behind it is a re-derivation and the count must not
 /// move. `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
 /// pins the `1420-v2` half of that as a forbidden string.
+///
+/// **[`PAIR_STATES`] does not weaken any of this, and was written not to.** It
+/// makes `BothReach` *expressible*, which is a different thing from making it
+/// *automatic*: the state is pinned per pair, so a pair arriving there is an
+/// edit to that table, this constant, and the affected rows' verdicts, argued
+/// for together. [`the_pair_state_census_holds`] asserts the arithmetic between
+/// the two censuses — 0, 1 or 2 gap rows per pair by state, summing to this
+/// number — so neither can be moved to accommodate the other in silence.
 const OPEN_GAPS: usize = 12;
 
-/// Pairs where NEITHER spelling reaches the form the decided chain requires.
+/// Every reported pair's [`PairState`], pinned per pair and in the table's own
+/// order.
 ///
-/// The `Row` model otherwise assumes every reported pair has exactly one working
-/// spelling — [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`]
-/// asserts the two verdicts differ, and
-/// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`] assumes the gap
-/// row's `wanted` string is what its sibling prints. Both were true while the
-/// `1419-r*` rows wanted the del-plus-sub form, which the spanning spelling did
-/// reach.
+/// **Every pair is listed, including the six in the unremarkable state.** That
+/// is the difference between this and the `PAIRS_NO_SPELLING_REACHES` list it
+/// replaces, which named only the exceptional pairs and so could say nothing
+/// about the others: a pair leaving `OneReaches` was a failure of an assertion
+/// that had assumed it could not happen, rather than a census moving. Here every
+/// transition in the space is the same kind of event — one row of this table
+/// changing — and there is no state left that the model has to be extended to
+/// describe.
 ///
-/// Applying the decided chain moved `wanted` to the **spanning delins**, and
-/// ferro prints that for neither spelling: the cis spelling is returned verbatim
-/// as its own two-deletion form, and the span spelling is *split* into the
-/// del-plus-sub form. So both rows of each `1419-r*` pair are `Gap`, and one of
-/// them is a `Gap` row that does not retain its input — a combination the model
-/// could not express, since it read "a pair is one canonical spelling and one
-/// gap" as a structural fact rather than as a consequence of what `wanted` was.
+/// **Pinned, so nothing ratchets on its own.** Moving an entry is a deliberate
+/// edit that must be accompanied by the affected rows' `verdict` fields,
+/// [`PAIR_STATE_CENSUS`] and [`OPEN_GAPS`] — [`the_pair_state_census_holds`]
+/// fails on any of the three lagging — and, per [`OPEN_GAPS`], by the **named
+/// clause** that carried the move. A pair that converged with no clause behind
+/// it is a re-derivation and the census must not move.
 ///
-/// Note this is a statement about `wanted`, **not** about convergence — and
-/// the two have now come apart, which is exactly why they were kept separate.
+/// Today: three `NeitherReaches` (#1419's, for the reason on that variant) and
+/// six `OneReaches`. Nothing is `BothReach`; that is the state a fixed pair is
+/// in, and none is fixed.
+const PAIR_STATES: &[(&str, PairState)] = &[
+    ("1419-r1", PairState::NeitherReaches),
+    ("1419-r2", PairState::NeitherReaches),
+    ("1419-r3", PairState::NeitherReaches),
+    ("1420-v2", PairState::OneReaches),
+    ("1420-v3", PairState::OneReaches),
+    ("1420-v4", PairState::OneReaches),
+    ("1421-n1", PairState::OneReaches),
+    ("1421-n2", PairState::OneReaches),
+    ("1421-n3", PairState::OneReaches),
+];
+
+/// How many pairs sit in each state: `(BothReach, OneReaches, NeitherReaches)`.
 ///
-/// **All three of these pairs HAVE converged, as of #1649**, and they are still
-/// listed here. `reported_confluence_pairs`' `CONVERGING_PAIRS_THREE_PRIME` and
-/// `_FIVE_PRIME` are both **3** rather than 0, and
-/// [`every_reported_pair_is_still_one_variant_by_equivalence`] now pins
-/// `NormalizedMatch` for these three and `SequenceMatch` for the other six. That
-/// moved the ratchet where it belongs, in the module that owns it.
+/// The family-wide total, asserted alongside the per-pair entries rather than
+/// instead of them. Per-pair alone, two compensating edits — one pair moved into
+/// a state and another out of it — leave every individual assertion satisfied
+/// while the family's shape has changed; the tuple is what makes that a
+/// three-number diff a reviewer has to argue for.
 ///
-/// Convergence is not what this constant tracks. Both spellings of each pair now
-/// print **one** string, and it is still not the spanning `delins` the decided
-/// chain requires — so neither spelling reaches `wanted` and every entry stays.
-/// Removing one still means a spelling started reaching the wanted form; a pair
-/// merely agreeing with itself is not that.
+/// It is one tuple rather than three constants so the three numbers cannot be
+/// edited apart. What actually forces a **new** [`PairState`] variant to be
+/// accounted for is the exhaustive `match` over it in
+/// [`the_pair_state_census_holds`] and in [`PairState::gap_rows`]: neither
+/// compiles until the new variant is given an arm, and the census arm has
+/// nowhere to put its count until this tuple grows too.
+const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 6, 3);
+
+/// The state [`PAIR_STATES`] pins for one pair.
 ///
-/// Listed explicitly rather than inferred, so the honestly-unfixed set is
-/// census-pinned and cannot grow in silence. Removing an entry means a spelling
-/// started reaching the wanted form — name the clause that carried it.
-const PAIRS_NO_SPELLING_REACHES: &[&str] = &["1419-r1", "1419-r2", "1419-r3"];
+/// Panics rather than defaulting when a pair is unlisted: a reported pair with
+/// no census entry is a table that has fallen out of step, and a silent default
+/// would pick one of the three answers for it.
+fn pinned_state(pair: &str) -> PairState {
+    PAIR_STATES
+        .iter()
+        .find(|(name, _)| *name == pair)
+        .map(|(_, state)| *state)
+        .unwrap_or_else(|| panic!("no PAIR_STATES entry for `{pair}`"))
+}
 
 /// The `<issue>-<row>` half of an `<issue>-<row>/<spelling>` label.
 fn pair_of(label: &'static str) -> &'static str {
@@ -705,13 +874,19 @@ fn pair_of(label: &'static str) -> &'static str {
 /// `chunks(2)` on its own trusts the table's row order, and that trust is not
 /// free. Reorder [`REPORTED_ROWS`] so a spelling sits beside a *different*
 /// pair's spelling and
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`] still
-/// passes — measured, not assumed: every assertion in it compares a row against
-/// its own pinned output, so a mispaired neighbour changes nothing it looks at.
-/// Only [`every_reported_pair_is_still_one_variant_by_equivalence`] notices, and
-/// it reports the mispairing as `NotEquivalent` — that is, as a regression in
-/// the equivalence fallback, which is the wrong diagnosis and sends a reader to
-/// the wrong file.
+/// [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`]
+/// still passes — measured, not assumed: every assertion in it compares a row
+/// against its own pinned output or its own `wanted`, so a mispaired neighbour
+/// changes nothing it looks at. Only
+/// [`every_reported_pair_is_still_one_variant_by_equivalence`] notices, and it
+/// reports the mispairing as `NotEquivalent` — that is, as a regression in the
+/// equivalence fallback, which is the wrong diagnosis and sends a reader to the
+/// wrong file.
+///
+/// [`the_pair_state_census_holds`] adds a second, cheaper tell for the same
+/// error: it zips [`PAIR_STATES`] against these pairs and checks the labels line
+/// up, so a reorder that survives the split above is reported as the two tables
+/// disagreeing rather than as an equivalence regression.
 ///
 /// Splitting the label costs nothing and makes the table error itself the
 /// failure.
@@ -851,11 +1026,21 @@ fn only_the_named_rows_answer_differently_in_the_two_directions() {
 #[test]
 fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
     for (a, b) in reported_pairs() {
-        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(a.label)) {
+        // Exhaustive on purpose: the claim is statable in exactly one of the
+        // three states, and adding a fourth must force that decision rather
+        // than fall through a `contains` check.
+        match pinned_state(pair_of(a.label)) {
+            // One canonical spelling and one gap — the shape this test is about.
+            PairState::OneReaches => {}
+            // Both spellings reach it, so there is no gap row to make the claim
+            // about. Vacuous, not skipped:
+            // `each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`
+            // is what measures such a pair.
+            PairState::BothReach => continue,
             // Neither spelling reaches the wanted form: both rows are `Gap`, so
             // there is no canonical sibling whose output could be compared. Not
-            // a convergence claim — see `PAIRS_NO_SPELLING_REACHES`.
-            continue;
+            // a convergence claim — see `PairState::NeitherReaches`.
+            PairState::NeitherReaches => continue,
         }
         let (canonical, gap) = match a.verdict {
             Verdict::Canonical => (a, b),
@@ -880,8 +1065,9 @@ fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
 /// Every canonical row already prints the form its issue asks for.
 ///
 /// The other half of the same claim, and the one that makes `wanted` load-bearing
-/// rather than decorative: for nine of the eighteen spellings ferro and the
-/// reporter agree outright, and that agreement is what a fix must not disturb.
+/// rather than decorative: for six of the eighteen spellings ferro and the
+/// reporter agree outright — the other twelve are [`OPEN_GAPS`] — and that
+/// agreement is what a fix must not disturb.
 #[test]
 fn every_canonical_row_already_prints_its_wanted_form() {
     for row in REPORTED_ROWS {
@@ -970,72 +1156,180 @@ fn the_spec_authority_census_holds() {
     );
 }
 
-/// Each reported pair reaches its canonical form from exactly one spelling.
+/// Each reported pair reaches its `wanted` form from exactly the spellings its
+/// pinned [`PairState`] names — **measured**, not read off the `verdict` column.
 ///
 /// This is the defect in one assertion, and it is sharper than "the two
 /// spellings disagree". Both spellings denote one variant; the canonical form
-/// is a property of the variant, so it should be reachable from either. It is
-/// reachable from exactly one, which makes reachability a function of how the
-/// variant was *written* — the spelling-dependence root-caused on #1419 to a
-/// weight bound whose threshold is the input's own spelling.
+/// is a property of the variant, so it should be reachable from either. For six
+/// of the nine pairs it is reachable from exactly one, which makes reachability
+/// a function of how the variant was *written* — the spelling-dependence
+/// root-caused on #1419 to a weight bound whose threshold is the input's own
+/// spelling.
 ///
-/// While this test passes, the family is unfixed. It is written to fail the day
-/// any pair reaches its canonical form from both spellings, so that progress is
-/// as loud as regression.
+/// The reach set is measured per row against that row's **own** `wanted`, never
+/// against the sibling's `output`, so the claim reads the same in all three
+/// states. Where a canonical sibling exists the two strings are the same one —
+/// that identity is what
+/// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`] pins — and where
+/// none exists ([`PairState::NeitherReaches`]) only the `wanted` formulation
+/// says anything at all. The sibling-relative form is kept as a second,
+/// differently-derived assertion in the `OneReaches` arm rather than dropped.
+///
+/// This test is written so that **every** transition is loud and none is
+/// automatic. It replaces an `assert_ne!(a.verdict, b.verdict)` that could not
+/// be satisfied by a fixed pair: the remedy its own failure message prescribed
+/// was to make both rows `Canonical`, which that assertion then rejected. A pair
+/// reaching its wanted form from both spellings now fails *this* test, naming
+/// [`PairState::BothReach`] as the entry to move it to — a census edit that has
+/// to be argued for, not a green run.
 #[test]
-fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
+fn each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names() {
     for (a, b) in reported_pairs() {
-        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(a.label)) {
-            // Neither spelling reaches the wanted form. Assert that, so the
-            // exception cannot quietly become "one of them does".
-            assert_eq!(
-                (a.verdict, b.verdict),
-                (Verdict::Gap, Verdict::Gap),
-                "{}: listed in PAIRS_NO_SPELLING_REACHES, so both spellings \
-                 must be gaps",
-                pair_of(a.label)
-            );
-            for row in [a, b] {
-                assert_ne!(
-                    normalized(row.input),
-                    row.wanted,
-                    "{} now reaches its wanted form; drop this pair from \
-                     PAIRS_NO_SPELLING_REACHES, flip the verdict, and name the \
-                     clause that carried the move",
-                    row.label
-                );
-            }
-            continue;
-        }
-        assert_ne!(
-            a.verdict, b.verdict,
-            "{} and {} have the same verdict; a pair is one canonical spelling \
-             and one gap",
-            a.label, b.label
-        );
+        let pair = pair_of(a.label);
+        let pinned = pinned_state(pair);
 
-        let (canonical, gap) = match a.verdict {
-            Verdict::Canonical => (a, b),
-            Verdict::Gap => (b, a),
+        let reaching: Vec<&str> = [a, b]
+            .into_iter()
+            .filter(|row| normalized(row.input) == row.wanted)
+            .map(|row| row.label)
+            .collect();
+        let measured = match reaching.as_slice() {
+            [] => PairState::NeitherReaches,
+            [_] => PairState::OneReaches,
+            _ => PairState::BothReach,
         };
 
         assert_eq!(
-            normalized(canonical.input),
-            canonical.output,
-            "{}: the canonical spelling stopped reaching the canonical form",
-            canonical.label
+            measured, pinned,
+            "{pair}: pinned {pinned:?} in PAIR_STATES, measures {measured:?} \
+             (reached by {reaching:?}).\n  \
+             A pair changing state is a deliberate multi-place edit: move this \
+             pair's PAIR_STATES entry, adjust PAIR_STATE_CENSUS, flip the \
+             affected rows' verdicts, and set OPEN_GAPS to match. BothReach is \
+             the fixed state and is sayable — but say in the PR WHICH CLAUSE \
+             carried the move. A pair that arrived there by re-derivation \
+             rather than by a licensed fix must not be banked as a fix; see \
+             OPEN_GAPS."
         );
-        assert_ne!(
-            normalized(gap.input),
-            canonical.output,
-            "{} now reaches `{}` too, so the pair has converged on the form \
-             its issue argues for. That is the fix: flip this row's verdict to \
-             Canonical, lower OPEN_GAPS, and say in the PR which stored \
-             spelling moved.",
-            gap.label,
-            canonical.output
-        );
+
+        // Per row, so the `verdict` column cannot drift away from what the row
+        // measures while the pair-level count stays right — two rows swapping
+        // verdicts leaves `measured` unchanged.
+        for row in [a, b] {
+            assert_eq!(
+                normalized(row.input) == row.wanted,
+                row.verdict == Verdict::Canonical,
+                "{}: marked {:?}, but reaching `{}` is {}. A row is Canonical \
+                 exactly when it prints the form it is measured against.",
+                row.label,
+                row.verdict,
+                row.wanted,
+                normalized(row.input) == row.wanted
+            );
+        }
+
+        if pinned == PairState::OneReaches {
+            let (canonical, gap) = match a.verdict {
+                Verdict::Canonical => (a, b),
+                Verdict::Gap => (b, a),
+            };
+
+            assert_eq!(
+                normalized(canonical.input),
+                canonical.output,
+                "{}: the canonical spelling stopped reaching the canonical form",
+                canonical.label
+            );
+            // The sibling-relative half of the same claim, kept because it is
+            // derived through a different string: `canonical.output` rather
+            // than `gap.wanted`. If the two ever come apart, the pin above
+            // fires here and not only in the test that owns that identity.
+            assert_ne!(
+                normalized(gap.input),
+                canonical.output,
+                "{} now reaches `{}` too, so the pair has converged on the form \
+                 its issue argues for. That is the fix, and it is now a STATE \
+                 rather than a contradiction: move {} to PairState::BothReach, \
+                 flip this row's verdict to Canonical, lower OPEN_GAPS, and say \
+                 in the PR which stored spelling moved and which clause carried \
+                 it.",
+                gap.label,
+                canonical.output,
+                pair
+            );
+        }
     }
+}
+
+/// The pair-state census, so no pair can change state in silence.
+///
+/// Three claims, each of which a different mistake trips. The **per-pair**
+/// entries tie [`PAIR_STATES`] to the `verdict` column, so a verdict edited
+/// without its census entry fails. The **family tuple** [`PAIR_STATE_CENSUS`]
+/// catches two compensating per-pair edits, which every individual entry would
+/// otherwise accept. And the **arithmetic tie to [`OPEN_GAPS`]** — 0, 1 or 2 gap
+/// rows per pair by state — is derived from the pair states where
+/// [`the_open_gap_census_holds`] derives the same number by counting rows, so
+/// the two censuses have to agree without either being computed from the other.
+///
+/// Together with
+/// [`each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names`],
+/// which measures the same states against ferro's actual output, that closes the
+/// chain: measurement, verdict column, per-pair census, family census, row
+/// count. Nothing in it moves on its own.
+#[test]
+fn the_pair_state_census_holds() {
+    assert_eq!(
+        PAIR_STATES.len() * 2,
+        REPORTED_ROWS.len(),
+        "PAIR_STATES must carry exactly one entry per reported pair"
+    );
+
+    let (mut both, mut one, mut neither) = (0usize, 0usize, 0usize);
+    let mut gap_rows = 0usize;
+
+    for ((name, pinned), (a, b)) in PAIR_STATES.iter().zip(reported_pairs()) {
+        assert_eq!(
+            *name,
+            pair_of(a.label),
+            "PAIR_STATES and REPORTED_ROWS list the reported pairs in different \
+             orders, so this row's state is being read against the wrong pair"
+        );
+
+        let derived = PairState::from_verdicts(a.verdict, b.verdict);
+        assert_eq!(
+            derived, *pinned,
+            "{name}: pinned {pinned:?}, but its two verdicts ({:?}, {:?}) make \
+             it {derived:?}. Whichever is wrong, both change together — and if \
+             a spelling really did start reaching its wanted form, name the \
+             clause that carried it (see OPEN_GAPS).",
+            a.verdict, b.verdict
+        );
+
+        match pinned {
+            PairState::BothReach => both += 1,
+            PairState::OneReaches => one += 1,
+            PairState::NeitherReaches => neither += 1,
+        }
+        gap_rows += pinned.gap_rows();
+    }
+
+    assert_eq!(
+        (both, one, neither),
+        PAIR_STATE_CENSUS,
+        "the family's shape moved: (BothReach, OneReaches, NeitherReaches) is \
+         now ({both}, {one}, {neither}). A rise in BothReach is the family \
+         being fixed and must name the clause; a fall is a regression."
+    );
+
+    assert_eq!(
+        gap_rows, OPEN_GAPS,
+        "the two censuses disagree: the pair states imply {gap_rows} gap rows \
+         and OPEN_GAPS says {OPEN_GAPS}. They are derived differently on \
+         purpose — this one from PAIR_STATES, the_open_gap_census_holds by \
+         counting rows — so one was moved without the other."
+    );
 }
 
 /// Every gap row is returned exactly as it was authored.
@@ -1059,16 +1353,16 @@ fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
 ///
 /// **And it does not reach every gap row even under 3'.** There are twelve gap
 /// rows now ([`OPEN_GAPS`]), and the three `1419-r*/span` rows are gap rows that
-/// ferro *splits* rather than returns — see [`PAIRS_NO_SPELLING_REACHES`], which
-/// this test exempts from the retention claim while still pinning each row's
-/// measured output.
+/// ferro *splits* rather than returns — see [`PairState::NeitherReaches`], whose
+/// pairs this test exempts from the retention claim while still pinning each
+/// row's measured output.
 #[test]
 fn every_gap_row_is_returned_exactly_as_authored() {
     for row in REPORTED_ROWS {
         if row.verdict != Verdict::Gap {
             continue;
         }
-        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(row.label)) {
+        if pinned_state(pair_of(row.label)) == PairState::NeitherReaches {
             // A gap row in one of these pairs may also MOVE: the span spelling
             // leaves its input for the del-plus-sub form, which is not the
             // wanted one. Retention is therefore not the property to assert for
@@ -1076,6 +1370,10 @@ fn every_gap_row_is_returned_exactly_as_authored() {
             // pin from the `/cis` half, which DOES still retain its input. So
             // pin the MEASURED output, which holds either way, and keep the
             // wanted-form check that would close the pair.
+            //
+            // The exemption is keyed on the pinned state rather than on a
+            // separate list, but it is the same set of pairs and the same
+            // weaker pin — see `PairState::NeitherReaches`.
             let output = normalized(row.input);
             assert_eq!(
                 output, row.output,
@@ -1084,8 +1382,8 @@ fn every_gap_row_is_returned_exactly_as_authored() {
             );
             assert_ne!(
                 output, row.wanted,
-                "{}: now reaches its wanted form; drop this pair from \
-                 PAIRS_NO_SPELLING_REACHES and name the clause that carried it",
+                "{}: now reaches its wanted form; move this pair's PAIR_STATES \
+                 entry off NeitherReaches and name the clause that carried it",
                 row.label
             );
             continue;
@@ -1135,14 +1433,14 @@ fn every_reported_pair_is_still_one_variant_by_equivalence() {
         //
         // The three `1419-r*` pairs are `NormalizedMatch` as of #1649, which
         // gave the splitter the two-deletion shape that lets each span spelling
-        // reach its `/cis` sibling's form. They stay in
-        // `PAIRS_NO_SPELLING_REACHES`: converging on one string is not reaching
-        // `wanted`, and that constant tracks the target.
+        // reach its `/cis` sibling's form. They stay `PairState::NeitherReaches`:
+        // converging on one string is not reaching `wanted`, and that census
+        // tracks the target.
         //
-        // Every other pair — including the rest of `PAIRS_NO_SPELLING_REACHES`
-        // — takes the denotational rung. That constant says neither spelling
-        // reaches `wanted`, which is a claim about the target and not about
-        // convergence, so there is no exemption to take here either.
+        // Every other pair takes the denotational rung. `PAIR_STATES` says
+        // nothing about convergence in either direction — a `NeitherReaches`
+        // pair may or may not converge, and today all three do — so there is no
+        // exemption to take here either.
         let expected = if a.output == b.output {
             EquivalenceLevel::NormalizedMatch
         } else {
