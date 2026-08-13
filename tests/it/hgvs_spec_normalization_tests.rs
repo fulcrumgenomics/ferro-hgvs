@@ -1029,8 +1029,18 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `separation-is-a-property-of-the-spelling-not-of-the-variant` both hold.
     // Moves no shipped row: the default arm (`live`) never runs the pass. On the
     // `FERRO_PARTITION=canonical-coalesced` arm it removes 380 genomic-axis
-    // merges over the designed cis corpus, and it deliberately PRESERVES the
-    // 193-member re-derivation of a stored 723-base `g.` `delins`.
+    // merges over the designed cis corpus.
+    //
+    // It does **not** cost the stored 723-base `g.` `delins` its 193-member
+    // re-derivation. That claim was recorded here and in the record itself and
+    // is **withdrawn as measured false**: the row is byte-identical on the
+    // `canonical` and `canonical-coalesced` arms, so this gate cannot be what
+    // keeps it split, and the payload-coincidence pass would have declined it
+    // axis-blind anyway (two gaps of 9 against `COALESCE_MAX_SEPARATION` = 8,
+    // and 407 minimum substitutions against `COALESCE_MISMATCH_BUDGET` = 1).
+    // Its cause is the `coalesce_whole_block_inversion` family (#160, #1034,
+    // #1041, #1517, #1637) — the row is an exact 697-base inversion with 16-
+    // and 10-base flanking deletions — not this carve-out.
     (
         "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
         "decided",
