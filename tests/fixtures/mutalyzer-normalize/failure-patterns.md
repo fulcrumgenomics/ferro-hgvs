@@ -384,7 +384,6 @@ Spec: `recommendations/general.md:34; recommendations/DNA/delins.md:81`
 | `NG_012337.1(NM_012459.2):c.15_17dup` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1:274` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
-| `NG_012337.1:g.4delins7_50` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.[4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
@@ -413,6 +412,6 @@ Spec: `recommendations/general.md:34; recommendations/DNA/delins.md:81`
 | genomic | 34 | 0 | 0 | 0 | 20 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 41 | 0 | 1 | 0 | 31 |
+| normalized | 40 | 0 | 1 | 0 | 31 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
