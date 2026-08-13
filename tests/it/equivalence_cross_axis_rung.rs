@@ -21,6 +21,39 @@
 //! These tests pin that with a two-exon synthetic transcript, because
 //! `SyntheticBuilder` builds single-exon transcripts only and so cannot express
 //! the geometry at all.
+//!
+//! # Why the denotational tests do not go through `check` (#1800)
+//!
+//! `check` is the whole ladder, and it short-circuits at `NormalizedMatch` the
+//! moment two spellings normalize to one string — so a denotational rung is
+//! reached only for a pair that **diverges**. Driving these tests through
+//! `check` therefore made every one of them depend on the normalizer staying
+//! non-confluent over some pair, and reducing divergence is the project's own
+//! goal (README rule 3). Twice now a confluence PR has destroyed the pair a
+//! test here was standing on: #1649 converged #1419's `[19_23del;27_33del]` /
+//! `19_33delinsCGG`, and #1616 converges #1420-v2's `c.[48dup;52del]` /
+//! `c.49_52delinsATTG` and its genomic sibling.
+//!
+//! Swapping in a fresh diverging pair buys one PR and guarantees a third
+//! occurrence, and it also requires proving the replacement's divergence is not
+//! itself a defect tracked elsewhere — otherwise the guard is pinned on a bug
+//! and retires the day it is fixed.
+//!
+//! So the denotational tests below call
+//! [`EquivalenceChecker::compare_denotations`], which runs the same rung logic
+//! over the pair **as written** and never asks whether the two normalize alike.
+//! The precondition is then *built* rather than *found*: the two forms differ
+//! because this file spells them differently, which no normalization change can
+//! undo. `check`'s own ladder is still pinned, by
+//! `check_stops_at_normalized_match_and_so_cannot_reach_a_denotational_rung` —
+//! which asserts the short-circuit that made the old strategy fragile, and is
+//! the one test here that *wants* a converging pair.
+//!
+//! **Re-pinning to `NormalizedMatch` was never an option.**
+//! `rulings[confluence-gate-is-apply-equality-on-every-determined-axis]` holds
+//! that equivalence is apply-equality on every determined axis and never
+//! `NormalizedMatch` — "a relation over `apply`, whose codomain is bases, so it
+//! cannot collapse into the normalizer it gates".
 
 use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel, EquivalenceResult};
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
@@ -41,13 +74,24 @@ const TX: &str = "NM_TWOEXON.1";
 /// the same transcript sequence and two different genomic sequences, which is
 /// the whole point of the fixture.
 ///
-/// The rest of exon 2 is the `reported_partition_verdicts` contig, so a
-/// partition pair that is known to stay in two distinct canonical forms —
-/// #1420-v2's `[37dup;41del]` against `38_41delinsATTG` — can be written on
-/// this transcript. Transcript position = that contig's position + 11.
+/// The rest of exon 2 is the `reported_partition_verdicts` contig, so
+/// #1420-v2's partition pair — `[37dup;41del]` against `38_41delinsATTG` — can
+/// be written on this transcript. Transcript position = that contig's position
+/// + 11.
 ///
-/// #1419's `[19_23del;27_33del]` / `19_33delinsCGG` was the pair used here
-/// until #1649 converged it; do not reach for it again without re-measuring.
+/// **What that pair is used for here has changed (#1800).** It is a *partition*
+/// of one edit: two spellings whose SPDI triple lists have different shapes (two
+/// triples against one) and whose reconstructed windows agree. That is what
+/// makes it a real exercise of the sequence rung and of the genomic
+/// re-derivation above it — a pair spelled identically would compare a triple
+/// list against itself and measure nothing. Whether the *normalizer* keeps the
+/// two apart is no longer load-bearing: these tests never normalize.
+///
+/// Two earlier readings of this fixture are recorded so they are not
+/// re-attempted. #1419's `[19_23del;27_33del]` / `19_33delinsCGG` stood here
+/// until #1649 converged it, and #1420-v2 replaced it on the strength of
+/// staying divergent — which #1616 then ended. Divergence is not a property to
+/// build on; see the module header.
 const EXON1_TX: &str = "ACGCACGCAT";
 const EXON2_TX: &str = "TATGCACCAGTCACCAGTCTGATGCGGATCACGTGCAATTGCACGTGCAATTGGATCCGATCGTACGTA";
 
@@ -135,30 +179,43 @@ fn check(provider: &MockProvider, a: &str, b: &str) -> EquivalenceResult {
         .unwrap()
 }
 
-/// Assert the two normalized forms a verdict was reached over.
+/// Drive the denotational ladder over two **constructed** forms, and assert it
+/// was reached over exactly those two.
 ///
-/// Every denotational rung below sits *between* two normalized strings, so a
-/// test that pins only the level cannot tell "the rung fired" from "the two
-/// spellings converged and the rung was never reached". That is not a
-/// hypothetical: these tests were first written over #1419's partition pair,
-/// #1649 converged it, and both of them silently started asserting
-/// `NormalizedMatch` against a rung they no longer exercised. Pinning the pair
-/// of strings makes that failure name itself.
-fn assert_normalized(result: &EquivalenceResult, first: &str, second: &str) {
+/// This is the whole of #1800's restructure. `compare_denotations` runs the
+/// sequence rung and the cross-axis strengthening above it over the pair as
+/// written, so the precondition every rung below needs — two distinct
+/// descriptions to compare — is supplied by this file rather than borrowed from
+/// whatever the normalizer currently declines to converge.
+///
+/// Both halves of the postcondition matter and neither implies the other:
+///
+/// * the two spellings must differ, or the comparison is a description against
+///   itself and any rung it reports is unearned; and
+/// * the result must have been reached over those same two strings, which is
+///   what proves nothing normalized them out from under the assertion. A future
+///   change routing this entry point back through the normalizer would fail
+///   here instead of silently restoring the fragility.
+fn denotational(provider: &MockProvider, first: &str, second: &str) -> EquivalenceResult {
+    assert_ne!(
+        first, second,
+        "a denotational rung sits between two distinct descriptions; comparing one with itself \
+         measures nothing"
+    );
+    let checker = EquivalenceChecker::new(provider.clone());
+    let result = checker
+        .compare_denotations(&parse_hgvs(first).unwrap(), &parse_hgvs(second).unwrap())
+        .unwrap();
     assert_eq!(
         (
             result.normalized_first.as_deref(),
             result.normalized_second.as_deref()
         ),
         (Some(first), Some(second)),
-        "the normalized forms this verdict was reached over have moved; the level below is \
-         measuring something other than what it says"
+        "the verdict was reached over a different pair than the one constructed, so the level \
+         below is measuring something other than what it says"
     );
-    assert_ne!(
-        first, second,
-        "the two spellings converged, so `check` returned at the NormalizedMatch rung and no \
-         denotational rung was exercised"
-    );
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -172,18 +229,19 @@ fn assert_normalized(result: &EquivalenceResult, first: &str, second: &str) {
 ///
 /// The pair must reach `SequenceMatch` (the transcript axis agrees) and must
 /// **not** reach `CrossAxisSequenceMatch` (the genomic axis does not).
+///
+/// This is the negative control for the cross-axis comparison, so it is driven
+/// the same way as the positive one: a `strengthen_across_axes` that stopped
+/// consulting the genomic axis and reported `CrossAxisSequenceMatch` for every
+/// own-axis agreement would fail *here*, and nowhere else in this file.
 #[test]
 fn a_junction_straddling_dup_pair_agrees_on_the_transcript_and_not_on_the_genome() {
     let provider = two_exon_provider();
-    let result = check(
+    let result = denotational(
         &provider,
         &format!("{TX}:c.10dup"),
         &format!("{TX}:c.11dup"),
     );
-    // Neither spelling moves: the exon boundary bounds the duplication on the
-    // transcript, so the two stay on opposite sides of it and the rung below is
-    // reached over a genuinely distinct pair.
-    assert_normalized(&result, &format!("{TX}:c.10dup"), &format!("{TX}:c.11dup"));
     let observed = result.level;
     assert_eq!(
         observed,
@@ -200,37 +258,59 @@ fn a_junction_straddling_dup_pair_agrees_on_the_transcript_and_not_on_the_genome
 // 2. The positive case: agreement on every determined axis
 // ---------------------------------------------------------------------------
 
-/// #1420-v2's partition pair, written on the transcript. The two spellings stay
-/// in distinct canonical forms — that is the open non-confluence the issue is
-/// about — so they reach a sequence rung rather than `NormalizedMatch`; and
-/// they sit wholly inside exon 2, so the genomic axis is a contiguous
-/// re-expression of the same edit and agrees. The pair therefore clears the
-/// gate.
+/// #1420-v2's partition pair, written on the transcript: a two-member cis
+/// allele against the single `delins` spanning the same block. The two denote
+/// one transcript sequence, and they sit wholly inside exon 2, so the genomic
+/// axis is a contiguous re-expression of the same edit and agrees there too.
+/// The pair therefore clears the gate.
 ///
-/// **#1419's pair used to stand here and no longer can.** #1649 gave the
-/// splitter the two-deletion shape, which converged
-/// `c.[30_34del;38_44del]` with `c.30_44delinsCGG`; both tests then asserted
-/// against `NormalizedMatch` without exercising any denotational rung. #1420-v2
-/// is the replacement because it is a *dup*-plus-*del* partition, which the
-/// splitter does not reach — see `reported_partition_verdicts`, where its two
-/// rows are still pinned as divergent. `assert_normalized` is what makes a
-/// repeat of that convergence fail loudly instead of quietly.
+/// **The pair is constructed, not normalized (#1800).** It used to be handed to
+/// `check`, which required the normalizer to keep the two apart — and #1616
+/// merges them, so that reading of the test is gone. What is being exercised is
+/// the rung, and the rung's input is two descriptions: `[48dup;52del]` derives
+/// two SPDI triples, `49_52delinsATTG` derives one, both are re-expressed on the
+/// genome through the exon alignment, and both reconstructions are compared
+/// against the reference window. None of that consults the normalizer, so none
+/// of it can be undone by making the normalizer more confluent.
 #[test]
 fn a_pair_agreeing_on_both_determined_axes_reaches_the_cross_axis_rung() {
     let provider = two_exon_provider();
-    let result = check(
+    let result = denotational(
         &provider,
-        &format!("{TX}:c.[48dup;52del]"),
-        &format!("{TX}:c.49_52delinsATTG"),
-    );
-    assert_normalized(
-        &result,
         &format!("{TX}:c.[48dup;52del]"),
         &format!("{TX}:c.49_52delinsATTG"),
     );
     let observed = result.level;
     assert_eq!(observed, EquivalenceLevel::CrossAxisSequenceMatch);
     assert!(observed.is_at_least(EquivalenceLevel::CrossAxisSequenceMatch));
+    assert!(
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("every determined axis")),
+        "the note must record that the second axis was consulted and agreed, not merely that the \
+         own axis did: {:?}",
+        result.notes
+    );
+}
+
+/// The same shape, one base of payload apart, must come back a decided
+/// negative.
+///
+/// Without it, a `same_resulting_sequence` that agreed unconditionally would
+/// satisfy every positive assertion in this file. The control is on the
+/// transcript rather than the genome so it also covers the derivation the
+/// positive above depends on.
+#[test]
+fn a_partition_that_denotes_different_bases_is_a_decided_negative() {
+    let provider = two_exon_provider();
+    let result = denotational(
+        &provider,
+        &format!("{TX}:c.[48dup;52del]"),
+        &format!("{TX}:c.49_52delinsATTC"),
+    );
+    assert_eq!(result.level, EquivalenceLevel::NotEquivalent);
+    assert!(result.level.is_decided());
 }
 
 /// A genomic description determines exactly one axis — the genome. Apply-
@@ -243,22 +323,77 @@ fn a_pair_agreeing_on_both_determined_axes_reaches_the_cross_axis_rung() {
 fn a_genomic_pair_determines_one_axis_and_so_reaches_the_cross_axis_rung() {
     let mut provider = MockProvider::new();
     provider.add_genomic_sequence(CONTIG, format!("{}{EXON2_TX}", "A".repeat(1000)));
-    // The same #1420-v2 pair, shifted onto the contig at g.1001 + n. The span
-    // spelling re-derives here — a genomic axis carries no reading frame, so
-    // `delins.md:47`'s payload-coincidence carve-out does not reach it and the
-    // members stay individual — which is exactly why the pinned pair below is
-    // not the pair pinned on the transcript.
-    let result = check(
+    // The same #1420-v2 pair, shifted onto the contig at g.1001 + n.
+    //
+    // This test used to pin the pair's *normalized* forms, and they were not
+    // the two written here: the span spelling re-derived to
+    // `g.[1039T>A;1041_1042delinsTG]`, because a genomic axis carries no reading
+    // frame and so `delins.md:47`'s payload-coincidence carve-out does not reach
+    // it. That asymmetry is `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    // and is still true; it is simply no longer this test's business, because
+    // the rung is now driven over the constructed pair.
+    let result = denotational(
         &provider,
         &format!("{CONTIG}:g.[1038dup;1042del]"),
         &format!("{CONTIG}:g.1039_1042delinsATTG"),
     );
-    assert_normalized(
-        &result,
-        &format!("{CONTIG}:g.[1038dup;1042del]"),
-        &format!("{CONTIG}:g.[1039T>A;1041_1042delinsTG]"),
-    );
     assert_eq!(result.level, EquivalenceLevel::CrossAxisSequenceMatch);
+    assert!(
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("the one axis they determine")),
+        "a genomic pair reaches the rung by determining one axis, not by corroboration: {:?}",
+        result.notes
+    );
+}
+
+/// The short-circuit that made the old fixture strategy fragile, pinned as
+/// behaviour so the restructure above is anchored to something rather than
+/// merely asserted in a comment.
+///
+/// `check` answers `NormalizedMatch` for a converging pair, and
+/// `NormalizedMatch` is deliberately off the denotational order — so
+/// `is_at_least(CrossAxisSequenceMatch)` *rejects* a pair whose two spellings
+/// normalize alike, and no denotational rung is reached for it at all. Every
+/// test in this file that went through `check` therefore needed the normalizer
+/// to keep its pair apart, which is the dependency #1800 removes.
+///
+/// The pair here is chosen to converge and to keep converging: `general.md:56`
+/// ranks a substitution above a one-base `delins` of the same base, so
+/// `g.1005delinsG` canonicalizes onto `g.1005C>G`. This is the one test in the
+/// file that wants convergence, and it is the only one a *further* confluence
+/// improvement can strengthen rather than break.
+#[test]
+fn check_stops_at_normalized_match_and_so_cannot_reach_a_denotational_rung() {
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence(CONTIG, format!("{}{EXON2_TX}", "A".repeat(1000)));
+
+    let converged = check(
+        &provider,
+        &format!("{CONTIG}:g.1005C>G"),
+        &format!("{CONTIG}:g.1005delinsG"),
+    );
+    assert_eq!(converged.level, EquivalenceLevel::NormalizedMatch);
+    assert!(
+        !converged
+            .level
+            .is_at_least(EquivalenceLevel::CrossAxisSequenceMatch),
+        "the whole hazard in one assertion: `check` reports a rung that a confluence gate must \
+         reject, for a pair that is genuinely one variant"
+    );
+
+    // The same pair, same provider, through the denotational entry point: the
+    // rung is reached and answers.
+    let denoted = denotational(
+        &provider,
+        &format!("{CONTIG}:g.1005C>G"),
+        &format!("{CONTIG}:g.1005delinsG"),
+    );
+    assert_eq!(denoted.level, EquivalenceLevel::CrossAxisSequenceMatch);
+    assert!(denoted
+        .level
+        .is_at_least(EquivalenceLevel::CrossAxisSequenceMatch));
 }
 
 // ---------------------------------------------------------------------------
@@ -304,16 +439,29 @@ fn an_unspecified_insertion_count_is_indeterminate() {
 }
 
 /// No input that denotes no sequence may reach a **positive denotational**
-/// rung, by whichever path `check` happens to take.
+/// rung, by whichever path — and through whichever **entry point** — the
+/// denotational rungs are reached.
 ///
-/// This is stated as an invariant over `check` rather than as a regression for
-/// one measured pair, because the hazard is precisely that the rule was applied
-/// on one path and not another. `check` has two ways to report agreement — the
-/// `SequenceVerdict::Same` branch and the fall-through — and normalization
-/// *expands* `insN[10]` into a literal `N` run, so an indeterminate payload
-/// arrives at the sequence rung looking definite. Asserting the property over a
-/// table, rather than pinning one path's answer, is what makes a future third
-/// path fail here instead of silently reporting a positive.
+/// This is stated as an invariant over the rungs rather than as a regression
+/// for one measured pair, because the hazard is precisely that the rule was
+/// applied on one path and not another. There are two ways to report agreement
+/// — the `SequenceVerdict::Same` branch and the fall-through — and
+/// normalization *expands* `insN[10]` into a literal `N` run, so an
+/// indeterminate payload arrives at the sequence rung looking definite.
+/// Asserting the property over a table, rather than pinning one path's answer,
+/// is what makes a future third path fail here instead of silently reporting a
+/// positive.
+///
+/// **Both entry points are driven, and that is not redundant.** `#1800` added
+/// `compare_denotations`, which reaches the same rungs without normalizing —
+/// and therefore without `check`'s string-identity rung in front of it. A pair
+/// of byte-equal indeterminate payloads reconstructs to byte-equal windows, so
+/// the sequence rung answers `Same` and returns *before* the fall-through
+/// indeterminacy check: `g.1001_1002insNNN` against itself reported
+/// `CrossAxisSequenceMatch`, which `is_at_least(CrossAxisSequenceMatch)`
+/// accepts. `check` could never show it, because string identity answers
+/// `Identical` first. Driving one entry point would leave the other's copy of
+/// this invariant unmeasured.
 ///
 /// Every row below is apply-*shaped* like a match — same accession, overlapping
 /// spans, payloads that expand to comparable runs — so a checker that consulted
@@ -344,8 +492,39 @@ fn an_indeterminate_input_never_wins_a_decided_denotational_rung() {
             format!("{TX}:c.20_21insN[3]"),
             format!("{TX}:c.20delinsANNN"),
         ),
+        // Two byte-equal literal `N` payloads: the sequence rung reconstructs
+        // identical windows and answers `Same`, so this is the row that reaches
+        // the rung *without* needing normalization to expand anything. It is
+        // invisible through `check` — string identity answers `Identical` — and
+        // is the row that caught `compare_denotations` skipping the hoisted
+        // indeterminacy guard.
+        (
+            format!("{CONTIG}:g.1001_1002insNNN"),
+            format!("{CONTIG}:g.1001_1002insNNN"),
+        ),
     ] {
-        let observed = level(&provider, &a, &b);
+        // `compare_denotations` is called directly rather than through
+        // `denotational`, because that helper refuses an identical pair — which
+        // is exactly the row that broke this invariant, so it must not be the
+        // one row exempted from it.
+        let via_denotations = EquivalenceChecker::new(provider.clone())
+            .compare_denotations(&parse_hgvs(&a).unwrap(), &parse_hgvs(&b).unwrap())
+            .unwrap()
+            .level;
+        // `check` short-circuits on string identity, so it has nothing to say
+        // about the identical row; everywhere it does answer, the two entry
+        // points must agree, or the invariant holds on one and not the other.
+        let observed = if a == b {
+            via_denotations
+        } else {
+            let via_check = level(&provider, &a, &b);
+            assert_eq!(
+                via_check, via_denotations,
+                "{a} vs {b}: the two entry points disagree about an indeterminate pair, so the \
+                 invariant holds on one and not the other"
+            );
+            via_check
+        };
         assert!(
             !observed.is_at_least(EquivalenceLevel::SequenceMatch),
             "{a} vs {b}: reported {observed:?}, a positive denotational verdict about a pair \
@@ -415,11 +594,20 @@ fn a_span_past_the_compare_window_cap_is_indeterminate() {
         &format!("{CONTIG}:g.150000del"),
     );
     // Neither spelling moved, so the 149,901-base union span is what exceeds
-    // the cap — not a shuffle that walked one of them somewhere else.
-    assert_normalized(
-        &far,
-        &format!("{CONTIG}:g.100del"),
-        &format!("{CONTIG}:g.150000del"),
+    // the cap — not a shuffle that walked one of them somewhere else. This test
+    // stays on `check` deliberately: the cap is reached through normalization,
+    // and pinning the normalized pair is what rules out the alternative
+    // explanation.
+    assert_eq!(
+        (
+            far.normalized_first.as_deref(),
+            far.normalized_second.as_deref()
+        ),
+        (
+            Some(format!("{CONTIG}:g.100del").as_str()),
+            Some(format!("{CONTIG}:g.150000del").as_str())
+        ),
+        "one of the two deletions shuffled, so the union span is not the variable under test"
     );
     assert_eq!(far.level, EquivalenceLevel::Indeterminate);
     assert!(!far.level.is_decided());
@@ -462,13 +650,8 @@ fn a_span_past_the_compare_window_cap_is_indeterminate() {
 #[test]
 fn a_second_axis_that_cannot_be_computed_stops_at_the_single_axis_rung() {
     let provider = two_exon_provider_without_a_contig();
-    let result = check(
+    let result = denotational(
         &provider,
-        &format!("{TX}:c.[48dup;52del]"),
-        &format!("{TX}:c.49_52delinsATTG"),
-    );
-    assert_normalized(
-        &result,
         &format!("{TX}:c.[48dup;52del]"),
         &format!("{TX}:c.49_52delinsATTG"),
     );
@@ -501,11 +684,12 @@ fn a_second_axis_that_cannot_be_computed_stops_at_the_single_axis_rung() {
     // cross-axis rung. Without it, a `SequenceMatch` from any other cause would
     // read as a pass.
     assert_eq!(
-        level(
+        denotational(
             &two_exon_provider(),
             &format!("{TX}:c.[48dup;52del]"),
             &format!("{TX}:c.49_52delinsATTG"),
-        ),
+        )
+        .level,
         EquivalenceLevel::CrossAxisSequenceMatch
     );
 }
@@ -694,14 +878,22 @@ fn complement(base: u8) -> u8 {
 
 /// `c.3921dup` and `c.3922dup` on the real minus-strand geometry: apply-equal on
 /// the transcript, and *not* on the genome.
+///
+/// Driven over the constructed pair for the same reason as its plus-strand twin
+/// — and here the hazard is not hypothetical:
+/// `rulings[exon-junction-dup-converge-from-the-far-side]` is **decided** and
+/// says `c.3922dup` normalizes to `c.3921dup`, so the day it is implemented a
+/// `check`-driven version of this test would answer `NormalizedMatch` and stop
+/// exercising the mapper's minus-strand arm without saying so.
 #[test]
 fn the_spec_pair_at_its_own_coordinates_is_single_axis_only() {
     let fixture = DmdFixture::new();
-    let observed = level(
+    let observed = denotational(
         &fixture.provider,
         &format!("{DMD_TX}:c.3921dup"),
         &format!("{DMD_TX}:c.3922dup"),
-    );
+    )
+    .level;
     assert_eq!(
         observed,
         EquivalenceLevel::SequenceMatch,

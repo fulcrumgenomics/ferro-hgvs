@@ -383,17 +383,18 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
             // A description that names no definite bases denotes no sequence,
             // so no rung below may report a positive denotational verdict about
-            // it. The check runs here rather than only on the fall-through path
-            // because normalization *expands* `insN[10]` into a literal run of
-            // `N`s: by the time the sequence rung compares two reconstructed
-            // windows, two indeterminate payloads can be byte-equal, and the
-            // rung would report agreement on a pair where neither side denotes
-            // anything to agree about.
+            // it. The check runs on the **inputs**, here, and not only on the
+            // normalized pair `denotational_verdict` re-checks, because
+            // normalization *expands* `insN[10]` into a literal run of `N`s: by
+            // the time the sequence rung compares two reconstructed windows, two
+            // indeterminate payloads can be byte-equal, and the rung would
+            // report agreement on a pair where neither side denotes anything to
+            // agree about.
             //
             // No input reaching `SequenceVerdict::Same` this way has been
             // measured — every constructed candidate either converges at
-            // `NormalizedMatch` above or is caught by the identical check on
-            // the fall-through path below. This is therefore stated as an
+            // `NormalizedMatch` above or is caught by the same check on the
+            // normalized pair. This is therefore stated as an
             // invariant rather than as a fix for an observed wrong answer, and
             // `an_indeterminate_input_never_wins_a_decided_denotational_rung`
             // pins it as one: the rule is a property of `check`, not of
@@ -406,83 +407,194 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 }
             }
 
-            // Sequence-level equivalence (issue #1158): two variants may
-            // normalize to different HGVS strings yet produce the same edited
-            // reference sequence — e.g. a length-changing `delins` vs a
-            // decomposed cis allele of the same edit, which ferro deliberately
-            // keeps in distinct canonical forms. Reconstruct each edited window
-            // from SPDI triples and compare. This is best-effort: any variant
-            // that cannot be projected (unsupported edit, missing reference,
-            // mixed accessions, or a multi-molecule allele) simply declines, so
-            // the rung only ever upgrades a `NotEquivalent` verdict.
-            match self.same_resulting_sequence(&norm1, &norm2) {
-                SequenceVerdict::Same => {
-                    let (level, note) = self.strengthen_across_axes(&norm1, &norm2);
-                    return Ok(EquivalenceResult::new(level)
-                        .with_normalized(norm_str1, norm_str2)
-                        .with_note(note));
-                }
-                // The reference window needed to compare them is wider than the
-                // cap, so nothing was reconstructed and nothing was compared.
-                SequenceVerdict::WindowTooWide => {
-                    return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
-                        .with_normalized(norm_str1, norm_str2)
-                        .with_note(format!(
-                            "The reference window covering both variants exceeds \
-                             {MAX_SEQUENCE_COMPARE_WINDOW} bases, so neither resulting \
-                             sequence was reconstructed"
-                        )));
-                }
-                SequenceVerdict::Different | SequenceVerdict::Declined => {}
-            }
-
-            // #1578 follow-up: `NotEquivalent` is a *positive claim* that two
-            // descriptions denote different variants, and it is only sound if
-            // some rung above actually examined them. For a structural
-            // rearrangement both deciding rungs are blind at once — see
-            // `undecidable_reason` — so falling through here would answer a
-            // question nobody asked. Decline instead, which is what the other
-            // three modules that hand-roll `Allele` recursion already do with a
-            // ring (`spdi::apply`, `vcf::from_hgvs`, `project::projector`).
-            //
-            // `Indeterminate` below says the same thing as a *verdict* rather
-            // than as an error. The two are kept apart deliberately: the error
-            // is the shipped contract for a ring and a `sup` marker (pinned by
-            // `issue_1578_followup_equivalence_rungs`), and turning it into a
-            // verdict would be a silent API change for every caller that
-            // matches on the `Err`. A future change may fold them together;
-            // until then, read them as one idea with two spellings.
-            for side in [&norm1, &norm2] {
-                if let Some(reason) = self.undecidable_reason(side) {
-                    return Err(FerroError::UnsupportedVariant {
-                        variant_type: reason,
-                    });
-                }
-            }
-
-            // Nothing above could compute a denotation for one of the sides, so
-            // there is no negative to report either.
-            //
-            // Only the **normalized** forms are examined here. The inputs were
-            // already cleared above the sequence rung — re-checking them would
-            // be dead work, and worse, would read as though this were the only
-            // place the rule is applied. The normalized forms still have to be
-            // checked on their own account, in the other direction from the
-            // hoisted check: normalization can *introduce* an indeterminate
-            // payload that the input did not name, by resolving a shape into a
-            // literal run of `N`s.
-            for side in [&norm1, &norm2] {
-                if let Some(reason) = indeterminate_reason(side) {
-                    return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
-                        .with_normalized(norm_str1, norm_str2)
-                        .with_note(reason));
-                }
-            }
-
-            Ok(EquivalenceResult::new(EquivalenceLevel::NotEquivalent)
-                .with_normalized(norm_str1, norm_str2)
-                .with_note("Variants do not normalize to the same form"))
+            self.denotational_verdict(&norm1, &norm2, norm_str1, norm_str2)
         }
+    }
+
+    /// Decide the **denotational** relation between two descriptions, as
+    /// written, without ever asking whether they normalize to one string.
+    ///
+    /// This is the relation
+    /// `rulings[confluence-gate-is-apply-equality-on-every-determined-axis]`
+    /// defines: apply-equality on every *determined* axis, a relation over
+    /// `apply` whose codomain is bases. [`Self::check`] answers a wider
+    /// question — it is the whole ladder, textual rungs included, and it
+    /// short-circuits at [`EquivalenceLevel::NormalizedMatch`] the moment the
+    /// two normalized forms coincide. That short-circuit is correct for a
+    /// caller asking "are these the same?" and useless to one asking "did the
+    /// denotational comparison agree?", because a converged pair never reaches
+    /// a denotational rung at all — and `NormalizedMatch` is deliberately off
+    /// the order, so `is_at_least(CrossAxisSequenceMatch)` *rejects* it.
+    ///
+    /// So this entry point starts one rung lower and reports what the
+    /// comparison found:
+    ///
+    /// * **Nothing is normalized.** The two variants are compared exactly as
+    ///   handed over, so a caller that wants normalized forms compared must
+    ///   normalize them itself. That is what makes the answer independent of
+    ///   how confluent the normalizer happens to be.
+    /// * **There is no `Identical` rung here.** Two identical descriptions are
+    ///   re-derived and compared like any other pair, which reports
+    ///   [`EquivalenceLevel::CrossAxisSequenceMatch`] when every determined axis
+    ///   could be computed, and a lower rung when one could not.
+    /// * **`AccessionVersionDifference` is still answered**, because it needs no
+    ///   normalizer; without it, one variant spelled on two versions of an
+    ///   accession would fall through to a `NotEquivalent` no rung examined.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
+    /// use ferro_hgvs::{parse_hgvs, MockProvider};
+    ///
+    /// let checker = EquivalenceChecker::new(MockProvider::with_test_data());
+    /// let v = parse_hgvs("NM_000088.3:c.10del").unwrap();
+    ///
+    /// // `check` stops at the textual rung; the denotational entry point
+    /// // re-derives the bases and reports what it compared.
+    /// assert_eq!(checker.check(&v, &v).unwrap().level, EquivalenceLevel::Identical);
+    /// assert!(checker.compare_denotations(&v, &v).unwrap().level.is_decided());
+    /// ```
+    pub fn compare_denotations(
+        &self,
+        v1: &HgvsVariant,
+        v2: &HgvsVariant,
+    ) -> Result<EquivalenceResult, FerroError> {
+        let str1 = v1.to_string();
+        let str2 = v2.to_string();
+        if let Some(result) = self.check_accession_version_difference(v1, v2, &str1, &str2) {
+            return Ok(result);
+        }
+
+        // The same hoist [`Self::check`] performs above its own call into
+        // `denotational_verdict`, and for the same reason: a description that
+        // names no definite bases denotes no sequence, so no rung below may
+        // report a positive denotational verdict about it.
+        //
+        // It cannot be left to the fall-through check inside
+        // `denotational_verdict`, because that one runs *after* the sequence
+        // rung has had its chance to return. Two byte-equal indeterminate
+        // payloads reconstruct to byte-equal windows, so the rung answers
+        // `SequenceVerdict::Same` and returns before the fall-through is
+        // reached. Measured: `NC_…:g.1001_1002insNNN` against itself reported
+        // `CrossAxisSequenceMatch` — a *decided positive* about a pair where
+        // neither side denotes anything, and one that
+        // `is_at_least(CrossAxisSequenceMatch)` accepts, i.e. exactly what a
+        // confluence gate written as the module docs prescribe would swallow.
+        // `check` never showed it because its string-identity rung answers
+        // `Identical` first; this entry point has no such rung by design.
+        //
+        // Pinned by
+        // `an_indeterminate_input_never_wins_a_decided_denotational_rung`,
+        // which drives both entry points — the invariant is a property of the
+        // denotational rungs, not of whichever entry point reaches them.
+        for side in [v1, v2] {
+            if let Some(reason) = indeterminate_reason(side) {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                    .with_normalized(str1, str2)
+                    .with_note(reason));
+            }
+        }
+
+        self.denotational_verdict(v1, v2, str1, str2)
+    }
+
+    /// The denotational half of the ladder: the sequence rung, the cross-axis
+    /// strengthening above it, and the three ways of declining below it.
+    ///
+    /// Shared verbatim by [`Self::check`] — which reaches it with the
+    /// *normalized* pair — and by [`Self::compare_denotations`], which reaches
+    /// it with the pair as written. `str1`/`str2` are the two descriptions'
+    /// rendered forms, recorded on the result so a caller can see which pair a
+    /// verdict was reached over.
+    fn denotational_verdict(
+        &self,
+        v1: &HgvsVariant,
+        v2: &HgvsVariant,
+        str1: String,
+        str2: String,
+    ) -> Result<EquivalenceResult, FerroError> {
+        // Sequence-level equivalence (issue #1158): two variants may normalize
+        // to different HGVS strings yet produce the same edited reference
+        // sequence — e.g. a length-changing `delins` vs a decomposed cis allele
+        // of the same edit, which ferro deliberately keeps in distinct
+        // canonical forms. Reconstruct each edited window from SPDI triples and
+        // compare. This is best-effort: any variant that cannot be projected
+        // (unsupported edit, missing reference, mixed accessions, or a
+        // multi-molecule allele) simply declines, so the rung only ever
+        // upgrades a `NotEquivalent` verdict.
+        match self.same_resulting_sequence(v1, v2) {
+            SequenceVerdict::Same => {
+                let (level, note) = self.strengthen_across_axes(v1, v2);
+                return Ok(EquivalenceResult::new(level)
+                    .with_normalized(str1, str2)
+                    .with_note(note));
+            }
+            // The reference window needed to compare them is wider than the
+            // cap, so nothing was reconstructed and nothing was compared.
+            SequenceVerdict::WindowTooWide => {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                    .with_normalized(str1, str2)
+                    .with_note(format!(
+                        "The reference window covering both variants exceeds \
+                         {MAX_SEQUENCE_COMPARE_WINDOW} bases, so neither resulting \
+                         sequence was reconstructed"
+                    )));
+            }
+            SequenceVerdict::Different | SequenceVerdict::Declined => {}
+        }
+
+        // #1578 follow-up: `NotEquivalent` is a *positive claim* that two
+        // descriptions denote different variants, and it is only sound if
+        // some rung above actually examined them. For a structural
+        // rearrangement both deciding rungs are blind at once — see
+        // `undecidable_reason` — so falling through here would answer a
+        // question nobody asked. Decline instead, which is what the other
+        // three modules that hand-roll `Allele` recursion already do with a
+        // ring (`spdi::apply`, `vcf::from_hgvs`, `project::projector`).
+        //
+        // `Indeterminate` below says the same thing as a *verdict* rather
+        // than as an error. The two are kept apart deliberately: the error
+        // is the shipped contract for a ring and a `sup` marker (pinned by
+        // `issue_1578_followup_equivalence_rungs`), and turning it into a
+        // verdict would be a silent API change for every caller that
+        // matches on the `Err`. A future change may fold them together;
+        // until then, read them as one idea with two spellings.
+        for side in [v1, v2] {
+            if let Some(reason) = self.undecidable_reason(side) {
+                return Err(FerroError::UnsupportedVariant {
+                    variant_type: reason,
+                });
+            }
+        }
+
+        // Nothing above could compute a denotation for one of the sides, so
+        // there is no negative to report either.
+        //
+        // Only the pair handed to *this* function is examined. On
+        // [`Self::check`]'s path that is the **normalized** pair, and its
+        // inputs were already cleared above the sequence rung — re-checking
+        // them would be dead work, and worse, would read as though this were
+        // the only place the rule is applied. The normalized forms still have
+        // to be checked on their own account, in the other direction from that
+        // hoisted check: normalization can *introduce* an indeterminate payload
+        // the input did not name, by resolving a shape into a literal run of
+        // `N`s.
+        for side in [v1, v2] {
+            if let Some(reason) = indeterminate_reason(side) {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                    .with_normalized(str1, str2)
+                    .with_note(reason));
+            }
+        }
+
+        // The note says "no rung found them equivalent" rather than the older
+        // "do not normalize to the same form", because this function is also
+        // reached from [`Self::compare_denotations`], where nothing was
+        // normalized and the old wording named a comparison that never ran.
+        Ok(EquivalenceResult::new(EquivalenceLevel::NotEquivalent)
+            .with_normalized(str1, str2)
+            .with_note("The two descriptions differ and no rung found them equivalent"))
     }
 
     /// Given that the two variants agree on the axis their descriptions are
@@ -2088,6 +2200,53 @@ mod tests {
                 .transcript_triples_to_genomic("NM_ZEROBASED.1", &triples)
                 .is_none(),
             "a genomic position with no interbase point to its left must be declined"
+        );
+    }
+
+    /// `compare_denotations` deliberately has no `Identical` rung: it answers
+    /// what the *comparison* found, so an identical pair is re-derived and
+    /// compared like any other. Without this, a caller could not tell "the
+    /// bases agree" from "the strings agree", which is the distinction the
+    /// entry point exists for.
+    #[test]
+    fn compare_denotations_re_derives_an_identical_pair_instead_of_short_circuiting() {
+        let checker = checker();
+        let v = parse_hgvs("NM_000088.3:c.10del").unwrap();
+
+        assert_eq!(
+            checker.check(&v, &v).unwrap().level,
+            EquivalenceLevel::Identical
+        );
+        // The exact rung, not merely "not `Identical`". `assert_ne!` alone is
+        // satisfied by `NotEquivalent` — a *decided negative* about a
+        // description compared with itself — and by `Indeterminate`, which
+        // would mean the re-derivation this test is named for never happened.
+        //
+        // `SequenceMatch` rather than `CrossAxisSequenceMatch` is the measured
+        // answer and is correct here: `MockProvider::with_test_data` serves no
+        // genomic sequence for `NM_000088.3`, so the second determined axis
+        // cannot be computed and the verdict stops one rung short. The note
+        // says so in as many words — "a determined axis could not be computed"
+        // — so a future fixture that *does* serve that axis will fail here and
+        // be re-pinned deliberately rather than drift.
+        let denoted = checker.compare_denotations(&v, &v).unwrap();
+        assert_eq!(denoted.level, EquivalenceLevel::SequenceMatch);
+        assert!(denoted.level.is_decided());
+    }
+
+    /// The accession-version rung needs no normalizer, so it is answered here
+    /// too. Dropping it would report a decided `NotEquivalent` for one variant
+    /// spelled on two versions of its accession — a positive claim no rung
+    /// examined, since apply-equality is not defined across two references.
+    #[test]
+    fn compare_denotations_still_answers_an_accession_version_difference() {
+        let checker = checker();
+        let v1 = parse_hgvs("NM_000088.3:c.10A>G").unwrap();
+        let v2 = parse_hgvs("NM_000088.4:c.10A>G").unwrap();
+
+        assert_eq!(
+            checker.compare_denotations(&v1, &v2).unwrap().level,
+            EquivalenceLevel::AccessionVersionDifference
         );
     }
 }

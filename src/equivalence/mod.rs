@@ -67,6 +67,22 @@
 //! rung consults the normalizer, so gating on it would restore the circularity
 //! above.
 //!
+//! # Two entry points, because the short-circuit is not always wanted
+//!
+//! [`EquivalenceChecker::check`] walks the whole ladder and answers the first
+//! rung that fires, so a pair whose normalized forms coincide is reported
+//! `NormalizedMatch` and no denotational rung is reached for it. That is the
+//! right answer to "are these the same?", and the wrong one to "what did the
+//! denotational comparison find?" — two questions that only look alike while
+//! the normalizer is non-confluent over the pair in front of you.
+//!
+//! [`EquivalenceChecker::compare_denotations`] answers the second question. It
+//! runs the sequence rung and the cross-axis strengthening over the two
+//! descriptions **as written**, normalizing neither, so its answer does not
+//! depend on how confluent the normalizer happens to be. Reach for it when the
+//! comparison itself is the subject — a confluence gate, or a test of these
+//! rungs (#1800).
+//!
 //! The list is open-ended — [`EquivalenceLevel`] is `#[non_exhaustive]`, so
 //! recognizing a new class of equivalence adds a level without breaking
 //! downstream matches.
