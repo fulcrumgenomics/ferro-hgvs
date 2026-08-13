@@ -1114,6 +1114,28 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // in any description, and `absolute-prohibition-enforcement-stage` fixes
     // the stage.
     ("rna-axis-alignment-only-symbol-reach", "decided"),
+    // The input-relative weight bound in `canonicalize_from_sequence` —
+    // `derived_columns > changed_columns_of_edits(&edits)` — refused any
+    // derivation heavier than the spelling the input happened to use, handing
+    // the variant back to the per-member pipeline so that spelling survived
+    // verbatim. **Decided for deletion by operator ruling (2026-08-10).** It
+    // cited no clause and could cite none: the spec compares a description to
+    // the sequence, never to the input, and `background/basics.md:38`'s design
+    // values omit minimality. It also contradicted
+    // `canonical-form-choice-when-both-legal` in terms. And what it refused was
+    // keyed on the reference bases a split RETAINS and a span must cover, which
+    // is exactly the `delins.md:44-47` coincidence — so it refused every merge
+    // `:47` recommends. (It did not refuse every merge unconditionally; #1591's
+    // `a_span_outweighs_a_split_that_keeps_reference_bases` pins the gap-free
+    // counter-example, and the record carries the correction.) The deletion
+    // itself is #1616 and is NOT on this branch — this entry pins the record's
+    // status only. Measurements quoted in the record are #1616's to re-derive;
+    // the +3,245/+3,251 and +3,244/+3,249 pairs quoted through its review are
+    // on superseded bases and are not to be re-quoted.
+    (
+        "derivation-may-not-be-bounded-by-the-inputs-spelling",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
