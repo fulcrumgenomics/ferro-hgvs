@@ -170,25 +170,46 @@ const REGENERATE: &str = "cargo run --features dev --example extract_inversion_s
 
 /// Rows returned character-for-character unchanged: already the 3'-most,
 /// minimal spelling.
-const CENSUS_UNCHANGED: usize = 1_434;
+///
+/// **1,434 before the post-hoc inversion run scan and 1,490 after it** (#1575):
+/// 56 rows whose authored `inv` used to be shredded into an allele are now
+/// returned exactly as authored.
+const CENSUS_UNCHANGED: usize = 1_490;
 /// Rows that stayed a lone `inv` at a different span — narrowed to the minimal
 /// block whose replacement is still the reverse complement, or 3'-shifted.
-const CENSUS_SHIFTED_STILL_INV: usize = 460;
+///
+/// **460 before the run scan and 466 after it** (#1575): the other 6 of the 62
+/// recovered rows come back as one `inv` at a narrowed span rather than at the
+/// authored one.
+const CENSUS_SHIFTED_STILL_INV: usize = 466;
 /// Rows that became a no-op `=`: the authored span is its own reverse
 /// complement, so inverting it changes nothing.
 const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// Rows repartitioned into allele members.
 ///
-/// **Zero before #1484 and 155 after it.** That PR widened the sequence-derived
-/// axis gate to `c.`/`n.`/`r.`, so an authored `inv` whose block admits a
-/// smaller partition is now re-derived into one. The direction is decided for
-/// at least the substitution case — `rulings[inversion-vs-two-delins-76-83]`
-/// records "#1230's substitution case is untouched and still splits" — so this
-/// is a census bucket rather than a violation. What still has to hold is that
-/// the members denote the same bases, which
+/// **Zero before #1484, 155 after it, and 93 after the post-hoc inversion run
+/// scan.** #1484 widened the sequence-derived axis gate to `c.`/`n.`/`r.`, so an
+/// authored `inv` whose block admits a smaller partition is re-derived into one;
+/// the run scan puts 62 of those back together, which is what #1575 asked for.
+///
+/// **All 93 that remain are #1230's case**, which `general.md:56` ranks above
+/// inversion and which `rulings[inversion-vs-two-delins-76-83]` records as
+/// "untouched and still splits": every *piece* of the competing partition is a
+/// one-base substitution. Measured, not assumed — every changed column in all 93
+/// blocks is isolated, so there is no multi-column run for the run scan's gate to
+/// admit on.
+///
+/// Six of them nevertheless *render* with a `delins` member
+/// (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`), and reading that as a
+/// counter-example is the trap: the `delins` is the coding codon carve-out
+/// (`general.md:35`, `DNA/delins.md:18`) merging two isolated substitutions one
+/// base apart, applied *after* this pass. The partition the gate reads holds no
+/// `delins` at all. Count these by the pieces, never by the rendered members.
+///
+/// What still has to hold is that the members denote the same bases, which
 /// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] checks
 /// against the committed sequence.
-const CENSUS_REPARTITIONED: usize = 155;
+const CENSUS_REPARTITIONED: usize = 93;
 /// Rows whose authored `c.` span crosses an exon junction. Pinned because it is
 /// the geometry #1478 records as unreachable in the generated corpora — if it
 /// ever reads 0, this corpus has stopped covering the thing it was built for.
