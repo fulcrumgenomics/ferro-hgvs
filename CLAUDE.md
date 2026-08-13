@@ -244,6 +244,12 @@ broke it*. Its exemptions are a **closed list**, deliberately (#1264):
   coordinates are sound and the downstream cdot derivation of the c./n./p. axes needs
   it, but its spelling is not one HGVS admits, so the projector withholds the
   *reported* genomic axis instead (`non_flanking_genomic_insertion_anchor`).
+- A **non-coding downstream position** (`n.*N`), which #1748 refuses at parse in every
+  mode while `TxPos::downstream` stays public API — so the spelling is gone and the AST
+  is not. Reachable only by a Rust library caller constructing one; no string entry
+  point reaches it, and normalization only ever preserves the flag, never mints it.
+  Keyed on the AST through `noncoding_zone_marker`, which is `Tx`-only by an exhaustive
+  match, so `c.*N` — anchored to the CDS, still legal — is not exempted.
 
 **This used to be a blanket** — "skip when the input does not itself re-parse" — and
 that blanket was hiding live defects rather than scoping the oracle. Instrumenting it

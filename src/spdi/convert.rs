@@ -2547,6 +2547,27 @@ mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
 
+    /// Build an `n.*N` substitution.
+    ///
+    /// #1748 refuses that spelling at parse in **every** mode
+    /// (`background/numbering.md:52` puts no `*` zone on the non-coding axis),
+    /// so a downstream fixture can no longer be parsed. It still has to be
+    /// *handled* here: [`TxPos::downstream`](crate::hgvs::location::TxPos::downstream)
+    /// is public API, so a caller can hand the conversion path one of these
+    /// without the parser ever seeing it. Constructing it is therefore the
+    /// faithful fixture, not a workaround.
+    fn tx_downstream_sub(accession: &str, base: i64) -> crate::hgvs::HgvsVariant {
+        use crate::hgvs::interval::TxInterval;
+        use crate::hgvs::location::TxPos;
+        let mut variant =
+            parse_hgvs(&format!("{accession}:n.{base}A>G")).expect("the template parses");
+        let crate::hgvs::HgvsVariant::Tx(tx) = &mut variant else {
+            unreachable!("an `n.` description parses as Tx")
+        };
+        tx.loc_edit.location = TxInterval::point(TxPos::downstream(base));
+        variant
+    }
+
     // ------------------------------------------------------------------
     // Unspelled-bases declines (#1388)
     //
@@ -4388,7 +4409,8 @@ mod tests {
     #[test]
     fn test_hgvs_to_spdi_simple_tx_downstream_needs_provider() {
         // n.*5: downstream of transcript end; needs transcript length.
-        let hgvs = parse_hgvs("NR_046018.2:n.*5A>G").unwrap();
+        // Constructed rather than parsed — see `tx_downstream_sub` (#1748).
+        let hgvs = tx_downstream_sub("NR_046018.2", 5);
         let result = hgvs_to_spdi_simple(&hgvs);
         assert!(matches!(
             result,
@@ -4880,7 +4902,8 @@ mod tests {
         );
         let mut provider = MockProvider::new();
         provider.add_transcript(tx);
-        let hgvs = parse_hgvs("NR_NONCODING.1:n.*5A>G").unwrap();
+        // Constructed rather than parsed — see `tx_downstream_sub` (#1748).
+        let hgvs = tx_downstream_sub("NR_NONCODING.1", 5);
         let err = hgvs_to_spdi(&hgvs, &provider).unwrap_err();
         assert!(matches!(err, ConversionError::InvalidPosition { .. }));
         let msg = err.to_string();

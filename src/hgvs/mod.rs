@@ -7,6 +7,7 @@ pub mod alignment_symbols;
 pub mod edit;
 pub mod interval;
 pub mod location;
+pub mod noncoding_zones;
 pub mod parser;
 pub mod uncertainty;
 pub mod validation;

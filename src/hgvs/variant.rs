@@ -3243,6 +3243,28 @@ mod tests {
     use crate::hgvs::edit::Base;
     use crate::hgvs::location::GenomePos;
 
+    /// Build an `n.*<start>_*<end><edit>` description.
+    ///
+    /// #1748 refuses that spelling at parse in **every** mode
+    /// (`background/numbering.md:52` puts no `*` zone on the non-coding axis),
+    /// so a downstream fixture can no longer be parsed. The AST shape is still
+    /// reachable — [`TxPos::downstream`](crate::hgvs::location::TxPos::downstream)
+    /// is public API — which is why the consumers below still have to classify
+    /// it.
+    fn tx_downstream_range(accession: &str, start: i64, end: i64, edit: &str) -> HgvsVariant {
+        use crate::hgvs::interval::TxInterval;
+        use crate::hgvs::location::TxPos;
+        let mut variant = crate::hgvs::parser::variant::parse_variant(&format!(
+            "{accession}:n.{start}_{end}{edit}"
+        ))
+        .expect("the template parses");
+        let HgvsVariant::Tx(tx) = &mut variant else {
+            unreachable!("an `n.` description parses as Tx")
+        };
+        tx.loc_edit.location = TxInterval::new(TxPos::downstream(start), TxPos::downstream(end));
+        variant
+    }
+
     #[test]
     fn test_accession_display() {
         let acc = Accession::new("NM", "000088", Some(3));
@@ -4982,8 +5004,14 @@ mod tests {
     #[test]
     fn test_self_cancelling_tx_downstream_star_overlap() {
         // `n.*N` downstream positions are the tx-axis analogue of c.*N.
-        let del = parse_variant("NR_001234.1:n.*100_*150del").unwrap();
-        let dup = parse_variant("NR_001234.1:n.*145_*160dup").unwrap();
+        //
+        // #1748 refuses that spelling at parse in every mode, so both members
+        // are constructed. The detector still has to handle them —
+        // `TxPos::downstream` is public API — and an overlap that arrives by
+        // construction rather than by parse is exactly the case a
+        // parse-stage refusal cannot cover.
+        let del = tx_downstream_range("NR_001234.1", 100, 150, "del");
+        let dup = tx_downstream_range("NR_001234.1", 145, 160, "dup");
         assert!(
             AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_some(),
             "overlapping n. downstream del+dup must be detected (#172)"

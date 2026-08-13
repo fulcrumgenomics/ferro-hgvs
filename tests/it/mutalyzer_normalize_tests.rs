@@ -1361,8 +1361,28 @@ fn issue_506_bare_downstream_position_is_rejected() {
 
     // Both a bare `n.*N` and a bare `r.*N` input must be declined, not
     // mis-projected into a spurious `c.` form / protein consequence.
+    //
+    // #1748 refuses `n.*N` at parse in every mode, so the `n.` half is
+    // constructed rather than parsed. The projector guard is still live for it:
+    // `TxPos::downstream` is public API, so this AST can reach the projector
+    // without the parser ever seeing it. The `r.` half is untouched and still
+    // parses — `numbering.md:58` makes the `r.` zone set a property of the
+    // underlying reference, which the parser cannot resolve, so `r.*5` is left
+    // alone deliberately. That asymmetry is the point of keeping both here.
     for input in ["NM_003002.4:n.*5del", "NM_003002.4:r.*5del"] {
-        let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input}: {e}"));
+        let v = if let Some(rest) = input.strip_suffix(":n.*5del") {
+            use ferro_hgvs::hgvs::interval::TxInterval;
+            use ferro_hgvs::hgvs::location::TxPos;
+            use ferro_hgvs::HgvsVariant;
+            let mut built = parse_hgvs(&format!("{rest}:n.5del")).expect("template parses");
+            let HgvsVariant::Tx(tx) = &mut built else {
+                unreachable!("an `n.` description parses as Tx")
+            };
+            tx.loc_edit.location = TxInterval::point(TxPos::downstream(5));
+            built
+        } else {
+            parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input}: {e}"))
+        };
         match vp.project_variant(&v, "NM_003002.4") {
             Err(FerroError::UnsupportedProjection { .. }) => {} // expected
             Err(other) => panic!(

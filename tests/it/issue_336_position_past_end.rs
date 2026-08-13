@@ -16,6 +16,36 @@ use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, FerroError, MockProvider, NormalizeConfig, Normalizer};
 
+/// Build an `n.*<start>_*<end>` description (or a point, when `start == end`).
+///
+/// #1748 refuses `n.*N` at parse in **every** mode — `background/numbering.md:52`
+/// puts no `*` zone on the non-coding axis — so these fixtures are constructed
+/// rather than parsed. The normalizer still has to handle the shape:
+/// `TxPos::downstream` is public API, and the bounds gate below is precisely the
+/// code that must not read a downstream base as an in-transcript one. A
+/// parse-stage refusal does not reach a variant a caller built directly, which
+/// is why these tests keep their subject rather than moving to `c.`.
+fn tx_downstream(accession: &str, start: i64, end: i64, edit: &str) -> ferro_hgvs::HgvsVariant {
+    use ferro_hgvs::hgvs::interval::TxInterval;
+    use ferro_hgvs::hgvs::location::TxPos;
+    use ferro_hgvs::HgvsVariant;
+    let template = if start == end {
+        format!("{accession}:n.{start}{edit}")
+    } else {
+        format!("{accession}:n.{start}_{end}{edit}")
+    };
+    let mut variant = parse_hgvs(&template).unwrap_or_else(|e| panic!("template {template}: {e}"));
+    let HgvsVariant::Tx(tx) = &mut variant else {
+        unreachable!("an `n.` description parses as Tx")
+    };
+    tx.loc_edit.location = if start == end {
+        TxInterval::point(TxPos::downstream(start))
+    } else {
+        TxInterval::new(TxPos::downstream(start), TxPos::downstream(end))
+    };
+    variant
+}
+
 /// Single-exon synthetic transcript:
 ///   tx positions 1..20  (20 bases)
 ///   5'UTR: 1..3   (`AAA`)
@@ -544,7 +574,8 @@ fn lenient_mode_skips_n_downstream_position() {
     // `n.*5` is downstream notation; the bounds check must not fire on the
     // raw base value (5) — and equally must not fire on the offset into the
     // post-transcript region.
-    let variant = parse_hgvs("NR_TEST.1:n.*5G>C").expect("parse");
+    // Constructed rather than parsed — see `tx_downstream` (#1748).
+    let variant = tx_downstream("NR_TEST.1", 5, 5, "G>C");
     let result = normalizer
         .normalize_with_diagnostics(&variant)
         .expect("downstream n. must not error in lenient mode");
@@ -568,7 +599,8 @@ fn lenient_mode_preserves_downstream_n_indel_without_normalization() {
     // POSITION_PAST_END warning, and Display preserves the input form.
     let provider = provider_with_short_noncoding_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::lenient());
-    let variant = parse_hgvs("NR_TEST.1:n.*5_*7del").expect("parse");
+    // Constructed rather than parsed — see `tx_downstream` (#1748).
+    let variant = tx_downstream("NR_TEST.1", 5, 7, "del");
     let result = normalizer
         .normalize_with_diagnostics(&variant)
         .expect("downstream n. indel must not error in lenient mode");
