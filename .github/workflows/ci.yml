@@ -73,7 +73,8 @@ env:
   # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
   # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
   # denoted-sequence oracle's counters, which are meaningless unless
-  # `FERRO_ASSERT_SEQUENCE` is set and `sweeps` is the only job that sets it. So
+  # `FERRO_ASSERT_SEQUENCE` is set and `sweeps` is the only job IN THIS FILE that
+  # sets it (`nightly-mutalyzer.yml` sets it too, non-gating). So
   # "nothing is run twice" holds of this filter and is one module short of
   # holding of that job's `-E`; the reason it is appended there rather than added
   # here is on the job itself.
@@ -1311,14 +1312,55 @@ jobs:
         #     the exon table; genome<->transcript mapping is unchanged and stays
         #     exon- and CIGAR-aware.
         #
-        #   Both rows are green, and the flag is STILL not set here, because
-        #   what was measured is the two rows and not this job's selection:
-        #     FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
-        #       -E 'test(test_explicit_base_removal)'     # 2 passed
-        #     FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
-        #       -E 'test(repeat_tract_maximization)'      # 3 passed
-        #   Arming it here needs a run over the selection below (whole suite
-        #   minus ORACLE_EXCLUDE, test(proptest) and SWEEP_FILTER) first.
+        #   Both rows are green. THE SELECTION-WIDE RUN THIS COMMENT USED TO ASK
+        #   FOR HAS NOW BEEN DONE, and it is RED — so the two closures were
+        #   necessary and not sufficient, and the flag stays unset. Measured on
+        #   `origin/main` @ 674e9c8b, this job's four flags plus
+        #   `FERRO_ASSERT_SEQUENCE=1`, over the `-E` below with its two `env:`
+        #   filters expanded and no `--partition`:
+        #
+        #     Summary [87.5s] 10383 tests run: 10378 passed, 5 failed, 289 skipped
+        #
+        #   FIVE failures, in two classes, NEITHER of them #1618 or #1619 and
+        #   neither reachable by the two-row check this comment used to rest on:
+        #
+        #   * 3x `issue_1487_canonical_window_overflow` — NOT an oracle fire.
+        #     `attempt to add with overflow` at `src/convert/mapper.rs:114`.
+        #     Arming the flag routes the output through `hgvs_to_spdi`, which
+        #     reaches `cds_to_tx`'s unchecked `cds_start as i64 + pos.base - 1`
+        #     on an `i64::MAX`-adjacent `c.` coordinate. That module already
+        #     records the measurement and names the site; the open issue is
+        #     **#1690**. The three are
+        #     `a_lone_member_at_an_extreme_coordinate_…`,
+        #     `an_extreme_coordinate_…` and
+        #     `two_adjacent_members_at_the_top_of_the_range_…`.
+        #   * 2x `stranded_identity_member` — a genuine fire, of #1281's
+        #     "denotes no sequence" shape, on that module's own sweep:
+        #       input  TEMPLATE:g.[10_11insAT;11_12inv;12_13insA]
+        #       output TEMPLATE:g.[11_12insTA;11_12=;12_13insA]
+        #     The output pairs an insertion at interbase 11|12 with an identity
+        #     claiming 11..12, so it denotes nothing. That module exists to PIN
+        #     a defect (#1655's stranded derived identity, 132 of 132
+        #     non-confluent), which puts it in exactly the class `ORACLE_EXCLUDE`
+        #     documents above — a test that pins a defect and an oracle that
+        #     aborts on it cannot both run.
+        #
+        #   Two further notes from the same measurement, so it is not re-run to
+        #   rediscover them. With `FERRO_MANIFEST` also set — which this job does
+        #   NOT set, so CI does not see these — six `mutalyzer_normalize_tests`
+        #   axis tests fail too, on real `NG_` geometry, e.g.
+        #   `NG_012337.1(NM_012459.2):c.4_5insGTA` -> `c.5_6insTAG`, where the
+        #   input applies `GTAA` and the output `ATAG` over `[34, 35)`: an
+        #   insertion shifted 3' past a base its first payload base does not
+        #   match. Those axes early-return without the manifest, which is why
+        #   they read as 11 failures with it and 5 without. And the proof the
+        #   flag is not a no-op over this selection is
+        #   `issue_1615_denoted_sequence_oracle::the_seam_compares_when_the_flag_is_set`,
+        #   which is IN this selection and asserts the oracle's `compared`
+        #   counter is non-zero; it skips by design when the flag is unset.
+        #
+        #   So arming this is blocked on #1690 and on a home for
+        #   `stranded_identity_member` — NOT on another measurement.
         #
         #     This row replaced an earlier one on the same issue
         #     (`NM_000492.4:c.1520_1522del` -> `c.1521_1523del`), and the swap is
@@ -1338,9 +1380,10 @@ jobs:
         # Suppressing a row would hollow out the oracle, which is why neither was
         # ever exempted. It runs in `sweeps` below — the cis-allele space every
         # one of the eight defects it was built for came from, and where it is
-        # measured green — and non-gating in the nightly. Moving it here is now
-        # unblocked by both rows closing, and gated only on the selection-wide
-        # measurement noted above.
+        # measured green — and non-gating in the nightly. Both rows closing
+        # unblocked the two obstacles this comment knew about; the selection-wide
+        # run above then found two more, so the flag stays out until those are
+        # settled. Do not read "both rows are green" as "it can be armed".
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
@@ -1530,7 +1573,9 @@ jobs:
         # one is exactly the edit that would drop a sweep from CI silently.
         #
         # `issue_1615_denoted_sequence_oracle` is appended to the selection
-        # because this job is the only one that sets `FERRO_ASSERT_SEQUENCE`, and
+        # because this job is the only one IN THIS FILE that sets
+        # `FERRO_ASSERT_SEQUENCE` (`nightly-mutalyzer.yml` sets it too, but it is
+        # non-gating and selects only the reference-aware modules), and
         # that module holds the one test which reads the oracle's counters —
         # `the_seam_compares_when_the_flag_is_set`, the guard that a green run
         # actually compared something rather than the seam call having been

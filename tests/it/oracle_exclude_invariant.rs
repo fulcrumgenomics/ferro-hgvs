@@ -306,8 +306,11 @@ const LOCAL_RUNNER: &str = "scripts/run_oracle_suite.sh";
 /// Comment lines are skipped for the reason the awk skips them: the job's
 /// comment block *mentions* `FERRO_ASSERT_SEQUENCE` in prose, to explain why it
 /// is absent. A scan that read the prose as a setting would demand the runner
-/// arm an oracle CI does not — and the two rows that comment names (#1618,
-/// #1619) would then be red locally and green in CI.
+/// arm an oracle CI does not — and the rows that comment names would then be red
+/// locally and green in CI. Note those rows are no longer #1618/#1619, which are
+/// both closed: a selection-wide run at `674e9c8b` put the count at 5, in
+/// `issue_1487_canonical_window_overflow` (issue #1690) and
+/// `stranded_identity_member`.
 fn test_oracle_job_flags() -> Vec<String> {
     test_oracle_job_lines()
         .into_iter()
@@ -521,7 +524,9 @@ fn the_ci_oracle_selection_negates_proptest_the_sweeps_and_the_corpus_modules() 
 /// **fewer** makes a local run weaker than CI while reading as an oracle pass.
 /// Arming **more** — `FERRO_ASSERT_SEQUENCE` is the live candidate, since
 /// `test-oracle` deliberately withholds it — makes the runner red on rows no PR
-/// caused, which teaches the operator to ignore it.
+/// caused, which teaches the operator to ignore it. That is not hypothetical:
+/// arming it over this exact selection at `674e9c8b` is red, 5 tests, so a
+/// runner that armed it ahead of the job would be red on every PR.
 #[test]
 fn the_local_oracle_runner_arms_exactly_the_flags_test_oracle_arms() {
     let runner_flags = local_runner_selection().flags;
