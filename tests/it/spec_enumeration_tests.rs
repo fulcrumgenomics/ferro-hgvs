@@ -293,9 +293,29 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // an inverted range (`c.5439_5430ins6`, 5439 > 5430) that ferro refuses for
     // the RANGE, so the `ins6` violation was never reached. Upstream `565b973`
     // corrected the typo to `c.5439_5440ins6`, the range now parses, and the
-    // defect surfaces. Do NOT suppress this row to restore a 0 — the zero was
-    // the bug hiding, and #1789 tracks the fix.
-    (Status::InvariantViolationMust, 1),
+    // defect surfaces.
+    //
+    // 1 -> 0 (#1789, THIS change), and this is the one zero that is a fix rather
+    // than the bug hiding — the warning above stands for every other route to a
+    // 0 here. Ferro now refuses the size-number form (W3029), so the row
+    // `output-invariant/B8-no-size-number-forms/NM_004006.2:c.5439_5440ins6#0`
+    // leaves the enumeration entirely rather than being reclassified.
+    //
+    // Re-measured on the rebase onto `565b973`, not composed from deltas, and
+    // verified by a ROW-ID diff of the enumeration regenerated either side
+    // rather than by the counts agreeing — which matters here, because the four
+    // `PASSING_CENSUS` figures this change moves land on exactly the quadruple
+    // the pre-bump `6f85311` pin carried, and reading that coincidence as "the
+    // fixture is stale" is the obvious wrong diagnosis. Both fixtures record
+    // `spec.commit_sha == 565b973`. The whole delta is one input:
+    //
+    //   -1 row   output-invariant/…:c.5439_5440ins6   (leaves; this counter)
+    //   +3 rows  error-mode/{strict,lenient,silent}/c.5439_5440ins6
+    //   +5 rows  project-{c,g,n,p,r}/c.5439_5440ins6 -> projection-error-pinned
+    //            (3 from projection-pinned, 2 from projection-unavailable-pinned)
+    //
+    // Enumeration total 2338 -> 2340. No other row moves in either direction.
+    (Status::InvariantViolationMust, 0),
     // SHOULD-level (advisory) output invariants. Never a hard failure.
     (Status::InvariantViolationShould, 2),
     // syntax.yaml examples that do not parse into their declared axis.
@@ -632,16 +652,31 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // not composed from the two branches' deltas. They read +3 / +2 / -5 / -3,
     // netting -3 here and +1 in DIVERGENCE_BUDGET's `InvariantViolationMust`,
     // for the -2 total.
-    (Status::ProjectionPinned, 1157),
+    //
+    // #1789 (THIS change): 1157 -> 1154. Part of the single-input move accounted for
+    // in DIVERGENCE_BUDGET's `InvariantViolationMust` — all five
+    // `project-*/c.5439_5440ins6` axes become `projection-error-pinned` once the
+    // size-number form is refused. Verified by row-id diff, not by the counts.
+    (Status::ProjectionPinned, 1154),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
     // #1870: 485 -> 479. See `ProjectionPinned` above — same ten-row move.
     // 479 -> 481 at `565b973`, from the harvest change described above.
-    (Status::ProjectionUnavailablePinned, 481),
+    //
+    // #1789 (THIS change): 481 -> 479. Part of the single-input move accounted for
+    // in DIVERGENCE_BUDGET's `InvariantViolationMust` — all five
+    // `project-*/c.5439_5440ins6` axes become `projection-error-pinned` once the
+    // size-number form is refused. Verified by row-id diff, not by the counts.
+    (Status::ProjectionUnavailablePinned, 479),
     // #1870: 210 -> 220, the +10 receiving the two deltas above.
     // 220 -> 215 at `565b973`, same cause.
-    (Status::ProjectionErrorPinned, 215),
+    //
+    // #1789 (THIS change): 215 -> 220 (the +5 receiving the two deltas above). Part of the single-input move accounted for
+    // in DIVERGENCE_BUDGET's `InvariantViolationMust` — all five
+    // `project-*/c.5439_5440ins6` axes become `projection-error-pinned` once the
+    // size-number form is refused. Verified by row-id diff, not by the counts.
+    (Status::ProjectionErrorPinned, 220),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
     // `LRG_199:g.954966C>T`, `LRG_199:g.981731G>A` and `LRG_476:g.4950_39800=`,
     // one per mode — and **no row entered**, which is what says this is the LRG
@@ -681,7 +716,12 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // 288 -> 285 at spec pin `565b973`, from the same harvest change recorded on
     // `ProjectionPinned` above — not a further LRG move and not a further #1630
     // move.
-    (Status::ModeDivergencePinned, 285),
+    //
+    // #1789 (THIS change): 285 -> 288, the three new `error-mode/*/c.5439_5440ins6` rows. Part of the single-input move accounted for
+    // in DIVERGENCE_BUDGET's `InvariantViolationMust` — all five
+    // `project-*/c.5439_5440ins6` axes become `projection-error-pinned` once the
+    // size-number form is refused. Verified by row-id diff, not by the counts.
+    (Status::ModeDivergencePinned, 288),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors

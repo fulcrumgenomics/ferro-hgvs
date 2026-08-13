@@ -178,14 +178,20 @@ fn test_two_ins_same_boundary_preserved_as_overlap() {
 
 #[test]
 fn test_merge_skips_non_literal_ins() {
-    // Ins with a non-Literal payload (e.g., ins10) is not safely
+    // Ins with a non-Literal payload (e.g., insN[10]) is not safely
     // concatenable; the pair passes through unchanged.
-    let input = "NC_000001.11:g.[100G>A;100_101ins10]";
+    //
+    // The payload used to be spelled `ins10`. #1789 refuses that at normalize
+    // in every mode (`W3029`, `checklist.md:33`), so it can no longer stand in
+    // for "a non-literal payload" here — but `insN[10]` is the spelling
+    // `DNA/insertion.md:77` gives for the same claim, is equally non-literal,
+    // and reaches the same `merge` arm.
+    let input = "NC_000001.11:g.[100G>A;100_101insN[10]]";
     let result = normalize_to_string(input);
     assert!(result.contains("100G>A"), "expected 100G>A in {}", result);
     assert!(
-        result.contains("100_101ins10"),
-        "expected 100_101ins10 in {}",
+        result.contains("100_101insN[10]"),
+        "expected 100_101insN[10] in {}",
         result
     );
     assert!(result.contains(';'), "expected separator in {}", result);

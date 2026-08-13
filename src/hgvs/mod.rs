@@ -7,6 +7,7 @@ pub mod alignment_symbols;
 pub mod bare_transcript_introns;
 pub mod edit;
 pub mod genomic_offsets;
+pub mod insertion_size_counts;
 pub mod interval;
 pub mod location;
 pub mod noncoding_zones;

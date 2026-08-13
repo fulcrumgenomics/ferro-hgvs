@@ -76,7 +76,7 @@
 //! | `sequence_changed` | 4 | 0 | the output denotes different bases from the input; a member was dropped |
 //! | `non_idempotent_outputs` | ~~7~~ **4** | 4 | the output is not its own fixed point. Re-blessed: see the note below |
 //! | `conflicts_accepted` | 72 | 72 | a conflicting allele was normalized instead of refused — nested, partially overlapping, and two insertions at one interbase |
-//! | `prohibited_absolute_accepted` | ~~32~~ **24** | ~~32~~ **24** | a shape the spec calls "not allowed" was accepted. Re-blessed by #1628 |
+//! | `prohibited_absolute_accepted` | ~~32~~ ~~24~~ ~~8~~ **0** | ~~32~~ ~~24~~ ~~8~~ **0** | a shape the spec calls "not allowed" was accepted. Re-blessed by #1628 (genomic offsets) and then to zero by #1789 (`ins6`) |
 //! | `prohibition_violating_outputs` | ~~32~~ ~~8~~ **0** | ~~32~~ ~~8~~ **0** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627 and then to zero by #1628: see the fourth section below |
 //!
 //! `guard_violations` is **0 of 210 guarded rows**, which is a real negative
@@ -274,8 +274,8 @@
 //! two counters #1627 moved are the two the clause was actually in, and the
 //! then-surviving 32 absolute acceptances were `checklist.md:33`'s `ins6` (24)
 //! plus `checklist.md:16`/`:45`'s genomic offset and hyphen range (4 + 4).
-//! **#1628 took the second group**, so that counter now reads 24 and the
-//! residue is `ins6` alone — #1627's remaining half.
+//! **#1628 took the second group** and **#1789 takes the first**, so the counter
+//! now reads 0 and no absolute-prohibition residue remains.
 //!
 //! **Every rank-2, idempotency and sequence-preservation figure is unchanged**,
 //! in both directions, which is what a refusal of un-denotable inputs should
@@ -453,6 +453,45 @@
 //!   continues a run and `AA` always does. Holding the transcript-direction
 //!   intron fixed makes both strands agree. See `defect_371_transcript_exit.rs`,
 //!   whose `junction_provider` takes the intron as a parameter for this reason.
+//!
+//! # RE-BLESSED (5 of 5) — #1789, the size-count insertion
+//!
+//! `checklist.md:33` says a description like `c.5439_5430ins6` "is not allowed,
+//! the inserted sequence (for `ins6`, e.g., `TGCCAT`) should be specified", and
+//! `DNA/insertion.md:22` / `RNA/insertion.md:20` enumerate the payload forms
+//! without a bare count among them. Ferro accepted `ins6` in every mode and
+//! re-emitted it. It now refuses: strict at parse, lenient and silent at
+//! normalize, per the decided `rulings[absolute-prohibition-enforcement-stage]`
+//! — which names `checklist.md:33` in its own clause list.
+//!
+//! **One figure moved, DOWN, identically in both directions:**
+//!
+//! | figure | was | now | direction |
+//! |---|---|---|---|
+//! | 3' and 5' `prohibited_absolute_accepted` | 32 | **8** | improves by 24 |
+//!
+//! **`prohibition_violating_outputs` deliberately does NOT move**, and its
+//! staying at 8 is this measurement's useful half. That counter was already 8
+//! after #1627, and its per-clause decomposition — pinned by
+//! `every_prohibition_violating_output_is_a_re_emitted_prohibited_input` — is
+//! entirely `checklist.md:16`. The `ins6` rows were never in it: this axis's
+//! output-side predicate is a text check for a `g.` offset and a hyphen range,
+//! and `ins6` is neither. So the input counter is the only one the clause was
+//! in, which is the mirror image of #1627's split and is why both are worth
+//! stating.
+//!
+//! **Every rank-1, rank-2, idempotency and sequence-preservation figure is
+//! unchanged**, in both directions — `outputs`, `declined`, `converged`,
+//! `split_*`, `non_idempotent_outputs`, `sequence_changed`,
+//! `outputs_denoting_no_sequence`, `conflicts_accepted` and `guard_violations`
+//! all hold. That is what refusing un-denotable inputs should look like: the 24
+//! refused rows contributed no confluence family and no sequence, so nothing
+//! they leave behind can move.
+//!
+//! **Nothing to promote to `spec_corpus_regressions.rs`** — no row newly fails.
+//! Two rows there *stopped* failing and are re-blessed in place; the guard that
+//! replaces them is `issue_1789_insertion_size_count.rs`, which also covers the
+//! `ins(6)` spelling and the `r.` axis, neither of which the corpus generates.
 //!
 //! # RE-BLESSED (3 of 3) — #1704, the junction exit's accession
 //!
@@ -829,13 +868,13 @@ pub(crate) const THREE_PRIME: Census = Census {
     sequence_changed: 4,
     // -- refusal --
     conflicts_accepted: 72,
-    // Re-blessed DOWN by #1628, by the 8 genomic-offset rows (4 ×
+    // Re-blessed DOWN to zero. #1628 took the 8 genomic-offset rows (4 ×
     // `checklist.md:16-genomic-has-no-offsets`, 4 ×
-    // `checklist.md:45-range-is-underscore`). Strict refuses them at parse
-    // (`W4009`); lenient and silent accept the input and then fail at normalize,
-    // which is why they leave the LENIENT counter this figure measures. The
-    // residual 24 are `checklist.md:33`'s `ins6`, which is #1627's open half.
-    prohibited_absolute_accepted: 24,
+    // `checklist.md:45-range-is-underscore`) and #1789 takes the 24
+    // `checklist.md:33` `ins6` rows. Strict refuses each at parse (`W4009`,
+    // `W3029`); lenient and silent accept the input and then fail at normalize,
+    // which is why they leave the LENIENT counter this figure measures.
+    prohibited_absolute_accepted: 0,
     // Re-blessed DOWN by #1627, same 24 rows as `prohibition_violating_outputs`
     // above. The residual 16 are `checklist.md:20`'s bare-transcript intronic
     // rows, which lenient is CORRECT to accept — see
@@ -938,8 +977,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     non_idempotent_outputs: 4,
     sequence_changed: 0,
     conflicts_accepted: 72,
-    // Re-blessed DOWN by #1628, by the same 8 rows as at 3'.
-    prohibited_absolute_accepted: 24,
+    // Re-blessed DOWN to zero by #1628 and #1789, by the same 32 rows as at 3'.
+    prohibited_absolute_accepted: 0,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
     prohibited_conditional_accepted: 16,
     guard_violations: 0,
@@ -1014,7 +1053,7 @@ pub(crate) struct Census {
     ///
     /// **Not decoration.** `corpus_prohibited_inputs.rs` re-measures three of
     /// the four refusal counters in strict mode and two of them move
-    /// (`prohibited_absolute_accepted`'s 32 stay accepted) —
+    /// (`prohibited_absolute_accepted`'s residual 8 stay accepted) —
     /// so a census compared against one taken under a different mode is a
     /// category error, and until this field existed nothing in the artifact or
     /// the pin said which mode either was. The decided ruling

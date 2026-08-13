@@ -1404,6 +1404,58 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3029",
+        CodeInfo {
+            code: "W3029",
+            name: "InsertionSizeCountWithoutSequence",
+            summary: "Insertion sized by a count instead of stating the inserted sequence.",
+            explanation: "checklist.md item 3 (\"Insertions\") asks at :32 \"do you provide the \
+                inserted sequence?\" and answers at :33: \"Describing a variant as \
+                c.5439_5430ins6 is not allowed, the inserted sequence (for ins6, e.g., \
+                TGCCAT) should be specified.\" The example is printed class=\"invalid\", and \
+                \"not allowed\" is MUST-level under style.md:9. Both axis clauses say it \
+                constructively by enumerating what an inserted sequence may be — \
+                DNA/insertion.md:22 and RNA/insertion.md:20 offer the nucleotides inserted, \
+                a range of the same reference, or a range of another reference — and neither \
+                list contains a bare count. DNA/insertion.md:119 reaches the same verdict \
+                about a reported description: \"ins24 does not define the sequence \
+                inserted\". Nothing is lost by refusing it: when the NUMBER of inserted \
+                nucleotides is known but their identity is not, the spec's own spelling is \
+                insN[6] (DNA/insertion.md:77) or, on r., insn[6] (RNA/insertion.md:41), and \
+                ferro accepts both. Strict rejects at parse; lenient and silent accept at \
+                parse (lenient warns) and then fail at normalize, because a count names no \
+                bases to shuffle. There is no auto-correction — ferro will not invent the \
+                bases, and re-spelling as insN[6] would assert they are unspecified rather \
+                than merely unwritten. The check is AST-keyed: c.849_850ins858_895 is also \
+                `ins` followed by digits and is the sanctioned range form. Sibling rule to \
+                W3011/W3023, which enforce the same checklist item's :49 bullet for del/dup. \
+                A count RANGE (ins(10_20)) is deliberately NOT this code — ferro's AST uses \
+                one node for it and for an uncertain position range, which is sanctioned.",
+            category: CodeCategory::Format,
+            // `CodeInfo::format_detailed` zips these two lists into
+            // Incorrect/Correct PAIRS, so entry `i` of each must describe the
+            // same locus — otherwise `ferro explain W3029` prints a "correct"
+            // spelling on a different accession from the "incorrect" one it is
+            // offered against.
+            bad_examples: &[
+                "NM_004006.2:c.5439_5440ins6",
+                "NM_004006.2:c.5439_5440ins(6)",
+                "NC_000023.10:g.32717298_32717299ins100",
+            ],
+            good_examples: &[
+                "NM_004006.2:c.5439_5440insTGCCAT",
+                "NM_004006.2:c.5439_5440insN[6]",
+                "NC_000023.10:g.32717298_32717299insN[100]",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/insertion/",
+            ),
+            related_codes: &["W3011", "W3023", "W3027"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
