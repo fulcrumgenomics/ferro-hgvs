@@ -259,6 +259,13 @@ fn census(fixture: &Fixture) -> BTreeMap<usize, usize> {
 }
 
 fn main() {
+    // Refuse a `FERRO_PARTITION` naming no arm before any work, so a
+    // misspelling cannot be served by the shipped rule under a candidate's
+    // name. See `tests/it/partition_switch_wiring.rs`.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        std::process::exit(1);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let check = args.iter().any(|a| a == "--check");
     let output: PathBuf = args

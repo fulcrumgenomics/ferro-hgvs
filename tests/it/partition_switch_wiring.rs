@@ -16,9 +16,10 @@
 //!
 //! - the behaviour, end to end, through the `ferro` binary — a misspelling exits
 //!   non-zero with the message, a real arm still runs, and `--help` keeps working;
-//! - the completeness, over `Cargo.toml`'s own `[[bin]]` table — so a binary
-//!   added later cannot skip the call and leave `README.md`'s "every binary in
-//!   this repository reports it" quietly false.
+//! - the completeness, over `Cargo.toml`'s own `[[bin]]` **and** `[[example]]`
+//!   tables — so a target added later cannot skip the call and leave
+//!   `README.md`'s "every binary and example in this repository reports it"
+//!   quietly false.
 //!
 //! The second is a source scan, so it proves the call is *written*, not that it
 //! is reached. The first is what proves it is reached, and it is written against
@@ -161,54 +162,124 @@ fn help_still_works_when_the_partition_switch_names_no_arm() {
     );
 }
 
-/// Every `[[bin]]` target's source calls `partition_switch_startup_error`.
+/// Every target declared in `Cargo.toml` — `[[bin]]` **and** `[[example]]` —
+/// whose source calls `partition_switch_startup_error`.
 ///
 /// Parsed as TOML rather than substring-matched, for the reason
-/// `generator_completeness.rs` gives: a `path` inside a comment, or under a
-/// `[[example]]` table, must not count.
+/// `generator_completeness.rs` gives: a `path` inside a comment must not count,
+/// and the two tables have to be told apart.
 ///
-/// The denominator is asserted non-zero, so "0 of 0 binaries are missing it"
+/// # Why the denominator is the manifest, and not a list kept here
+///
+/// This test used to read the `[[bin]]` table and then **append one example by
+/// hand** — `dump_normalized_corpus`, the harness somebody had remembered to
+/// wire. Every other bake-off example was outside its denominator, so the
+/// completeness it asserted was completeness over a hand-written list.
+///
+/// Measured on `examples/dump_confluence_divergences.rs`, which was outside it:
+/// a **release** build run with `FERRO_PARTITION=canonicl` printed a census
+/// byte-identical to the `live` one, on empty stderr, at exit 0. A misspelled
+/// arm and a correct run of the shipped arm were the same observation. A
+/// **debug** build was no better as an instrument — the library's own refusal
+/// fires there, but `catch_unwind` in the harness swallows it per row, so the
+/// run still exits 0 and reports `divergent: 0`, which reads as a candidate
+/// that converges everything.
+///
+/// So the fix is not a more central refusal — `partition_rule_from_env` already
+/// refuses centrally, and in a debug build it did refuse, 47 377 times, without
+/// the run failing. What was wrong is *where the refusal is delivered*: at a
+/// process boundary, which is per-entry-point by construction. Making the
+/// denominator the manifest's own tables is what removes the "targets somebody
+/// remembered to add" step, since a target that is not in `Cargo.toml` does not
+/// build at all.
+///
+/// **That last clause is a property of `Cargo.toml`, not of cargo.** Cargo
+/// auto-discovers `src/bin/*.rs`, `examples/*.rs` and `benches/*.rs` unless
+/// told not to, and an auto-discovered target would build, run, and sit outside
+/// this denominator — the same hole under a different name. `autoexamples`,
+/// `autobins` and `autobenches` are therefore all `false` in `[package]`, which
+/// is what makes "not in `Cargo.toml`" and "does not build" the same statement.
+/// If any of the three is ever turned back on, this test stops being complete
+/// even though it still passes.
+///
+/// The obligation is uniform rather than scoped to the targets that normalize
+/// today. A target that does not normalize loses nothing by refusing a value
+/// naming no arm — the caller asked for something that does not exist — and a
+/// uniform rule has no per-target judgement to get wrong when an example starts
+/// normalizing later.
+///
+/// # The one table deliberately left out: `[[bench]]`
+///
+/// Three of the four declared benches normalize (`benches/benchmarks.rs`,
+/// `benches/baseline_head.rs`, `benches/seqfirst_align.rs`), so the argument
+/// above reaches them and they are **not** covered. The obstacle is mechanical
+/// rather than principled: each ends in `criterion_main!`, which *generates* the
+/// `fn main`, so there is no hand-written entry point to put the call in without
+/// hand-expanding that macro and taking on its argument handling. A bake-off run
+/// through `cargo bench` under a misspelled arm therefore still times the
+/// shipped rule under a candidate's name. Wiring them means replacing
+/// `criterion_main!` in all four; until someone does, the exclusion is stated
+/// here rather than left to be rediscovered from the absence of a table read.
+///
+/// Both denominators are asserted non-empty, so "0 of 0 targets are missing it"
 /// cannot pass as a result — the failure mode this repository has been bitten by
 /// often enough to make it a house rule.
 #[test]
-fn every_binary_target_reports_a_refused_partition_switch() {
+fn every_binary_and_example_target_reports_a_refused_partition_switch() {
     let manifest_text =
         std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("read Cargo.toml");
     let manifest: toml::Value = manifest_text.parse().expect("parse Cargo.toml as TOML");
 
-    let mut sources = BTreeSet::new();
-    for entry in manifest
-        .get("bin")
-        .and_then(toml::Value::as_array)
-        .expect("Cargo.toml declares at least one [[bin]] target")
-    {
-        let name = entry
-            .get("name")
-            .and_then(toml::Value::as_str)
-            .expect("every [[bin]] has a name");
-        let path = entry
-            .get("path")
-            .and_then(toml::Value::as_str)
-            .unwrap_or_else(|| panic!("[[bin]] {name} declares no path"));
-        sources.insert((name.to_string(), path.to_string()));
+    /// The targets declared under one manifest table, as `(name, source path)`.
+    ///
+    /// `default_dir` supplies cargo's own path convention for the table, since
+    /// `[[example]]` entries here declare only a name — the file is
+    /// `examples/<name>.rs` — while `[[bin]]` entries all declare a path
+    /// explicitly and are required to keep doing so.
+    fn targets(
+        manifest: &toml::Value,
+        table: &str,
+        default_dir: Option<&str>,
+    ) -> BTreeSet<(String, String)> {
+        let mut found = BTreeSet::new();
+        for entry in manifest
+            .get(table)
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("Cargo.toml declares at least one [[{table}]] target"))
+        {
+            let name = entry
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .unwrap_or_else(|| panic!("every [[{table}]] has a name"));
+            let path = match entry.get("path").and_then(toml::Value::as_str) {
+                Some(path) => path.to_string(),
+                None => match default_dir {
+                    Some(dir) => format!("{dir}/{name}.rs"),
+                    None => panic!("[[{table}]] {name} declares no path"),
+                },
+            };
+            found.insert((name.to_string(), path));
+        }
+        found
     }
+
+    let bins = targets(&manifest, "bin", None);
     assert!(
-        sources.len() >= 5,
+        bins.len() >= 5,
         "expected the five known binaries (ferro, ferro-web, ferro-benchmark and \
-         the two spec generators); found {sources:?}"
+         the two spec generators); found {bins:?}"
+    );
+    let examples = targets(&manifest, "example", Some("examples"));
+    assert!(
+        examples.len() >= 20,
+        "expected the repository's ~23 declared examples — the bake-off \
+         harnesses, the window extractors and the artifact generators; found \
+         {examples:?}"
     );
 
-    // The bake-off harness is not a `[[bin]]`, but it is the entry point a
-    // blast-radius measurement runs through, so it carries the same obligation:
-    // a refused value there yields an empty diff AND a silent decline census.
-    let mut expected: Vec<(String, String)> = sources.into_iter().collect();
-    expected.push((
-        "dump_normalized_corpus".to_string(),
-        "examples/dump_normalized_corpus.rs".to_string(),
-    ));
-
-    let missing: Vec<&str> = expected
+    let missing: Vec<&str> = bins
         .iter()
+        .chain(examples.iter())
         .filter(|(_, path)| {
             let text = std::fs::read_to_string(repo_root().join(path))
                 .unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -219,10 +290,10 @@ fn every_binary_target_reports_a_refused_partition_switch() {
 
     assert!(
         missing.is_empty(),
-        "these entry points normalize without reporting a refused \
-         FERRO_PARTITION, so they would serve the shipped rule under a \
-         candidate's name in a release build: {missing:?}. Call \
-         `ferro_hgvs::normalize::partition_switch_startup_error()` after \
+        "these entry points run without reporting a refused FERRO_PARTITION, so \
+         a misspelled arm serves the shipped rule under a candidate's name and \
+         the run cannot be told apart from a correct `live` one: {missing:?}. \
+         Call `ferro_hgvs::normalize::partition_switch_startup_error()` after \
          argument parsing and fail on `Some`."
     );
 }
