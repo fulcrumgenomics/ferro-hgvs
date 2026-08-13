@@ -751,6 +751,9 @@ pub(crate) const THREE_PRIME: Census = Census {
     // Equals `CorpusShape::guarded_rows` (210) exactly, which is the check that
     // every guarded row's authored spelling re-parsed and was actually decided.
     guard_evaluations: 210,
+    // -- instruments (#1710), kept across the #1616 rebase --
+    coding_axis_separation_two_or_more_rows: 997,
+    coding_axis_separation_two_or_more_merges: 0,
 };
 
 /// The rows that still merge a frameless separation of one, named.
@@ -845,6 +848,9 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // cross-check: a direction that stopped evaluating would show up here rather
     // than as a quietly unchanged zero above.
     guard_evaluations: 210,
+    // -- instruments (#1710), kept across the #1616 rebase --
+    coding_axis_separation_two_or_more_rows: 997,
+    coding_axis_separation_two_or_more_merges: 0,
 };
 
 /// The corpus's shape, independent of any property measured over it.
@@ -1048,6 +1054,66 @@ pub(crate) struct Census {
     /// so from two counters and a reader has to compose them. This asserts it
     /// directly, at the site.
     pub(crate) guard_evaluations: usize,
+    /// The denominator [`Self::coding_axis_separation_two_or_more_merges`] is
+    /// `n of` — coding-axis rows separated by two or more unchanged nucleotides
+    /// that the measurement actually reached and evaluated.
+    ///
+    /// Pinned, and asserted non-zero. A separate figure from
+    /// `SHAPE.coding_axis_separation_two_or_more_rows` on purpose: that one says the
+    /// generator built the rows, this one says the run *normalized* them. A
+    /// measurement whose every eligible row declined would report `0` merges
+    /// with the generator-side denominator still healthy, which is the shape
+    /// of vacuity this axis exists to refuse.
+    pub(crate) coding_axis_separation_two_or_more_rows: usize,
+    /// Coding-axis multi-member alleles whose authored spelling normalized to
+    /// **fewer members than were authored** — i.e. the members were merged
+    /// across the two or more unchanged nucleotides between them.
+    ///
+    /// # An instrument. It counts a population; it does not judge it
+    ///
+    /// This counter reports how often a merge of this shape happens. It does
+    /// **not** assert the merge is wrong. Contrast [`Self::guard_violations`],
+    /// which counts a shape whose merge implements a **rejected** proposal and
+    /// is therefore a verdict. A count of `n` here is a measurement of how large
+    /// the merged population is, not a claim that `n` rows are defective.
+    ///
+    /// # Everything else about this population is stated ONCE, and not here
+    ///
+    /// Why the floor is two; what the sub-floor population contains and which
+    /// part of it is a known defect; which three ruling records govern which
+    /// part of it, and therefore what a rise and a zero each mean; and why this
+    /// is a second counter rather than a widened guard — all of that is on
+    /// `spec_corpus::is_coding_axis_separation_two_or_more_shape`.
+    ///
+    /// It is deliberately not restated here. The first revision of this change
+    /// carried that argument in seven places, and two of the copies ended up
+    /// contradicting each other 406 lines apart in this file — one saying ferro
+    /// implements the codon exception and it accounts for the sub-floor merges,
+    /// the other retracting exactly that. A pointer cannot drift.
+    ///
+    /// # The numerator, and what it can and cannot see
+    ///
+    /// [`coding_axis_merge_observed`] is the test: `members_of(output).len() <
+    /// row.members`. It was `< 2`, which on the 313 of 997 flagged rows carrying
+    /// three or four members could only ever see a collapse **all the way** to
+    /// one member — a 4-member row merged to 2 counted as zero. Below the floor
+    /// that blindness is 25 of 41 merges.
+    ///
+    /// It still cannot see a merge whose output is unparseable, since the count
+    /// is taken on a parsed output; `unparseable_outputs` is the counter for
+    /// that and is pinned at 0.
+    ///
+    /// # Pinned at zero in both directions, and that zero is a measurement
+    ///
+    /// The pass that merges this population under the canonical-coalesced
+    /// evaluation arm — `merge::coalesce_payload_alignment_split`, reached only
+    /// when `payload_coalesce_applies` sees `PartitionRule::CanonicalCoalesced`
+    /// — does not run on the shipped rule, so the shipping arm merges none of
+    /// these rows. That is a mechanical reason rather than an empirical
+    /// coincidence, and the counter is separately shown able to move: see the
+    /// module docs' arm table and
+    /// [`the_coding_axis_merge_counter_can_observe_a_merge`].
+    pub(crate) coding_axis_separation_two_or_more_merges: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,6 +1642,7 @@ impl Census {
             prohibited_absolute_accepted,
             prohibited_conditional_accepted,
             guard_violations,
+            guard_evaluations,
             coding_axis_separation_two_or_more_rows,
             coding_axis_separation_two_or_more_merges,
         } = other;
@@ -1597,6 +1664,7 @@ impl Census {
         self.prohibited_absolute_accepted += prohibited_absolute_accepted;
         self.prohibited_conditional_accepted += prohibited_conditional_accepted;
         self.guard_violations += guard_violations;
+        self.guard_evaluations += guard_evaluations;
         self.coding_axis_separation_two_or_more_rows += coding_axis_separation_two_or_more_rows;
         self.coding_axis_separation_two_or_more_merges += coding_axis_separation_two_or_more_merges;
     }
