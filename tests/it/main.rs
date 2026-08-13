@@ -435,6 +435,7 @@ mod mutalyzer_normalize_tests;
 mod mutalyzer_tests;
 mod network_benchmark_tests;
 mod normalization_contract_doc;
+mod normalization_stage_audit_doc;
 mod normalization_transcripts_exon_contract;
 mod normalize_axis_preserving;
 mod normalize_config_disambiguation;

@@ -326,6 +326,11 @@ from, and why. Those records are published in full, with their clause quotes, in
 That document is generated from the records and gated against them, so it cannot drift; it
 deliberately does not restate the seven rules above, which are stated only here.
 
+The inverse index — for each stage of the normalizer, *which* record or clause governs it, and
+which decisions are governed by **nothing** — is
+[docs/NORMALIZATION_STAGE_AUDIT.md](docs/NORMALIZATION_STAGE_AUDIT.md). Read that one if what
+you want to know is whether a behaviour you are looking at was chosen or merely happened.
+
 ## Deriving a description from sequences
 
 If what you have is **bases** rather than a description — a window out of a BAM, a VCF row, an
