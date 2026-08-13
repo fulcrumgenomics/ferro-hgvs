@@ -1276,9 +1276,69 @@ fn build_genome_merged(template: &GenomeVariant, merged: Anchor) -> GenomeVarian
     }
 }
 
+/// Name a cis-collapse anchor coordinate on a signed transcript axis
+/// (`c.` / `n.` / `r.`), where the integer `0` names no nucleotide.
+///
+/// The collapse works in dense window arithmetic — `del_start - 1` for a group
+/// that nets to a pure insertion at the window's 5' edge — so the coordinate
+/// immediately 5' of `1` arrives here as `0`. The `c.`/`n.`/`r.` axes skip
+/// zero: `background/numbering.md:31`, *"there is no nucleotide `c.0`"*, and
+/// `:29` numbers the bases upstream of the start codon `c.-1`, `c.-2`, `c.-3`.
+/// So the position below `1` is named `-1`, which is the same step-down
+/// `Normalizer::cds_to_tx_pos` and `tx_to_cds_pos` make for issue #97.
+///
+/// Only `0` is remapped. The collapse restricts a group to the positive body
+/// region (issue #920) and refuses a window starting below `1`, so a body
+/// anchor endpoint is never negative on entry, and `0` arises only from the
+/// 5'-edge insertion case above.
+///
+/// Without this the builders emit `CdsPos { base: 0 }` — rendered `c.?` by
+/// `CdsPos::Display`, since `CDS_BASE_UNKNOWN` *is* `0`, so a fully known
+/// position is described as an unknown one — and `TxPos`/`RnaPos { base: 0 }`,
+/// rendered as the literal `n.0`/`r.0`, which ferro's own parser rejects.
+/// Issue #1772.
+///
+/// Deliberately **not** applied to the genomic axis: `g.`/`m.` have no negative
+/// coordinate, so an insertion 5' of `g.1` has no two-position anchor and needs
+/// its own answer rather than this one.
+///
+/// # The citation above scopes `c.`, and the three axes are not equally served
+///
+/// `:29` and `:31` sit under `numbering.md:28`'s "untranslated region (UTR)"
+/// bullet inside *"### coding DNA reference sequences"*, so on its own the
+/// clause licenses `-1` on the `c.` axis only. Read what each axis inherits
+/// before citing it here:
+///
+/// - **`c.`** — governed directly. `c.-1` is a conformant 5'UTR position.
+/// - **`r.`** — `:58` gives an RNA reference "that of the associated **coding
+///   or non-coding** DNA reference sequence", so `r.-1` is conformant against a
+///   coding RNA reference and is not against a non-coding one. This builder,
+///   like the parser (`src/hgvs/noncoding_zones.rs`), cannot tell which it has.
+/// - **`n.`** — **not** governed by `:31`. The non-coding DNA axis is `:50`-`:54`,
+///   which grants `n.1..n.N` plus intronic offsets and nothing else, and `:54`
+///   forbids naming a nucleotide beyond a transcript's boundaries using that
+///   transcript. PR #1751 (merged) implements exactly that: `n.-N` is refused at
+///   **strict** parse (`W4008`) and accepted only by lenient, silent and the
+///   bare [`crate::parse_hgvs`] entry — the last kept open for five real ClinVar
+///   rows.
+///
+/// So on `n.` this is a strict improvement and not a resolution: it replaces
+/// `n.0`, which every mode rejects and which names a nucleotide no axis has,
+/// with `n.-1`, which strict still refuses. The residue is the same open
+/// question as the genomic axis's — what a cis group nets to a pure insertion 5'
+/// of the first base of a transcript should be called at all — and it belongs
+/// with #1772 rather than to this rename.
+fn name_on_zeroless_axis(base: i64) -> i64 {
+    if base == 0 {
+        -1
+    } else {
+        base
+    }
+}
+
 fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
     let (location, edit) = build_naedit(merged, |region, b| match region {
-        Region::Cds | Region::FivePrimeUtr => CdsPos::new(b),
+        Region::Cds | Region::FivePrimeUtr => CdsPos::new(name_on_zeroless_axis(b)),
         Region::ThreePrimeUtr => CdsPos {
             base: b,
             offset: None,
@@ -1296,7 +1356,7 @@ fn build_cds_merged(template: &CdsVariant, merged: Anchor) -> CdsVariant {
 
 fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
     let (location, edit) = build_naedit(merged, |region, b| match region {
-        Region::Tx | Region::TxUpstream => TxPos::new(b),
+        Region::Tx | Region::TxUpstream => TxPos::new(name_on_zeroless_axis(b)),
         Region::TxDownstream => TxPos::downstream(b),
         _ => unreachable!("non-n. region {:?} on TxVariant", region),
     });
@@ -1309,7 +1369,7 @@ fn build_tx_merged(template: &TxVariant, merged: Anchor) -> TxVariant {
 
 fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
     let (location, edit) = build_naedit(merged, |region, b| match region {
-        Region::Rna | Region::FivePrimeUtr => RnaPos::new(b),
+        Region::Rna | Region::FivePrimeUtr => RnaPos::new(name_on_zeroless_axis(b)),
         Region::ThreePrimeUtr => RnaPos::utr3(b),
         _ => unreachable!("non-r. region {:?} on RnaVariant", region),
     });
@@ -12792,6 +12852,104 @@ mod tests {
             cached_introns: std::sync::OnceLock::new(),
         });
         provider
+    }
+
+    /// A cis group that nets to a pure insertion at the 5' edge of its window
+    /// must anchor on `-1`, never on the axis's non-existent `0`.
+    ///
+    /// # Why this asserts the intermediate rather than the final string
+    ///
+    /// `collapse_overlapping_cis_edits` is the producer, and on the `c.` and
+    /// `r.` axes its output is silently repaired downstream: the `base == 0`
+    /// arms in `Normalizer::cds_to_tx_pos` and `rna_to_tx_pos` map `0` to
+    /// `cds_start - 1`, which happens to be the correct transcript coordinate
+    /// for `-1`. So `NM_TEST.1:c.[1A>G;1dup]` already normalizes to
+    /// `c.-1dup` end-to-end, and a test on that string passes with the defect
+    /// present. Asserting here, on what the collapse itself builds, is what
+    /// makes this a guard rather than a change detector — and it keeps holding
+    /// when those conversion arms are eventually retired (they are a separate
+    /// change, needing their own ruling).
+    ///
+    /// The `n.` axis has no such arm, which is why it is the one that escapes:
+    /// before this fix `NM_TEST.1:n.[1G>A;1dup]` normalized to the literal
+    /// `n.0_1insA`, a description `parse_hgvs` rejects. That is asserted too,
+    /// as the user-visible half. Issue #1772.
+    #[test]
+    fn a_five_prime_edge_insertion_anchors_below_one_not_on_zero() {
+        let provider = bounds_transcript_provider();
+        // (members, expected collapsed member)
+        let cases = [
+            (
+                ["NM_TEST.1:c.1A>G", "NM_TEST.1:c.1dup"],
+                "NM_TEST.1:c.-1_1insG",
+            ),
+            (
+                ["NM_TEST.1:n.1G>A", "NM_TEST.1:n.1dup"],
+                "NM_TEST.1:n.-1_1insA",
+            ),
+            (
+                ["NM_TEST.1:r.1a>g", "NM_TEST.1:r.1dup"],
+                "NM_TEST.1:r.-1_1insg",
+            ),
+        ];
+        for (members, expected) in cases {
+            let parsed: Vec<_> = members
+                .iter()
+                .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
+                .collect();
+            let collapsed = collapse_overlapping_cis_edits(parsed, AllelePhase::Cis, &provider);
+            let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
+            assert_eq!(
+                rendered,
+                vec![expected.to_string()],
+                "{members:?} must collapse onto a `-1` anchor"
+            );
+            // The half a user sees: ferro must be able to read back what it
+            // wrote. `n.0_1insA` and `r.0_1insg` both failed this before.
+            //
+            // `parse_hgvs` is the bare, mode-less entry, and on the `n.` row
+            // that is load-bearing rather than incidental: PR #1751 refuses
+            // `n.-N` at *strict* parse (`W4008`) while lenient, silent and this
+            // entry keep accepting it, for the five real ClinVar rows named in
+            // `src/hgvs/noncoding_zones.rs`. So this assertion says the output
+            // is readable on the entry every `ferro` subcommand uses — not that
+            // `n.-1_1insA` is conformant on the non-coding axis, which
+            // `numbering.md:52`/`:54` say it is not. See
+            // `name_on_zeroless_axis`'s doc comment for why that residue is
+            // still an improvement over `n.0`, and #1772 for where it is owed.
+            for r in &rendered {
+                assert!(
+                    parse_hgvs(r).is_ok(),
+                    "collapsed output {r} must re-parse (from {members:?})"
+                );
+            }
+        }
+    }
+
+    /// The same geometry away from the axis origin is untouched — the fix
+    /// remaps the single coordinate that names no nucleotide and nothing else.
+    #[test]
+    fn an_interior_insertion_anchor_is_unchanged() {
+        let provider = bounds_transcript_provider();
+        let cases = [
+            (
+                ["NM_TEST.1:c.2A>T", "NM_TEST.1:c.2dup"],
+                "NM_TEST.1:c.2_3insT",
+            ),
+            (
+                ["NM_TEST.1:n.13A>G", "NM_TEST.1:n.13dup"],
+                "NM_TEST.1:n.12_13insG",
+            ),
+        ];
+        for (members, expected) in cases {
+            let parsed: Vec<_> = members
+                .iter()
+                .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
+                .collect();
+            let collapsed = collapse_overlapping_cis_edits(parsed, AllelePhase::Cis, &provider);
+            let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
+            assert_eq!(rendered, vec![expected.to_string()], "{members:?}");
+        }
     }
 
     fn overrun(descriptor: &str, provider: &MockProvider) -> Option<OutOfBoundsCoordinate> {
