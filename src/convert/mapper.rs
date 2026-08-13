@@ -6,10 +6,18 @@
 //!
 //! | System | Basis | Notes |
 //! |--------|-------|-------|
-//! | Genomic | 0-based | Half-open intervals for exons |
+//! | Genomic | 1-based | Closed `[start, end]` exon intervals ([`crate::reference::transcript::Exon`]); `GenomicLocation.position` is an HGVS `g.` number |
 //! | Transcript (tx) | 1-based | `TxPos.base` is 1-based |
 //! | CDS (c.) | 1-based | `CdsPos.base` is 1-based, negative for 5'UTR |
 //! | Protein (p.) | 1-based | `ProtPos.number` is 1-based |
+//!
+//! The genomic row is 1-based **inclusive on both ends** because this mapper only
+//! ever reads a materialised [`crate::reference::transcript::Transcript`], never raw
+//! cdot JSON: `genomic_to_tx` tests `g_start <= pos <= g_end` against
+//! `Exon::genomic_start`/`genomic_end`, which are 1-based inclusive by construction
+//! (whichever loader built them has already converted). Raw cdot's 0-based half-open
+//! genomic bounds are a different layer entirely and never reach this module — see
+//! [`crate::coords`] for that layer and [`crate::data::cdot`] for the in-memory one.
 //!
 //! ## Key conversions:
 //! - CDS → Tx: `cds_to_tx()` - accounts for CDS start/end and UTR regions

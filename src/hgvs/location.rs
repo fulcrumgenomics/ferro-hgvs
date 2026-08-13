@@ -135,7 +135,13 @@ impl fmt::Display for GenomePos {
 /// Positions with * prefix are downstream of stop codon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CdsPos {
-    /// Base position in CDS (can be negative for 5' UTR)
+    /// Base position in CDS, **1-based** (`c.1` is the A of the start codon).
+    ///
+    /// Negative for 5' UTR, counting back from `c.1` with no zero in between, so
+    /// `c.-1` is the base immediately before the start codon. With `utr3`, counts
+    /// forward from the stop codon (`c.*1`). The value `0` is not a position: it is
+    /// [`CDS_BASE_UNKNOWN`], the sentinel for `c.?`, and also the placeholder `base`
+    /// carried by a `special` position.
     pub base: i64,
     /// Intronic offset (+ for downstream, - for upstream of exon)
     pub offset: Option<i64>,
@@ -306,7 +312,11 @@ impl fmt::Display for CdsPos {
 /// (e.g., n.*5 is 5 bases after the transcript end).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxPos {
-    /// Position on transcript (can be negative for upstream positions)
+    /// Position on transcript, **1-based** (`n.1` is the first transcribed base).
+    ///
+    /// Negative for positions upstream of the transcript start, counting back from
+    /// `n.1` with no zero in between, so `n.-1` is the base immediately before it.
+    /// With `downstream`, counts forward from the transcript end (`n.*1`).
     pub base: i64,
     /// Intronic offset
     pub offset: Option<i64>,
