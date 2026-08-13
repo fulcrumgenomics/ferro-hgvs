@@ -237,6 +237,71 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---|---|---|---|
 | `NG_008939.1:g.5207_5212delins[4300_4309inv;4310_4320]` | genomic | spec_citation | — | — |
 
+### genomic delins at separation one: ferro describes individually, mutalyzer merges
+
+Spec: `recommendations/general.md:34; recommendations/DNA/delins.md:81`
+
+`general.md:34` ("two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'") and its restatement at `DNA/delins.md:81` ("preferably") state the individual form as PREFERRED. ferro emits it on the genomic axis; mutalyzer merges into one spanning delins. BOTH FORMS ARE CONFORMANT: `rulings[separation-rule-force-modal-or-negation]` grades the clause as a README RULE 2 preference, not rule 1, so this cluster must never be cited as a conformance finding. The prohibition line in this family is at separation ZERO (`substitution.md` L32, class="invalid"); these rows are at separation one. `delins.md:47`'s payload-coincidence carve-out is out of reach because the axis is genomic (`rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`, which accepts this cost by name), and `rulings[delins-merge-vs-individual-gap-two-or-more]` is scoped to net DELETIONS while this family is a net INSERTION (6 reference bases replaced by 21). The `normalized`/`genomic` fields deliberately RETAIN MUTALYZER'S recorded answer so the divergence stays visible; the XPASS guard is what keeps that honest. Movement is AWAY from the reference implementation (#1616). Six live-mutalyzer probes recorded on `rulings[adjudication-precedence-order]` show there is NO general separation disagreement — mutalyzer splits at separation one and two on a genomic axis when both members are plain substitutions — so this cluster is a WEIGHT difference, not a separation-rule difference.
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delinsGTCCTGTGCTCATTATCTGGC` | genomic | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCT;CATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_161delins[GTCCTGTGCTCATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320inv` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320inv` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320inv` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins4300_4320inv` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;4310_4320]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;4310_4320]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;4310_4320]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;4310_4320]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;CATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;CATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;CATTATCTGGC]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309;CATTATCTGGC]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;4310_4320]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;4310_4320]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;CATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;CATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;CATTATCTGGC]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4309inv;CATTATCTGGC]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320inv]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320inv]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320inv]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[4300_4320inv]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320inv]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320inv]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320inv]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320inv]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;CATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;CATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;CATTATCTGGC]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;CATTATCTGGC]` | normalized | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCTCATTATCTGGC]` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCTCATTATCTGGC]` | genomic | spec_citation | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCTCATTATCTGGC]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCTCATTATCTGGC]` | normalized | spec_citation | — | — |
+
 ### Ungrouped
 
 | input | axis | disposition | ferro output | tracking |
@@ -345,9 +410,9 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 19 | 0 | 0 | 0 | 0 |
-| genomic | 19 | 0 | 0 | 0 | 5 |
+| genomic | 34 | 0 | 0 | 0 | 20 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 28 | 0 | 1 | 0 | 18 |
+| normalized | 41 | 0 | 1 | 0 | 31 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

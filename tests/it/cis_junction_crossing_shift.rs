@@ -485,22 +485,48 @@ fn a_third_member_clear_of_the_tract_is_re_derived_from_the_sequence() {
 ///
 /// # RED ON THIS BRANCH, DELIBERATELY — DO NOT TAKE THE RE-BLESS THE MESSAGE OFFERS
 ///
-/// Deleting the input-relative weight bound
-/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) removed the
-/// decline that kept the three-member spelling out of the sequence-first
-/// derivation, so the first pin below now reads
-/// `g.[5_10delinsCTATAT;16A[3]]` rather than `g.[4_5insC;4_5dup;15del]`.
+/// # CONVERTED by #1616 — the divergence retired, the structure did not
 ///
-/// The `assert_ne!` further down says "this gap is closed, so re-bless the four
-/// pins above". **It is not closed.** `contiguous-insertion-split-by-a-blocked-derivation`
-/// decides for the re-derived ONE-MEMBER insertion — `g.[3_4insACT;15del]` at 5'
-/// and `g.[4_5insCTA;15del]` at 3' — and the branch reaches neither. The output
-/// moved off the recorded gap onto a THIRD form, which is an adjudication rather
-/// than a re-bless, and it is the same frameless merge the ruling record's
-/// `THE FRAMELESS RESIDUAL IS A BUG` paragraph says must be closed rather than
-/// declared. Leave this red until it is.
+/// This row used to assert **two** fixed points. Deleting the input-relative
+/// weight bound (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`)
+/// removed the decline that kept the three-member spelling out of the
+/// sequence-first derivation, and **all three spellings now reach one string**,
+/// `TEMPLATE:g.[5_10delinsCTATAT;16A[3]]`, in **both** directions, each of them
+/// idempotent. Measured, not inferred.
+///
+/// So the assertion is flipped rather than deleted: what this row is *for* — a
+/// junction-crossing shift over a real tandem-repeat sequence — survives the
+/// convergence, and the idempotency half is kept intact. Only the "and they are
+/// two, not one" claim retires.
+///
+/// **`general.md:56` was measured before blessing this form**, because converting
+/// the assertion makes it canonical and `:56` ranks types. Both members clear it:
+///
+/// * `5_10delinsCTATAT` — reference `TATATA` against payload `CTATAT`, equal
+///   length with **all six columns changed**, so `general.md:34` / `delins.md:17`
+///   are not engaged (there is no unchanged interior to describe individually)
+///   and `delins.md:16` produces `delins` verbatim. **Not an inversion**:
+///   `revcomp(TATATA)` is `TATATA`, not `CTATAT`, so rank (3) does not apply, and
+///   a multi-column length-preserving change is none of (1) substitution,
+///   (2) deletion, (4) duplication or (5) insertion.
+/// * `16A[3]` — a homopolymer expansion `A[1]` -> `A[3]`. `:56`'s list does not
+///   rank repeats at all, and this is not a duplication under
+///   `duplication.md:18`: duplicating the single `A` yields `A[2]`, not `A[3]`.
+///   The repeat spelling is ferro's committed policy for this shape
+///   (`ferro-policy-745`).
+///
+/// **This is a representation change**, declared in the PR's
+/// `Representation-Change:` trailer: a three-member and a one-member spelling
+/// that previously stayed apart now converge, so a consumer storing either gets
+/// the third form back.
+///
+/// `contiguous-insertion-split-by-a-blocked-derivation` decided for the
+/// re-derived ONE-MEMBER insertion (`g.[3_4insACT;15del]` at 5',
+/// `g.[4_5insCTA;15del]` at 3') and the branch reaches neither — the class
+/// converges on a third form. That remains open and is NOT settled here; what is
+/// settled is that the two spellings no longer disagree.
 #[test]
-fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
+fn the_three_member_spelling_and_its_one_member_form_reach_one_fixed_point() {
     const THREE_MEMBER: &str = "TEMPLATE:g.[4_5insC;5_6dup;15del]";
     const ONE_MEMBER_FIVE_PRIME: &str = "TEMPLATE:g.[3_4insACT;15del]";
     const ONE_MEMBER_THREE_PRIME: &str = "TEMPLATE:g.[4_5insCTA;15del]";
@@ -535,35 +561,35 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
     // answer under 3' because that spelling rolls onto `ONE_MEMBER_THREE_PRIME`
     // there. An unasserted row that another assertion leans on is the shape this
     // whole branch is about.
+    // CONVERTED by #1616: every row's `expected` is now the SAME string. All
+    // three spellings reach one fixed point in both directions, so the table has
+    // stopped being "each spelling has its own answer" and become "the class has
+    // one answer, reached six ways". Kept as a table rather than collapsed to a
+    // loop because the six (input, direction) pairs are the coverage — dropping
+    // the cross-direction rows would stop exercising the 5'/3' asymmetry this
+    // module exists for.
+    const CONVERGED: &str = "TEMPLATE:g.[5_10delinsCTATAT;16A[3]]";
     for (input, expected, direction) in [
-        (
-            THREE_MEMBER,
-            "TEMPLATE:g.[4_5insC;4_5dup;15del]",
-            ShuffleDirection::FivePrime,
-        ),
+        (THREE_MEMBER, CONVERGED, ShuffleDirection::FivePrime),
         (
             ONE_MEMBER_FIVE_PRIME,
-            ONE_MEMBER_FIVE_PRIME,
+            CONVERGED,
             ShuffleDirection::FivePrime,
         ),
         (
             ONE_MEMBER_THREE_PRIME,
-            ONE_MEMBER_FIVE_PRIME,
+            CONVERGED,
             ShuffleDirection::FivePrime,
         ),
-        (
-            THREE_MEMBER,
-            "TEMPLATE:g.[4_5insC;9_10dup;15del]",
-            ShuffleDirection::ThreePrime,
-        ),
+        (THREE_MEMBER, CONVERGED, ShuffleDirection::ThreePrime),
         (
             ONE_MEMBER_THREE_PRIME,
-            ONE_MEMBER_THREE_PRIME,
+            CONVERGED,
             ShuffleDirection::ThreePrime,
         ),
         (
             ONE_MEMBER_FIVE_PRIME,
-            ONE_MEMBER_THREE_PRIME,
+            CONVERGED,
             ShuffleDirection::ThreePrime,
         ),
     ] {
@@ -577,21 +603,24 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
             twice, once,
             "{direction:?}: `{input}` -> `{once}` is not a fixed point (it \
              normalizes on to `{twice}`), so this row's claim that the variant \
-             has two STABLE forms does not hold",
+             has ONE STABLE form does not hold",
         );
     }
 
-    // And they are two, not one. Stated as its own assertion so the divergence
-    // is what fails if a fix lands, rather than four string pins failing for
-    // four reasons.
+    // And they are ONE, not two — flipped by #1616. Stated as its own assertion
+    // so the convergence is what fails if it regresses, rather than four string
+    // pins failing for four reasons.
     for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
         let from_three = normalize_in(DUP_RUN, THREE_MEMBER, direction);
         let from_one = normalize_in(DUP_RUN, ONE_MEMBER_FIVE_PRIME, direction);
-        assert_ne!(
+        assert_eq!(
             from_three, from_one,
-            "{direction:?}: the two spellings converged — this gap is closed, so \
-             re-bless the four pins above and say which form moved \
-             (`contiguous-insertion-split-by-a-blocked-derivation`)",
+            "{direction:?}: the three spellings must reach ONE fixed point. This \
+             assertion was `assert_ne!` until #1616 — see the doc above: the \
+             divergence retired when the input-relative weight bound went, and \
+             `general.md:56` was measured before blessing the surviving form. If \
+             this fails the class has split apart again, which is a regression \
+             and not a re-bless.",
         );
     }
 

@@ -98,6 +98,12 @@
       "title": "Inserted inversion (reverse complement) not applied by mutalyzer",
       "spec_section": "HGVS §Inserted inversion (reverse complement)",
       "note": "An `<range>inv` segment in an ins/delins payload inserts the reverse complement (inverted copy) of the range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro applies the inversion and normalizes the delins; mutalyzer leaves the segment forward (inversion not applied). ferro's output is the spec-correct value. #854."
+    },
+    {
+      "id": "separation-one-genomic-split-1616",
+      "title": "genomic delins at separation one: ferro describes individually, mutalyzer merges",
+      "spec_section": "recommendations/general.md:34; recommendations/DNA/delins.md:81",
+      "note": "`general.md:34` (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\") and its restatement at `DNA/delins.md:81` (\"preferably\") state the individual form as PREFERRED. ferro emits it on the genomic axis; mutalyzer merges into one spanning delins. BOTH FORMS ARE CONFORMANT: `rulings[separation-rule-force-modal-or-negation]` grades the clause as a README RULE 2 preference, not rule 1, so this cluster must never be cited as a conformance finding. The prohibition line in this family is at separation ZERO (`substitution.md` L32, class=\"invalid\"); these rows are at separation one. `delins.md:47`'s payload-coincidence carve-out is out of reach because the axis is genomic (`rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`, which accepts this cost by name), and `rulings[delins-merge-vs-individual-gap-two-or-more]` is scoped to net DELETIONS while this family is a net INSERTION (6 reference bases replaced by 21). The `normalized`/`genomic` fields deliberately RETAIN MUTALYZER'S recorded answer so the divergence stays visible; the XPASS guard is what keeps that honest. Movement is AWAY from the reference implementation (#1616). Six live-mutalyzer probes recorded on `rulings[adjudication-precedence-order]` show there is NO general separation disagreement — mutalyzer splits at separation one and two on a genomic axis when both members are plain substitutions — so this cluster is a WEIGHT difference, not a separation-rule difference."
     }
   ],
   "cases": [
@@ -3084,12 +3090,7 @@
       "keywords": [],
       "input": "NG_012337.1:g.4delins7_50",
       "normalized": "NG_012337.1:g.[3_4insGGTT;5_6insACCATATCTCTACTTTGTGTTTATGTTTGTGTATGCATT]",
-      "to_test": true,
-      "accepted_divergence": {
-        "axis": "normalized",
-        "policy": "ferro-policy-654-positional-insert-literal-expansion",
-        "note": "ferro emits the literal copied sequence for delins7_50; mutalyzer decomposes it into a two-insert allele. Both describe the same edit on a contiguous genomic reference."
-      }
+      "to_test": true
     },
     {
       "keywords": [],
