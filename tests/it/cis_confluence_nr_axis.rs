@@ -71,6 +71,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use rayon::prelude::*;
 use serde::Deserialize;
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
@@ -346,21 +347,43 @@ struct Census {
     sequence_changed: usize,
 }
 
+impl Census {
+    /// Fold another census in. Every field is a count over a partition of the
+    /// classes, so summing is exact rather than approximate — which is what
+    /// makes [`measure`]'s per-group split safe.
+    fn absorb(&mut self, other: &Census) {
+        self.classes += other.classes;
+        self.spellings += other.spellings;
+        self.declined += other.declined;
+        self.converged += other.converged;
+        self.split_two += other.split_two;
+        self.split_three += other.split_three;
+        self.split_more += other.split_more;
+        self.underdetermined += other.underdetermined;
+        self.sequence_changed += other.sequence_changed;
+    }
+}
+
 /// A worst-offender line, for the failure message when a pin moves.
 struct Divergence {
     id: String,
     outputs: Vec<String>,
 }
 
-fn measure(direction: ShuffleDirection, axis: &str) -> (Census, Vec<Divergence>) {
-    let classes = &corpus().classes;
-    let mut census = Census::default();
-    let mut worst: Vec<Divergence> = Vec::new();
+/// How many divergent classes the failure message names. Applied per group and
+/// again to the concatenation, which is what keeps the parallel result
+/// byte-identical to a serial one — see [`measure`].
+const WORST_LIMIT: usize = 10;
 
-    // Classes are sorted by an id that starts with the core index and the axis,
-    // so every class sharing a reference is contiguous. Building one provider
-    // and one normalizer per group instead of per class is the difference
-    // between this running in seconds and in minutes.
+/// The contiguous runs of `classes` that share one reference and sit on `axis`.
+///
+/// Classes are sorted by an id that starts with the core index and the axis, so
+/// every class sharing a reference is contiguous. Building one provider and one
+/// normalizer per group instead of per class is the difference between this
+/// running in seconds and in minutes; [`measure`] additionally runs the groups
+/// concurrently, which it can do only because each one owns its provider.
+fn reference_groups<'a>(classes: &'a [Class], axis: &str) -> Vec<&'a [Class]> {
+    let mut groups = Vec::new();
     let mut start = 0usize;
     while start < classes.len() {
         let mut end = start + 1;
@@ -370,64 +393,108 @@ fn measure(direction: ShuffleDirection, axis: &str) -> (Census, Vec<Divergence>)
         {
             end += 1;
         }
-        if classes[start].axis != axis {
-            start = end;
-            continue;
-        }
-        let (provider, reference) = reference_for(&classes[start]);
-        let normalizer = Normalizer::with_config(
-            provider.clone(),
-            NormalizeConfig::default().with_direction(direction),
-        );
-
-        for class in &classes[start..end] {
-            census.classes += 1;
-            let expected = class.denoted.clone();
-            let mut outputs: BTreeSet<String> = BTreeSet::new();
-            let mut normalized_spellings = 0usize;
-            for spelling in &class.spellings {
-                census.spellings += 1;
-                let Ok(variant) = parse_hgvs(spelling) else {
-                    census.declined += 1;
-                    continue;
-                };
-                let normalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    normalizer.normalize(&variant)
-                }));
-                let output = match normalized {
-                    Ok(Ok(value)) => value.to_string(),
-                    _ => {
-                        census.declined += 1;
-                        continue;
-                    }
-                };
-                normalized_spellings += 1;
-                if apply_with(&provider, &reference, &output).as_deref() != Some(expected.as_str())
-                {
-                    census.sequence_changed += 1;
-                }
-                outputs.insert(output);
-            }
-
-            if normalized_spellings < 2 {
-                census.underdetermined += 1;
-                continue;
-            }
-            match outputs.len() {
-                1 => census.converged += 1,
-                2 => census.split_two += 1,
-                3 => census.split_three += 1,
-                _ => census.split_more += 1,
-            }
-            if outputs.len() > 1 && worst.len() < 10 {
-                worst.push(Divergence {
-                    id: class.id.clone(),
-                    outputs: outputs.into_iter().collect(),
-                });
-            }
+        if classes[start].axis == axis {
+            groups.push(&classes[start..end]);
         }
         start = end;
     }
+    groups
+}
+
+/// Census one reference group. Owns its provider and normalizer, reads nothing
+/// outside its own slice, and so is safe to run alongside its siblings.
+fn measure_group(group: &[Class], direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
+    let mut census = Census::default();
+    let mut worst: Vec<Divergence> = Vec::new();
+
+    let (provider, reference) = reference_for(&group[0]);
+    let normalizer = Normalizer::with_config(
+        provider.clone(),
+        NormalizeConfig::default().with_direction(direction),
+    );
+
+    for class in group {
+        census.classes += 1;
+        let expected = class.denoted.clone();
+        let mut outputs: BTreeSet<String> = BTreeSet::new();
+        let mut normalized_spellings = 0usize;
+        for spelling in &class.spellings {
+            census.spellings += 1;
+            let Ok(variant) = parse_hgvs(spelling) else {
+                census.declined += 1;
+                continue;
+            };
+            let normalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                normalizer.normalize(&variant)
+            }));
+            let output = match normalized {
+                Ok(Ok(value)) => value.to_string(),
+                _ => {
+                    census.declined += 1;
+                    continue;
+                }
+            };
+            normalized_spellings += 1;
+            if apply_with(&provider, &reference, &output).as_deref() != Some(expected.as_str()) {
+                census.sequence_changed += 1;
+            }
+            outputs.insert(output);
+        }
+
+        if normalized_spellings < 2 {
+            census.underdetermined += 1;
+            continue;
+        }
+        match outputs.len() {
+            1 => census.converged += 1,
+            2 => census.split_two += 1,
+            3 => census.split_three += 1,
+            _ => census.split_more += 1,
+        }
+        if outputs.len() > 1 && worst.len() < WORST_LIMIT {
+            worst.push(Divergence {
+                id: class.id.clone(),
+                outputs: outputs.into_iter().collect(),
+            });
+        }
+    }
+
+    (census, worst)
+}
+
+/// Census one axis in one direction, one reference group per rayon task.
+///
+/// **The result is byte-identical to the serial walk, not merely equivalent**,
+/// which is the only basis on which a pinned census may be parallelized at all:
+///
+/// * every `Census` field is a count over a partition of the classes, so
+///   [`Census::absorb`] over the groups is exact and order-free;
+/// * `par_iter().collect()` preserves *input* order, so the per-group results
+///   are folded in corpus order however they finish;
+/// * `worst` is "the first [`WORST_LIMIT`] divergent classes in corpus order".
+///   Each group keeps its own first `WORST_LIMIT`, and concatenating the groups
+///   in corpus order and truncating again yields exactly that set — the serial
+///   loop's global cap can only have kept the same ones.
+///
+/// Nothing is shared across tasks: each group builds its own `MockProvider` and
+/// `Normalizer` (it already did — that is the per-group loop's whole point), and
+/// the only borrow that crosses is the immutable corpus slice. The normalization
+/// oracles' recursion guard is a thread-local, so it is per-task too.
+fn measure(direction: ShuffleDirection, axis: &str) -> (Census, Vec<Divergence>) {
+    let groups = reference_groups(&corpus().classes, axis);
+
+    let per_group: Vec<(Census, Vec<Divergence>)> = groups
+        .par_iter()
+        .map(|group| measure_group(group, direction))
+        .collect();
+
+    let mut census = Census::default();
+    let mut worst: Vec<Divergence> = Vec::new();
+    for (group_census, group_worst) in per_group {
+        census.absorb(&group_census);
+        worst.extend(group_worst);
+    }
+    worst.truncate(WORST_LIMIT);
 
     (census, worst)
 }
@@ -624,6 +691,57 @@ fn the_rna_axis_is_spelled_in_the_rna_alphabet() {
                 "{spelling} carries a `t`, which RNA spells `u`"
             );
         }
+    }
+}
+
+/// [`measure`]'s byte-identity argument rests on [`reference_groups`] returning
+/// a **partition** of the axis's classes, in corpus order. Nothing else observes
+/// that: the censuses would still sum to something if a class were dropped or
+/// counted twice, and `worst` only ever surfaces inside a failure message — so a
+/// broken partition is invisible on a green run and would move the pins
+/// silently, which is the one way a parallelized census can go wrong without
+/// saying so.
+#[test]
+fn the_reference_groups_partition_each_axis_in_corpus_order() {
+    let classes = &corpus().classes;
+    for axis in ["n", "r"] {
+        let groups = reference_groups(classes, axis);
+        assert!(
+            !groups.is_empty(),
+            "{axis}: no groups, so nothing is measured"
+        );
+
+        // Every group is non-empty and shares one reference, which is what lets
+        // `measure_group` build a single provider from `group[0]`.
+        for group in &groups {
+            assert!(
+                !group.is_empty(),
+                "{axis}: an empty group would panic on group[0]"
+            );
+            assert!(
+                group
+                    .iter()
+                    .all(|c| c.axis == group[0].axis && c.core == group[0].core),
+                "{axis}: a group spans two references, so one provider cannot serve it"
+            );
+        }
+
+        // Concatenating the groups reproduces the axis's classes exactly, in
+        // corpus order — no class dropped, none counted twice, none reordered.
+        let flattened: Vec<&str> = groups
+            .iter()
+            .flat_map(|group| group.iter())
+            .map(|c| c.id.as_str())
+            .collect();
+        let expected: Vec<&str> = classes
+            .iter()
+            .filter(|c| c.axis == axis)
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(
+            flattened, expected,
+            "{axis}: the groups are not a partition of the axis in corpus order"
+        );
     }
 }
 
