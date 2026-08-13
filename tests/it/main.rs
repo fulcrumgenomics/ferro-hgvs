@@ -29,6 +29,7 @@ mod issue_1627_named_element_alphabet_reach;
 mod issue_1632_parse_entry_applies_no_mode;
 mod issue_1715_rna_alignment_symbol_reach;
 mod issue_1748_noncoding_axis_zones;
+mod issue_1764_hgvs_to_vcf_continues;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;
