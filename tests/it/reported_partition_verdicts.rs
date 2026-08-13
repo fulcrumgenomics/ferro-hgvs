@@ -628,10 +628,20 @@ const REPORTED_ROWS: &[Row] = &[
     // the reverse of #1419/#1420, so a fix that simply preferred whichever form
     // has fewer members would get this family backwards.
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n1/split",
         input: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         output: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        five_prime: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        five_prime: "TEMPLATE:g.[29delinsAACACAT;32_33delinsTG]",
         verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecSelfConflicting,
@@ -643,10 +653,20 @@ const REPORTED_ROWS: &[Row] = &[
                    other way on this shape (see the sibling span row).",
     },
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n1/span",
         input: "TEMPLATE:g.29_33delinsAACACATACTG",
-        output: "TEMPLATE:g.29_33delinsAACACATACTG",
-        five_prime: "TEMPLATE:g.29_33delinsAACACATACTG",
+        output: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        five_prime: "TEMPLATE:g.[29delinsAACACAT;32_33delinsTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecSelfConflicting,
@@ -668,10 +688,20 @@ const REPORTED_ROWS: &[Row] = &[
                    wanted form either.",
     },
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n2/split",
         input: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        output: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        five_prime: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
+        output: "TEMPLATE:g.[32G>T;35C>G;38_39insCGACAT]",
+        five_prime: "TEMPLATE:g.[32G>T;35C>G;36_37insATCGAC]",
         verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         authority: Authority::SpecSelfConflicting,
@@ -680,10 +710,20 @@ const REPORTED_ROWS: &[Row] = &[
                    answers the other way (see the sibling span row).",
     },
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n2/span",
         input: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
-        output: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
-        five_prime: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
+        output: "TEMPLATE:g.[32G>T;35C>G;38_39insCGACAT]",
+        five_prime: "TEMPLATE:g.[32G>T;35C>G;36_37insATCGAC]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         authority: Authority::SpecSelfConflicting,
@@ -694,10 +734,20 @@ const REPORTED_ROWS: &[Row] = &[
                    column matching. SpecSelfConflicting for that reason.",
     },
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n3/split",
         input: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         output: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        five_prime: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        five_prime: "TEMPLATE:g.[34G>T;35_36insACCTTT;37_38delinsCG]",
         verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         authority: Authority::SpecSelfConflicting,
@@ -706,10 +756,20 @@ const REPORTED_ROWS: &[Row] = &[
                    answers the other way (see the sibling span row).",
     },
     Row {
+                // PINNED TO THE MEASURED STRINGS by #1616 — NOT a ruling on the form.
+        // `rulings[canonical-form-choice-when-both-legal]` (decided) licenses
+        // deriving from the resulting sequence and emitting what falls out, so a
+        // form neither spelling authored is not wrong on its face. Whether THIS
+        // form is right is a `:47`/`:34` question that is deliberately NOT
+        // answered here; what is fixed is that the movement is no longer
+        // unpinned. Disclosed in the PR's `Representation-Change:` trailer.
+        //
+        // NOTE FOR THE #1421 RELABEL: this touches `output`/`five_prime` only.
+        // The `authority` field is untouched on every row.
         label: "1421-n3/span",
         input: "TEMPLATE:g.34_38delinsTCACCTTTACG",
-        output: "TEMPLATE:g.34_38delinsTCACCTTTACG",
-        five_prime: "TEMPLATE:g.34_38delinsTCACCTTTACG",
+        output: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        five_prime: "TEMPLATE:g.[34G>T;35_36insACCTTT;37_38delinsCG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         authority: Authority::SpecSelfConflicting,
@@ -738,7 +798,24 @@ const REPORTED_ROWS: &[Row] = &[
 /// **`1420-v2/cis` was removed by #1616.** It was here because the 5' pass moved
 /// its duplication's anchor one base left; the row no longer prints a `dup` at
 /// all, so the two directions now print one string and there is nothing to move.
-const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span"];
+/// **Six #1421 rows joined by #1616, and they are the measured set rather than a
+/// chosen one.** Under 5' all three #1421 pairs land on a form that is neither
+/// spelling's `wanted` — `1421-n2` does so in BOTH directions. This constant is
+/// asserted as a set by
+/// [`only_the_named_rows_answer_differently_in_the_two_directions`] precisely so
+/// the movers cannot drift silently behind the per-row pins, so it is updated
+/// with them. **No judgement is implied about the forms themselves** — see the
+/// `PINNED TO THE MEASURED STRINGS` notes on the rows.
+const FIVE_PRIME_MOVERS: &[&str] = &[
+    "1419-r3/cis",
+    "1419-r3/span",
+    "1421-n1/split",
+    "1421-n1/span",
+    "1421-n2/split",
+    "1421-n2/span",
+    "1421-n3/split",
+    "1421-n3/span",
+];
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
@@ -786,16 +863,32 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1419-r3/span"];
 ///
 /// The second has been observed, on an experimental partitioner arm. It was
 /// recorded against two rows: `1419-r3/cis` (`g.[19_24del;28_33del]` ->
-/// `g.[19T>G;22_33del]`, two deletions three unchanged nucleotides apart coming
-/// back as a substitution plus a deletion) and `1420-v2/cis`
-/// (`g.[37dup;41del]` -> `g.[38T>A;40_41delinsTG]`, likewise three unchanged
-/// nucleotides apart). Both are `general.md:34` violations that landed on an
-/// issue's wanted string, which is precisely how a defect gets banked as a fix.
+/// `g.[19T>G;22_33del]`) and `1420-v2/cis` (`g.[37dup;41del]` ->
+/// `g.[38T>A;40_41delinsTG]`).
 ///
-/// `1419-r3/cis` is no longer one of them — its `wanted` is now the spanning
-/// `delins`, which that arm does not produce — so the hazard was live on
-/// `1420-v2/cis` alone. The `1419-r3/cis` half is kept because the mechanism is
-/// what recurs, not the row.
+/// # CORRECTED by #1616 — this paragraph called those `general.md:34` violations
+///
+/// It described both as "three unchanged nucleotides apart" and therefore as
+/// `general.md:34` violations. **That characterisation is ruled wrong** and it
+/// fails in exactly the way the guard deleted with it did: 38, 39 and 40 are
+/// unchanged only in the INPUT'S SPELLING (members written at 37 and 41), and
+/// `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]`
+/// (decided) reads separation off the partition re-derived from the resulting
+/// sequence. Read that way `g.[38T>A;40_41delinsTG]` is two members at
+/// separation one, described individually — what `:34` asks for. **Nothing
+/// merged.**
+///
+/// This doc also named
+/// `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
+/// as the pin holding the hazard. **That test no longer exists** — it was
+/// deleted by the same operator ruling (2026-08-13); its block comment in that
+/// file carries the argument.
+///
+/// The DICHOTOMY above still stands and is still the thing to apply. What is
+/// withdrawn is the claim that these two rows instantiate its second horn. Note
+/// the hazard is a row reaching **its wanted string** by re-derivation, which is
+/// how a defect gets banked as a fix; a row landing on a form that is *not*
+/// `wanted` banks nothing and is not this hazard.
 ///
 /// So lowering this constant requires naming, in the PR, **which clause carried
 /// the move** — not merely that the row now prints its wanted form. A row that
