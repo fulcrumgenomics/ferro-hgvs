@@ -726,8 +726,25 @@ fn shipping_arm() -> bool {
     }
 }
 
+/// Whether a spelling came from dimension (b) rather than dimension (a).
+///
+/// Dimension (a) emits exactly one member and [`assemble`] writes a single member
+/// bare, so the allele brackets are the discriminator and there is no third case.
+/// It is worth having because *which dimension a bucket was reached from* is the
+/// whole triage: a partition that lines up with this predicate is ferro
+/// preserving the spelling it was handed, which is a named mechanism rather than
+/// an arbitrary split.
+fn is_multi_member(spelling: &str) -> bool {
+    spelling.contains('[')
+}
+
 /// Print the output partition, so a bake-off run under another arm reports a
 /// number instead of nothing.
+///
+/// Each bucket carries its dimension breakdown — how many of its inputs were
+/// spanning single members and how many were multi-member partitions — because
+/// that is what separates "the class disagrees" from "ferro handed back what it
+/// was given".
 fn report(class: &str, enumeration: &Enumeration, buckets: &BTreeMap<String, Vec<String>>) {
     let arm = std::env::var("FERRO_PARTITION").unwrap_or_else(|_| "live (unset)".to_string());
     println!(
@@ -738,11 +755,52 @@ fn report(class: &str, enumeration: &Enumeration, buckets: &BTreeMap<String, Vec
         buckets.len()
     );
     for (output, inputs) in buckets {
-        println!("    {:>5}  {output}", inputs.len());
+        let multi = inputs.iter().filter(|input| is_multi_member(input)).count();
+        println!(
+            "    {:>5}  (a:{:<5} b:{:<5})  {output}",
+            inputs.len(),
+            inputs.len() - multi,
+            multi
+        );
         if inputs.len() <= 12 {
             for input in inputs {
                 println!("             <- {input}");
             }
+        }
+    }
+}
+
+/// Assert that a two-way partition falls **exactly** along the dimension the
+/// spellings came from.
+///
+/// This is the sharpest statement the enumeration can make about a divergent
+/// class: not "it splits into two" but "it splits by provenance, with nothing
+/// crossing". That is the mechanism
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant` names — ferro
+/// preserving the partition it was handed — asserted rather than described.
+fn assert_partition_is_by_provenance(
+    class: &str,
+    buckets: &BTreeMap<String, Vec<String>>,
+    from_spanning: &str,
+    from_members: &str,
+) {
+    for (output, inputs) in buckets {
+        for input in inputs {
+            let expected = if is_multi_member(input) {
+                from_members
+            } else {
+                from_spanning
+            };
+            assert_eq!(
+                output,
+                expected,
+                "[{class}] {input} crossed: a {} spelling reached {output}",
+                if is_multi_member(input) {
+                    "multi-member"
+                } else {
+                    "spanning"
+                }
+            );
         }
     }
 }
@@ -973,6 +1031,12 @@ fn the_adjacent_members_class_partitions_as_measured() {
                 ("NM_TEST.1:c.[9dup;13del]", 36),
             ],
         );
+        assert_partition_is_by_provenance(
+            "adjacent-members",
+            &buckets,
+            "NM_TEST.1:c.10_13delinsTAAT",
+            "NM_TEST.1:c.[9dup;13del]",
+        );
     }
 }
 
@@ -987,6 +1051,24 @@ const ADJACENT_MEMBERS_SPELLINGS: usize = 1_076;
 /// would destroy the duplication `DNA/duplication.md:18` requires, so the ruling
 /// does not reach it. The partition below is therefore an observation of where a
 /// deliberately unruled shape lands, pinned so it cannot drift unnoticed.
+///
+/// **The finding this class hands back, and it is bigger than the pinned point.**
+/// The other two divergent classes split cleanly by provenance — spanning
+/// spellings one way, multi-member spellings the other, nothing crossing. This
+/// one does not. Its spanning spellings do all agree with each other, but its
+/// multi-member spellings reach **four** different outputs, differing in edit
+/// type and not merely in position: a `dup`+`del` form, a `dup`+two-substitution
+/// form, an `inv`-bearing form, and a single wide `delins`. Every one of them
+/// denotes the class's own sequence (asserted), is its own fixed point and
+/// satisfies all four seam oracles, so this is a canonical-form disagreement
+/// rather than a correctness defect.
+///
+/// What moves between them is only **where a member was shifted to inside its own
+/// equivalence class** — a shift that HGVS says changes nothing. That is worth an
+/// operator's attention because the record this class sits under
+/// (`delins-adjacent-members-when-both-consume-reference`, `SCOPE` paragraph)
+/// declines to rule on a `dup` flush against a `del`; it does not say the shape
+/// may reach four forms. All three sequence-first arms collapse it to one output.
 #[test]
 fn the_dup_flush_carve_out_class_partitions_as_measured() {
     let provider = transcript_provider();
@@ -1089,6 +1171,12 @@ fn the_spanning_versus_split_class_partitions_as_measured() {
                 ("NM_TEST.1:c.9_17delinsA", 864),
                 ("NM_TEST.1:c.[9_12del;15_18del]", 16),
             ],
+        );
+        assert_partition_is_by_provenance(
+            "spanning-vs-split",
+            &buckets,
+            "NM_TEST.1:c.9_17delinsA",
+            "NM_TEST.1:c.[9_12del;15_18del]",
         );
     }
 }
