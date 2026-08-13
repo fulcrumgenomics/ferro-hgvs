@@ -285,12 +285,7 @@
         "clause": "docs/recommendations/general.md:56",
         "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
       },
-      "defect": {
-        "issue": "#1541",
-        "kind": "confluence",
-        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
-      },
-      "note": "LIVE DEFECT #1541, and this spelling is the DECIDED TARGET the class must converge on. c.710_713 reads TCGT and its reverse complement is ACGA; the interior CG is self-complementary, so the inversion changes only the flanks -- which is exactly what these two substitutions write. VERIFIED EQUIVALENT, and the reference bases at 710 and 713 genuinely are T. THE TARGET IS NOT AN OPEN QUESTION: #1517/#1535 already adjudicated this geometry, and tests/it/issue_1517_inv_priority_over_delins.rs pins both directions -- a whole-block reverse complement competing with SUBSTITUTIONS prefers the split, because general.md:56 ranks substitution (1) above inversion (3); one competing with DELINS prefers inv, because delins is absent from the ranking and so ranks below everything. This row's competitors are two substitutions, so the preferred form is c.[710T>A;713T>A], the same answer as #1230. The opposite direction is the NM_004006.2:c.76_83 class in this same corpus, which is the control preventing the rule from being written as 'always prefer the split'. WHY IT IS STILL RED ON MAIN: not the typing rule but the AXIS GATE -- Normalizer::is_splittable_single_member (src/normalize/mod.rs:2005) matches only HV::Genome/HV::Mt, so a lone c. member never reaches the sequence-first pass; the existing #1230 control passes only because it is written on the g. axis. PR #1484 widens that gate to c./n./r. and all three spellings converge on c.[710T>A;713T>A] under it. Un-ignore the guard in the change that merges #1484."
+      "note": "#1541's class, and this spelling is the form the class converges on today. c.710_713 reads TCGT and its reverse complement is ACGA; the interior CG is self-complementary, so the inversion changes only the flanks -- which is exactly what these two substitutions write. VERIFIED EQUIVALENT, and the reference bases at 710 and 713 genuinely are T. NO LONGER A LIVE REPRODUCER: the class did not converge while Normalizer::is_splittable_single_member matched only HV::Genome/HV::Mt, so a lone c. member never reached the sequence-first pass; PR #1484 widened that gate to c./n./r. and merged 2026-08-08, and all three spellings now converge. The `defect` was dropped and the guard case_harvest::the_four_mer_inversion_pair_converges un-ignored in the same change, as the census assertion requires. THE FORM IS STILL NOT ADJUDICATED, WHICH IS WHY THIS ROW PINS NO OUTPUT. #1541 asked for a ruling on which form governs and then convergence on it; convergence arrived as a side effect and no ruling was made, so the issue stays open. This note used to say the target was decided by general.md:56 ranking substitution (1) above inversion (3). THAT GROUNDING IS WITHDRAWN: the decided record adjudication-precedence-order, entry E1, says :56 ranks single-variant type labels for one span and 'cannot settle a merge-versus-split question at all', which is exactly what this class is. The sibling decided record inversion-vs-two-delins-76-83 reads :56 the other way; the two are in tension and that is the operator's call. #1541's 2026-08-12 status also records this locus as a live member of the #1703 family (GTTAA -> TTAAC is the identical shape at 5 nt) and that whichever way that is ruled, this row moves with it. The exact form is held only as a stability tripwire in the guard, on background/basics.md:38."
     },
     {
       "input": "NM_000500.9:c.710_713inv",
@@ -300,12 +295,7 @@
         "clause": "docs/recommendations/DNA/inversion.md:5",
         "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
       },
-      "defect": {
-        "issue": "#1541",
-        "kind": "confluence",
-        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
-      },
-      "note": "LIVE DEFECT #1541, the inversion spelling. Held under inversion.md:5, the clause that makes this block an inversion by definition -- but that is the clause the class must move AWAY from here, because the members it competes with are substitutions and general.md:56 ranks those first. A fixed point on main; converges on c.[710T>A;713T>A] under PR #1484. See the two-substitution row for the full ruling and for why the blocker is the axis gate rather than the typing rule."
+      "note": "#1541's class, the inversion spelling. Held under inversion.md:5, the clause that makes this block an inversion by definition. On main it now converges with the other two spellings on c.[710T>A;713T>A] (PR #1484, merged 2026-08-08, widened the c.-axis gate). That is a measurement, not a ruling: whether the class SHOULD settle on the split or on this inv is open, and Mutalyzer converges the sibling #1703 locus on the inv. See the two-substitution row for why the general.md:56 grounding this corpus used to give was withdrawn, and for the #1703 linkage. No output is pinned here, because the governing ruling is open."
     },
     {
       "input": "NM_000500.9:c.710_713delinsACGA",
@@ -315,12 +305,7 @@
         "clause": "docs/recommendations/DNA/delins.md:5",
         "quote": "**and which is not** a substitution or inversion"
       },
-      "defect": {
-        "issue": "#1541",
-        "kind": "confluence",
-        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
-      },
-      "note": "LIVE DEFECT #1541, the delins spelling -- the third member of the class, and the one that makes it as strong as the NM_004006.2 class. The payload ACGA is exactly revcomp(TCGT), so delins.md:5 excludes the delins typing outright and the row must be re-typed. CORRECTION TO A MEASUREMENT: this row was reported as a fixed point on main. It is not -- on main it normalizes to NM_000500.9:c.710_713inv, i.e. it converges with the inversion spelling and against the substitution spelling. That does not change the verdict (the class still yields two normal forms, so #1541 is red) but it does change the picture: the class splits 2-versus-1, not 1-versus-1-versus-1. Under PR #1484 all three converge on c.[710T>A;713T>A]. No output is pinned here for the same reason as its siblings -- the form the class currently agrees on is the one the ruling says is wrong."
+      "note": "#1541's class, the delins spelling -- the third member, and the one that makes it as strong as the NM_004006.2 class. The payload ACGA is exactly revcomp(TCGT), so delins.md:5 excludes the delins typing outright and the row must be re-typed. CORRECTION TO AN OLDER MEASUREMENT, KEPT BECAUSE IT WAS REPORTED WRONG ONCE: this row was reported as a fixed point on main; it was not -- it normalized to c.710_713inv, so the class split 2-versus-1 rather than three ways. Since PR #1484 merged (2026-08-08) all three spellings converge on c.[710T>A;713T>A]. No output is pinned here, and the class carries no `defect` any more: it no longer reproduces non-convergence, while #1541 stays open because the form was never ruled on. See the two-substitution row."
     },
     {
       "input": "NC_000017.11:g.80110044_80110047delinsGTTGG",
