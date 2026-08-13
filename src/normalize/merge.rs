@@ -6112,30 +6112,40 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
 /// pieces.iter().any(|p| !p.alt.is_empty() && p.alt.len() != p.ref_end - p.ref_start)
 /// ```
 ///
-/// # INTERIM: the ledger record this answers is `undecided`
+/// # RATIFIED: the ledger record this answers is now `decided`
 ///
-/// **Read this before citing anything below as settled law.** The question this
-/// predicate decides is the one
+/// **This section used to say the opposite, and the change is the point.** The
+/// question this predicate decides is the one
 /// `rulings[delins-recommendation-reach-when-the-input-arrives-split]` (in
-/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`) holds open:
+/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`) held open:
 /// *"`:47` recommends the span; `:17` and `general.md:34` describe separated
 /// variants individually. … WHAT REMAINS OPEN IS WHICH CLAUSE THE RE-DERIVATION
-/// LANDS ON."* That record's status is `undecided`, and this code does not
-/// change it — no ruling record is added or edited alongside this predicate.
+/// LANDS ON."* **Operator ruling, 2026-08-12: `:46` governs**, and the reading
+/// it ratifies is exactly this predicate's — `:47` reaches a payload-coincidence
+/// split only where an *inserted sequence* re-aligned, i.e. only where some
+/// member supplies bases while consuming a different number of reference bases.
 ///
-/// So what follows is **ferro's provisional answer under README rule 6**
-/// (*"among multiple conformant forms: the maintainers choose"*), disclosed
-/// under rule 7, and it sits on `adjudication-precedence-order`'s third rung —
-/// our own judgement. It is argued from `:46`'s stated mechanism, which is the
-/// best ground available, but it is not conformance and a later reader must not
-/// cite it as such.
+/// So what follows is no longer ferro's provisional answer under README rule 6.
+/// It is a decided record on `adjudication-precedence-order`'s **first** rung,
+/// argued from `:46`'s stated mechanism, and it may be cited as settled. The
+/// deciding ground was that this is the only reading under which BOTH worked
+/// examples in the passage come out as the spec writes them — see the table
+/// below, which is what the ruling was made on.
 ///
-/// **Expect this to be superseded rather than refined.** An operator ruling on
-/// that record decides the whole population, and this predicate reads only the
-/// derived members of one block; the two need not agree outside the three worked
-/// cases below. The concrete consequence is named on
-/// `an_all_survivor_payload_is_not_an_alignment_artifact`, which is the guard a
-/// ruling is most likely to flip.
+/// **The ruling was made ON the derived members, which is what makes it fit.**
+/// The record's own text notes the alternative it did not take: a rule keyed on
+/// the block, on the uniqueness of its minimal split, or on a novel-base count
+/// would decide the same population differently and would land
+/// `an_all_survivor_payload_is_not_an_alignment_artifact` back on **merge**. It
+/// was rejected because a count needs a threshold and the spec states none.
+///
+/// **Two limits the ruling keeps, so do not read this predicate alone as the
+/// scope.** It sits under `delins-merge-vs-individual-gap-two-or-more`'s shape
+/// and net-deletion scopes, and under
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`'s `c.`-only axis
+/// scope — which is enforced at the call site by `payload_coalesce_applies`,
+/// not here. And the ruling engages only the protein-level one of `:47`'s two
+/// grounds; the counterweight is recorded on the record itself.
 ///
 /// **The population is the whole re-derived one, not the already-split subset.**
 /// The record's rationale rules that framing out by name — the already-split
@@ -6558,11 +6568,11 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     // cannot be that artefact — so `:47` does not reach it and `general.md:34`
     // governs. See `split_carries_a_gap_bearing_insert`.
     //
-    // INTERIM, and not a settled reading: the ruling record whose question this
-    // answers — `delins-recommendation-reach-when-the-input-arrives-split` — is
-    // `undecided`, and nothing here decides it. This is ferro's provisional
-    // choice under README rule 6, on `adjudication-precedence-order`'s third
-    // rung. The predicate's own doc comment carries the full statement.
+    // RATIFIED, 2026-08-12: the ruling record whose question this answers —
+    // `delins-recommendation-reach-when-the-input-arrives-split` — is `decided`,
+    // for `:46`, on exactly this reading. It is no longer a provisional choice
+    // under README rule 6. The predicate's own doc comment carries the full
+    // statement, including the two scopes this line sits under.
     if !split_carries_a_gap_bearing_insert(pieces) {
         return;
     }
@@ -14545,19 +14555,19 @@ mod tests {
         /// future change that starts merging it again should have to come
         /// through here.
         ///
-        /// **INTERIM — this is the assertion most likely to be flipped back.**
-        /// It pins ferro's provisional answer to a question the ledger record
-        /// `delins-recommendation-reach-when-the-input-arrives-split` records as
-        /// `undecided` (see [`split_carries_a_gap_bearing_insert`]'s own
-        /// INTERIM section). A ruling that decides the merge direction on
-        /// grounds other than the derived members — anything keyed on the
-        /// block, on the uniqueness of its minimal split, or on the number of
-        /// distinct minimal splits it admits — can land this block back on
-        /// **merge**, because its payload base can sit at any of four `T`s. If
-        /// you arrive here holding such a ruling, the reversal is the ruling
-        /// superseding this predicate and is not a regression. Nothing in this
-        /// repository has ruled that yet; do not read this paragraph as saying
-        /// one exists.
+        /// **RATIFIED — this assertion was the one most likely to be flipped
+        /// back, and the ruling went the other way.** It pins the answer the
+        /// ledger record `delins-recommendation-reach-when-the-input-arrives-split`
+        /// now records as `decided`, for `:46` (see
+        /// [`split_carries_a_gap_bearing_insert`]'s own RATIFIED section). The
+        /// paragraph this replaces was right about the risk: a ruling deciding
+        /// the merge direction on grounds *other* than the derived members —
+        /// anything keyed on the block, on the uniqueness of its minimal split,
+        /// or on the number of distinct minimal splits it admits — would land
+        /// this block back on **merge**, because its payload base can sit at any
+        /// of four `T`s. The operator ruled on the derived members precisely so
+        /// that it does not. A later change of that ground is a re-ruling, not a
+        /// refinement, and must go through the record.
         #[test]
         fn an_all_survivor_payload_is_not_an_alignment_artifact() {
             let reference = b"CTCTACCCGGAGCGGCAATACCCCCTCCGCCCCC";
