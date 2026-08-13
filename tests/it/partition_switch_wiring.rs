@@ -12,7 +12,7 @@
 //! reporting is the *original* defect this switch was given a refusal to prevent:
 //! a bake-off served the shipped rule under a candidate's name, coming back with
 //! a clean empty diff that reads as "the candidate changes nothing". So the
-//! wiring is the contract, and these two tests pin both halves of it:
+//! wiring is the contract, and the first two tests pin both halves of it:
 //!
 //! - the behaviour, end to end, through the `ferro` binary — a misspelling exits
 //!   non-zero with the message, a real arm still runs, and `--help` keeps working;
@@ -23,8 +23,30 @@
 //! The second is a source scan, so it proves the call is *written*, not that it
 //! is reached. The first is what proves it is reached, and it is written against
 //! the binary a user actually runs.
+//!
+//! # A third test, about a different call site the arms are the only way to reach
+//!
+//! `canonicalize_from_sequence` calls `coalesce_compensating_gap_split` behind
+//! `compensating_gap_coalesce_applies(partition_rule(), kind)` — the arm **and**
+//! the axis (#1711). `merge.rs`'s own unit tests pin that predicate exhaustively,
+//! and they can only pin the predicate: `partition_rule()` caches into a
+//! process-global `OnceLock`, so an in-process test cannot select the `canonical`
+//! / `canonical-coalesced` arms the pass runs on. That reads as "the call site
+//! cannot be tested", and it is not — a **subprocess** gets its own `OnceLock`,
+//! which is exactly what the two tests above already exploit, against the mock
+//! provider and so with no prepared reference.
+//!
+//! Measured before this test existed, and the reason it now does: replacing
+//! that call site's axis argument with a hardcoded `CisKind::Cds` — #1711
+//! restored verbatim — left the whole suite passing and clippy exiting 0. A
+//! well-guarded predicate wired to nothing is indistinguishable from a fix.
+//!
+//! It lives here rather than beside the predicate because what it asks is
+//! whether the call site consults the axis at all. That is a wiring question,
+//! and the answer to it survives either reading of what `DNA/delins.md:47`
+//! reaches.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -45,16 +67,20 @@ fn repo_root() -> PathBuf {
 /// under the default strict mode.
 const SHIFTED: &str = "NM_000088.3:c.16del";
 
-/// Run `ferro normalize` over one variant with `FERRO_PARTITION` set to `value`.
+/// Run `ferro normalize` over `inputs` with `FERRO_PARTITION` set to `value`.
 ///
-/// The mock provider serves `NM_000088.3`, so no `--reference` and no prepared
-/// reference directory is needed.
-fn normalize_one(value: &str) -> std::process::Output {
+/// The mock provider serves every accession used here, so no `--reference` and
+/// no prepared reference directory is needed — which is what makes driving the
+/// real binary cheap enough to be the default answer whenever a `OnceLock` puts
+/// a switch out of an in-process test's reach.
+fn normalize(inputs: &[&str], value: &str) -> std::process::Output {
     let mut input = tempfile::Builder::new()
         .suffix(".txt")
         .tempfile()
         .expect("create input file");
-    writeln!(input, "{SHIFTED}").expect("write input");
+    for line in inputs {
+        writeln!(input, "{line}").expect("write input");
+    }
     input.flush().expect("flush input");
 
     Command::new(env!("CARGO_BIN_EXE_ferro"))
@@ -64,6 +90,11 @@ fn normalize_one(value: &str) -> std::process::Output {
         .env("FERRO_PARTITION", value)
         .output()
         .expect("run ferro normalize")
+}
+
+/// Run `ferro normalize` over one variant with `FERRO_PARTITION` set to `value`.
+fn normalize_one(value: &str) -> std::process::Output {
+    normalize(&[SHIFTED], value)
 }
 
 /// A misspelled arm name stops the CLI before it reads input, and a real one does
@@ -194,4 +225,121 @@ fn every_binary_target_reports_a_refused_partition_switch() {
          `ferro_hgvs::normalize::partition_switch_startup_error()` after \
          argument parsing and fail on `Some`."
     );
+}
+
+/// The two `partition_block_canonical` arms — the ones
+/// `PartitionRule::cuts_with_canonical` names, and the only ones on which
+/// `coalesce_compensating_gap_split` runs at all.
+const CANONICAL_ARMS: [&str; 2] = ["canonical", "canonical-coalesced"];
+
+/// A cis allele on the **non-coding** `n.` axis whose re-derivation carries a
+/// compensating gap, so the pass fires on it once the axis test is bypassed.
+///
+/// The mock `NR_000123.1` is `ACGTACGTACGT` with no CDS, so `n.` is
+/// transcript-relative and the axis is `CisKind::Tx` — `false` under both
+/// `AxisFrame::is_coding_dna` and `AxisFrame::carries_translated_frame`, which
+/// is what makes it a test of the *kind* rather than of the frame flag.
+///
+/// The shape is the one #1711 was found on: an `inv` and a `del` one unchanged
+/// base apart, the same family as the spec conformance corpus rows
+/// (`s01-n3{m,p}-pair-del-inv-p4-sep1`) whose merge that corpus's own negative
+/// guard for the **rejected** SVD-WG010 proposal counts.
+const NONCODING_COMPENSATING_GAP: &str = "NR_000123.1:n.[2_4inv;6del]";
+
+/// What the pass makes of [`NONCODING_COMPENSATING_GAP`] when the axis test is
+/// bypassed: one `delins` spanning the members *and the unchanged bases between
+/// them* — two variants merged across a gap `general.md:34` keeps individual.
+///
+/// Measured on the mutated builds rather than reasoned about, on both arms of
+/// [`CANONICAL_ARMS`].
+const NONCODING_MERGED: &str = "NR_000123.1:n.2_6delinsACGA";
+
+/// The coding-axis control, in the same shape, on the mock `NM_000088.3`.
+///
+/// It is here so this test cannot pass in a build where the pass is simply never
+/// called — which is the one mutation the negative half above is blind to, and
+/// which would look exactly like the fix. Removing the call site entirely splits
+/// this row into `c.[2dup;4_5inv;8_9del]` instead (measured), so the assertion
+/// below fails.
+const CODING_COMPENSATING_GAP: &str = "NM_000088.3:c.[3_7inv;9del]";
+
+/// The single spanning `delins` [`CODING_COMPENSATING_GAP`] must still reach on
+/// the coding axis, where `DNA/delins.md:47`'s carve-out does apply.
+const CODING_MERGED: &str = "NM_000088.3:c.3_9delinsTGGGCA";
+
+/// Each input's normalized output, read out of `ferro normalize`'s stdout.
+///
+/// A row the normalizer left alone is printed as the input alone, with no arrow,
+/// so it maps to itself; anything else would silently drop exactly the rows a
+/// caller most wants to see unchanged.
+fn normalized_outputs(inputs: &[&str], arm: &str) -> BTreeMap<String, String> {
+    let out = normalize(inputs, arm);
+    assert!(
+        out.status.success(),
+        "`ferro normalize` failed under FERRO_PARTITION={arm}; stderr was:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut parsed = BTreeMap::new();
+    for line in stdout.lines() {
+        let (input, output) = line.split_once(" -> ").unwrap_or((line, line));
+        if inputs.contains(&input) {
+            parsed.insert(input.to_string(), output.to_string());
+        }
+    }
+    for input in inputs {
+        assert!(
+            parsed.contains_key(*input),
+            "no output for {input} under FERRO_PARTITION={arm}; stdout was:\n{stdout}"
+        );
+    }
+    parsed
+}
+
+/// The compensating-gap coalesce consults the **axis** at its call site, not
+/// only in its predicate. #1711.
+///
+/// Both directions in one test, for the reason the misspelling test above gives:
+/// a build that declined the pass on *every* axis would satisfy the negative
+/// half while making the pass dead, and in a log that is indistinguishable from
+/// the fix working.
+///
+/// The negative half deliberately does **not** pin the split spelling. What
+/// `general.md:34` governs is that the members stay individual; which individual
+/// members the re-derivation lands on is a separate question, and pinning it
+/// here would redden this guard for changes that leave its subject untouched.
+#[test]
+fn the_cli_declines_the_compensating_gap_coalesce_off_the_coding_dna_axis() {
+    for arm in CANONICAL_ARMS {
+        let outputs =
+            normalized_outputs(&[NONCODING_COMPENSATING_GAP, CODING_COMPENSATING_GAP], arm);
+
+        let noncoding = &outputs[NONCODING_COMPENSATING_GAP];
+        assert_ne!(
+            noncoding, NONCODING_MERGED,
+            "on FERRO_PARTITION={arm} the `n.` row merged across the unchanged \
+             base between its members. That is the **rejected** SVD-WG010 \
+             proposal, and `DNA/delins.md:47` — the only clause that licenses \
+             merging across unchanged bases — reaches `c.` and nothing else \
+             (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`). The \
+             call site must pass the description's own axis to \
+             `compensating_gap_coalesce_applies`, not a constant (#1711)."
+        );
+        assert!(
+            noncoding.contains(';'),
+            "on FERRO_PARTITION={arm} the `n.` row collapsed to one member \
+             ({noncoding}); off the coding DNA axis `general.md:34` governs and \
+             the members stay individual (#1711)"
+        );
+
+        let coding = &outputs[CODING_COMPENSATING_GAP];
+        assert_eq!(
+            coding, CODING_MERGED,
+            "on FERRO_PARTITION={arm} the `c.` row did not reach the spanning \
+             `delins`, so this test is no longer measuring anything: the pass is \
+             not running on the arm it is scoped to, and the assertion above \
+             would hold in a build that had simply deleted the call. Check the \
+             call site before re-blessing this string."
+        );
+    }
 }
