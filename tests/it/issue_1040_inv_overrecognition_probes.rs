@@ -235,8 +235,11 @@ fn a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation(
     // occur, individually) reaches any single spanning description. At four
     // unchanged bases these are two independent changes rather than interior
     // columns of one reverse-complement relation, so
-    // `coalesce_whole_block_inversion`'s `every_separation_is_a_single_base`
-    // gate must refuse them.
+    // `coalesce_whole_block_inversion`'s admission gate must refuse them. Every
+    // surviving route does: 2 changed columns of 6, no piece wider than one
+    // base, and a payload of 2 against a span of 6. (The gate used to open on
+    // `every_separation_is_a_single_base`, whose gap of 4 refused it first; that
+    // disjunct has since been removed as subsumed by the payload route.)
     //
     // Without this case the two tests above would pass just as well against a
     // rule that merged *any* whole-span reverse complement — the shape, not the
@@ -258,8 +261,10 @@ fn a_dense_inversion_is_recognised_across_multi_base_separations() {
     //
     // `AACAACCGCGTG -> CACGCGGTTGTT` is a whole-span reverse complement whose
     // changed columns fall in three runs separated by **two** unchanged bases
-    // each, so `every_separation_is_a_single_base` refuses it. Before #1461 that
-    // was the end of it and the span came back as separate members.
+    // each, so the separation route the gate then opened on refused it. Before
+    // #1461 that was the end of it and the span came back as separate members.
+    // (That route is gone — subsumed by the payload one — but the history is
+    // what this pair of tests is calibrated against.)
     //
     // Separation cannot decide between this and the control above, and that is
     // the whole point of the pair. Measured on the real case #1461 reports —

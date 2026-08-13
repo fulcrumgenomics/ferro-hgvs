@@ -5365,17 +5365,23 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// makes the derivation agree with the per-member pipeline instead of shredding
 /// what that pipeline types correctly.
 ///
-/// Gated on [`every_separation_is_a_single_base`], and that gate is load-bearing
-/// rather than defensive. `AAGCTA -> TAGCTT` is also a whole reverse complement,
-/// but only its first and last bases change and four unchanged bases lie between
-/// them. `general.md:34` describes two variants separated by one or more
-/// nucleotides individually; its letter names only `delins`, but its rationale
-/// (`delins.md:81-84` — the variants may have been reported, or may occur,
-/// individually) reaches any single spanning description, and at four unchanged
-/// bases these are two independent changes rather than interior columns of one
-/// reverse-complement relation. At exactly one unchanged base the match is far
-/// more likely to be the alignment's coincidence than structure — the same line
-/// [`every_separation_is_a_single_base`] draws inside [`partition_block`].
+/// Gated, and that gate is load-bearing rather than defensive. `AAGCTA ->
+/// TAGCTT` is also a whole reverse complement, but only its first and last bases
+/// change and four unchanged bases lie between them. `general.md:34` describes
+/// two variants separated by one or more nucleotides individually; its letter
+/// names only `delins`, but its rationale (`delins.md:81-84` — the variants may
+/// have been reported, or may occur, individually) reaches any single spanning
+/// description, and at four unchanged bases these are two independent changes
+/// rather than interior columns of one reverse-complement relation.
+///
+/// The gate used to *open* on [`every_separation_is_a_single_base`], on the
+/// reading that at exactly one unchanged base the match is far more likely to be
+/// the alignment's coincidence than structure — the same line that predicate
+/// still draws inside [`partition_block`]. That disjunct is gone, and
+/// [`whole_block_inversion`] records the measurement that removed it: the
+/// single-base regime is a strict subset of what
+/// [`payload_columns_dominate_the_span`] admits, so it never decided anything.
+/// The pair above is still refused, by the three surviving routes.
 ///
 /// Expressed through [`is_inversion`] rather than re-deriving the test, so the
 /// block-level and piece-level answers cannot drift apart.
@@ -5412,8 +5418,14 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// software tools making incorrect predictions for the consequences on protein
 /// level." That is this shape exactly — interior columns coinciding by alignment
 /// rather than by structure — and it endorses the spanning form over the split.
-/// [`every_separation_is_a_single_base`] cites the same passage for the regime
-/// it admits, so both ends of this rule rest on one line of the spec.
+///
+/// That citation carries **less** than it used to, and the next paragraph is
+/// what the pass actually stands on. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+/// (decided 2026-08-11) scopes `:47` to the coding DNA axis, and this pass is
+/// axis-blind — it widens on `g.` as readily as on `c.`. So `:46-47` is a
+/// recommendation ferro follows more widely than the clause reaches, not an
+/// authority for doing so off `c.`. The second citation, below, carries no such
+/// scope and is what the widening actually stands on off the coding axis.
 ///
 /// The **type** of that spanning description is then not a preference but a
 /// definition: `delins.md:5` defines a delins as a replacement "which is not a
@@ -5446,15 +5458,55 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// drift (they did — see
 /// `a_dense_inversion_is_recognised_across_multi_base_separations`, which the
 /// first revision of that pass broke).
+///
+/// # The separation route was removed, and what it was believed to do was measured away
+///
+/// The chain used to open with `every_separation_is_a_single_base`, on the belief
+/// — stated in [`coalesce_whole_block_inversion`]'s own doc, and in that
+/// predicate's — that the single-base regime was *the* discriminator for the
+/// inversions this pass exists to keep whole: the one place a coincidentally
+/// matched interior column is least believable, so the one place widening is
+/// safe. It could never be the disjunct that decided. Being written first in an
+/// `||` chain, it short-circuited ahead of the others and so *looked* decisive —
+/// but every geometry it admitted, [`payload_columns_dominate_the_span`] admits
+/// too, so removing it cannot change a verdict.
+///
+/// The algebra is short enough to keep here rather than to re-derive. Write the
+/// pieces' reference widths `wᵢ`, their payloads `altᵢ`, and `k = pieces.len()`.
+/// The span is `Σwᵢ + Σgaps`, and the separation predicate is exactly the
+/// constraint that every gap is at most one, so `span ≤ Σwᵢ + (k − 1)`. The
+/// payload total is `Σ max(wᵢ, altᵢ) ≥ max(Σwᵢ, k)`, since no piece is empty on
+/// both sides. So `span ≤ payload + k − 1 < 2·payload` whenever `payload ≥ k`,
+/// which it is — and `2·payload > span` is what the payload route tests.
+///
+/// One qualifier, stated because the inequality alone would overclaim: the
+/// payload route takes a `span > 0` early return, so the derivation covers every
+/// geometry with a span. A **zero** span means every piece is zero-wide at one
+/// coordinate, which is not the disjoint ascending partition this pass is handed
+/// — and such a block is refused by [`is_inversion`] regardless, a zero-length
+/// reference span having no reverse complement to match a non-empty payload
+/// against. The test counts those separately rather than skipping them quietly.
+///
+/// Enumerated as well as argued, because an algebraic subsumption that is wrong
+/// is wrong silently: `the_single_base_separation_regime_is_subsumed_by_payload_density`
+/// walks every separation-≤1 geometry over `k = 2..4` with widths and payloads
+/// `0..3` and finds **0** of 418 833 that the payload route misses.
+///
+/// **[`changed_columns_dominate_the_span`] does NOT subsume it**, which is why
+/// the removal is justified specifically against the payload route and the test
+/// pins both halves. That sibling counts reference width only, so it under-reads
+/// a zero-width pure insertion; the same enumeration finds **12 393** geometries
+/// it refuses and the separation route admitted. Removing the disjunct on the
+/// strength of the *density* route would have been a behaviour change.
 fn whole_block_inversion(pieces: &[Piece], ref_bytes: &[u8]) -> Option<Piece> {
-    // Written in the order the four routes were added, which is the order their
-    // own docs number themselves ("the second admission route", "the third
-    // alternative", "the fourth admission route"). All four are pure, so the
-    // order is not observable — but a chain that disagrees with the ordinals
-    // makes every one of those doc lines read as stale.
+    // Written in the order the surviving routes were added, which is the order
+    // their own docs number themselves ("the second admission route", "the third
+    // alternative", "the fourth admission route" — the first is the separation
+    // route this chain no longer carries). All three are pure, so the order is
+    // not observable — but a chain that disagrees with the ordinals makes every
+    // one of those doc lines read as stale.
     if pieces.len() < 2
-        || !(every_separation_is_a_single_base(pieces)
-            || changed_columns_dominate_the_span(pieces)
+        || !(changed_columns_dominate_the_span(pieces)
             || no_piece_is_a_lone_substitution(pieces)
             || payload_columns_dominate_the_span(pieces))
     {
@@ -5514,9 +5566,11 @@ fn whole_block_inversion(pieces: &[Piece], ref_bytes: &[u8]) -> Option<Piece> {
 ///
 /// The inversion that must be recognised has *wider* gaps than the pair that
 /// must stay individual, so every threshold on separation either refuses #1461
-/// or admits the #1040 control. That is why widening
-/// [`every_separation_is_a_single_base`] breaks
-/// `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`.
+/// or admits the #1040 control. That is the argument this rule was added by, and
+/// it is why a separation threshold was never going to be raised to reach #1461.
+/// It is stated in the past tense because [`whole_block_inversion`] no longer
+/// consults [`every_separation_is_a_single_base`] at all — the threshold that
+/// could not be widened has since been removed as subsumed, not widened.
 ///
 /// Density does separate the two rows of that table, and this rule is what
 /// admits #1461. What it is *not* is a test that the reverse-complement relation
@@ -5723,6 +5777,34 @@ fn payload_columns_dominate_the_span(pieces: &[Piece]) -> bool {
 /// a *deliberately pinned* non-confluence rather than a plain bug, and why
 /// `delins.md:44-47` prefers the spanning form where a payload merely *aligns*.
 /// Restricting the collapse to that regime is what lets both rules stand.
+///
+/// # `delins.md:44-47` is narrower than it reads here, and the citation was stale
+///
+/// The ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+/// (decided 2026-08-11) scopes `:47`'s carve-out to the **coding DNA axis**:
+/// `c.`, and nothing else. On `g.`/`m.`/`o.`/`n.` — and on `r.`, in both
+/// directions — `general.md:34` governs unopposed. So a caller that runs on
+/// every axis cannot rest on `:44-47`, and this doc previously read as though
+/// one could.
+///
+/// The caller that most obviously could not was [`whole_block_inversion`], which
+/// is axis-blind and whose gate this predicate opened. That disjunct is gone —
+/// removed as subsumed, see that function — so the question is now moot there,
+/// and it is worth recording that the *outcome* was never in doubt anyway: what
+/// licenses widening to an `inv` is `inversion.md:5`, which defines the type on
+/// the sequence relation alone and carries no axis scope. The predicate's stated
+/// ground was stale; the pass's authority was not.
+///
+/// The **residue is live and is not fixed here**, because fixing it would move
+/// output. The remaining caller is [`partition_block`]'s
+/// [`split_buys_no_higher_priority_type`] route, which is equally axis-blind, and
+/// that route *is* the payload-coincidence shape — its own doc derives the
+/// collapse by analogy from `:44-47` and labels it ferro policy rather than a
+/// spec rule. So the analogy's source clause is now `c.`-scoped while the site
+/// that draws on it is not. Named rather than adjudicated: whether that route
+/// takes an axis gate is a representation question for the ruling's implementers,
+/// and `AxisFrame::reading_frame` is the wrong gate for it (the ruling says so —
+/// it is true for a coding `r.` too, which is how the defect it closes arose).
 fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
     pieces
         .windows(2)
@@ -5732,10 +5814,13 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
 /// No piece spells a lone substitution — every one covers two or more columns.
 ///
 /// The third alternative admitting [`coalesce_whole_block_inversion`], and the
-/// one that closes #1517. It exists because the other two are geometric — they
-/// ask how far apart the pieces are, or what fraction of the span they cover —
-/// and geometry cannot separate #1517 from the case that must stay split. The
-/// two blocks are the same shape:
+/// one that closes #1517. Ordinals here count the order the routes were *added*,
+/// not their position in today's chain — the first of them, the separation
+/// route, has since been removed as subsumed (see [`whole_block_inversion`]). It
+/// exists because the two that preceded it are geometric — they ask how far
+/// apart the pieces are, or what fraction of the span they cover — and geometry
+/// cannot separate #1517 from the case that must stay split. The two blocks are
+/// the same shape:
 ///
 /// ```text
 /// #1230   GATG     -> CATC       changes at 2 of 4 columns, interior `AT` coincides
@@ -11685,7 +11770,8 @@ mod tests {
         );
         assert!(
             !every_separation_is_a_single_base(&inversion),
-            "and it is admitted by density alone -- the single-base gate refuses it"
+            "and it is admitted by density alone -- the single-base PREDICATE refuses it. \
+             Not a gate: `whole_block_inversion` no longer consults it at all"
         );
 
         // The #1040 control, `AAGCTA -> TAGCTT`: 6 nt, 2 changed, one gap of 4.
@@ -14299,6 +14385,138 @@ mod tests {
                 "two insertions are not an inversion, so the pass must leave them \
                  exactly as they were -- a length check alone would also pass if \
                  the pass rewrote them into two different pieces"
+            );
+        }
+
+        /// Every separation-≤1 geometry is one [`payload_columns_dominate_the_span`]
+        /// already admits — which is why [`whole_block_inversion`] no longer
+        /// carries a separation disjunct.
+        ///
+        /// The removal rests on a subsumption, so the subsumption is pinned in
+        /// the tree rather than argued in a PR description. If someone
+        /// reintroduces a geometry the payload route misses — by narrowing that
+        /// predicate, or by widening
+        /// [`every_separation_is_a_single_base`] past a gap of one — this fails
+        /// and names the geometry, instead of the separation route quietly
+        /// needing to come back.
+        ///
+        /// # What is enumerated, and why the bound is where it is
+        ///
+        /// `k = 2..4` pieces, reference widths and payload lengths `0..3`, gaps
+        /// drawn from `{0, 1}`: **418 833** geometries, ~0.4 s in a debug build.
+        /// The algebra on [`whole_block_inversion`] is what makes a bounded sweep
+        /// sufficient — `span ≤ payload + k − 1 < 2·payload` has no largest case,
+        /// so a counterexample would have to be small or the inequality wrong.
+        /// The sweep is the check on the inequality, not a substitute for it.
+        ///
+        /// Widths and payloads reach 3 so that a piece can be wider than its
+        /// payload, narrower than it, and equal to it, which is every side of the
+        /// `max(width, payload)` the predicate takes. Shrink the bound if it ever
+        /// costs real time, but keep all three.
+        ///
+        /// # The two exclusions, both deliberate
+        ///
+        /// A piece changing nothing on either side (`0` wide, empty payload) is
+        /// not a piece — [`shrink_pieces_to_differences`] cannot emit one — and
+        /// counting it would let the enumeration report cases the gate never
+        /// sees.
+        ///
+        /// A **zero span** is the one geometry where the two predicates genuinely
+        /// disagree: `k` pure insertions all at one coordinate satisfy the
+        /// separation predicate, while the payload one takes its `span > 0` early
+        /// return and refuses. There are 117 of them here, they are counted rather
+        /// than skipped silently, and they are not a hole in the removal — pieces
+        /// stacked on one coordinate are not the disjoint ascending partition this
+        /// pass is given, and such a block is refused downstream by [`is_inversion`]
+        /// anyway, since a zero-length reference span cannot reverse-complement to
+        /// a non-empty payload.
+        ///
+        /// # And the sibling does *not* subsume it
+        ///
+        /// Asserted here too, because it is what makes the removal specifically a
+        /// claim about the payload route. [`changed_columns_dominate_the_span`]
+        /// counts reference width, so a zero-width pure insertion reads as
+        /// contributing nothing; it misses 12 393 of these geometries. Dropping
+        /// the disjunct against *that* predicate would have moved output.
+        #[test]
+        fn the_single_base_separation_regime_is_subsumed_by_payload_density() {
+            // `(0, 0)` — changing nothing on either side — is not a piece.
+            let shapes: Vec<(usize, usize)> = (0..4)
+                .flat_map(|width| (0..4).map(move |payload| (width, payload)))
+                .filter(|&(width, payload)| width > 0 || payload > 0)
+                .collect();
+
+            let mut enumerated = 0usize;
+            let mut zero_span = 0usize;
+            let mut payload_misses: Vec<Vec<Piece>> = Vec::new();
+            let mut density_misses = 0usize;
+            let mut pieces: Vec<Piece> = Vec::new();
+
+            for count in 2..=4usize {
+                for shape_index in 0..shapes.len().pow(count as u32) {
+                    // One bit per interior gap: `0` for abutting pieces, `1` for
+                    // the single unchanged base. Built rather than filtered, so
+                    // the enumeration cannot inherit a bug in the predicate whose
+                    // regime it is meant to cover.
+                    for gaps in 0..(1usize << (count - 1)) {
+                        pieces.clear();
+                        let mut digits = shape_index;
+                        let mut cursor = 0usize;
+                        for member in 0..count {
+                            let (width, payload) = shapes[digits % shapes.len()];
+                            digits /= shapes.len();
+                            pieces.push(Piece {
+                                ref_start: cursor,
+                                ref_end: cursor + width,
+                                alt: vec![b'A'; payload],
+                            });
+                            cursor += width + ((gaps >> member) & 1);
+                        }
+                        assert!(
+                            every_separation_is_a_single_base(&pieces),
+                            "the enumeration must cover exactly the predicate's \
+                             regime, and this geometry is outside it: {pieces:?}"
+                        );
+
+                        if pieces[count - 1].ref_end == pieces[0].ref_start {
+                            zero_span += 1;
+                            continue;
+                        }
+                        enumerated += 1;
+                        if !payload_columns_dominate_the_span(&pieces) {
+                            payload_misses.push(pieces.clone());
+                        }
+                        if !changed_columns_dominate_the_span(&pieces) {
+                            density_misses += 1;
+                        }
+                    }
+                }
+            }
+
+            assert!(
+                payload_misses.is_empty(),
+                "the payload route must admit every separation-<=1 geometry, or \
+                 removing the separation disjunct from `whole_block_inversion` \
+                 was a behaviour change; {} missed, first: {:?}",
+                payload_misses.len(),
+                payload_misses.first()
+            );
+            assert_eq!(
+                (enumerated, zero_span),
+                (418_833, 117),
+                "if the enumerated space changes the counts below are measuring \
+                 something else"
+            );
+            assert!(
+                density_misses > 0,
+                "the sibling predicate must NOT subsume the separation regime -- \
+                 if it did, this test would be pinning the wrong justification \
+                 for the removal"
+            );
+            assert_eq!(
+                density_misses, 12_393,
+                "the geometries only the payload route reaches, all of them \
+                 carrying a zero-width pure insertion"
             );
         }
 
