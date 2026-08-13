@@ -53,6 +53,7 @@ mod build_transcript_library_parity;
 mod bulk_fixture_tests;
 mod case_harvest;
 mod cds_utr3_crossing_shift_idempotency;
+mod cis_adjudication_enumeration;
 mod cis_allele_confluence_proptest;
 mod cis_confluence_adjudication;
 mod cis_confluence_axis;
