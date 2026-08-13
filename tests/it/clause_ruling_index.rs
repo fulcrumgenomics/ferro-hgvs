@@ -105,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 25 records, 22 decided / 3 undecided
-//! 103 clause lines, of which 26 are named by more than one record
+//! 26 records, 22 decided / 4 undecided
+//! 104 clause lines, of which 27 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -176,6 +176,8 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/alleles.md:5
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
+//! docs/recommendations/DNA/alleles.md:16
+//!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
 //! docs/recommendations/DNA/complex.md:5
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:13
@@ -310,8 +312,9 @@
 //!     `absolute-prohibition-enforcement-stage` — decided (governing)
 //! docs/recommendations/checklist.md:16
 //!     `absolute-prohibition-enforcement-stage` — decided (cited)
-//! docs/recommendations/checklist.md:20
+//! docs/recommendations/checklist.md:20  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (governing)
+//!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
 //! docs/recommendations/checklist.md:31
 //!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:33
@@ -407,6 +410,9 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//! docs/recommendations/checklist.md:20
+//!     `bare-transcript-intronic-position` — decided (governing)
+//!     `junction-exit-wrapper-scope-in-a-mixed-allele` — undecided (cited)
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
@@ -513,6 +519,14 @@
 //! out of the same-verdict block and into the mixed one at a stroke
 //! (`open-issues.md:77`, `:78`, `delins.md:17`, `:47`, `general.md:34` — every
 //! line that record cites).
+//!
+//! `checklist.md:20` is the second instance of that same direction, and a
+//! smaller one — filing `junction-exit-wrapper-scope-in-a-mixed-allele` moved
+//! exactly one line, the line `bare-transcript-intronic-position` had already
+//! settled. That is the shape to expect when an open question is a *residue* of
+//! a decided one rather than a fresh argument: the settled record still governs
+//! everything it ruled on, and the index is what says that reading it alone is
+//! now incomplete.
 //!
 //! `delins.md:17` is the row this project keeps tripping over, and it is a good
 //! illustration precisely because it has now been on both sides. It was mixed;
@@ -799,7 +813,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (25, 22, 3),
+        (26, 22, 4),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -963,7 +977,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        26,
+        27,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -981,7 +995,7 @@ fn clauses_named_by_several_records_are_flagged() {
         .collect();
     assert_eq!(
         mixed.len(),
-        7,
+        8,
         "measured count of mixed-verdict clause lines changed: {mixed:?}"
     );
 
