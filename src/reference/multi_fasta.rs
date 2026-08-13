@@ -2039,10 +2039,19 @@ impl MultiFastaProvider {
     /// version-stripped); callers that rely on a different contig version should
     /// keep the genome FASTA in sync with cdot.
     ///
-    /// `tx.strand` is honored; metadata fields are projected onto the returned
-    /// `Transcript` using the same conventions as the FASTA-backed path so
-    /// downstream consumers see one shape regardless of which path served
-    /// them. `genome_build` is derived from `build_hint` when the caller
+    /// The sequence this serves is therefore the **gap-collapsed** transcript —
+    /// exon bases only, with no position for any transcript base cdot's exon
+    /// table does not cover. The exon table and CDS bounds published on the
+    /// returned `Transcript` are stated on that same axis, so the three agree
+    /// with each other (#1773); cdot's own `tx_start`/`tx_end`, which are flat
+    /// transcript offsets, are **not** carried through. That is the one place
+    /// this path deliberately differs from the FASTA-backed path, which serves
+    /// the flat deposited sequence and for which the flat table is correct.
+    ///
+    /// `tx.strand` is honored; the remaining metadata fields are projected onto
+    /// the returned `Transcript` using the same conventions as the FASTA-backed
+    /// path so downstream consumers see one shape regardless of which path
+    /// served them. `genome_build` is derived from `build_hint` when the caller
     /// supplied one; otherwise from the attached [`CdotMapper`]'s primary
     /// build (this entry point is only reachable through that mapper, so
     /// the cdot-less branch of
@@ -2094,6 +2103,11 @@ impl MultiFastaProvider {
         // pre-#807 behavior — the overwhelming common, non-indel case).
         let is_minus = matches!(tx.strand, Strand::Minus);
         let mut sequence = String::new();
+        // Bases each exon actually contributed to `sequence`, in tx-order. The
+        // exon table published below is built from these rather than from cdot's
+        // own `tx_start`/`tx_end`, so it tiles the served sequence by
+        // construction — see the coordinate-space note there (#1773).
+        let mut emitted_per_exon: Vec<u64> = Vec::with_capacity(tx.exons.len());
         for (i, e) in tx.exons.iter().enumerate() {
             let g_start_hgvs = e[0];
             let g_end_excl_hgvs = e[1];
@@ -2145,10 +2159,62 @@ impl MultiFastaProvider {
                             ),
                         });
                     }
+                    emitted_per_exon.push(applied.len() as u64);
                     sequence.push_str(&applied);
                 }
                 // No per-exon CIGAR data: keep the whole window (pre-#807 behavior).
-                _ => sequence.push_str(&tx_oriented),
+                _ => {
+                    // Guard-set parity with the CIGAR arm above, scoped to the
+                    // records where the mismatch can do damage (#1773).
+                    //
+                    // The CIGAR arm refuses when the emitted length disagrees
+                    // with the declared span `e[3] - e[2]`. This arm never asked,
+                    // because a no-CIGAR exon emits its whole genome window by
+                    // design and the exon table published below deliberately
+                    // follows the bases served rather than the declaration
+                    // (`synthesized_exon_table_follows_the_bases_served_not_the_declared_span`).
+                    //
+                    // That is the right answer for the exon table and the WRONG
+                    // one for the CDS. cdot states `start_codon`/`stop_codon`
+                    // over the concatenation of the exons' DECLARED spans, so
+                    // when a no-CIGAR exon emits a different number of bases the
+                    // two disagree and the CDS silently names different bases in
+                    // the sequence this function serves — no error, no warning
+                    // that discriminates it, and an exon table that tiles
+                    // perfectly while the CDS inside it is displaced.
+                    //
+                    // Do NOT rely on `cdot_synthesis_has_unverified_exon` to make
+                    // this loud: it fires for EVERY no-CIGAR exon, which is the
+                    // overwhelming common case, so it cannot single out the one
+                    // record where the lengths disagree.
+                    //
+                    // Measured 0 of 482,519 GRCh38 and 0 of 197,846 GRCh37 builds
+                    // carry such an exon, so this refuses nothing in the current
+                    // cdot — but that zero is a property of this release (its Gap
+                    // attribute is written exactly when the alignment has indels),
+                    // not a guarantee, which is why it is enforced rather than
+                    // assumed. Scoped to records that publish a CDS: with no CDS
+                    // there is nothing stated in the declared-span frame, and the
+                    // emitted-bases table is unambiguously correct.
+                    let emitted = tx_oriented.len() as u64;
+                    if tx.cds_start.is_some() || tx.cds_end.is_some() {
+                        let declared = e[3].saturating_sub(e[2]);
+                        if emitted != declared {
+                            return Err(FerroError::InvalidCoordinates {
+                                msg: format!(
+                                    "cdot exon {} for {id} has no CIGAR and emits {emitted} \
+                                     transcript base(s) from its genome window, but its declared \
+                                     transcript span is {declared}; the record's CDS bounds are \
+                                     stated over the declared spans, so serving this would \
+                                     displace the CDS within the synthesized sequence",
+                                    i + 1
+                                ),
+                            });
+                        }
+                    }
+                    emitted_per_exon.push(emitted);
+                    sequence.push_str(&tx_oriented);
+                }
             }
         }
 
@@ -2173,23 +2239,74 @@ impl MultiFastaProvider {
             );
         }
 
-        // Project cdot exons + CDS metadata onto the transcript struct using the
-        // same conventions as the FASTA-backed `get_transcript` path above so
-        // downstream consumers see one shape regardless of which path served them.
+        // Project cdot exons + CDS metadata onto the transcript struct.
+        //
+        // #1773 — the transcript axis here is NOT the one the FASTA-backed path
+        // publishes, and the two must not be conflated. A cdot record states two
+        // transcript coordinate spaces and labels neither:
+        //   - the exon table's `tx_start`/`tx_end` are absolute offsets into the
+        //     **flat** transcript sequence, so a base that fails to align to the
+        //     genome still occupies a position in them;
+        //   - `start_codon`/`stop_codon` (`CdotTranscript.cds_start`/`cds_end`)
+        //     are offsets into the gap-**collapsed** transcript — exon bases only.
+        // The sequence synthesized above is the concatenation of the exons'
+        // emitted bases, so it *is* the collapsed transcript: it has no position
+        // for any base the exon table does not cover. Publishing cdot's flat
+        // `tx_start`/`tx_end` over it therefore mis-states every exon boundary by
+        // the leading offset plus every preceding hole, and every consumer that
+        // walks the table — genome↔transcript mapping, exon/intron geometry,
+        // junction-crossing checks — then indexes the served bytes with a
+        // position that is not on their axis.
+        //
+        // The two spaces coincide only for an exon table that is contiguous
+        // **and** starts at 0. Measured over the prepared reference's cdot
+        // 0.2.32: 167 of 482,519 GRCh38 builds and 442 of 197,846 GRCh37 builds
+        // fail that, split between a non-zero head offset and an internal hole,
+        // with the head offset the larger class on both.
+        //
+        // So build the table from the bases each exon actually contributed. It
+        // then tiles `sequence` from 1 by construction, which is also what makes
+        // it agree with `cds_start`/`cds_end` below.
+        //
+        // The FASTA-backed path above is deliberately untouched: there the
+        // served sequence is the flat deposited one, so cdot's flat exon table
+        // is the correct table for it.
+        let mut compact_offset: u64 = 0;
+        // The loop above pushes exactly one entry per exon or returns `Err`, so
+        // these lengths agree. Said out loud because the `zip` below would
+        // otherwise absorb a disagreement by TRUNCATING the published table, and
+        // a short table still tiles a prefix of the sequence — so the guards
+        // would keep passing while the last exons quietly vanished.
+        debug_assert_eq!(
+            emitted_per_exon.len(),
+            tx.exons.len(),
+            "{id}: synthesis must record one emitted length per exon"
+        );
         let exons: Vec<TxExon> = tx
             .exons
             .iter()
+            .zip(emitted_per_exon.iter())
             .enumerate()
-            .map(|(i, e)| TxExon {
-                number: (i + 1) as u32,
-                // #742: `CdotTranscript.exons` is now HGVS-convention
-                // ([genome 1-based incl/excl, tx 0-based incl/excl]); `TxExon`
-                // is 1-based-inclusive on both axes. (This also resolves the
-                // former #331 genomic-coordinate off-by-one noted here.)
-                start: e[2] + 1,             // tx_start: 0-based incl → 1-based incl
-                end: e[3],                   // tx_end: 0-based excl = 1-based incl
-                genomic_start: Some(e[0]),   // genome_start: already 1-based incl
-                genomic_end: Some(e[1] - 1), // genome_end: 1-based excl → 1-based incl
+            .map(|(i, (e, &emitted))| {
+                // `TxExon` is 1-based-inclusive on both axes. An exon that
+                // emitted no bases (only reachable from a degenerate record)
+                // yields `end < start`, which is the honest encoding of an empty
+                // span and is what every other empty-span check in the crate
+                // already tolerates.
+                let exon = TxExon {
+                    number: (i + 1) as u32,
+                    start: compact_offset + 1,
+                    end: compact_offset + emitted,
+                    // The genome axis is unchanged — it is cdot's alignment and
+                    // is stated in genome coordinates, which no transcript-space
+                    // question can move. (#742 put these in the HGVS convention:
+                    // `genome_start` 1-based inclusive, `genome_end` 1-based
+                    // exclusive.)
+                    genomic_start: Some(e[0]),
+                    genomic_end: Some(e[1] - 1),
+                };
+                compact_offset += emitted;
+                exon
             })
             .collect();
 
@@ -2204,6 +2321,35 @@ impl MultiFastaProvider {
             gene_symbol: tx.gene_name.clone(),
             strand: tx.strand,
             sequence: Some(sequence),
+            // cdot's `start_codon`/`stop_codon` are offsets into the
+            // gap-**collapsed** transcript, which is the space the sequence
+            // above is in, so they are carried through with only the 0-based →
+            // 1-based shift. Verified against the deposited transcript FASTA
+            // rather than assumed: over the GRCh38 non-identity records that
+            // carry both a CDS and a sequence, slicing the flat deposited
+            // sequence at these bounds read as **collapsed** offsets yields a
+            // valid ORF 50/50 (gapped) and 41/46 (head-offset, the residue
+            // failing under both readings for its own reasons), while reading
+            // them as **flat** offsets yields 0/50 and 0/46.
+            //
+            // Read precisely, cdot states those offsets over the concatenation
+            // of the exons' DECLARED transcript spans (`e[3] - e[2]`), while the
+            // sequence above is the concatenation of what each exon EMITTED. The
+            // two agree for every CIGAR-bearing exon, which synthesis checks
+            // (#807), and for every exon whose genome window is its declared
+            // span — which is every no-CIGAR exon in this cdot: measured 0 of
+            // 482,519 GRCh38 and 0 of 197,846 GRCh37 builds carry a no-CIGAR
+            // exon whose genome span differs from its declared transcript span.
+            // A record that broke it would already be warning loudly through
+            // `cdot_synthesis_has_unverified_exon`, so the case is not silent,
+            // but the assumption belongs here rather than in a reader's head.
+            //
+            // #1773 — THIS IS THE SEAM. Anything that moves
+            // `CdotTranscript::cds_start`/`cds_end` into the flat transcript
+            // space must map them back to the collapsed space here, or the CDS
+            // stops naming positions in the sequence this function serves. The
+            // guard is
+            // `synthesized_cds_bounds_are_on_the_served_sequences_axis`.
             cds_start: tx.cds_start.map(|s| s + 1),
             cds_end: tx.cds_end,
             exons,
@@ -6571,6 +6717,303 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             .get_transcript("NM_MIX.1")
             .expect("mixed deletion + missing-CIGAR record must synthesize, not decline");
         assert_eq!(tx.sequence.as_deref(), Some("GGTTAAAACCCCGGGGTT"));
+    }
+
+    // ----------------------------------------------------------------------
+    // #1773 — the synthesized transcript's own coordinate space.
+    //
+    // Synthesis concatenates the exons' bases, so what it serves is the
+    // gap-COLLAPSED transcript. cdot's exon table is stated in FLAT transcript
+    // offsets and its `start_codon`/`stop_codon` in collapsed ones; publishing
+    // the former over the collapsed sequence puts the exon table on an axis the
+    // bytes are not on.
+    // ----------------------------------------------------------------------
+
+    /// A genome whose two exon windows concatenate to a valid ORF, so the CDS
+    /// bounds can be checked by what they DENOTE rather than by their numbers.
+    ///
+    /// `NC_ORF.1` = `ATGCCCGGG` `TTTTT` `AAACCCTAA` (23 bases). The two windows
+    /// are HGVS `[1,10)` and `[15,24)`; concatenated they read
+    /// `ATG CCC GGG AAA CCC TAA` — start codon, no internal stop, terminator.
+    fn build_provider_with_orf_genome() -> (MultiFastaProvider, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_ORF.1").unwrap();
+            writeln!(f, "ATGCCCGGGTTTTTAAACCCTAA").unwrap();
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            // Header ">NC_ORF.1\n" is 10 bytes, so the sequence offset is 10.
+            writeln!(f, "NC_ORF.1\t23\t10\t23\t24").unwrap();
+        }
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        (provider, dir)
+    }
+
+    /// `NM_ORF.1` over `build_provider_with_orf_genome`, carrying BOTH shapes
+    /// that make the flat and collapsed spaces differ: a 7-base head offset
+    /// (the first exon starts at flat tx 7, not 0) and an 11-base hole between
+    /// the exons. Real cdot has both — 167 GRCh38 and 442 GRCh37 builds, the
+    /// head offset the larger class on each.
+    ///
+    /// The CDS is stated the way cdot states it, as gap-collapsed offsets
+    /// `[0, 18)` — the whole served transcript.
+    fn seat_headed_and_gapped_orf_tx() -> CdotMapper {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::transcript::Strand;
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_ORF.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("ORF".to_string()),
+                contig: "NC_ORF.1".to_string(),
+                // [genome_start (1-based incl), genome_end (1-based excl),
+                //  tx_start (0-based incl), tx_end (0-based excl)] — the tx
+                // bounds are FLAT: head offset 7, then a hole of 11 (16 → 27).
+                exons: vec![[1, 10, 7, 16], [15, 24, 27, 36]],
+                strand: Strand::Plus,
+                cds_start: Some(0),
+                cds_end: Some(18),
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![None, None],
+            },
+        );
+        cdot
+    }
+
+    #[test]
+    fn synthesized_exon_table_tiles_the_served_sequence() {
+        let (mut provider, _kept) = build_provider_with_orf_genome();
+        provider.cdot_mapper = Some(seat_headed_and_gapped_orf_tx());
+
+        let tx = provider
+            .get_transcript("NM_ORF.1")
+            .expect("head-offset + gapped record must synthesize");
+        let seq = tx.sequence.as_deref().expect("synthesis serves bases");
+        assert_eq!(seq, "ATGCCCGGGAAACCCTAA");
+
+        // The published table is on the served sequence's axis: it starts at 1,
+        // ends at its last base, and leaves no hole. cdot's flat table would say
+        // 8..=16 and 28..=36 over these 18 bytes.
+        let spans: Vec<(u64, u64)> = tx.exons.iter().map(|e| (e.start, e.end)).collect();
+        assert_eq!(spans, vec![(1, 9), (10, 18)]);
+        assert_eq!(
+            tx.exons.last().map(|e| e.end),
+            Some(seq.len() as u64),
+            "the last exon must end at the last served base"
+        );
+
+        // The genome axis is cdot's alignment and must not move with it.
+        assert_eq!(
+            tx.exons
+                .iter()
+                .map(|e| (e.genomic_start, e.genomic_end))
+                .collect::<Vec<_>>(),
+            vec![(Some(1), Some(9)), (Some(15), Some(23))]
+        );
+    }
+
+    #[test]
+    fn synthesized_cds_bounds_are_on_the_served_sequences_axis() {
+        let (mut provider, _kept) = build_provider_with_orf_genome();
+        provider.cdot_mapper = Some(seat_headed_and_gapped_orf_tx());
+
+        let tx = provider
+            .get_transcript("NM_ORF.1")
+            .expect("head-offset + gapped record must synthesize");
+        let seq = tx.sequence.as_deref().expect("synthesis serves bases");
+        let (cds_start, cds_end) = (
+            tx.cds_start.expect("fixture has a CDS"),
+            tx.cds_end.expect("fixture has a CDS"),
+        );
+
+        // Judged by what the bounds DENOTE, not by their numbers: on the served
+        // sequence's axis they must slice the reading frame the fixture's genome
+        // windows were built to spell. Read as flat offsets they would name
+        // 8..=36 on an 18-base sequence and slice nothing at all.
+        assert!(
+            cds_start >= 1 && cds_end <= seq.len() as u64 && cds_start <= cds_end,
+            "CDS {cds_start}..={cds_end} is not inside the {}-base served sequence",
+            seq.len()
+        );
+        let cds = &seq[(cds_start - 1) as usize..cds_end as usize];
+        assert_eq!(cds, "ATGCCCGGGAAACCCTAA");
+        assert!(cds.starts_with("ATG"), "CDS must open on the start codon");
+        assert_eq!(cds.len() % 3, 0, "CDS must be a whole number of codons");
+        assert_eq!(&cds[cds.len() - 3..], "TAA", "CDS must close on its stop");
+
+        // And the CDS must sit inside the exon table it is published beside,
+        // which is the coherence the two halves of this fix buy together.
+        assert!(
+            tx.exons
+                .iter()
+                .any(|e| e.start <= cds_start && cds_start <= e.end),
+            "cds_start {cds_start} falls in no exon of {:?}",
+            tx.exons
+                .iter()
+                .map(|e| (e.start, e.end))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn fasta_backed_transcript_keeps_cdots_flat_exon_table() {
+        // The other half of #1773, and the half that must NOT move: when the
+        // transcript FASTA carries the accession, the served sequence is the
+        // FLAT deposited one — head offset and hole included as real bases — so
+        // cdot's flat `tx_start`/`tx_end` is the correct table for it and is
+        // published verbatim. Re-tiling this path the way synthesis is re-tiled
+        // would be a regression, and nothing in the suite noticed it before this
+        // test: the mutation that subtracts the head offset here passed all 4194
+        // `--lib` tests.
+        let dir = tempdir().unwrap();
+        {
+            let mut f = File::create(dir.path().join("genome.fna")).unwrap();
+            writeln!(f, ">NC_ORF.1").unwrap();
+            writeln!(f, "ATGCCCGGGTTTTTAAACCCTAA").unwrap();
+            // ">NC_ORF.1\n" is 10 bytes, so the sequence offset is 10.
+            let mut i = File::create(dir.path().join("genome.fna.fai")).unwrap();
+            writeln!(i, "NC_ORF.1\t23\t10\t23\t24").unwrap();
+        }
+        {
+            // The deposited transcript, on the flat axis the exon table states:
+            // 7 unaligned head bases, exon 1's 9, an 11-base hole, exon 2's 9.
+            let mut f = File::create(dir.path().join("tx.fna")).unwrap();
+            writeln!(f, ">NM_ORF.1").unwrap();
+            writeln!(f, "GGGGGGGATGCCCGGGNNNNNNNNNNNAAACCCTAA").unwrap();
+            let mut i = File::create(dir.path().join("tx.fna.fai")).unwrap();
+            writeln!(i, "NM_ORF.1\t36\t10\t36\t37").unwrap();
+        }
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        provider.cdot_mapper = Some(seat_headed_and_gapped_orf_tx());
+
+        let tx = provider
+            .get_transcript("NM_ORF.1")
+            .expect("the FASTA record must serve this accession");
+        assert_eq!(
+            tx.sequence.as_deref().map(str::len),
+            Some(36),
+            "the FASTA path serves the flat deposited sequence"
+        );
+        assert_eq!(
+            tx.exons
+                .iter()
+                .map(|e| (e.start, e.end))
+                .collect::<Vec<_>>(),
+            vec![(8, 16), (28, 36)],
+            "cdot's flat exon table is correct against a flat sequence"
+        );
+    }
+
+    /// The other side of `..._follows_the_bases_served_not_the_declared_span`,
+    /// and the case that test could not cover because it deliberately carries no
+    /// CDS.
+    ///
+    /// A no-CIGAR exon emits its whole genome window whatever its declared
+    /// transcript span says, and the published exon table follows those bases —
+    /// correct, and what the sibling test pins. But cdot states
+    /// `start_codon`/`stop_codon` over the concatenation of the exons'
+    /// **declared** spans, so on a record that also carries a CDS the two frames
+    /// disagree and the CDS silently names different bases in the served
+    /// sequence. The exon table still tiles perfectly, so nothing downstream
+    /// looks wrong.
+    ///
+    /// Synthesis must refuse rather than serve that. Two exons, the FIRST
+    /// mismatching (window 9, declared 4) and the CDS opening in the second, so
+    /// the displacement is real rather than incidental.
+    ///
+    /// Measured 0 of 482,519 GRCh38 and 0 of 197,846 GRCh37 builds carry such an
+    /// exon, so this refuses nothing in the shipped cdot — the guard exists
+    /// because that zero is a property of the release, not a guarantee, and
+    /// because `cdot_synthesis_has_unverified_exon` fires for every no-CIGAR
+    /// exon and so cannot single this one out.
+    #[test]
+    fn synthesis_refuses_a_no_cigar_exon_whose_window_contradicts_its_declared_span_when_a_cds_is_published(
+    ) {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::transcript::Strand;
+
+        let (mut provider, _kept) = build_provider_with_orf_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_MISMATCH.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("MISMATCH".to_string()),
+                contig: "NC_ORF.1".to_string(),
+                // Exon 1: genome window [1,10) is 9 bases, declared span is 4.
+                // Exon 2: genome window [15,24) is 9 bases, declared span is 9.
+                exons: vec![[1, 10, 0, 4], [15, 24, 4, 13]],
+                strand: Strand::Plus,
+                // A CDS in the declared-span frame — which is the frame the
+                // mismatch invalidates.
+                cds_start: Some(4),
+                cds_end: Some(13),
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![None, None],
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        let err = provider
+            .get_transcript("NM_MISMATCH.1")
+            .expect_err("a declared-span mismatch must be refused when a CDS is published");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("declared transcript span") && msg.contains("displace the CDS"),
+            "expected the declared-span refusal, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn synthesized_exon_table_follows_the_bases_served_not_the_declared_span() {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::transcript::Strand;
+
+        // An exon with no CIGAR emits its WHOLE genome window, whatever its
+        // declared transcript span says — that is the pre-#807 behavior the
+        // "unverified exon" warning is about. So the table has to be built from
+        // the bases actually emitted; a table built from `tx_end - tx_start`
+        // would claim 4 bases for an exon that served 9.
+        let (mut provider, _kept) = build_provider_with_orf_genome();
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_SPAN.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("SPAN".to_string()),
+                contig: "NC_ORF.1".to_string(),
+                // Genome window [1,10) is 9 bases; the declared tx span is 4.
+                exons: vec![[1, 10, 0, 4]],
+                strand: Strand::Plus,
+                cds_start: None,
+                cds_end: None,
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![None],
+            },
+        );
+        provider.cdot_mapper = Some(cdot);
+
+        let tx = provider
+            .get_transcript("NM_SPAN.1")
+            .expect("a no-CIGAR exon serves its whole window");
+        let seq = tx.sequence.as_deref().expect("synthesis serves bases");
+        assert_eq!(seq, "ATGCCCGGG");
+        assert_eq!(
+            tx.exons
+                .iter()
+                .map(|e| (e.start, e.end))
+                .collect::<Vec<_>>(),
+            vec![(1, 9)],
+            "the exon must claim the 9 bases it served, not its declared span of 4"
+        );
     }
 
     #[test]
