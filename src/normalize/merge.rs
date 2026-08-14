@@ -9733,44 +9733,106 @@ pub(crate) fn derive_block_members(
     coalesce_adjacent_pieces(&mut pieces);
     shrink_pieces_to_differences(&mut pieces, reference);
 
-    // Contig-start escape: rescue the one pure insertion that has no HGVS
-    // anchor from the one window where the anchor genuinely does not exist.
+    // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
+    // interbase 0 from the one window where the anchor genuinely does not exist.
     //
     // When `w_lo == 1` the window begins at the accession's first base, so
     // `reference[0]` *is* the contig's first base — not merely the first base
-    // this call was handed. A pure insertion the 5'-shuffle rolled to interbase
-    // 0 would then be spelled `0_1ins…`, naming a position that does not exist
-    // rather than one this caller simply did not supply (`DerivedBlock`).
+    // this call was handed. A pure insertion at interbase 0 would then be
+    // spelled `0_1ins…`, naming a position that does not exist rather than one
+    // this caller simply did not supply (`DerivedBlock`). There are two ways
+    // out, and they denote different things:
     //
-    // But interbase 0 and interbase 1 denote the *same* sequence whenever the
-    // payload's leading base equals the terminal base `reference[0]`: the
-    // insertion sits in an ambiguous run reaching the terminus, and inserting
-    // `alt` before base 1 equals inserting `rotate_left(1)(alt)` before base 2
-    // (the algebra is `alt[0] == reference[0]`, exactly `shuffle`'s own 3'-step
-    // predicate). When it holds, present the insertion at the leftmost
-    // *nameable* interbase — offset 1 — instead of refusing. This is the
-    // terminal analogue of the 3'-most rule: the 5'-most position is off the
-    // sequence, so the run's leftmost expressible position stands in for it.
+    // **(1) The insertion crosses the terminal base unchanged**
+    // (`alt[0] == reference[0]`). It sits in an ambiguous run reaching the
+    // terminus — base 1 itself is *not* changed — so inserting `alt` before
+    // base 1 equals inserting `rotate_left(1)(alt)` before base 2 (exactly
+    // `shuffle`'s own 3'-step predicate). Present it at the leftmost *nameable*
+    // interbase, offset 1: a genuine insertion, kept as one. This is the
+    // terminal analogue of the 3'-most rule.
     //
-    // Guarded to `w_lo == 1` alone. At any interior window the correct answer is
-    // to widen the 5' flank (`Normalizer::sequence_normalize` does), not to
-    // relabel; only at the true contig start is widening impossible and the
-    // relabel forced. A payload that cannot cross the terminal base
-    // (`alt[0] != reference[0]`) is genuinely an insertion before base 1 and
-    // still refuses. `verify_round_trip` re-applies the escaped members, so a
-    // mis-step here surfaces as an error rather than a wrong sequence.
+    // **(2) The insertion cannot cross the terminal base**
+    // (`alt[0] != reference[0]`), so base 1 is itself rewritten. HGVS has no
+    // interbase 5' of base 1 to hang the payload on, but the *span* form needs
+    // none: fold the leading insertion rightward into the next piece, absorbing
+    // the unchanged reference between them, to make one delins anchored at
+    // base 1 (`0_next.ref_end`). This is what Mutalyzer emits for these dense,
+    // base-1-overwriting substitution stacks — `g.1_5delinsCAAGA` — and a
+    // resulting reverse-complement span is retyped to `inv` downstream by
+    // `retype_inversions`, matching its `g.1_3inv` too. A leading insertion with
+    // no piece to fold into is a true insertion before base 1 and still refuses.
+    //
+    // Both are guarded to `w_lo == 1`: at any interior window the answer is to
+    // widen the 5' flank (`Normalizer::sequence_normalize` does), not to
+    // relabel. `verify_round_trip` re-applies the emitted members, so a mis-step
+    // here surfaces as an error rather than a wrong sequence.
     if w_lo == 1 {
-        let next_is_clear = pieces.get(1).is_none_or(|next| next.ref_start >= 1);
-        if next_is_clear {
-            if let Some(first) = pieces.first_mut() {
-                let is_pure_insertion =
-                    first.ref_start == 0 && first.ref_end == 0 && !first.alt.is_empty();
-                let crosses_terminus = reference.first() == first.alt.first();
-                if is_pure_insertion && crosses_terminus {
-                    first.alt.rotate_left(1);
-                    first.ref_start = 1;
-                    first.ref_end = 1;
-                }
+        let leading_insertion_at_zero = pieces
+            .first()
+            .is_some_and(|p| p.ref_start == 0 && p.ref_end == 0 && !p.alt.is_empty());
+        if leading_insertion_at_zero {
+            let crosses_terminus = reference.first() == pieces[0].alt.first();
+            // Stated as the invariant it is, rather than as the `next_is_clear`
+            // guard it used to be. `coalesce_adjacent_pieces` ran two statements
+            // above and merges any second piece whose `ref_start` equals
+            // `pieces[0].ref_end`, which is `0` here — so a surviving `pieces[1]`
+            // always starts at 1 or beyond and the guard could never exclude
+            // anything. As a condition it gated case (1) and not case (2),
+            // which read as a distinction between the two and is not one; as an
+            // assertion it says why the invariant holds and fails loudly if
+            // `coalesce_adjacent_pieces` ever stops holding it. With it gone the
+            // `else if`'s own `!crosses_terminus` is the negation of the `if`,
+            // so that goes too.
+            debug_assert!(
+                pieces.get(1).is_none_or(|next| next.ref_start >= 1),
+                "coalesce_adjacent_pieces should have merged a piece abutting the \
+                 leading insertion",
+            );
+            let mut escaped = false;
+            if crosses_terminus {
+                // Case (1): the leftmost nameable interbase stands in for the
+                // 5'-most position that is off the sequence.
+                let first = &mut pieces[0];
+                first.alt.rotate_left(1);
+                first.ref_start = 1;
+                first.ref_end = 1;
+                escaped = true;
+            } else if pieces.len() >= 2 {
+                // Case (2): fold `insP` + (unchanged `reference[0..gap]`) +
+                // `next` into one delins anchored at base 1.
+                let next = pieces.remove(1);
+                let mut alt = std::mem::take(&mut pieces[0].alt);
+                alt.extend_from_slice(&reference[0..next.ref_start]);
+                alt.extend_from_slice(&next.alt);
+                pieces[0].ref_start = 0;
+                pieces[0].ref_end = next.ref_end;
+                pieces[0].alt = alt;
+                escaped = true;
+            }
+            // Re-establish what the two passes above established, because this
+            // block ran *after* them and both escapes move a piece: case (1)
+            // takes the leading insertion from interbase 0 to interbase 1, where
+            // a `pieces[1]` starting at 1 would abut it, and
+            // `coalesce_adjacent_pieces` — the enforcement point for
+            // `delins.md:16` — has already gone past. `verify_round_trip` cannot
+            // stand in for this: it re-applies the members and compares *bases*,
+            // and `g.[1_2insA;2G>C]` and `g.2delinsAC` re-apply identically. The
+            // invariant is about shape, which it does not look at.
+            //
+            // Measured as a no-op on today's partitioner — over an exhaustive
+            // 3-letter sweep (reference lengths 3-6 against observed lengths
+            // 2-7, ~3.5M pairs) plus 400k randomised 4-letter cases, case (1)
+            // fired 61,428 times, 57,594 of them with a second piece, and the
+            // nearest such piece ever started at `ref_start == 2`. So the
+            // adjacency is not reachable through `partition_block_for_derivation`
+            // as it stands, and this re-run changed the piece list zero times.
+            // It is kept because the invariant is the escape's obligation and
+            // not the partitioner's: a partition that placed the insertion at
+            // interbase 0 beside a piece at 1 would otherwise emit an
+            // un-coalesced member pair silently.
+            if escaped {
+                coalesce_adjacent_pieces(&mut pieces);
+                shrink_pieces_to_differences(&mut pieces, reference);
             }
         }
     }
