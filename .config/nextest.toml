@@ -1,8 +1,30 @@
 [profile.default]
 fail-fast = false
 
-[profile.ci]
-test-threads = "num-cpus"
-fail-fast = true
-slow-timeout = { period = "60s", terminate-after = 2 }
-retries = 1
+# There is deliberately no `[profile.ci]`.
+#
+# One existed and was BOTH dead and a trap. Nothing in `.github/` or `scripts/`
+# ever selected it — CI runs the archived binaries directly:
+#
+#     cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+#       --extract-to . --extract-overwrite --partition hash:<K>/6 -E "..."
+#
+# so its settings described nothing that runs. Worse, anyone who reached for
+# `--profile ci` locally with `FERRO_MANIFEST` set got a deterministic failure
+# rather than a test result: it carried
+#
+#     slow-timeout = { period = "60s", terminate-after = 2 }   # kills at 120s
+#     retries = 1
+#
+# while the two conformance censuses take 200.9s and 187.9s under the default
+# profile. Both are terminated at 120s, retried once, terminated again — 240s of
+# timeout and 0 tests passed, presenting as a test failure rather than as a
+# configuration one.
+#
+# Its other settings did not describe CI either: `fail-fast = true` against CI's
+# archive runs, and `retries = 1` where a normalization suite wants a
+# deterministic result rather than a re-roll.
+#
+# If a CI profile is wanted later, derive it from what `ci.yml` actually runs,
+# and size any `slow-timeout` from the measured cost of the slowest test rather
+# than from a round number.
