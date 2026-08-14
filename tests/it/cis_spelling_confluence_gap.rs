@@ -35,8 +35,7 @@
 //!
 //! Both tables are measured in both directions. Every row above was blessed
 //! against the 3' rule, but confluence is a property of the normalizer rather
-//! than of one shuffle direction, and `--direction 5prime` is a supported public
-//! option — so [`DIVERGENT_UNDER_FIVE_PRIME`] records the [`CONVERGED`] rows that
+//! than of one shuffle direction — so [`DIVERGENT_UNDER_FIVE_PRIME`] records the [`CONVERGED`] rows that
 //! converge under 3' and diverge under 5', and
 //! [`the_eight_spelling_pairs_still_diverge_under_five_prime`] pins that the
 //! [`DIVERGENT`] eight diverge under 5' too. Both use the same assert-then-flip
@@ -132,7 +131,7 @@ const CONVERGED: &[(&str, &str, &str, &str, &str)] = &[
     // the derivation *read* a form rather than by teaching it to build one. Its
     // agreed string is neither input spelling: two members denoting one changed
     // base come back as that substitution. Verified identical under
-    // `--direction 5prime`.
+    // the 5' shuffle direction.
     (
         "#1296",
         "AAAAAAATAATCGCAACAGAAG",
@@ -312,10 +311,12 @@ fn converged_pairs_stay_converged() {
 
 /// Rows from [`CONVERGED`] that converge under the 3' rule but **not** under 5'.
 ///
-/// Confluence is a property of the normalizer, not of one shuffle direction, and
-/// `--direction 5prime` is a supported public option on both the CLI
-/// (`src/bin/ferro.rs`) and the Python bindings. Every row above was blessed
-/// against the 3' direction only, so these gaps were never measured.
+/// Confluence is a property of the normalizer, not of one shuffle direction.
+/// The 5' direction is no longer a public option — it is not reachable from the
+/// CLI, the Python bindings or the web service (`README.md` rule 6, and
+/// `tests/it/five_prime_public_surface_removed.rs`) — but that does not narrow
+/// what has to be measured here, it changes only why: the 5' arm is ferro's differential oracle over its own 3' output — the instrument that found #1542, where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only the shipped `live`/3' arm diverged. Every row above was
+/// blessed against the 3' direction only, so these gaps were never measured.
 ///
 /// **Both original rows have since left this set, for unrelated reasons.**
 ///

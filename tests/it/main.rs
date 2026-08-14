@@ -14,6 +14,7 @@
 mod common;
 mod five_prime_boundary_delins_unification;
 mod five_prime_insertion_dup_boundary_anchor;
+mod five_prime_public_surface_removed;
 mod five_prime_tandem_repeat_dup_rotation;
 mod issue_1282_position_zero;
 mod issue_1450_derivation_exon_junction;

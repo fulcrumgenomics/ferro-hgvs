@@ -761,11 +761,14 @@ pub(crate) const THREE_PRIME: Census = Census {
 
 /// The 5'-direction census, pinned.
 ///
-/// `--direction 5prime` is a supported public option and confluence is a
-/// property of the normalizer rather than of one shuffle direction, so it is
-/// measured in full. Two directions landing on materially different numbers
-/// would mean a fix was treating a symptom of the shuffle rather than the
-/// partitioner.
+/// Confluence is a property of the normalizer rather than of one shuffle
+/// direction, so it is measured in full. Two directions landing on materially
+/// different numbers would mean a fix was treating a symptom of the shuffle
+/// rather than the partitioner.
+///
+/// The 5' direction is **no longer a public option** — see `README.md` rule 6
+/// and `tests/it/five_prime_public_surface_removed.rs`. It is measured in full
+/// for a different reason now: the 5' arm is ferro's differential oracle over its own 3' output — the instrument that found #1542, where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only the shipped `live`/3' arm diverged.
 ///
 /// Measured on the same base as [`THREE_PRIME`], and re-blessed by the same
 /// five changes — see the module docs' five RE-BLESSED sections.

@@ -39,17 +39,16 @@ impl FerroService {
             })?
         };
 
-        // Create normalization config
-        let shuffle_direction = match config.shuffle_direction.as_deref() {
-            Some("5prime") => ShuffleDirection::FivePrime,
-            Some("3prime") | None => ShuffleDirection::ThreePrime,
-            Some(other) => {
-                return Err(ServiceError::ConfigError(format!(
-                    "Invalid shuffle_direction '{}', must be '3prime' or '5prime'",
-                    other
-                )));
-            }
-        };
+        // Create normalization config.
+        //
+        // The service used to read a `shuffle_direction` key here. It is gone:
+        // `README.md` rule 6 says there are no user options for normalization
+        // form, and a direction is not orthogonal to the form. The service
+        // normalizes 3', the only direction the HGVS recommendations describe.
+        // `FerroConfig` is `deny_unknown_fields` so a stale
+        // `shuffle_direction = "5prime"` in an operator's TOML fails the load
+        // rather than being ignored.
+        let shuffle_direction = ShuffleDirection::ThreePrime;
 
         let error_mode = match config.error_mode.as_deref() {
             Some("strict") => ErrorMode::Strict,
@@ -267,7 +266,6 @@ mod tests {
             enabled: true,
             reference_dir: temp_dir.path().to_path_buf(),
             parallel_workers: Some(1),
-            shuffle_direction: Some("3prime".to_string()),
             error_mode: Some("lenient".to_string()),
         };
 
@@ -293,17 +291,43 @@ mod tests {
     // function in `crate::service::types`. The service exercises it end-to-end via
     // `parse`/`normalize`, which populate `ParseResult::details`.
 
+    /// A malformed enumerated config value must be refused, not defaulted.
+    ///
+    /// This used to key on `shuffle_direction: Some("invalid")`. That key was
+    /// removed with the rest of the public 5' surface, so the test now keys on
+    /// `error_mode`, which is the remaining enumerated string on `FerroConfig`
+    /// and has the identical reject-don't-guess contract.
     #[test]
     fn test_invalid_config() {
         let config = FerroConfig {
             enabled: true,
             reference_dir: std::path::PathBuf::from("/nonexistent/path"),
             parallel_workers: Some(1),
-            shuffle_direction: Some("invalid".to_string()),
-            error_mode: Some("lenient".to_string()),
+            error_mode: Some("invalid".to_string()),
         };
 
         let result = FerroService::new(&config);
         assert!(result.is_err());
+    }
+
+    /// A stale `shuffle_direction` key must fail the config load loudly.
+    ///
+    /// The dangerous removal shape is the silent one: serde ignores unknown
+    /// fields by default, so an operator's `shuffle_direction = "5prime"` would
+    /// vanish and the service would 3'-shift while the file still asked for 5'.
+    /// `deny_unknown_fields` on `FerroConfig` turns that into a load error.
+    #[test]
+    fn a_removed_shuffle_direction_key_is_rejected_not_ignored() {
+        let toml = r#"
+enabled = true
+reference_dir = "/tmp/ferro-ref"
+shuffle_direction = "5prime"
+"#;
+        let err = toml::from_str::<FerroConfig>(toml)
+            .expect_err("a removed key must not be silently ignored");
+        assert!(
+            err.to_string().contains("shuffle_direction"),
+            "the error must name the offending key, got: {err}"
+        );
     }
 }

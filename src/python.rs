@@ -29,7 +29,7 @@ use crate::prepare::{check_references, prepare_references, PrepareConfig, Refere
 use crate::python_helpers::{
     get_indel_length, get_num_variants, get_substitution_bases, get_variant_edit_type,
     get_variant_end, get_variant_offset, get_variant_reference, get_variant_start, is_frameshift,
-    is_identity, parse_direction, variant_type_str,
+    is_identity, variant_type_str,
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::{GenomeBuild, Strand};
@@ -250,19 +250,12 @@ fn build_isolated_batch(
     Ok(out)
 }
 
-/// Validate a shuffle-direction argument at the Python boundary.
-///
-/// Mirrors the `assembly` argument's validate-and-raise pattern: an unrecognized
-/// spelling raises `ValueError` naming the accepted values instead of silently
-/// defaulting to 3' (#1016).
-fn parse_direction_or_raise(direction: &str) -> PyResult<ShuffleDirection> {
-    parse_direction(direction).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "unrecognized direction {direction:?}; expected one of \"3prime\", \"5prime\", \
-             \"3\", \"5\", \"3'\", \"5'\" (case-insensitive)"
-        ))
-    })
-}
+// `parse_direction_or_raise` was removed with the ten `direction=` keywords it
+// validated. #1016 filed the shape it fixed — an unrecognized spelling silently
+// defaulting to 3' — and the removal keeps that property rather than dropping
+// it: an argument PyO3 does not know about is a `TypeError`, so
+// `normalize(s, direction="5prime")` fails at the call instead of quietly
+// 3'-shifting. Pinned by `tests/python/test_issue_1016_direction_validation.py`.
 
 /// Resolve an optional `error_config=` keyword argument to the `ErrorConfig`
 /// the normalizer should use.
@@ -593,7 +586,6 @@ fn parse(hgvs_string: &str) -> PyResult<PyHgvsVariant> {
 ///
 /// Args:
 ///     hgvs_string: The HGVS variant description to normalize
-///     direction: Shuffle direction - "3prime" (default) or "5prime"
 ///
 /// Returns:
 ///     The normalized HGVS string
@@ -602,8 +594,8 @@ fn parse(hgvs_string: &str) -> PyResult<PyHgvsVariant> {
 ///     ValueError: If the HGVS string cannot be parsed
 ///     RuntimeError: If normalization fails
 #[pyfunction]
-#[pyo3(signature = (hgvs_string, direction="3prime"))]
-fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<String> {
+#[pyo3(signature = (hgvs_string))]
+fn normalize(py: Python<'_>, hgvs_string: &str) -> PyResult<String> {
     let variant = parse_hgvs(hgvs_string)
         .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
@@ -611,10 +603,8 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     // is a deliberate choice rather than a dropped parameter — `for_entry_point`
     // makes it explicit at the call site instead of inheriting it silently
     // (#1197). Callers wanting strict handling construct a `Normalizer`.
-    let config = NormalizeConfig::for_entry_point(
-        parse_direction_or_raise(direction)?,
-        ErrorConfig::lenient(),
-    );
+    let config =
+        NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::lenient());
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
     let provider = JsonProvider::with_test_data();
     // This free function always uses genome-less test data; surface the
@@ -660,7 +650,6 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
 ///
 /// Args:
 ///     hgvs_string: The HGVS variant description to normalize
-///     direction: Shuffle direction - "3prime" (default) or "5prime"
 ///
 /// Returns:
 ///     NormalizeResultWithWarnings — `.result` is the normalized variant,
@@ -670,11 +659,10 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
 ///     ValueError: If the HGVS string cannot be parsed
 ///     RuntimeError: If normalization fails
 #[pyfunction]
-#[pyo3(signature = (hgvs_string, direction="3prime"))]
+#[pyo3(signature = (hgvs_string))]
 fn normalize_with_warnings(
     py: Python<'_>,
     hgvs_string: &str,
-    direction: &str,
 ) -> PyResult<PyNormalizeResultWithWarnings> {
     let variant = parse_hgvs(hgvs_string)
         .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
@@ -683,10 +671,8 @@ fn normalize_with_warnings(
     // takes no error-mode argument, and a lenient normalizer is precisely the
     // one that produces warnings rather than errors — which is what this
     // function exists to hand back.
-    let config = NormalizeConfig::for_entry_point(
-        parse_direction_or_raise(direction)?,
-        ErrorConfig::lenient(),
-    );
+    let config =
+        NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::lenient());
     let provider = JsonProvider::with_test_data();
     emit_reduced_capability_warning(
         py,
@@ -1081,18 +1067,15 @@ impl PyHgvsVariant {
     /// For production use, create a Normalizer instance with your reference data.
     ///
     /// Args:
-    ///     direction: Shuffle direction - "3prime" (default) or "5prime"
     ///
     /// Returns:
     ///     A new PyHgvsVariant representing the normalized variant
-    #[pyo3(signature = (direction="3prime"))]
-    fn normalize(&self, py: Python<'_>, direction: &str) -> PyResult<PyHgvsVariant> {
+    #[pyo3(signature = ())]
+    fn normalize(&self, py: Python<'_>) -> PyResult<PyHgvsVariant> {
         // No error-mode argument on this convenience method either; the lenient
         // default is stated rather than inherited (#1197).
-        let config = NormalizeConfig::for_entry_point(
-            parse_direction_or_raise(direction)?,
-            ErrorConfig::lenient(),
-        );
+        let config =
+            NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::lenient());
         // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
         let provider = JsonProvider::with_test_data();
         // Genome-less test data; surface the reduced-capability signal once per
@@ -1394,23 +1377,21 @@ impl PySequencePair {
     ///
     /// Args:
     ///     max_grid_cells: As the free `from_sequences`.
-    ///     direction: "3prime" (default) or "5prime".
     ///
     /// Returns:
     ///     DerivedDescription
     ///
     /// Raises:
-    ///     ValueError: for an unrecognized direction, or a max_grid_cells of 0.
+    ///     ValueError: for a max_grid_cells of 0.
     ///     NormalizationError: as the free `from_sequences`.
-    #[pyo3(signature = (*, max_grid_cells=None, direction="3prime"))]
-    #[pyo3(text_signature = "(*, max_grid_cells=None, direction='3prime')")]
+    #[pyo3(signature = (*, max_grid_cells=None))]
+    #[pyo3(text_signature = "(*, max_grid_cells=None)")]
     fn derive(
         &self,
         py: Python<'_>,
         max_grid_cells: Option<usize>,
-        direction: &str,
     ) -> PyResult<PyDerivedDescription> {
-        let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+        let options = from_sequences_options(max_grid_cells, ShuffleDirection::ThreePrime)?;
         let inner = self.inner.clone();
         // Detached for the reason given on the free `from_sequences`: the grid
         // is caller-tunable and unbounded by design.
@@ -1621,15 +1602,13 @@ fn from_sequences_options(
 ///         build. Defaults to (4096 + 1) ** 2, about 310 MB at roughly 18
 ///         bytes a cell. Exceeding it raises rather than answering with a
 ///         weaker rule.
-///     direction: Which end of an ambiguous run a pure indel is placed at —
-///         "3prime" (default) or "5prime".
 ///
 /// Returns:
 ///     HgvsVariant
 ///
 /// Raises:
-///     ValueError: for an unrecognized `direction`, or a `max_grid_cells` of 0.
-///         These two are checked at the binding, before any derivation.
+///     ValueError: for a `max_grid_cells` of 0, checked at the binding
+///         before any derivation.
 ///     NormalizationError: for everything the derivation itself refuses — a
 ///         zero position, an empty reference, a non-nucleotide symbol, a
 ///         transcript or protein accession, a grid over budget, or an inserted
@@ -1651,10 +1630,8 @@ fn from_sequences_options(
 ///     >>> str(ferro_hgvs.from_sequences("NC_000001.11", 1000, "AGCG", "AG"))
 ///     'NC_000001.11:g.1002_1003del'
 #[pyfunction]
-#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, direction="3prime"))]
-#[pyo3(
-    text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, direction='3prime')"
-)]
+#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None))]
+#[pyo3(text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None)")]
 fn from_sequences(
     py: Python<'_>,
     accession: &str,
@@ -1662,9 +1639,8 @@ fn from_sequences(
     reference: &str,
     alternate: &str,
     max_grid_cells: Option<usize>,
-    direction: &str,
 ) -> PyResult<PyHgvsVariant> {
-    let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+    let options = from_sequences_options(max_grid_cells, ShuffleDirection::ThreePrime)?;
     // Detached even though no provider is touched: the work behind this call is
     // unbounded by design — the default budget admits a 4097x4097 grid, ~310 MB
     // and 16.8 M cells, and the docs invite raising it — so holding the GIL
@@ -1687,10 +1663,8 @@ fn from_sequences(
 /// Returns:
 ///     DerivedDescription with `variant` and `placement_bounded_by_window`.
 #[pyfunction]
-#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, direction="3prime"))]
-#[pyo3(
-    text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, direction='3prime')"
-)]
+#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None))]
+#[pyo3(text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None)")]
 fn from_sequences_detailed(
     py: Python<'_>,
     accession: &str,
@@ -1698,9 +1672,8 @@ fn from_sequences_detailed(
     reference: &str,
     alternate: &str,
     max_grid_cells: Option<usize>,
-    direction: &str,
 ) -> PyResult<PyDerivedDescription> {
-    let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+    let options = from_sequences_options(max_grid_cells, ShuffleDirection::ThreePrime)?;
     // Detached for the reason given on `from_sequences` above.
     let (accession, reference, alternate) = (
         accession.to_string(),
@@ -1747,26 +1720,22 @@ impl PyNormalizer {
     ///     reference_json: Path to a transcripts.json file for reference data.
     ///         If not provided, uses built-in test data (limited coverage,
     ///         **not suitable for production use**).
-    ///     direction: Shuffle direction - "3prime" (default) or "5prime"
     ///     error_config: Optional ErrorConfig controlling reference-mismatch
     ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
     ///         variants). Defaults to lenient (warn and continue; a
     ///         wrong-reference substitution is preserved unchanged, not
     ///         auto-corrected).
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime", error_config=None))]
+    #[pyo3(signature = (reference_json=None, error_config=None))]
     fn new(
         py: Python<'_>,
         reference_json: Option<&str>,
-        direction: &str,
         error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
-        // Validate the `direction` argument BEFORE loading any reference, so an
-        // invalid direction always raises `ValueError` regardless of whether the
-        // reference path is valid — a bad/missing path must not mask (or be
-        // masked by) the argument error.
+        // 3' is the only direction ferro shifts; there is no `direction=`
+        // keyword to validate any more (`README.md` rule 6).
         let config = NormalizeConfig::for_entry_point(
-            parse_direction_or_raise(direction)?,
+            ShuffleDirection::ThreePrime,
             error_config_or_default(error_config),
         );
 
@@ -1792,7 +1761,6 @@ impl PyNormalizer {
     /// Args:
     ///     manifest_path: Path to a manifest.json file (typically inside a
     ///         directory produced by `ferro prepare`).
-    ///     direction: Shuffle direction - "3prime" (default) or "5prime"
     ///     error_config: Optional ErrorConfig controlling reference-mismatch
     ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
     ///         variants). Defaults to lenient (warn and continue; a
@@ -1802,17 +1770,14 @@ impl PyNormalizer {
     /// Returns:
     ///     A Normalizer backed by a MultiFastaProvider.
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime", error_config=None))]
+    #[pyo3(signature = (manifest_path, error_config=None))]
     fn from_manifest(
         py: Python<'_>,
         manifest_path: &str,
-        direction: &str,
         error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
-        // Validate `direction` before loading the manifest (see `new`): a bad
-        // manifest path must not mask an invalid-direction `ValueError`.
         let config = NormalizeConfig::for_entry_point(
-            parse_direction_or_raise(direction)?,
+            ShuffleDirection::ThreePrime,
             error_config_or_default(error_config),
         );
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
@@ -2081,10 +2046,6 @@ impl PyNormalizer {
     /// which would make the provider a hidden input. This one holds a provider,
     /// so it does check, and refuses an interval running past the end of the
     /// sequence. It also offers `normalize`, which the free function cannot.
-    ///
-    /// The shuffle direction is this normalizer's own, set when it was
-    /// constructed, rather than a separate keyword — one direction per
-    /// normalizer is the contract every other method here follows.
     ///
     /// Args:
     ///     accession: The sequence the window is on.
@@ -2513,7 +2474,6 @@ impl PyVariantProjector {
     /// Args:
     ///     reference_json: Path to a transcripts.json file. If None, uses
     ///         built-in test data (limited; not for production).
-    ///     direction: Shuffle direction passed to the internal normalizer
     ///         ("3prime" or "5prime").
     ///     assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
     ///         aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
@@ -2529,21 +2489,18 @@ impl PyVariantProjector {
     ///         wrong-reference substitution is preserved unchanged, not
     ///         auto-corrected).
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
+    #[pyo3(signature = (reference_json=None, assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
     fn new(
         py: Python<'_>,
         reference_json: Option<&str>,
-        direction: &str,
         assembly: Option<&str>,
         protein_stop: &str,
         amino_acid_code: &str,
         error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
         // Validate boundary args BEFORE loading any reference (a bad path must
-        // not mask an invalid direction/assembly/protein_stop/amino_acid_code
-        // ValueError).
-        let (config, assembly_build) =
-            parse_projector_boundary_args(direction, assembly, error_config)?;
+        // not mask an invalid assembly/protein_stop/amino_acid_code ValueError).
+        let (config, assembly_build) = parse_projector_boundary_args(assembly, error_config)?;
         let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let (provider, kind) = match reference_json {
             Some(path) => (
@@ -2560,7 +2517,6 @@ impl PyVariantProjector {
     ///
     /// Args:
     ///     manifest_path: Path to a ferro-prepare manifest.json.
-    ///     direction: Shuffle direction passed to the internal normalizer
     ///         ("3prime" or "5prime").
     ///     assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
     ///         aliases "hg19"/"hg38") for build-agnostic inputs.
@@ -2574,19 +2530,17 @@ impl PyVariantProjector {
     ///         wrong-reference substitution is preserved unchanged, not
     ///         auto-corrected).
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
+    #[pyo3(signature = (manifest_path, assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
     fn from_manifest(
         py: Python<'_>,
         manifest_path: &str,
-        direction: &str,
         assembly: Option<&str>,
         protein_stop: &str,
         amino_acid_code: &str,
         error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
         // Validate boundary args before loading the manifest (see `new`).
-        let (config, assembly_build) =
-            parse_projector_boundary_args(direction, assembly, error_config)?;
+        let (config, assembly_build) = parse_projector_boundary_args(assembly, error_config)?;
         let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         Self::from_provider(
@@ -2823,11 +2777,9 @@ impl PyVariantProjector {
     ///
     /// By default (`normalize=True`) the result is the projector-normalized
     /// genomic form — what most callers want; a `Genome` input is canonicalized
-    /// too. The normalizer follows this projector's configured shuffle direction
-    /// (`VariantProjector(direction=...)`): with the default `direction="3prime"`
-    /// that is the spec-canonical, 3'-shifted form (e.g. a non-3'-most `g.1003del`
-    /// in a poly-A run → `g.1007del`); a `direction="5prime"` projector instead
-    /// returns the 5'-anchored form. Pass `normalize=False` to get the raw pivot,
+    /// too. That is the spec-canonical, 3'-shifted form (e.g. a non-3'-most
+    /// `g.1003del` in a poly-A run → `g.1007del`); 3' is the only direction
+    /// ferro shifts. Pass `normalize=False` to get the raw pivot,
     /// which intentionally does not normalize its input (#785): a non-canonical
     /// input then yields a non-canonical genomic output, and a `Genome` input
     /// passes through unchanged (idempotent). (#867)
@@ -2845,7 +2797,7 @@ impl PyVariantProjector {
     ///         `Accession`.
     ///     normalize: When True (default), return the projector-normalized
     ///         genomic form (spec-canonical 3'-shifted for the default
-    ///         `direction="3prime"`); when False, return the raw un-normalized
+    ///         3'-shifted); when False, return the raw un-normalized
     ///         pivot.
     ///
     /// Returns:
@@ -2976,18 +2928,20 @@ impl PyVariantProjector {
     }
 }
 
-/// Parse the projector's boundary args (`direction`, `assembly`) into their
-/// validated forms. Split out so callers validate them BEFORE loading a
-/// reference — a bad/missing reference path must not mask (or be masked by) an
-/// invalid direction/assembly `ValueError`. The assembly name is normalized to a
-/// canonical "GRCh37"/"GRCh38" at the boundary so the core only sees that (#715).
+/// Parse the projector's boundary args (`assembly`) into their validated forms.
+/// Split out so callers validate them BEFORE loading a reference — a
+/// bad/missing reference path must not mask (or be masked by) an invalid
+/// assembly `ValueError`. The assembly name is normalized to a canonical
+/// "GRCh37"/"GRCh38" at the boundary so the core only sees that (#715).
+///
+/// It used to take a `direction` too. That keyword is gone; the projector's
+/// normalizer is always 3'.
 fn parse_projector_boundary_args(
-    direction: &str,
     assembly: Option<&str>,
     error_config: Option<&PyErrorConfig>,
 ) -> PyResult<(NormalizeConfig, Option<&'static str>)> {
     let config = NormalizeConfig::for_entry_point(
-        parse_direction_or_raise(direction)?,
+        ShuffleDirection::ThreePrime,
         error_config_or_default(error_config),
     );
     let assembly_build = match assembly {

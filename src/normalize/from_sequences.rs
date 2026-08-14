@@ -89,12 +89,13 @@ use crate::normalize::merge::{
 };
 use crate::normalize::ShuffleDirection;
 
-/// Cost and direction knobs for [`from_sequences`].
+/// Cost knobs for [`from_sequences`].
 ///
 /// Nothing here changes which *forms* the function is willing to emit — that is
-/// fixed by the rules, not by the caller (`README.md` rule 6). `direction` is
-/// the same orthogonal axis `NormalizeConfig` already exposes, and
-/// `max_grid_cells` is a memory bound.
+/// fixed by the rules, not by the caller (`README.md` rule 6). `max_grid_cells`
+/// is a memory bound. `direction` is **not** a caller-facing knob: it mirrors
+/// `NormalizeConfig`'s internal test instrument, is `#[doc(hidden)]` for the
+/// same reason, and is always `ThreePrime` on every shipped path.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct FromSequencesOptions {
@@ -108,7 +109,11 @@ pub struct FromSequencesOptions {
     /// weaker rule is the policy.
     pub max_grid_cells: usize,
     /// Which end of an ambiguous run a pure indel is placed at, within the
-    /// caller's window. `ThreePrime` matches `general.md:41` and is the default.
+    /// caller's window. Always `ThreePrime`, which matches `general.md:41`.
+    ///
+    /// **Internal test instrument, not a supported knob** — see
+    /// [`crate::normalize::ShuffleDirection`].
+    #[doc(hidden)]
     pub direction: ShuffleDirection,
 }
 
@@ -132,6 +137,10 @@ impl Default for FromSequencesOptions {
 /// pattern for the same reason.
 impl FromSequencesOptions {
     /// Set which end of an ambiguous run a pure indel is placed at.
+    ///
+    /// **Internal test instrument, not a supported knob** — see
+    /// [`crate::normalize::ShuffleDirection`].
+    #[doc(hidden)]
     #[must_use]
     pub fn with_direction(mut self, direction: ShuffleDirection) -> Self {
         self.direction = direction;

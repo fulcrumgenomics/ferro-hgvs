@@ -106,29 +106,40 @@ def test_an_unchanged_pair_is_the_identity_description():
 
 
 def test_the_options_are_keyword_only():
-    """``max_grid_cells`` and ``direction`` are keyword-only on purpose: they are
-    tuning knobs, and a positional fifth argument would read as part of the
-    variant rather than as configuration."""
+    """``max_grid_cells`` is keyword-only on purpose: it is a tuning knob, and a
+    positional fifth argument would read as part of the variant rather than as
+    configuration."""
     with pytest.raises(TypeError):
         ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", 1024)  # type: ignore[misc]
 
 
-def test_the_direction_reaches_the_partitioner():
-    """Both directions must be accepted *and act*. A binding that parsed the
-    keyword and then dropped it would pass a "does not raise" test, so this pins
-    a pair where the two answers differ — a single-base deletion inside the
-    ``AAAA`` run, which 3' places at 14 and 5' at 11. Those are coordinates in
-    *this pair's* frame (it starts at 10 and is written out below, not sliced
-    from ``SEQUENCE``); the run sits at 12-15 of ``SEQUENCE`` itself."""
-    three = ferro_hgvs.from_sequences("NC_1", 10, "CAAAAG", "CAAAG", direction="3prime")
-    five = ferro_hgvs.from_sequences("NC_1", 10, "CAAAAG", "CAAAG", direction="5prime")
+def test_the_partitioner_places_a_pure_indel_three_prime():
+    """The derivation is 3'-most, and there is no keyword that can change it.
+
+    This pinned both directions before the public ``direction=`` keyword was
+    removed (``README.md`` rule 6). The 3' row it asserted is kept verbatim —
+    a single-base deletion inside the ``AAAA`` run, placed at 14 — because it is
+    the shipped answer and this is the only test that pins it against a
+    hand-written window. The 5' half moved to
+    ``tests/it/five_prime_public_surface_removed.rs``, which drives the internal
+    direction type directly and asserts the same 11 the removed row asserted, so
+    the measurement is relocated rather than dropped. Coordinates are in *this
+    pair's* frame (it starts at 10 and is written out here, not sliced from
+    ``SEQUENCE``); the run sits at 12-15 of ``SEQUENCE`` itself."""
+    three = ferro_hgvs.from_sequences("NC_1", 10, "CAAAAG", "CAAAG")
     assert str(three) == "NC_1:g.14del"
-    assert str(five) == "NC_1:g.11del"
 
 
-def test_an_unrecognized_direction_is_a_value_error():
-    with pytest.raises(ValueError, match="unrecognized direction"):
-        ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", direction="sideways")
+def test_a_direction_keyword_is_a_type_error():
+    """Not a ``ValueError`` about the value — a ``TypeError`` about the keyword.
+
+    The distinction is the whole safety property of the removal: a keyword PyO3
+    does not name cannot be silently dropped, so a caller who still writes
+    ``direction="5prime"`` fails at the call rather than receiving a 3' answer
+    to a 5' question. See ``test_issue_1016_direction_validation.py``."""
+    for value in ("3prime", "5prime", "sideways"):
+        with pytest.raises(TypeError, match="unexpected keyword argument 'direction'"):
+            ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", direction=value)
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +190,17 @@ def test_the_two_refusal_classes_are_the_established_split():
     ``FerroError``.
 
     That split is the binding's existing convention, not a choice made here —
-    ``Normalizer(direction=...)`` has always raised a plain ``ValueError`` for an
-    unrecognized direction. Pinned because the obvious wrong guess is that
-    ``FerroError`` catches everything from one call, and it does not: a caller
-    wrapping ``from_sequences`` needs ``(ValueError, ferro_hgvs.FerroError)``, or
-    simply ``Exception``."""
-    binding_checks = (
-        lambda: ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", max_grid_cells=0),
-        lambda: ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", direction="sideways"),
-    )
+    ``VariantProjector(assembly=...)`` raises a plain ``ValueError`` for an
+    unrecognized assembly the same way. Pinned because the obvious wrong guess is
+    that ``FerroError`` catches everything from one call, and it does not: a
+    caller wrapping ``from_sequences`` needs
+    ``(ValueError, ferro_hgvs.FerroError)``, or simply ``Exception``.
+
+    (A second row here used to pass ``direction="sideways"``. That keyword is
+    gone, and its successor fault is a ``TypeError`` rather than a
+    ``ValueError`` — a different split, pinned in
+    ``test_a_direction_keyword_is_a_type_error`` above.)"""
+    binding_checks = (lambda: ferro_hgvs.from_sequences("NC_1", 1, "AGCG", "AG", max_grid_cells=0),)
     for call in binding_checks:
         with pytest.raises(ValueError) as excinfo:
             call()
@@ -350,9 +363,16 @@ def test_the_method_refuses_an_unknown_accession(normalizer):
         normalizer.from_sequences("NOT_A_TEMPLATE", 10, "CAAAAG", "CAAAG")
 
 
-def test_the_method_uses_the_normalizers_own_direction():
-    """One direction per normalizer, set at construction — the contract every
-    other method here follows, rather than a second place to set it."""
+def test_the_method_takes_no_direction_of_its_own():
+    """A ``Normalizer`` has no direction to set and its ``from_sequences`` has no
+    keyword to override one with — both constructions below are the same 3'
+    normalizer, so they must agree.
+
+    This used to build a 3' normalizer and a 5' one and assert they *differed*,
+    which was the strongest available proof that the keyword was not being
+    parsed and dropped. That proof moved to the Rust side with the type; here
+    the property worth pinning is the converse — that no construction reachable
+    from Python can produce anything but the 3' answer."""
     reference = {
         "transcripts": [
             {
@@ -368,9 +388,13 @@ def test_the_method_uses_the_normalizers_own_direction():
     path.write_text(json.dumps(reference))
 
     args = ("TEMPLATE", 10, "CAAAAG", "CAAAG")
-    three = ferro_hgvs.Normalizer(reference_json=str(path), direction="3prime")
-    five = ferro_hgvs.Normalizer(reference_json=str(path), direction="5prime")
-    assert str(three.from_sequences(*args)) != str(five.from_sequences(*args))
+    default = ferro_hgvs.Normalizer(reference_json=str(path))
+    from_manifestless = ferro_hgvs.Normalizer(reference_json=str(path))
+    assert str(default.from_sequences(*args)) == str(from_manifestless.from_sequences(*args))
+    assert str(default.from_sequences(*args)) == "TEMPLATE:g.14del"
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'direction'"):
+        ferro_hgvs.Normalizer(reference_json=str(path), direction="5prime")
 
 
 def test_post_normalizing_is_available_and_is_a_no_op_here(normalizer):
@@ -617,9 +641,11 @@ def test_a_pair_derives_from_itself():
     assert str(derived.variant) == "NC_1:g.14del"
     assert derived.placement_bounded_by_window is True
 
-    # Same knobs as the free function, and the same refusals.
-    assert str(pair.derive(direction="5prime").variant) == "NC_1:g.12del"
+    # Same knobs as the free function, and the same refusals. `derive` used to
+    # take a `direction=` too; it is gone with the rest of the public surface,
+    # and its 5' row (`NC_1:g.12del`) is re-pinned against the internal type in
+    # `tests/it/five_prime_public_surface_removed.rs`.
     with pytest.raises(ValueError, match="max_grid_cells must be positive"):
         pair.derive(max_grid_cells=0)
-    with pytest.raises(ValueError, match="unrecognized direction"):
-        pair.derive(direction="sideways")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'direction'"):
+        pair.derive(direction="5prime")

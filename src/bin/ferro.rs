@@ -8,9 +8,8 @@
 use clap::{Parser, Subcommand};
 use ferro_hgvs::cli::{
     normalize_tsv_row, normalize_tsv_summary, output_error as cli_output_error,
-    output_error_with_context as cli_output_error_with_context, parse_genome_build,
-    parse_shuffle_direction, parse_vcf_line, process_input_line, OutputFormat,
-    NORMALIZE_TSV_HEADER,
+    output_error_with_context as cli_output_error_with_context, parse_genome_build, parse_vcf_line,
+    process_input_line, OutputFormat, NORMALIZE_TSV_HEADER,
 };
 use ferro_hgvs::config::{apply_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
@@ -218,7 +217,7 @@ enum Commands {
     },
 
     /// Normalize HGVS variants
-    #[command(long_about = "Normalize HGVS variants (3'/5' shifting).
+    #[command(long_about = "Normalize HGVS variants (3' shifting).
 
 UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
 
@@ -283,10 +282,16 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
         #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json", "tsv"])]
         format: String,
 
-        /// Shuffle direction (3prime or 5prime)
-        #[arg(long, default_value = "3prime")]
-        direction: String,
-
+        // There is deliberately no `--direction` flag. `README.md` rule 6:
+        // there are no user options for normalization form, and a shuffle
+        // direction is not orthogonal to the form — it selects the frame every
+        // other rule is evaluated in. `ferro normalize` shifts 3', which is the
+        // only direction the HGVS recommendations describe. Removing the flag
+        // rather than accepting-and-ignoring it is the point: clap rejects an
+        // unknown argument with a non-zero exit, so a script that still passes
+        // `--direction 5prime` fails loudly instead of silently 3'-shifting
+        // (the #1863 failure shape). Pinned by
+        // `tests/it/five_prime_public_surface_removed.rs`.
         /// Reference directory (with manifest.json from 'ferro prepare')
         #[arg(long)]
         reference: Option<PathBuf>,
@@ -850,7 +855,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             input,
             output,
             format,
-            direction,
             reference,
             error_mode,
             ignore,
@@ -865,7 +869,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 input.as_ref(),
                 output.as_ref(),
                 &format,
-                &direction,
                 reference.as_ref(),
                 timing.as_ref(),
                 workers,
@@ -1613,7 +1616,6 @@ fn run_normalize(
     input: Option<&PathBuf>,
     output: Option<&PathBuf>,
     format: &str,
-    direction: &str,
     reference: Option<&PathBuf>,
     timing: Option<&PathBuf>,
     workers: usize,
@@ -1632,8 +1634,13 @@ fn run_normalize(
     // so the omission cannot recur at this call site (#1197). It is not a
     // whole-crate guarantee — see the constructor's docs and the entry-point
     // scan in `tests/it/issue_1197_required_error_config.rs`.
-    let config =
-        NormalizeConfig::for_entry_point(parse_shuffle_direction(direction), error_config.clone());
+    // 3' is the only direction ferro shifts (`README.md` rule 6); naming it
+    // explicitly here rather than relying on `Default` matches how `project`
+    // has always done it below.
+    let config = NormalizeConfig::for_entry_point(
+        ferro_hgvs::normalize::ShuffleDirection::ThreePrime,
+        error_config.clone(),
+    );
 
     // Create reference provider from directory
     let provider = create_reference_provider(reference.map(|p| p.as_path()), strict_reference)?;
@@ -2042,7 +2049,7 @@ fn run_project(
     // family as #1181, out of scope here; noted so the line above is not read
     // as a stronger claim than it makes.
     //
-    // `project` has no direction flag; naming the 3' default explicitly is the
+    // No subcommand has a direction flag any more; naming the 3' default explicitly is the
     // price of a constructor that cannot silently default the error
     // configuration (#1197), and it documents the choice at the call site.
     let projector = VariantProjector::new(Projector::new(cdot), provider).with_normalize_config(

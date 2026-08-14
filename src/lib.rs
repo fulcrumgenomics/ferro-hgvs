@@ -78,7 +78,14 @@ pub use normalize::from_sequences::{
     from_sequences, from_sequences_detailed, DerivedDescription, FromSequencesOptions,
 };
 pub use normalize::sequence_pair::SequencePair;
-pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
+pub use normalize::{NormalizeConfig, Normalizer};
+// `ShuffleDirection` is re-exported for ferro's own integration tests only —
+// `tests/` is an external crate, so the 3'/5' differential oracle cannot reach a
+// `pub(crate)` type. It is `#[doc(hidden)]` at its definition and no ferro entry
+// point accepts a direction from a caller; see the type's docs and `README.md`
+// rule 6.
+#[doc(hidden)]
+pub use normalize::ShuffleDirection;
 pub use project::{VariantProjection, VariantProjector};
 pub use reference::{JsonProvider, MockProvider, MultiFastaProvider, ReferenceProvider};
 pub use spdi::{

@@ -129,7 +129,6 @@ jobs:
           [tools.ferro]
           enabled = true
           reference_dir = "/var/lib/ferro-web/reference"
-          shuffle_direction = "3prime"
           error_mode = "lenient"
 
           # Mutalyzer runs as a local Python subprocess for reproducibility and

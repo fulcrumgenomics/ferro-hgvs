@@ -70,7 +70,17 @@ pub struct ToolConfigs {
 }
 
 /// Ferro tool configuration
+///
+/// `deny_unknown_fields` is load-bearing rather than tidiness. The
+/// `shuffle_direction` key was removed from this struct (`README.md` rule 6 —
+/// there are no user options for normalization form), and serde's default is to
+/// *ignore* a key it does not recognize. Without this attribute an operator's
+/// existing `shuffle_direction = "5prime"` would be silently dropped and the
+/// service would 3'-shift while the config file still said otherwise — a wrong
+/// answer served under a configuration that appears to ask for something else.
+/// With it, that config fails to load and names the offending key.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FerroConfig {
     /// Whether tool is enabled
     pub enabled: bool,
@@ -78,8 +88,6 @@ pub struct FerroConfig {
     pub reference_dir: PathBuf,
     /// Number of parallel workers (default: number of CPU cores)
     pub parallel_workers: Option<usize>,
-    /// Shuffle direction (3prime or 5prime, default: 3prime)
-    pub shuffle_direction: Option<String>,
     /// Error handling mode (strict, lenient, silent, default: lenient)
     pub error_mode: Option<String>,
 }
@@ -221,7 +229,6 @@ impl Default for FerroConfig {
             enabled: true,
             reference_dir: PathBuf::from("./reference"),
             parallel_workers: None,
-            shuffle_direction: Some("3prime".to_string()),
             error_mode: Some("lenient".to_string()),
         }
     }
@@ -404,5 +411,29 @@ mod tests {
             ..FerroConfig::default()
         });
         assert_eq!(config.enabled_tools(), vec!["ferro"]);
+    }
+
+    /// The shipped example config must actually deserialize.
+    ///
+    /// Nothing parsed `config/service.example.toml` before this test, and that
+    /// is exactly how it went stale: `shuffle_direction = "3prime"` sat in it
+    /// after the key was removed from [`FerroConfig`]. Under
+    /// `deny_unknown_fields` that is no longer a harmless leftover — it is a
+    /// file the docs tell an operator to `cp` into place that would fail to
+    /// load. The example is documentation with a schema, so it is checked like
+    /// one.
+    #[test]
+    fn the_shipped_example_config_deserializes() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/service.example.toml");
+        let text = std::fs::read_to_string(path).expect("read config/service.example.toml");
+        let config: ServiceConfig = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("config/service.example.toml must deserialize: {e}"));
+
+        let ferro = config
+            .tools
+            .ferro
+            .expect("the example config configures the ferro tool");
+        assert!(ferro.enabled);
+        assert_eq!(ferro.error_mode.as_deref(), Some("lenient"));
     }
 }

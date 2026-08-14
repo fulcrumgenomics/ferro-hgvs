@@ -1,7 +1,9 @@
 //! Normalization engine
 //!
 //! Implements the core HGVS variant normalization algorithm including
-//! 3'/5' shifting and boundary detection.
+//! 3' shifting and boundary detection. (A 5' arm exists as an internal
+//! differential oracle and is not reachable from any entry point — see
+//! [`config::ShuffleDirection`] and `README.md` rule 6.)
 //!
 //! # Coordinate Systems
 //!
@@ -95,7 +97,9 @@ use crate::hgvs::HgvsVariant as HV;
 use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
-pub use config::{NormalizeConfig, ShuffleDirection};
+pub use config::NormalizeConfig;
+#[doc(hidden)]
+pub use config::ShuffleDirection;
 #[cfg(debug_assertions)]
 use merge::OutOfBoundsCoordinate;
 use rules::{
@@ -1691,12 +1695,11 @@ impl std::fmt::Display for NormalizationWarning {
 #[non_exhaustive]
 pub enum NormalizationInfo {
     /// The shuffle layer relocated the variant per the HGVS arbitrary-
-    /// position rule. The HGVS spec mandates the 3' (rightmost) form, but
-    /// ferro supports both 3' and 5' shuffling via
-    /// [`config::ShuffleDirection`] (some VCF pipelines prefer 5'); the
-    /// direction is carried explicitly so callers can interpret the
-    /// signal correctly. Code: `SHUFFLE_APPLIED`. Mutalyzer-equivalent:
-    /// `ICORRECTEDPOINT` (mutalyzer only emits 3').
+    /// position rule. Every shipped path shuffles 3' (the rightmost form the
+    /// HGVS recommendations mandate); the direction is still carried
+    /// explicitly because ferro's own tests drive a 5' arm as a differential
+    /// oracle — see [`config::ShuffleDirection`]. Code: `SHUFFLE_APPLIED`.
+    /// Mutalyzer-equivalent: `ICORRECTEDPOINT` (mutalyzer only emits 3').
     ShuffleApplied {
         /// Accession of the reference sequence.
         accession: String,
@@ -6524,7 +6527,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // context, re-run the shuffle in genomic space (which spans the
         // junction naturally) and adopt the result only if it actually crossed
         // into the intron. The trigger is a rare edge landing, so the hot path
-        // is untouched; it is 3'-only (5'/VCF shuffles stay exon-confined).
+        // is untouched; it is 3'-only (5' shuffles stay exon-confined).
         // Perf note: an edge-landing variant whose genomic re-shuffle does NOT
         // cross still pays one `transcript_for_intronic()` lookup + one
         // `normalize_boundary_spanning_cds` fetch, then discards them. That cost
@@ -7247,7 +7250,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // intron exists, and we have genomic context, re-run the shuffle in
         // genomic space (which spans the junction naturally) and adopt the result
         // only if it actually crossed into the intron. The trigger is a rare edge
-        // landing, so the hot path is untouched; it is 3'-only (5'/VCF shuffles
+        // landing, so the hot path is untouched; it is 3'-only (5' shuffles
         // stay exon-confined), exactly as the `c.` path.
         //
         // Ordering constraint (#1202, other half documented at the clamp
@@ -15825,7 +15828,7 @@ mod tests {
 
     #[test]
     fn test_purely_exonic_del_5prime_direction_stays_exon_confined() {
-        // #670 is 3'-only. Under 5' (VCF) shuffle direction, a purely-exonic del
+        // #670 is 3'-only. Under the internal 5' shuffle direction, a purely-exonic del
         // must NOT cross into the intron — it shifts toward the 5' end within
         // the exon, never emitting an intronic offset.
         let provider = make_boundary_test_provider();
