@@ -288,12 +288,19 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     // sweep every row, so both are shared. That is the intentional addition
     // PINNED_UNIQUE_TEST_COUNT moved 289 -> 290 for.
     MstoIssue { number: 1419, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_pair_state_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
-    // #1420's `the_1420_v2_pair_does_not_converge_by_re_derivation` was DELETED by
+    // #1420's `the_1420_v2_pair_does_not_converge_by_re_derivation` was DELISTED by
     // operator ruling of 2026-08-13 — it read separation off the input's spelling,
     // which `rulings[separation-is-a-property-of-the-spelling-not-of-the-variant]`
     // forbids. The issue keeps its slice through the remaining table-driven
-    // guards; `the_reported_pair_census_is_unchanged` now carries the row, whose
-    // pair converges at 9 of 9.
+    // guards; `the_reported_pair_census_is_unchanged` now carries the row.
+    //
+    // The surviving half of that guard is renamed here to
+    // `the_1420_v2_cis_spelling_does_not_merge_across_its_unchanged_interior`,
+    // which asserts a property of the CIS spelling's own output rather than a
+    // separation read off an input, so the ruling above does not reach it. It is
+    // deliberately left OUT of this list all the same, so that delisting stands
+    // as the operator left it and this PR does not re-list an issue slice on its
+    // own authority.
     MstoIssue { number: 1420, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "reported_spans_change_the_columns_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_pair_state_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
     MstoIssue { number: 1421, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_wanted_form_from_the_spellings_its_state_names"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_1421_spans_separate_by_two_nucleotides_not_one"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_pair_state_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
     // #1430's slice is one or more guards per proposed stage, not a
@@ -385,11 +392,15 @@ const PINNED_HIGH_ISSUE_COUNT: usize = 27;
 /// sections). No test was written to move this number.
 ///
 /// Raised again to 289 by
-/// `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
+/// `reported_confluence_pairs::the_1420_v2_cis_spelling_does_not_merge_across_its_unchanged_interior`
 /// — a genuinely new test, and the one exception to the sentence above. It names
 /// the string `1420-v2` converges on when the merge-across-unchanged-bases veto
 /// stops firing, so the pair cannot be recorded as converging on #1420's own
-/// wanted form by way of a `general.md:34` violation.
+/// wanted form by way of a `general.md:34` violation. **Renamed by #1878** from
+/// `the_1420_v2_pair_does_not_converge_by_re_derivation`, which moves no count:
+/// closing #1878 retired the half of it that named the SPAN — the span reaches
+/// #1420's form legitimately now, by the unique correspondence of its own
+/// equal-length block — and the name follows the half that remains.
 ///
 /// Raised to 290 by
 /// `reported_partition_verdicts::the_pair_state_census_holds` (#1802), the

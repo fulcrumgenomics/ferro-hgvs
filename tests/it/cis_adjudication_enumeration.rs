@@ -98,10 +98,14 @@
 //! divergent under `live` — but for two of those classes the single output the
 //! candidate arms pick is a *third* form, named by no decided record". #1835 made
 //! `canonical-coalesced` the default, so those are the partitions asserted below.
-//! Re-measured on the default arm, all three classes collapse to one output:
-//! adjacent-members to `c.[9dup;13del]` (1 076 spellings), the `dup`-flush
-//! carve-out to `c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]` (1 166), and
-//! spanning-versus-split to `c.[9del;11_17del]` (880).
+//! Re-measured on the default arm, two of the three classes collapse to one
+//! output: the `dup`-flush carve-out to
+//! `c.[9T>A;24_25insTTT;28T>A;31_32insCACCA]` (1 166) and spanning-versus-split
+//! to `c.[9del;11_17del]` (880). Adjacent-members collapsed too until #1878
+//! returned its equal-length block to the unique column correspondence, and it
+//! is a bipartition again — 1 040 on `c.10_13delinsTAAT`, 36 on
+//! `c.[9dup;13del]`. Its own note says why, and says whose the residue is
+//! (#1440's, measured).
 //!
 //! **"Converging a class is not the same as converging it on the adjudicated
 //! form" still stands, and is the thing to read the per-class notes for.** Each
@@ -799,6 +803,45 @@ fn report(class: &str, enumeration: &Enumeration, buckets: &BTreeMap<String, Vec
     }
 }
 
+/// Assert that a two-way partition falls **exactly** along the dimension the
+/// spellings came from.
+///
+/// This is the sharpest statement the enumeration can make about a divergent
+/// class: not "it splits into two" but "it splits by provenance, with nothing
+/// crossing". That is the mechanism
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant` names — ferro
+/// preserving the partition it was handed — asserted rather than described.
+///
+/// Restored by #1878. It was deleted by #1835, which converged the only class
+/// that used it; the adjacent-members class is a bipartition again, for the
+/// reason its own note gives, so the sharper statement is available again.
+fn assert_partition_is_by_provenance(
+    class: &str,
+    buckets: &BTreeMap<String, Vec<String>>,
+    from_spanning: &str,
+    from_members: &str,
+) {
+    for (output, inputs) in buckets {
+        for input in inputs {
+            let expected = if is_multi_member(input) {
+                from_members
+            } else {
+                from_spanning
+            };
+            assert_eq!(
+                output,
+                expected,
+                "[{class}] {input} crossed: a {} spelling reached {output}",
+                if is_multi_member(input) {
+                    "multi-member"
+                } else {
+                    "spanning"
+                }
+            );
+        }
+    }
+}
+
 /// Assert that provenance predicts **nothing** — one output, reached from both
 /// dimensions.
 ///
@@ -1067,46 +1110,46 @@ fn the_adjacent_members_class_partitions_as_measured() {
 
     assert_eq!(enumeration.len(), ADJACENT_MEMBERS_SPELLINGS);
     if default_arm() {
-        // #1835: the class CONVERGES. It was a clean bipartition by provenance —
-        // 1 040 spanning spellings on `c.10_13delinsTAAT`, 36 multi-member ones
-        // on `c.[9dup;13del]` — and all 1 076 now reach the second.
+        // #1835 CONVERGED THIS CLASS; #1878 RETURNS IT TO THE BIPARTITION.
         //
-        // THE RESIDUE THIS CLASS EXISTED TO SHOW IS GONE. The doc above describes
-        // it as "ferro preserving the partition it was handed", and names
-        // `separation-is-a-property-of-the-spelling-not-of-the-variant` as the
-        // record that owns it. That record is decided and says the separation is
-        // read off the partition re-derived from the resulting sequence, never off
-        // the input's spelling — which is precisely what the default arm now does,
-        // so the record is satisfied rather than merely cited.
+        // Under the flip all 1 076 spellings reached `c.[9dup;13del]`, closing a
+        // clean split by provenance — 1 040 spanning spellings on
+        // `c.10_13delinsTAAT`, 36 multi-member ones on the pair. That was a real
+        // gain against `separation-is-a-property-of-the-spelling-not-of-the-variant`
+        // and it is given back here, deliberately and with a measured cause.
         //
-        // WHY THE CONVERGED FORM VIOLATES NO CLAUSE, which is the question
-        // `assert_partition` cannot ask. The form
+        // WHY IT IS GIVEN BACK. The block is equal-length (`AATA` -> `TAAT`, a
+        // one-position rotation) and
+        // `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+        // says an equal-length block has one column correspondence and therefore
+        // no alignment to select: three of its four columns change, so the
+        // derived form is the spanning `c.10_13delinsTAAT` that
         // `delins-adjacent-members-when-both-consume-reference` adjudicates
-        // correct is the spanning `c.10_13delinsTAAT`, and ferro no longer emits
-        // it — but read that record's SCOPE. It rules that two members with NO
-        // unchanged nucleotide between them, BOTH consuming reference bases, are
-        // one `delins`; its authority is `DNA/substitution.md:32`, which marks the
-        // flush split `c.[79G>T;80C>T]` invalid by name. The re-derived partition
-        // meets neither conjunct: `9dup` and `13del` are separated by the
-        // unchanged `c.10_12`, and a `dup` consumes no reference. So the record
-        // does not reach this partition, and the flush split it forbids is not
-        // what ferro emits. `general.md:34` governs the separated pair and asks
-        // for exactly the individual description given, while
-        // `DNA/duplication.md:18` REQUIRES the `dup` label on the inserted copy.
+        // CORRECT, and the flip's `[9dup;13del]` was a re-frame rather than a
+        // reading of the variant. That much is a conformance gain.
         //
-        // The block is equal-length (`AATA` -> `TAAT`, a one-position rotation),
-        // so `delins.md:47`'s net-deletion scope excludes it and nothing merges
-        // the pair back.
+        // WHAT SPLITS THE CLASS AGAIN IS NOT THIS RULE. The 36 multi-member
+        // spellings weigh less than the derived spanning form, so
+        // `canonicalize_from_sequence`'s input-relative weight bound refuses their
+        // derivation and hands each back verbatim. That bound is
+        // `derivation-may-not-be-bounded-by-the-inputs-spelling` (decided: DELETE
+        // IT), tracked as #1440 and not implemented; with it disabled this class
+        // converges on `c.10_13delinsTAAT` and the bipartition closes again — on
+        // the adjudicated form rather than off it. Measured, not predicted.
         assert_partition(
             "adjacent-members",
             &buckets,
-            &[("NM_TEST.1:c.[9dup;13del]", 1_076)],
+            &[
+                ("NM_TEST.1:c.10_13delinsTAAT", 1_040),
+                ("NM_TEST.1:c.[9dup;13del]", 36),
+            ],
         );
-        // The provenance bipartition is not asserted any more: there is one
-        // bucket, so there are no two sides to be split by provenance. Asserted
-        // instead is that provenance no longer predicts anything, which is the
-        // positive form of the same fact.
-        assert_no_provenance_split("adjacent-members", &buckets);
+        assert_partition_is_by_provenance(
+            "adjacent-members",
+            &buckets,
+            "NM_TEST.1:c.10_13delinsTAAT",
+            "NM_TEST.1:c.[9dup;13del]",
+        );
     }
 }
 

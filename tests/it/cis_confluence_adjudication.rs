@@ -452,58 +452,47 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
 
     assert_eq!(denotes(&provider, spanning), denotes(&provider, authored));
 
-    // # #1835 — THE CLASS CONVERGES, ON THE AUTHORED PARTITION
+    // # #1835 MOVED THIS OFF THE ADJUDICATED FORM; #1878 RETURNED IT
     //
-    // Both spellings now reach `c.[9dup;13del]`. The residue the second assertion
-    // below used to record — "the other spelling still keeps its own partition,
-    // so the class remains divergent" — is closed, and closed by the mechanism
-    // that comment names: `separation-is-a-property-of-the-spelling-not-of-the-variant`
-    // is decided and says the separation is read off the partition re-derived from
-    // the resulting sequence. The default arm now re-derives it.
+    // Under the partition default flip both spellings reached `c.[9dup;13del]`
+    // instead. The class converged, which was the flip's good half, but it
+    // converged off the form THIS RECORD calls correct — and the record is
+    // labelled ADJUDICATED-CORRECT rather than observed, so that had to be
+    // argued rather than re-blessed. The argument made there was that `c.10_13`
+    // reads `AATA` against a payload of `TAAT`, a one-position rotation whose
+    // minimal alignment is one inserted base plus one deleted base (cost 2)
+    // rather than three substitutions (cost 3), so the spanning `delins` "is not
+    // a minimal alignment of this block at all; it is a merge over one".
     //
-    // WHY THIS DOES NOT CONTRADICT THIS RECORD, which is the question to answer
-    // before accepting the re-pin, because the old expectation was labelled
-    // ADJUDICATED-CORRECT rather than observed.
-    //
-    // The record's ruling is scoped, and its scope is stated in two conjuncts:
-    // two members with NO unchanged nucleotide between them, BOTH consuming
-    // reference bases. Its authority, `DNA/substitution.md:32`, marks exactly that
-    // shape invalid — of `LRG_199t1:c.79_80delinsTT` it says "the description
-    // `c.[79G>T;80C>T]` is not correct". The forbidden output is the FLUSH SPLIT.
-    //
-    // The re-derived partition meets neither conjunct. `9dup` inserts at the
-    // junction 9|10 and `13del` removes c.13, so `c.10_12` sits unchanged between
-    // them — separation 3, not 0 — and a `dup` consumes no reference bases at all.
-    // So `substitution.md:32` has nothing to say about it, `general.md:34` governs
-    // the separated pair and asks for the individual description given, and
-    // `DNA/duplication.md:18` REQUIRES the `dup` label on a copy of the base
-    // immediately 5' of the insertion point. Ferro emits neither the form the
-    // record forbids nor a form any cited clause forbids.
-    //
-    // What ferro has stopped emitting is the spanning form the record called
-    // correct. That is a rule-6 choice between conformant descriptions, which
-    // `canonical-form-choice-when-both-legal` (decided) assigns to the
-    // derivation: `c.10_13` reads `AATA` against a payload of `TAAT`, a
-    // one-position rotation whose minimal alignment is one inserted base and one
-    // deleted base (cost 2) rather than three substitutions (cost 3). The spanning
-    // `delins` is not a minimal alignment of this block at all; it is a merge over
-    // one.
-    //
-    // The block is equal-length, so `delins.md:47` cannot merge the pair back —
-    // `delins-merge-vs-individual-gap-two-or-more` is scoped to the net-deletion
-    // direction.
+    // `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+    // answers it: four reference bases against a four-base payload have exactly
+    // one column correspondence, so there is no alignment to minimise over. Under
+    // it `c.10`, `c.12` and `c.13` change and `c.11` does not — and this IS a
+    // coding axis, so `DNA/delins.md:47` reaches the payload-coincidence split
+    // and merges it back to the spanning form, which is what this record states.
+    // What the return costs is the flip's convergence on this class: the authored
+    // spelling is held back by a different mechanism, named on the assertion
+    // below.
     assert_eq!(
         normalized(&provider, spanning),
-        "NM_TEST.1:c.[9dup;13del]",
-        "the re-derived partition is separated and carries a `dup`, so \
-         `DNA/substitution.md:32`'s flush-split prohibition does not reach it"
+        spanning,
+        "the spanning form `substitution.md:32` and `delins.md:16` name for a \
+         block whose every column but one changes"
     );
-    assert_eq!(normalized(&provider, authored), "NM_TEST.1:c.[9dup;13del]");
-    // Stated as its own assertion: the class converged, and that is the point.
-    assert_eq!(
+    // THE OTHER SPELLING STILL KEEPS ITS OWN PARTITION, so the class is divergent
+    // again — it converged under #1835 and does so no longer. That residue is not
+    // this record's and it is not #1878's either: the derived spanning form weighs
+    // more than the two members the caller wrote, so
+    // `canonicalize_from_sequence`'s input-relative weight bound refuses the
+    // derivation and hands the input back. `derivation-may-not-be-bounded-by-the-
+    // inputs-spelling` (decided: DELETE THE BOUND) owns it, tracked as #1440, and
+    // with the bound disabled this line reads `spanning` and the class converges
+    // ON the adjudicated form. Measured, not predicted.
+    assert_eq!(normalized(&provider, authored), authored);
+    assert_ne!(
         normalized(&provider, spanning),
         normalized(&provider, authored),
-        "the two spellings of one variant must converge"
+        "pinned as a divergence so closing it is deliberate; see #1440"
     );
 }
 

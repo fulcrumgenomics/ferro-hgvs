@@ -7280,11 +7280,15 @@ fn partition_block_sequence_first(
 /// claim more changed columns than the block's edit distance —
 /// `partition_members_canonical`'s doc works the case through.
 ///
+/// An **equal-length** block is exempt from the search — see
+/// [`partition_block_canonical_within`], which is where that case is decided.
+///
 /// Returns `None` only when the alignment grid would exceed
 /// [`MAX_SEQFIRST_GRID_CELLS`]; the caller falls back to [`partition_block`].
 ///
-/// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
-/// example; it does not decide any shipped result.
+/// Reached under `FERRO_PARTITION=canonical` and `canonical-coalesced`, and from
+/// the `dump_partitions` example. Since #1835 made `canonical-coalesced` the
+/// default it decides shipped results — this doc said the opposite until #1878.
 fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
     partition_block_canonical_within(reference, result, MAX_SEQFIRST_GRID_CELLS)
 }
@@ -7316,6 +7320,50 @@ fn partition_block_canonical_within(
         .checked_mul(result.len().checked_add(1)?)?;
     if cells > max_grid_cells {
         return None;
+    }
+
+    // An equal-length block has a UNIQUE column correspondence, so there is no
+    // alignment to choose and nothing for the search to decide.
+    //
+    // This is `README.md`'s own ruleset, in the list of reasons rules 2 and 3 are
+    // best effort: "For an equal-length block the column correspondence is
+    // unique, so 'two variants separated by N nucleotides' is a fact about the
+    // variant. For an unequal-length block there is no correspondence —
+    // recovering one means *choosing* an alignment, and the spec does not say
+    // which." The search is how ferro chooses when it must; here it must not, and
+    // choosing anyway makes the decomposition a property of the tie-break rather
+    // than of the variant.
+    //
+    // [`partition_block`] already scopes three of its own rules this way, in the
+    // same words — "an equal-length block has no gap to place, so
+    // `best_alignment` compares position-wise there". Since #1835 made
+    // `canonical-coalesced` the default, this arm decides shipped results and did
+    // **not** carry that scoping, which is #1878: `TEMPLATE:g.38_41delinsATTG`
+    // over the equal-length block `TTGC -> ATTG` came back as
+    // `g.[37dup;41del]` — a compensating insertion and deletion, distance 2 —
+    // where the unique correspondence gives `g.[38T>A;40_41delinsTG]`, distance
+    // 3. Minimising distance is ferro policy (`canonical-form-choice-when-both-
+    // legal` records that the spec states no minimality principle); the unique
+    // correspondence is a fact, so the fact governs.
+    //
+    // **Do not re-derive this from `general.md:56`.** That the surviving form
+    // also happens to be the one whose members rank higher there is a
+    // consequence, not the ground: `rulings[conflicting-member-geometry-refusal-
+    // scope]` (decided) records that `:56` "ranks competing descriptions of ONE
+    // span; it says nothing about two members of one allele", and names citing it
+    // against a multi-member allele as this repository's recorded cautionary
+    // error. `rulings[equal-length-block-column-correspondence-is-unique]` carries
+    // the argument in full.
+    //
+    // Placed after the grid guard rather than before it so the decline surface is
+    // untouched: the identity pairing needs no grid, but a caller that lowers
+    // `max_grid_cells` itself (`FromSequencesOptions::max_grid_cells`) keeps the
+    // refusal it asked for. Within [`MAX_CANONICAL_WINDOW`] the default budget
+    // cannot bind on an equal-length block anyway, so the placement costs the
+    // dispatch path nothing.
+    if reference.len() == result.len() {
+        let columns: Vec<Column> = (0..reference.len()).map(|i| (Some(i), Some(i))).collect();
+        return Some(pieces_from_columns(&columns, reference, result));
     }
 
     let dag = AlignmentDag::build(reference, result);
@@ -16195,99 +16243,81 @@ mod tests {
         /// The inversion coalesce must reach a partition the *canonical* arm
         /// produced, not only one `partition_block` produced.
         ///
+        /// # The 3 nt case no longer comes apart, and that is #1878
+        ///
         /// `GCT -> AGC` is a textbook 3 nt inversion — `AGC` is the reverse
-        /// complement of `GCT` — and the two partitioners describe it
-        /// differently while denoting the same bases:
+        /// complement of `GCT` — and under `FERRO_PARTITION=canonical` it used to
+        /// be cut into `0:0/A | 2:3/`, an insertion and a deletion, which is the
+        /// shape this pass exists to put back together. It is not cut that way any
+        /// more: the block is equal-length, so
+        /// `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+        /// gives it the unique column correspondence, all three columns differ,
+        /// and the arm returns the whole block already. The pass has nothing to do
+        /// and correctly does nothing.
         ///
-        /// ```text
-        /// partition_block           0:3/AGC        one piece
-        /// partition_block_canonical 0:0/A | 2:3/   an insertion and a deletion
-        /// ```
-        ///
-        /// The second must be put back together, or `inversion.md:5`'s whole-span
-        /// reverse complement is emitted as its columns. Under
-        /// `FERRO_PARTITION=canonical` that is what happened to the spec's own
-        /// published 16 nt example (`DNA/inversion.md:27-34`).
+        /// **That does not retire the pass**, because an inversion is
+        /// length-preserving by definition and the correspondence still splits one
+        /// wherever a column coincides with its own reverse complement.
+        /// `ACGTGC -> GCACGT` is the smallest such case: positions 1 and 4 match
+        /// by coincidence, so the correspondence yields three pieces that must be
+        /// rejoined or `inversion.md:5`'s whole-span reverse complement is emitted
+        /// as its columns. Both halves are asserted below.
         ///
         /// # It fails to fire; it is not fired and undone
         ///
-        /// Asserted here rather than described, because "the pass declines" and
-        /// "a later pass reverses it" call for opposite fixes. The
-        /// reconstruction is a valid inversion — `is_inversion` accepts it — so
-        /// nothing is wrong with what the pass would produce. What refused was
-        /// the admission gate, and each of the three routes that predate #1637
-        /// is asserted below to be the reason.
+        /// Asserted rather than described, because "the pass declines" and "a
+        /// later pass reverses it" call for opposite fixes. The reconstruction is
+        /// a valid inversion — `is_inversion` accepts it — so nothing is wrong
+        /// with what the pass would produce.
         #[test]
         fn the_inversion_coalesce_reaches_a_canonical_partition() {
-            let reference = b"GCT";
-            let mut pieces =
-                partition_block_canonical(reference, b"AGC").expect("grid is far below the bound");
+            // Half one: the smallest inversion is already whole.
+            assert_eq!(
+                partition_block_canonical(b"GCT", b"AGC").expect("grid is far below the bound"),
+                vec![Piece {
+                    ref_start: 0,
+                    ref_end: 3,
+                    alt: b"AGC".to_vec()
+                }],
+                "an equal-length block has one correspondence, and all three of \
+                 these columns differ under it"
+            );
+
+            // Half two: a coincidental match does split one, and the pass rejoins it.
+            let reference = b"ACGTGC";
+            let mut pieces = partition_block_canonical(reference, b"GCACGT")
+                .expect("grid is far below the bound");
             assert_eq!(
                 pieces,
                 vec![
                     Piece {
                         ref_start: 0,
-                        ref_end: 0,
-                        alt: b"A".to_vec()
+                        ref_end: 1,
+                        alt: b"G".to_vec()
                     },
                     Piece {
                         ref_start: 2,
-                        ref_end: 3,
-                        alt: Vec::new()
+                        ref_end: 4,
+                        alt: b"AC".to_vec()
+                    },
+                    Piece {
+                        ref_start: 5,
+                        ref_end: 6,
+                        alt: b"T".to_vec()
                     },
                 ],
                 "if the canonical partition of this block ever changes, the rest \
                  of this test is measuring something else"
             );
 
-            // The diagnosis: the block IS an inversion and the reconstruction is
-            // sound. Only the gate refused.
             let reconstructed = Piece {
                 ref_start: 0,
-                ref_end: 3,
-                alt: b"AGC".to_vec(),
+                ref_end: 6,
+                alt: b"GCACGT".to_vec(),
             };
             assert!(
                 is_inversion(&reconstructed, reference),
                 "the span these pieces denote is a whole reverse complement"
-            );
-            assert!(
-                !every_separation_is_a_single_base(&pieces),
-                "the gap is 2, so the single-base route cannot admit it"
-            );
-            assert!(
-                !changed_columns_dominate_the_span(&pieces),
-                "the insertion consumes no reference, so reference width \
-                 under-reads this partition's density"
-            );
-            // Re-blessed 2026-08-12, and the flip is the point rather than an
-            // accommodation. This assertion used to read `!no_piece_…` with the
-            // reason "the insertion's reference width is 0, narrower than a lone
-            // substitution" — which was true of the predicate as it was then
-            // written (a `>= 2` width test) and false of the question it claims
-            // to ask. Neither piece here is a substitution by
-            // `DNA/delins.md:15`: `0:0/A` replaces no nucleotide and `2:3/`
-            // replaces one with none. So the route now admits, correctly.
-            //
-            // The pass's OUTCOME is unchanged — it reached the `inv` before this
-            // correction too, via `payload_columns_dominate_the_span` — so what
-            // moved is which route is the reason, not what ferro emits.
-            //
-            // The message below was corrected on 2026-08-12, hours after it was
-            // written. It read "`general.md:56` ranks substitution, and neither
-            // of these is one" — which attributes the point to `:56`'s SILENCE
-            // about a `del` and an `ins`, and `:56` is not silent about either
-            // (deletion is item (2), insertion item (5)). A wrong authority
-            // baked into a failure message is read as authority by whoever next
-            // sees it fire, so it names the clause that actually decides.
-            assert!(
-                no_piece_is_a_lone_substitution(&pieces),
-                "an insertion and a deletion: neither piece is a substitution under \
-                 `DNA/substitution.md:5`, which is the only question this route asks"
-            );
-            assert!(
-                payload_columns_dominate_the_span(&pieces),
-                "counting the payload is what makes this partition's density visible"
             );
 
             coalesce_whole_block_inversion(&mut pieces, reference);
@@ -16536,9 +16566,7 @@ mod tests {
                 pieces,
                 vec![
                     piece(0, 3, b"GTG"),
-                    piece(6, 7, b""),
-                    piece(8, 9, b"A"),
-                    piece(10, 10, b"T"),
+                    piece(6, 10, b"GACT"),
                     piece(13, 16, b"GGA"),
                 ],
                 "if the canonical partition of the spec's example ever changes, \
@@ -16555,24 +16583,28 @@ mod tests {
                 !every_separation_is_a_single_base(&pieces),
                 "the widest gap is 3, so the single-base route cannot admit it"
             );
+            // RE-BLESSED BY #1878, AND THE ROUTES MOVED. Under the compensating
+            // partition this block used to get, three of the four routes refused
+            // it — the density route read 8 changed columns against a span of 16,
+            // and `8:9/A` was a lone substitution. The unique column
+            // correspondence gives no compensating gaps and no 1-to-1 member, so
+            // both of those refusals are gone and only the separation route still
+            // refuses. Asserted rather than dropped: which route decides is the
+            // thing this test is for, and it is now a different one.
             assert!(
-                !changed_columns_dominate_the_span(&pieces),
-                "reference widths total 3 + 1 + 1 + 0 + 3 = 8 against a span of \
-                 16, so the density route reads it as exactly not dominant"
+                changed_columns_dominate_the_span(&pieces),
+                "reference widths total 3 + 4 + 3 = 10 against a span of 16, so \
+                 the density route now reads it as dominant"
             );
             assert!(
-                !no_piece_is_a_lone_substitution(&pieces),
-                "`8:9/A` replaces one nucleotide with one other, so it is a \
-                 substitution by `DNA/delins.md:15` and the route refuses. \
-                 `10:10/T` is NOT a second reason — a pure insertion replaces no \
-                 nucleotide — and this message said it was while the predicate \
-                 measured reference width instead of substitution-hood"
+                no_piece_is_a_lone_substitution(&pieces),
+                "no member replaces exactly one nucleotide with one other, so \
+                 `DNA/delins.md:15` types none of them a substitution"
             );
             assert!(
                 payload_columns_dominate_the_span(&pieces),
-                "counting the payload lifts the deletion and the insertion above \
-                 their reference widths, which is what makes this partition's \
-                 density visible"
+                "and the payload route agrees, as it must when every member is \
+                 length-preserving"
             );
 
             coalesce_whole_block_inversion(&mut pieces, reference);
@@ -17551,19 +17583,35 @@ mod tests {
         /// through `partition_block_canonical` — the arm the rule is for.
         #[test]
         fn a_manufactured_split_is_merged_and_a_genuine_one_is_not() {
-            // MERGE: every one of these is a block `partition_block` keeps whole
-            // and the canonical rule shreds. The offsets are given because they
-            // are the property under test.
+            // MERGE: every one of these is a block the canonical rule shreds
+            // into members whose matched runs exist only at a shift. The offsets
+            // are given because they are the property under test.
+            //
+            // # #1878 RETIRED BOTH OF THE ORIGINAL ROWS, AND THAT IS A FINDING
+            //
+            // They were `#1040` (`CAGTGACTAG -> TGTCACGACT`, shredded four ways)
+            // and a 21-member shredding of an equal-length 40 nt delins. Both are
+            // EQUAL-LENGTH blocks, and
+            // `rulings[equal-length-block-column-correspondence-is-unique]`
+            // (decided) now gives such a block its unique column correspondence —
+            // which has no gaps to compensate, so neither is shredded any more
+            // and neither reaches this pass at all. The first comes back as one
+            // member and the second as two.
+            //
+            // So this pass no longer sees the family it was written for. It is
+            // NOT dead: an unequal-length block can still be shredded the same
+            // way, and the rows below are two, drawn from the sweep in
+            // `merging_a_manufactured_split_preserves_the_denoted_sequence` (277
+            // firings over its corpus, none of them equal-length). Whether the
+            // pass still earns its place is a question for whoever next touches
+            // it; it is recorded here rather than answered.
             for (name, reference, alt, canonical_members) in [
-                // offsets -1, -1, -1, 0 — deleted then inserted back
-                ("#1040", &b"CAGTGACTAG"[..], &b"TGTCACGACT"[..], 4),
-                // a 21-member shredding of an equal-length 40 nt delins
-                (
-                    "long-delins-40nt",
-                    &b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT"[..],
-                    &b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG"[..],
-                    21,
-                ),
+                // 5 -> 6. Two `AA`/`CC` runs re-phased, so the matched interior
+                // exists only at the +1 shift the insertion introduces.
+                ("shift-plus-one", &b"AACCA"[..], &b"CCAAAC"[..], 3),
+                // 4 -> 5, on a three-letter alphabet, so the match cannot be an
+                // artefact of a two-letter corpus having nothing else to match.
+                ("shift-plus-one-acg", &b"AACG"[..], &b"CAGAC"[..], 3),
             ] {
                 let mut pieces =
                     partition_block_canonical(reference, alt).expect("grid is far below the bound");
@@ -17603,13 +17651,17 @@ mod tests {
                 ("#1260b-split", &b"AA"[..], &b"CAAC"[..], 2),
                 ("#1000", &b"C"[..], &b"GCA"[..], 2),
                 ("#422-spanning", &b"CTATAG"[..], &b"AAACCCC"[..], 2),
-                // Two members, so below `MIN_MANUFACTURED_SPLIT_MEMBERS` even
-                // though both are non-monotone and dense. `#1034-guard-3nt` is
-                // an inversion and is merged by `coalesce_whole_block_inversion`
-                // instead; `#160-1099` has three unchanged bases between its
-                // members, which `general.md:34` describes individually.
-                ("#1034-guard-3nt", &b"GCT"[..], &b"AGC"[..], 2),
-                ("#160-1099", &b"TGCTC"[..], &b"AAGCT"[..], 2),
+                // ONE member each since #1878, so below
+                // `MIN_MANUFACTURED_SPLIT_MEMBERS` by a wider margin than before:
+                // both are equal-length blocks in which every column differs
+                // under the unique correspondence, so there is nothing to
+                // separate and `delins.md:16` types each as one `delins`. They
+                // were two members apiece under the compensating partition. Kept
+                // in the KEEP list rather than moved out, because what the list
+                // asserts is that this pass leaves them alone, which is still the
+                // property and is still worth pinning.
+                ("#1034-guard-3nt", &b"GCT"[..], &b"AGC"[..], 1),
+                ("#160-1099", &b"TGCTC"[..], &b"AAGCT"[..], 1),
             ] {
                 let mut pieces =
                     partition_block_canonical(reference, alt).expect("grid is far below the bound");
@@ -17712,7 +17764,12 @@ mod tests {
                 }
                 let mut out = Vec::new();
                 for shorter in words(len - 1) {
-                    for base in *b"AC" {
+                    // `ACG`, not `AC`, since #1878: the equal-length family that
+                    // used to supply most of the firings no longer reaches this
+                    // pass, and a two-letter corpus fires only 8 times, which is
+                    // below the floor below and proves nothing. Three letters at
+                    // one less width fires 276.
+                    for base in *b"ACG" {
                         let mut w = shorter.clone();
                         w.push(base);
                         out.push(w);
@@ -17720,7 +17777,7 @@ mod tests {
                 }
                 out
             }
-            let all: Vec<Vec<u8>> = (0..=6).flat_map(words).collect();
+            let all: Vec<Vec<u8>> = (0..=5).flat_map(words).collect();
             let mut merged = 0usize;
             for reference in &all {
                 for alt in &all {
@@ -18463,6 +18520,176 @@ mod tests {
                 partition_block(b"CTATAG", b"AAACCCC", CODING_DNA).len(),
                 1,
                 "#422 on the coding DNA axis"
+            );
+        }
+    }
+
+    /// The equal-length block exemption (#1878).
+    ///
+    /// On a block whose reference and result are the same length the column
+    /// correspondence is unique, so there is no alignment to choose: position `i`
+    /// of the reference IS position `i` of the result. Every arm must therefore
+    /// cut such a block identically, and `delins.md:15`/`:16`/`:17` then type
+    /// what falls out. See `partition_block_canonical_within` and
+    /// `rulings[equal-length-block-column-correspondence-is-unique]`.
+    mod equal_length_block_correspondence {
+        use super::*;
+
+        /// #1878's own block, and its `1420-v3` sibling.
+        ///
+        /// `TTGC -> ATTG` has a compensating alignment of distance 2 (insert `A`,
+        /// match `TTG`, delete `C`) and a position-wise one of distance 3. The
+        /// canonical arm took the cheaper one, which spells the change at the
+        /// first column as a `dup`; the correspondence says that column is a
+        /// substitution and the last two are one `delins`.
+        #[test]
+        fn the_reported_blocks_are_cut_position_wise() {
+            for (reference, result, expected) in [
+                (
+                    &b"TTGC"[..],
+                    &b"ATTG"[..],
+                    vec![
+                        Piece {
+                            ref_start: 0,
+                            ref_end: 1,
+                            alt: b"A".to_vec(),
+                        },
+                        Piece {
+                            ref_start: 2,
+                            ref_end: 4,
+                            alt: b"TG".to_vec(),
+                        },
+                    ],
+                ),
+                (
+                    &b"ATTG"[..],
+                    &b"CATT"[..],
+                    vec![
+                        Piece {
+                            ref_start: 0,
+                            ref_end: 2,
+                            alt: b"CA".to_vec(),
+                        },
+                        Piece {
+                            ref_start: 3,
+                            ref_end: 4,
+                            alt: b"T".to_vec(),
+                        },
+                    ],
+                ),
+            ] {
+                assert_eq!(
+                    partition_block_canonical(reference, result).expect("in budget"),
+                    expected,
+                    "the unique correspondence, not the cheaper compensating alignment",
+                );
+            }
+        }
+
+        /// The whole block is one `delins` when no column survives — `:16`, and
+        /// `1420-v4`'s answer.
+        #[test]
+        fn a_block_with_no_matched_column_is_one_delins() {
+            assert_eq!(
+                partition_block_canonical(b"ATGC", b"GCTG").expect("in budget"),
+                vec![Piece {
+                    ref_start: 0,
+                    ref_end: 4,
+                    alt: b"GCTG".to_vec(),
+                }],
+            );
+        }
+
+        /// The property, rather than three instances of it: on an equal-length
+        /// block the canonical arm and the shipped-since-v0.12 `partition_block`
+        /// must agree exactly, because neither has anything to decide.
+        ///
+        /// `partition_block` reaches the same place from the other side —
+        /// `best_alignment` returns the position-wise pairing on its first
+        /// statement, and all three of its length-changing guards are scoped away
+        /// — so this is a genuine cross-check and not a tautology. An unchanged
+        /// block is the one deliberate exception: `partition_block` answers with a
+        /// spanning no-op piece where the canonical arm answers with no pieces at
+        /// all, which is its contract for a block that changes nothing.
+        ///
+        /// Swept against **both** carve-out scopes (#1899 gave `partition_block`
+        /// a `CoincidenceCarveOut` argument). The exemption this module is about
+        /// is a property of the correspondence, so it cannot be axis-dependent,
+        /// and asserting only one scope would leave the other untested at exactly
+        /// the seam `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+        /// separates.
+        #[test]
+        fn every_equal_length_block_agrees_with_the_live_rule() {
+            let alphabet = b"ACGT";
+            let mut compared = 0usize;
+            let mut differing = 0usize;
+            for width in 1..=6usize {
+                let combinations = alphabet.len().pow(width as u32);
+                for a in 0..combinations {
+                    for b in 0..combinations {
+                        let word = |mut n: usize| -> Vec<u8> {
+                            (0..width)
+                                .map(|_| {
+                                    let base = alphabet[n % alphabet.len()];
+                                    n /= alphabet.len();
+                                    base
+                                })
+                                .collect()
+                        };
+                        let (reference, result) = (word(a), word(b));
+                        if reference == result {
+                            continue; // the unchanged-block exception, above.
+                        }
+                        differing += 1;
+                        // Sample the wide widths: the full cross product at
+                        // width 6 is 16.7M pairs, which is a soak rather than a
+                        // unit test. The prefix is deterministic, so a failure
+                        // reproduces.
+                        if width > 4 && !differing.is_multiple_of(97) {
+                            continue;
+                        }
+                        compared += 1;
+                        for carve_out in [NO_AXIS, CODING_DNA] {
+                            assert_eq!(
+                                partition_block_canonical(&reference, &result).expect("in budget"),
+                                partition_block(&reference, &result, carve_out),
+                                "{} -> {} ({carve_out:?}): an equal-length block has one \
+                                 correspondence, so the two rules cannot legitimately disagree",
+                                String::from_utf8_lossy(&reference),
+                                String::from_utf8_lossy(&result),
+                            );
+                        }
+                    }
+                }
+            }
+            // A sweep that compared nothing would pass silently; say how much it
+            // actually did.
+            assert!(
+                compared > 50_000,
+                "only {compared} blocks compared, of {differing} differing pairs"
+            );
+        }
+
+        /// The negative control: an unequal-length block still goes through the
+        /// alignment DAG, so the exemption is scoped rather than a bypass.
+        ///
+        /// `AAA -> CA` has no unique correspondence — the deleted `A` may be any
+        /// of the three — so the canonical rule picks, and it picks differently
+        /// from `partition_block`'s single-gap search. That disagreement is the
+        /// whole reason both arms exist, and it must survive #1878.
+        #[test]
+        fn an_unequal_length_block_still_chooses_an_alignment() {
+            assert_eq!(
+                partition_block_canonical(b"AAA", b"CA").expect("in budget"),
+                vec![Piece {
+                    ref_start: 0,
+                    ref_end: 2,
+                    alt: b"C".to_vec(),
+                }],
+            );
+            assert_ne!(
+                partition_block_canonical(b"AAA", b"CA").expect("in budget"),
+                partition_block(b"AAA", b"CA", NO_AXIS),
             );
         }
     }

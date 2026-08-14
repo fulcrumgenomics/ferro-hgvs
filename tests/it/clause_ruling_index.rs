@@ -112,8 +112,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 31 records, 28 decided / 3 undecided
-//! 112 clause lines, of which 34 are named by more than one record
+//! 32 records, 29 decided / 3 undecided
+//! 112 clause lines, of which 35 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -121,6 +121,7 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/background/glossary.md:310
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
@@ -228,11 +229,13 @@
 //! docs/recommendations/DNA/complex.md:161  [MULTI]
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/DNA/delins.md:15
+//! docs/recommendations/DNA/delins.md:15  [MULTI]
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (governing)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -240,6 +243,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
@@ -366,6 +370,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
@@ -398,6 +403,7 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
@@ -440,6 +446,7 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/background/numbering.md:21
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
@@ -471,9 +478,13 @@
 //! docs/recommendations/DNA/alleles.md:5
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
+//! docs/recommendations/DNA/delins.md:15
+//!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (governing)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -481,6 +492,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18
@@ -532,6 +544,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
@@ -560,6 +573,7 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `equal-length-block-column-correspondence-is-unique` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
@@ -888,7 +902,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (31, 28, 3),
+        (32, 29, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1052,7 +1066,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        34,
+        35,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

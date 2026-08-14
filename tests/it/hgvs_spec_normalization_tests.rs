@@ -1284,6 +1284,29 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "c-description-against-an-unresolvable-cds-is-refused",
         "decided",
     ),
+    // Whether a block whose reference and result are the SAME LENGTH may be cut
+    // by an alignment other than the position-wise correspondence — a
+    // compensating insertion-plus-deletion pair costs fewer edit operations and
+    // is what the canonical partitioner selected. **No.** On an equal-length
+    // block the correspondence is unique, so the changed-column set is a fact
+    // about the variant rather than an alignment ferro picks, and
+    // `delins.md:15`/`:16`/`:17` then type what falls out with nothing left to
+    // choose. `README.md`'s ruleset states the uniqueness itself; minimal edit
+    // distance, which the exemption displaces, is ferro policy and no clause.
+    // **NOT grounded on `general.md:56`**, which is how #1878 was filed:
+    // `conflicting-member-geometry-refusal-scope` already holds that `:56` does
+    // not reach a multi-member allele, and both competitors here are one.
+    // **A restoration** — `partition_block`, shipped through v0.13.x, already
+    // cuts every equal-length block this way and scopes three of its own rules
+    // away from the regime in those words; all 2,426 rows this moves over the
+    // shape-family corpus land byte-identically on that arm's answer. Its cost
+    // is convergence (`converged` 11,271 -> 10,773 on `cis_confluence_axis` at
+    // 3'), and that cost is measured to be the input-relative weight bound's,
+    // not this rule's — see #1440.
+    (
+        "equal-length-block-column-correspondence-is-unique",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

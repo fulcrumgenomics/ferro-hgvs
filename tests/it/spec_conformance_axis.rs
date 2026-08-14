@@ -647,6 +647,32 @@ const SHAPE: CorpusShape = CorpusShape {
 /// four confluence figures below are measured against the third rather than
 /// against the corpus PR's `main`. The module docs carry a RE-BLESSED section per
 /// change, naming each figure, which way it moved, and the row ids behind it.
+/// # #1878 — CONFLUENCE FALLS, VALIDITY DOES NOT MOVE, AND THE CAUSE IS #1440'S
+///
+/// 3': `converged` 11 016 -> 10 521, `split_two` 673 -> 1 162, `split_three`
+/// 164 -> 170, `outputs_intronic_under_a_genomic_wrapper` 389 -> 384. 5':
+/// `converged` 10 753 -> 10 282, `split_two` 981 -> 1 452. **Every rank-1
+/// figure is unchanged on both directions** — `declined` 0, `unparseable` 0,
+/// `outputs_denoting_no_sequence` 10/18, `prohibition_violating_outputs` 0,
+/// `guard_violations` 0, `non_idempotent_outputs` 4/4, `sequence_changed` 4/0 —
+/// so nothing conformant was traded for the movement.
+///
+/// The output moves under
+/// `rulings[equal-length-block-column-correspondence-is-unique]` (decided): an
+/// equal-length block has one column correspondence, so its changed-column set
+/// is a fact rather than an alignment the partitioner selects.
+///
+/// **What lowers `converged` is a different mechanism**, and it is measured
+/// rather than argued. The derived form for these rows weighs more than the
+/// members some spellings were written with, so `canonicalize_from_sequence`'s
+/// input-relative weight bound refuses those derivations and returns the input
+/// verbatim. That bound is
+/// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` (decided:
+/// DELETE THE BOUND), tracked as #1440, still in the tree. **Measured on this
+/// tree with the bound disabled: 3' `converged` returns to exactly 11 016 and
+/// 5' RISES to 10 773, with `guard_violations` still 0 and every rank-1 figure
+/// still unchanged.** So the correspondence rule and full convergence are
+/// compatible, and only their sequencing is at issue.
 pub(crate) const THREE_PRIME: Census = Census {
     // -- provenance --
     //
@@ -676,7 +702,7 @@ pub(crate) const THREE_PRIME: Census = Census {
     // stays at 0, which is the counter that would move if any of the eighteen
     // were being emitted on a bare transcript instead
     // (`bare-transcript-intronic-position`, decided).
-    outputs_intronic_under_a_genomic_wrapper: 389,
+    outputs_intronic_under_a_genomic_wrapper: 384,
     // Re-blessed DOWN to ZERO. #1627 refused `standards.md:39`'s 24 `X` rows
     // rather than re-emitting them; #1628 refused the residual 8 —
     // `checklist.md:16`'s `+` offset (4) and `checklist.md:45`'s hyphen range
@@ -721,9 +747,9 @@ pub(crate) const THREE_PRIME: Census = Census {
     // and `non_idempotent_outputs` are unmoved at 4, and
     // `outputs_denoting_no_sequence` is unmoved at 10. So nothing converged by
     // losing a member, changing a base or ceasing to be a fixed point.
-    converged: 11_016,
-    split_two: 673,
-    split_three: 164,
+    converged: 10_521,
+    split_two: 1_162,
+    split_three: 170,
     split_more: 29,
     underdetermined: 0,
     // -- idempotency --
@@ -802,7 +828,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // time**, by 284, and the same three measured zeros hold as at 3': no family
     // loses convergence, rises in arity, or becomes divergent that was not.
     // #1627 does not move it either: a refused row contributes no family.
-    converged: 10_753,
+    converged: 10_282,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -822,7 +848,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // class converged outright. The 5' direction gains 1 525 against the 3'
     // direction's 1 614; the two moving by different amounts is the asymmetry
     // every entry above records, and both move the same way.
-    split_two: 981,
+    split_two: 1_452,
     split_three: 124,
     split_more: 24,
     underdetermined: 0,

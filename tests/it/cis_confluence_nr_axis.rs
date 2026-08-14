@@ -181,13 +181,30 @@ const TX_CONTIG: &str = "chr_synth";
 /// observation one change earlier, and it holds again: `n.` and `r.` gain
 /// 1 456 and 1 456 against `cis_confluence_axis`'s 2 910, which is what an
 /// axis-neutral partitioner change looks like on a corpus half the size.
+/// # #1878 — `converged` FALLS ON ALL FOUR, AND THE CAUSE IS #1440'S
+///
+/// `n.` 3': 5 635 -> 5 386. `n.` 5': 5 636 -> 5 387. `r.` 3': 5 633 -> 5 384.
+/// `r.` 5': 5 634 -> 5 385. `declined` and `sequence_changed` stay 0 on all
+/// four, so the whole movement is between `converged` and `split_two`.
+///
+/// This file's ratchet says `converged` may only go up, so the fall is argued
+/// rather than re-blessed. The argument is `cis_confluence_axis`'s, in full and
+/// not repeated here: `rulings[equal-length-block-column-correspondence-is-unique]`
+/// (decided) moves the OUTPUT, and the input-relative weight bound
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`, decided,
+/// tracked as #1440) is what SPLITS the classes. Measured with that bound
+/// disabled, all four return to their previous values.
+///
+/// Note the four move by 249 apiece against the `c.` axis's 498 — the same
+/// axis-neutral proportion this section's paragraphs above record for the
+/// gains, read in the other direction.
 const N_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see the section above.
-    converged: 5_635,
-    split_two: 1,
+    // #1835 raised these; #1878 lowers them — see the section above.
+    converged: 5_386,
+    split_two: 250,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,
@@ -231,9 +248,9 @@ const R_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see `N_THREE_PRIME`.
-    converged: 5_633,
-    split_two: 3,
+    // #1835 raised these; #1878 lowers them — see `N_THREE_PRIME`.
+    converged: 5_384,
+    split_two: 252,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,
@@ -271,9 +288,9 @@ const N_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see `N_THREE_PRIME`.
-    converged: 5_636,
-    split_two: 0,
+    // #1835 raised these; #1878 lowers them — see `N_THREE_PRIME`.
+    converged: 5_387,
+    split_two: 249,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,
@@ -304,9 +321,9 @@ const R_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see `N_THREE_PRIME`.
-    converged: 5_634,
-    split_two: 2,
+    // #1835 raised these; #1878 lowers them — see `N_THREE_PRIME`.
+    converged: 5_385,
+    split_two: 251,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,

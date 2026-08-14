@@ -68,24 +68,21 @@ fn same_accession_bare_cross_reference_expands_to_literal() {
         !out.contains("[NC_"),
         "cross-reference bracket must be flattened to a literal; got {out}",
     );
-    // #1835: this used to assert `out.contains("delins")` as a proxy for "the
-    // payload was expanded to literal bases". The partition default flip re-derives
-    // the block from the resulting sequence and reaches
-    // `g.[10_11del;16_17dup]` — the payload IS fully expanded and the bracket IS
-    // gone, but no member happens to be spelled `delins`, so the proxy fails while
-    // the property it stood for holds.
+    // This used to assert `out.contains("delins")` as a proxy for "the payload
+    // was expanded to literal bases". #1835 re-derived the block onto
+    // `g.[10_11del;16_17dup]`, where the payload IS fully expanded and the
+    // bracket IS gone but no member happens to be spelled `delins`, so the proxy
+    // failed while the property it stood for held. It was replaced there with the
+    // whole description, which is the stronger test and is kept.
     //
-    // Replaced with the whole description rather than a weaker keyword test. The
-    // 6 nt span `g.10_15` (`CGTACG`) is replaced by `g.20_25` (`TACGTA`): dropping
-    // the leading `CG` leaves `TACG`, and the trailing `TA` is supplied by an
-    // insertion at junction 15|16 which 3'-shifts onto the reference's own `TA` at
-    // `g.16_17` — so `DNA/duplication.md:18` requires it be LABELLED `dup`, and it
-    // is. Equal-length in, equal-length out; `general.md:34` describes the two
-    // members individually and `delins.md:47` is coding-axis-scoped
-    // (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`), so nothing
-    // merges them.
+    // #1878 moves the value back. The 6 nt span `g.10_15` (`CGTACG`) is replaced
+    // by the 6 nt `g.20_25` (`TACGTA`) — an equal-length block, so
+    // `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+    // says the correspondence is unique and there is no rotation alignment to
+    // find. Every one of the six columns differs under it, and `delins.md:16`
+    // types six consecutive changed nucleotides as one `delins`.
     assert_eq!(
-        out, "NC_000022.10:g.[10_11del;16_17dup]",
+        out, "NC_000022.10:g.10_15delinsTACGTA",
         "the cross-reference must expand to literal bases and then normalize from \
          the resulting sequence; got {out}",
     );

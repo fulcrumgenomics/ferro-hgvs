@@ -574,7 +574,7 @@ const REPORTED_ROWS: &[Row] = &[
         // #1420's own ask by violating `general.md:34`. Observed on an
         // experimental partitioner arm, where it raised
         // `reported_confluence_pairs`' 5' census from 0 to 1 on this row alone.
-        // `the_1420_v2_pair_does_not_converge_by_re_derivation` pins the string
+        // `the_1420_v2_cis_spelling_does_not_merge_across_its_unchanged_interior` pins the string
         // as forbidden; read it before flipping this verdict.
         argument: "Wanted `[38T>A;40_41delinsTG]`. Reference 38-41 is `TTGC` \
                    and the result is `ATTG`, so 38 and 40-41 change and 39 \
@@ -589,38 +589,37 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v2/span",
         input: "TEMPLATE:g.38_41delinsATTG",
-        // MOVED BY THE PARTITION DEFAULT FLIP, AND MOVED THE WRONG WAY. Under
-        // `live` this printed `[38T>A;40_41delinsTG]` — #1420's wanted form —
-        // and the verdict was `Canonical`. Under `canonical-coalesced` the span
-        // re-derives onto the CIS spelling instead, so the pair converges (see
-        // the rung assertion, which now derives `NormalizedMatch` from
-        // `a.output == b.output`) but converges on the form the spec ranks
-        // LOWER. Hence `Gap`, and hence `1420-v2` moves `OneReaches` ->
-        // `NeitherReaches`: after the flip NEITHER spelling reaches `wanted`.
-        output: "TEMPLATE:g.[37dup;41del]",
-        five_prime: "TEMPLATE:g.[36dup;41del]",
-        verdict: Verdict::Gap,
+        // RETURNED BY #1878, AND BACK TO `Canonical`. Under `live` this printed
+        // `[38T>A;40_41delinsTG]` — #1420's wanted form; the partition default
+        // flip re-derived it onto the cis spelling `[37dup;41del]`, which
+        // converged the pair on the form `general.md:56` ranks lower and was
+        // pinned here as a disclosed rule-2 preference miss.
+        //
+        // #1878 closes it, and NOT on `:56` — see the row's argument. The block
+        // `38-41` is equal-length, so its column correspondence is unique and the
+        // compensating alignment the flip found was never a competing reading.
+        // The row is direction-insensitive again and leaves `FIVE_PRIME_MOVERS`.
+        output: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v2: substitution exposed \
                    at 38, and the span separated at the unchanged 39 per \
-                   delins.md:17. THE FLIP NO LONGER REACHES IT, and that is a \
-                   DISCLOSED RULE-2 PREFERENCE MISS rather than a licensed \
-                   re-derivation. Reference 38-41 is `TTGC` against a result of \
-                   `ATTG`, so 38 IS a substitution and `general.md:56` ranks \
-                   (1) substitution above (4) duplication — yet the derived form \
-                   spells that change as `37dup`. Both forms denote the same \
-                   sequence, so this is a choice between legal descriptions on \
-                   which the spec states a ranking, and the derivation does not \
-                   consult it after re-partitioning. `rulings[separation-rule-\
-                   force-modal-or-negation]` (decided 2026-08-12) grades \
-                   `general.md`'s modals as README rule 2 — a deviation to \
-                   DISCLOSE AND PIN WITH A TRIPWIRE, not a rule-7 blocker — so \
-                   this is pinned here and disclosed in the PR's \
-                   `Representation-Change:` trailer rather than blocking. The \
-                   ranking defect is filed separately; closing it should return \
-                   this row to `Canonical` and the pair to `OneReaches`, which \
-                   is the tripwire: a change that moves either MUST say which.",
+                   delins.md:17. Reference 38-41 is `TTGC` against a result of \
+                   `ATTG`, four reference bases against a four-base payload, so \
+                   the column correspondence is UNIQUE and the changed-column \
+                   set is a fact about the variant rather than an alignment \
+                   ferro selects — `rulings[equal-length-block-column-\
+                   correspondence-is-unique]`, decided. Under it 38 changes \
+                   alone (`delins.md:15`, a substitution), 39 does not, and \
+                   40-41 change consecutively (`:16`, one delins), which \
+                   `:17` keeps individual. Note the ground is NOT \
+                   `general.md:56`, which #1878 was filed on: both competitors \
+                   are multi-member alleles and \
+                   `rulings[conflicting-member-geometry-refusal-scope]` records \
+                   that `:56` does not reach one. That the surviving form also \
+                   ranks higher there is a consequence, not the reason.",
     },
     Row {
         label: "1420-v3/cis",
@@ -638,21 +637,21 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v3/span",
         input: "TEMPLATE:g.37_40delinsCATT",
-        // MOVED BY THE PARTITION DEFAULT FLIP, same shape as `1420-v2/span`
-        // and the same defect: the span re-derives onto its cis sibling's
-        // authored form, so the pair converges but neither spelling reaches
-        // `wanted`. Here `general.md:56` ranks (1) substitution above
-        // (5) insertion, and the surviving form spells the change as an `ins`.
-        // A README rule-2 preference miss, disclosed and filed as #1878.
-        output: "TEMPLATE:g.[36_37insC;40del]",
-        five_prime: "TEMPLATE:g.[36_37insC;40del]",
-        verdict: Verdict::Gap,
+        // RETURNED BY #1878 alongside `1420-v2/span`, and for the same reason:
+        // the block `37-40` is equal-length, so the correspondence is unique and
+        // the flip's `[36_37insC;40del]` was a re-frame rather than a reading.
+        output: "TEMPLATE:g.[37_38delinsCA;40G>T]",
+        five_prime: "TEMPLATE:g.[37_38delinsCA;40G>T]",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.[37_38delinsCA;40G>T]",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v3: reference 37-40 is \
                    `ATTG` against `CATT`, so 37-38 change consecutively \
                    (delins.md:16), 39 does not, and 40 is a substitution \
-                   separated from them (delins.md:17).",
+                   separated from them (delins.md:17). Four reference bases \
+                   against a four-base payload, so the correspondence is unique \
+                   and those three facts are read off it rather than chosen — \
+                   `rulings[equal-length-block-column-correspondence-is-unique]`.",
     },
     Row {
         label: "1420-v4/cis",
@@ -671,21 +670,31 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v4/span",
         input: "TEMPLATE:g.21_24delinsGCTG",
-        // MOVED BY THE PARTITION DEFAULT FLIP, and unlike `1420-v2`/`v3` this
-        // one is LICENSED rather than a preference miss. The flip finds the
-        // payload-coincidence alignment across 22-23, and
-        // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
-        // (decided) puts every `g.` row OUTSIDE `DNA/delins.md:47`, so
-        // `general.md:34` governs unqualified and the members are described
-        // individually. #1420 asks for the span; the ledger says a `g.` row
-        // splits, and the ledger is the later and narrower authority.
-        output: "TEMPLATE:g.[21delinsGC;24del]",
-        five_prime: "TEMPLATE:g.[21delinsGC;24del]",
-        verdict: Verdict::Gap,
+        // RETURNED BY #1878, and this row's history is worth reading. The flip
+        // split it on the payload-coincidence alignment across 22-23, and that
+        // was recorded here as LICENSED — `rulings[delins-payload-coincidence-
+        // carve-out-is-coding-dna-scoped]` puts every `g.` row outside
+        // `DNA/delins.md:47`, so `general.md:34` governed unqualified and the
+        // members were described individually.
+        //
+        // The axis scope is untouched and simply never comes up: the block is
+        // equal-length, so the correspondence is unique, and under it ALL FOUR
+        // columns differ. There is no unchanged interior for `:34` to key on and
+        // no coincidence for `:47` to be scoped away from. `delins.md:16` types
+        // four consecutive changed nucleotides as one delins, which is #1420's
+        // ask — so v4 and its v2/v3 siblings, whose "corrections point in
+        // opposite directions", are all satisfied by one rule after all.
+        output: "TEMPLATE:g.21_24delinsGCTG",
+        five_prime: "TEMPLATE:g.21_24delinsGCTG",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.21_24delinsGCTG",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v4: one delins over four \
-                   consecutive changed positions, per delins.md:16.",
+                   consecutive changed positions, per delins.md:16. Reference \
+                   21-24 is `ATGC` against `GCTG`, four bases against four, so \
+                   the correspondence is unique and all four positions change \
+                   under it — the split spelling asserts 22-23 are unchanged, \
+                   and they are not.",
     },
     // -- #1421 -- net insertions. Here the SPLIT spelling is the canonical one,
     // the reverse of #1419/#1420, so a fix that simply preferred whichever form
@@ -832,11 +841,11 @@ const REPORTED_ROWS: &[Row] = &[
 /// prints — and the 5' pass shifts that form's leading deletion one base left,
 /// which the substitution-plus-deletion form gave it no way to do. So the row
 /// joins its own `/cis` sibling here rather than arriving for a new reason.
-// `1420-v2/span` JOINED under the partition default flip: its 3' answer is
-// `g.[37dup;41del]` and its 5' answer `g.[36dup;41del]`, because the span now
-// descends onto the cis form and the cis form's `dup` is direction-sensitive
-// (3'-anchored by `general.md:41`). Disclosed as a representation change under
-// a supported option; see #1878.
+// `1420-v2/span` JOINED under the partition default flip and LEFT AGAIN with
+// #1878: it descended onto the direction-sensitive cis form and now derives the
+// unique correspondence of its own equal-length block, which no shift can move.
+// Its `/cis` sibling is unaffected and stays here — the cis spelling's `dup` is
+// still 3'-anchored by `general.md:41` and still walks into the `AA` at 36-37.
 // `1421-n3/split` and `1421-n3/span` ALSO joined: both converge on
 // `g.[34G>T;37delinsCC;39_40insTACGT]` at 3' and on
 // `g.[34G>T;37delinsCC;38_39insTTACG]` at 5', the trailing insertion anchoring
@@ -846,7 +855,6 @@ const FIVE_PRIME_MOVERS: &[&str] = &[
     "1419-r3/cis",
     "1419-r3/span",
     "1420-v2/cis",
-    "1420-v2/span",
     "1421-n3/split",
     "1421-n3/span",
 ];
@@ -911,8 +919,9 @@ const FIVE_PRIME_MOVERS: &[&str] = &[
 /// So lowering this constant requires naming, in the PR, **which clause carried
 /// the move** — not merely that the row now prints its wanted form. A row that
 /// converged with no clause behind it is a re-derivation and the count must not
-/// move. `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
-/// pins the `1420-v2` half of that as a forbidden string.
+/// move. `reported_confluence_pairs`'
+/// `the_1420_v2_cis_spelling_does_not_merge_across_its_unchanged_interior` pins
+/// the `1420-v2` half of that as a forbidden string.
 ///
 /// **[`PAIR_STATES`] does not weaken any of this, and was written not to.** It
 /// makes `BothReach` *expressible*, which is a different thing from making it
@@ -921,7 +930,7 @@ const FIVE_PRIME_MOVERS: &[&str] = &[
 /// for together. [`the_pair_state_census_holds`] asserts the arithmetic between
 /// the two censuses — 0, 1 or 2 gap rows per pair by state, summing to this
 /// number — so neither can be moved to accommodate the other in silence.
-const OPEN_GAPS: usize = 18;
+const OPEN_GAPS: usize = 15;
 
 /// Every reported pair's [`PairState`], pinned per pair and in the table's own
 /// order.
@@ -949,17 +958,18 @@ const PAIR_STATES: &[(&str, PairState)] = &[
     ("1419-r1", PairState::NeitherReaches),
     ("1419-r2", PairState::NeitherReaches),
     ("1419-r3", PairState::NeitherReaches),
-    // OneReaches -> NeitherReaches under the partition default flip: the span
-    // spelling re-derives onto the cis form, so neither reaches `wanted`. A
-    // disclosed rule-2 preference miss on `general.md:56`; see the row.
-    ("1420-v2", PairState::NeitherReaches),
-    // OneReaches -> NeitherReaches under the flip: the span descends onto the
-    // cis form, so neither reaches `wanted`. Same mechanism as 1420-v2; #1878.
-    ("1420-v3", PairState::NeitherReaches),
-    // OneReaches -> NeitherReaches: the span splits on the axis scope ruling,
-    // so neither spelling reaches #1420's wanted span form. LICENSED, not a
-    // preference miss — see the row.
-    ("1420-v4", PairState::NeitherReaches),
+    // NeitherReaches -> OneReaches with #1878: the span spelling reaches
+    // `wanted` again, on the unique column correspondence of its equal-length
+    // block. The cis spelling is held back by the input-relative weight bound
+    // (#1440), so the pair is not `BothReach`.
+    ("1420-v2", PairState::OneReaches),
+    // NeitherReaches -> OneReaches with #1878, same mechanism as 1420-v2.
+    ("1420-v3", PairState::OneReaches),
+    // NeitherReaches -> OneReaches with #1878: all four of this block's columns
+    // differ under the unique correspondence, so the span is `delins.md:16`'s
+    // single delins — #1420's own ask — and the payload-coincidence split the
+    // flip found had nothing to coincide on.
+    ("1420-v4", PairState::OneReaches),
     // OneReaches -> NeitherReaches: both spellings converge on a third form
     // neither authored, licensed by `canonical-form-choice-when-both-legal`,
     // so neither reaches #1421's `wanted`.
@@ -984,7 +994,7 @@ const PAIR_STATES: &[(&str, PairState)] = &[
 /// [`the_pair_state_census_holds`] and in [`PairState::gap_rows`]: neither
 /// compiles until the new variant is given an arm, and the census arm has
 /// nowhere to put its count until this tuple grows too.
-const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 0, 9);
+const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 3, 6);
 
 /// The state [`PAIR_STATES`] pins for one pair.
 ///

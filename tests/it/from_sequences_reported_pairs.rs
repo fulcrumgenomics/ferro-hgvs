@@ -122,11 +122,21 @@ fn derive(
 /// **A zero-pad window refuses an insertion resting on its 5' edge**, and says
 /// what to do about it.
 ///
-/// `1420-v2` is the row that exposed this: at pad 0 the window starts at 38,
-/// `g.[37dup;41del]` derives to `g.[37_38insA;41del]`, and position 37 is
+/// `1420-v2` is the row that exposed this: at pad 0 its window used to start at
+/// 38, `g.[37dup;41del]` derived to `g.[37_38insA;41del]`, and position 37 was
 /// outside it. HGVS writes an insertion between two positions, so there is no
 /// other spelling available — and had the window instead started at position 1
 /// of the sequence, the anchor would not exist at all.
+///
+/// **That row no longer reaches the refusal, and the window is now built here
+/// directly rather than taken from it.** `1420-v2`'s block is equal-length, and
+/// `rulings[equal-length-block-column-correspondence-is-unique]` (decided) gives
+/// such a block its unique column correspondence, which has no insertion in it
+/// at all — the derivation is `g.[38T>A;40_41delinsTG]`, wholly inside the
+/// window. Rather than hunt for another committed row with the right geometry,
+/// the pair is stated: the same window (`TTGC` at 38) against a payload one base
+/// longer, which is a net insertion and so still has an alignment to choose and
+/// still places the inserted `A` on the 5' edge.
 ///
 /// Pinned as a refusal, not as a `should_panic`: the message is the deliverable
 /// here. `from_sequences`'s own round-trip check catches this shape anyway, but
@@ -134,19 +144,16 @@ fn derive(
 /// a bug in ferro rather than adding one base of flank.
 #[test]
 fn a_zero_pad_window_refuses_an_insertion_on_its_five_prime_edge() {
-    let normalizer = normalizer_for(TEMPLATE, ShuffleDirection::ThreePrime);
-    let pair = window(&normalizer, "TEMPLATE:g.[37dup;41del]", 0);
-    assert_eq!(
-        (pair.position, pair.reference.len()),
-        (38, 4),
-        "the row no longer produces the window this test is about"
-    );
+    // `TEMPLATE:g.36_41` is `AATTGC`. The zero-pad window starts at 38 and holds
+    // `TTGC`; the payload prepends one `A`, so the derivation is a pure insertion
+    // at the window's own 5' edge and its anchor is position 37.
+    let accession = "TEMPLATE";
 
     let error = ferro_hgvs::from_sequences(
-        &pair.accession,
-        pair.position,
-        &pair.reference,
-        &pair.alternate,
+        accession,
+        38,
+        "TTGC",
+        "ATTGC",
         &FromSequencesOptions::default(),
     )
     .expect_err("an insertion on the 5' edge has no anchor inside the window")
@@ -161,13 +168,13 @@ fn a_zero_pad_window_refuses_an_insertion_on_its_five_prime_edge() {
     }
 
     // The message's remedy — more 5' flank — has to actually work, or it is a
-    // dead end dressed up as advice.
-    let padded = window(&normalizer, "TEMPLATE:g.[37dup;41del]", 1);
+    // dead end dressed up as advice. One base takes the window back to 37, whose
+    // `A` is what the payload's leading `A` 3'-shifts onto.
     ferro_hgvs::from_sequences(
-        &padded.accession,
-        padded.position,
-        &padded.reference,
-        &padded.alternate,
+        accession,
+        37,
+        "ATTGC",
+        "AATTGC",
         &FromSequencesOptions::default(),
     )
     .expect("one base of 5' flank clears it under ThreePrime, as the refusal promises");
@@ -179,14 +186,8 @@ fn a_zero_pad_window_refuses_an_insertion_on_its_five_prime_edge() {
     // from being quietly narrowed back to "one base" by someone reading only the
     // assertion above.
     let five_prime = FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime);
-    ferro_hgvs::from_sequences(
-        &padded.accession,
-        padded.position,
-        &padded.reference,
-        &padded.alternate,
-        &five_prime,
-    )
-    .expect_err("under FivePrime one base is not enough — see the refusal's own wording");
+    ferro_hgvs::from_sequences(accession, 37, "ATTGC", "AATTGC", &five_prime)
+        .expect_err("under FivePrime one base is not enough — see the refusal's own wording");
 }
 
 /// **`to_sequences` hands both spellings of a pair one window.**

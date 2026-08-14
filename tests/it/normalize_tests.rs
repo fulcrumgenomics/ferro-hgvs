@@ -4819,39 +4819,31 @@ mod issue_160_revcomp_inv_subspans {
         // whole run is not an inversion and the revcomp sub-run may not be carved
         // out (issue #1034). It is not: there is no `inv` in the output.
         //
-        // #1835 — RE-PINNED BY THE PARTITION DEFAULT FLIP. Was the spanning
-        // `g.1099_1103delinsAAGCT`; now `g.[1099delinsAA;1103del]`.
+        // #1835 re-pinned this to `g.[1099delinsAA;1103del]`; #1878 returned it
+        // to the spanning form.
         //
-        // THE #1034 DEFECT IS NOT BACK. That defect is an `inv` being carved out
-        // of a contiguous run, and neither member here is an `inv`. What moved is
-        // the alignment, not the typing.
+        // The flip's reading was that "all five positions differ" holds only of
+        // the position-wise comparison, and that a gapped alignment is cheaper:
+        // write `AA` for the single `T` at 1099, keep `GCT` at 1100-1102, delete
+        // the `C` at 1103 — two members against five substitutions, same payload.
+        // Under it 1100-1102 are unchanged and `general.md:34` describes the two
+        // members individually.
         //
-        // WHY THE RUN IS NO LONGER CONTIGUOUS. "All five positions differ" is true
-        // only of the position-wise reading, which is what `partition_block`
-        // used. The minimal alignment is gapped and much cheaper: write `AA` in
-        // place of the single `T` at 1099, keep `GCT` at 1100-1102 untouched, and
-        // delete the `C` at 1103 — two members against five substitutions, and the
-        // result is `AA` + `GCT` = `AAGCT`, the same payload. Under that alignment
-        // 1100-1102 are genuinely unchanged bases, so this is not one contiguous
-        // change at all.
+        // `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+        // is what answers it: five reference bases against a five-base payload
+        // have exactly ONE column correspondence, so "1100-1102 are unchanged" is
+        // a property of the alignment the search picked and not of the variant.
+        // With nothing to pick, all five columns differ and `delins.md:16` types
+        // them as one `delins`. `general.md:34` has no separation to key on.
         //
-        // WHY IT IS NOT MERGED BACK. `general.md:34` describes members separated by
-        // unchanged nucleotides individually; `DNA/delins.md:47` would recommend
-        // the span instead, but `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-        // (decided) scopes `:47` to the coding DNA axis and this is a `g.` row.
-        // `general.md:35`'s exception needs a reading frame a genomic reference
-        // does not declare. Derivation from the resulting sequence is
-        // `canonical-form-choice-when-both-legal`.
-        //
-        // The two sibling tests above are unmoved and are the contrast worth
-        // keeping: `TCC` -> `GAG` at 1150_1152 has no cheaper gapped alignment, so
-        // it stays one spanning `delins` from both input spellings.
+        // The #1034 defect — an `inv` carved out of a contiguous run — is absent
+        // under both pinnings; what moved, twice, is the alignment.
         let provider = provider_with_genomic("NC_000001.11", 1099, "TGCTC");
         let result = normalize_to_string(
             provider,
             "NC_000001.11:g.[1099T>A;1100G>A;1101C>G;1102T>C;1103C>T]",
         );
-        assert_eq!(result, "NC_000001.11:g.[1099delinsAA;1103del]");
+        assert_eq!(result, "NC_000001.11:g.1099_1103delinsAAGCT");
     }
 
     #[test]

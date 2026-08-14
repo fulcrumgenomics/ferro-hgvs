@@ -127,17 +127,17 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **100.0% of designed classes converge** (11 271 of 11 272). The 1 that does
-/// not is the measurement this module exists to make: nothing in the repo could
+/// **95.6% of designed classes converge** (10 773 of 11 272). The 499 that do
+/// not are the measurement this module exists to make: nothing in the repo could
 /// state that number before, because only 650 real rows reach the partitioner at
 /// all — and `multi_member_cis_axis` measures convergence over the respellable
 /// ones of those, which is what a corpus of far-apart members looks like.
 ///
-/// **Read the percentage as rounded, not as exact.** 11 271 of 11 272 is
-/// 99.991 %, and the guard below rounds to the nearest tenth, so the headline
-/// says 100.0 while one class still diverges. The residual is named in the
-/// re-bless section below; a reader who needs "all of them" should read the
-/// count, which is the figure the guard actually asserts.
+/// **Read the percentage as rounded, not as exact**, and read the count beside
+/// it: the guard below rounds to the nearest tenth, so a headline can say 100.0
+/// while a class still diverges — it did, at 11 271 of 11 272. A reader who
+/// needs "all of them" should read the count, which is the figure the guard
+/// actually asserts.
 ///
 /// # This headline was wrong for four movements of the pin
 ///
@@ -358,13 +358,45 @@ const CDS_END: u64 = 63;
 /// touches; `delins-adjacent-members-when-both-consume-reference` already
 /// records the adjacent repeat-expansion shape as outside its reach, and the
 /// same holds here. The 5' direction has no residue at all.
+/// # #1878 — `converged` FALLS, AND THE CAUSE IS MEASURED TO BE #1440'S
+///
+/// 3': 11,271 -> 10,773 converged, `split_two` 1 -> 499. 5': 11,272 -> 10,774,
+/// `split_two` 0 -> 498. `sequence_changed` stays **0** in both directions and
+/// `declined` stays 0, so nothing converged onto different bases and nothing
+/// stopped being answerable — the whole movement is between `converged` and
+/// `split_two`.
+///
+/// This file's rule is that a divergence figure may only go DOWN and `converged`
+/// only UP, so a fall is re-blessed only with an argument. Two halves:
+///
+/// **WHAT MOVES THE OUTPUT** is `rulings[equal-length-block-column-correspondence-is-unique]`
+/// (decided): a block whose reference and result are the same length has one
+/// column correspondence, so the changed-column set is a fact rather than an
+/// alignment the partitioner selects, and `delins.md:15`/`:16`/`:17` type what
+/// falls out. That is a rule-2 gain — three `1420-v*` rows in
+/// `reported_partition_verdicts` return to `Canonical`, an adjudicated-correct
+/// expectation in `cis_confluence_adjudication` returns, and `inv` recognition
+/// improves — and it is the whole of what this change does.
+///
+/// **WHAT SPLITS THE CLASSES** is a different mechanism, and it is not this one.
+/// The derived form for these classes weighs more than the members some
+/// spellings were written with, so `canonicalize_from_sequence`'s
+/// input-relative weight bound refuses those derivations and hands the input
+/// back — leaving the spanning spellings on the derived form and the
+/// multi-member ones on their own. That bound is
+/// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` (decided:
+/// DELETE THE BOUND), tracked as #1440 and still in the tree. **Measured on this
+/// tree with the bound disabled: both directions return to their pinned values
+/// above** — 11,271 and 11,272 — with `sequence_changed` and `declined` still 0.
+/// So the two rules are compatible and only their sequencing is at issue.
+///
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    // #1835: the partition default flip — see the section above.
-    converged: 11_271,
-    split_two: 1,
+    // #1835 raised these; #1878 lowers them again — see the section above.
+    converged: 10_773,
+    split_two: 499,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,
@@ -457,9 +489,9 @@ const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    // #1835: the partition default flip — see `THREE_PRIME`.
-    converged: 11_272,
-    split_two: 0,
+    // #1835 raised these; #1878 lowers them again — see `THREE_PRIME`.
+    converged: 10_774,
+    split_two: 498,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,

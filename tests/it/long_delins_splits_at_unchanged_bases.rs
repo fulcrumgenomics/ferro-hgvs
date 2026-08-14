@@ -66,62 +66,42 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     // a coincidental one this periodic `ACGT` fixture could plausibly produce —
     // which would let the very defect this file guards against pass as a fix.
     //
-    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), AND THIS IS THE LARGEST
-    // SINGLE-ROW MOVE IN THE CHANGE: 2 MEMBERS -> 21
+    // # MOVED BY #1835 TO 21 MEMBERS, AND RETURNED BY #1878
     //
-    // The old expectation was two members split at the unchanged base, and the
-    // reasoning given for it was that "the block is equal-length, so
-    // `best_alignment` short-circuits to a positional comparison with no gap to
-    // place and no alignment choice to make". That short-circuit is
-    // `partition_block`'s — the `live` arm. `partition_block_canonical` does not
-    // short-circuit; it searches for a genuinely minimal alignment, and on this
-    // fixture a GAPPED one wins outright.
+    // The expectation here is two members split at the unchanged base, on the
+    // ground that the block is equal-length, so there is no gap to place and no
+    // alignment choice to make: every column differs except index 19.
     //
-    // WHY, ARITHMETICALLY. The core is `ACGT` x10 and the payload is that with
-    // A<->C and G<->T swapped, i.e. `CATG` x10, with index 19 restored. Read
+    // #1835 replaced that with a 21-member split, and its arithmetic was right as
+    // far as it went. The core is `ACGT` x10 and the payload is that with A<->C
+    // and G<->T swapped, i.e. `CATG` x10, with index 19 restored. Read
     // position-wise, 39 of 40 columns differ: cost 39. Delete the leading `A`
-    // instead and the frames line up — core[1..] = `CGTACGT…` against payload
-    // `CATGCAT…` matches every other position — so the same block is 1 deletion,
-    // 19 substitutions and 1 insertion: cost 21. The minimal alignment is the
-    // gapped one, and it is minimal by a wide margin rather than by a tie.
+    // instead and the frames line up, so the same block is 1 deletion, 19
+    // substitutions and 1 insertion: cost 21. The minimal alignment is the gapped
+    // one, by a wide margin rather than by a tie.
     //
-    // WHY THE 21 MEMBERS ARE NOT MERGED BACK. Under the gapped alignment the
-    // separations are real unchanged bases, and `general.md:34` says two variants
-    // separated by one or more nucleotides "should be described individually".
-    // The clause that would recommend the span instead is `DNA/delins.md:47`, and
-    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided)
-    // scopes it to the coding DNA axis — this is a `g.` row, so `:47` does not
-    // reach it and nothing competes with `:34`. `general.md:35`'s one-amino-acid
-    // exception cannot apply either: a genomic reference declares no reading
-    // frame, so its second conjunct is unstatable.
+    // WHAT `rulings[equal-length-block-column-correspondence-is-unique]` (decided)
+    // says is that cost is the wrong question here. Forty reference bases against
+    // a forty-base payload have exactly ONE column correspondence, so the
+    // changed-column set is a fact about the variant; the gapped alignment is
+    // cheaper but it is a re-frame, and its "unchanged" bases are unchanged only
+    // relative to a shift the variant does not have. `general.md:34` keys on
+    // nucleotides separating two variants, and under the correspondence there is
+    // exactly one such nucleotide — index 19. `delins.md:16` types the runs each
+    // side of it, and `:17` keeps them individual.
     //
-    // THIS IS A COST THE RULING STATED IN ADVANCE, not a surprise. The axis-scope
-    // record names it in terms: what the scope costs is "`g.` rows in the
-    // payload-coincidence stratum that the ungated pass would have merged".
-    // `separations_are_meaningful` — the guard this file's module docs describe —
-    // lives in `partition_block` and guards only length-changing blocks; it is not
-    // on the canonical path at all, where `:47` is implemented instead by the
-    // `c.`-scoped coalescing pass. So an equal-length `g.` block has no merge
-    // guard on either arm, and on this arm it now has a gapped alignment to
-    // expose.
+    // The sentence the flip retired — "the block is equal-length, so there is no
+    // alignment choice to make" — is restored as a property of the SHAPE rather
+    // than of `partition_block`. That is the whole of #1878.
     //
-    // THE FILE'S OWN THESIS IS UNCHANGED. Its title is that a delins must split at
-    // its unchanged bases regardless of length, and this row still asserts exactly
-    // that — more strongly than before. What is no longer true is the *sentence*
-    // about equal-length blocks having no alignment choice to make; that was a
-    // property of one partitioner, not of the shape.
-    //
-    // Pinned as a literal rather than rebuilt from `replacement`, because the
-    // answer is no longer a simple function of it — deriving the expected string
-    // would mean reimplementing the aligner in the test, which is how a pin stops
-    // being independent evidence.
-    // The `\` continuations below elide the newline and the following
-    // indentation, so this is one unbroken description.
-    let expected = "NC_TEST.1:g.[1del;3G>A;5A>G;7G>A;9A>G;11G>A;13A>G;15G>A;17A>G;19G>A;\
-                    21A>T;23G>A;25A>G;27G>A;29A>G;31G>A;33A>G;35G>A;37A>G;39G>A;40_41insG]";
+    // The file's thesis is untouched either way: a delins must split at its
+    // unchanged bases regardless of length, and both pinnings assert it.
+    let first: String = replacement.chars().take(19).collect();
+    let second: String = replacement.chars().skip(20).collect();
+    let expected = format!("NC_TEST.1:g.[1_19delins{first};21_40delins{second}]");
     assert_eq!(
         out, expected,
-        "a 40 nt delins must split at the unchanged bases of its MINIMAL alignment"
+        "a 40 nt delins with an unchanged interior base must split at exactly that base"
     );
 }
 
