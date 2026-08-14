@@ -62,12 +62,20 @@ fn a_del_beside_a_dup_re_spells_instead_of_colliding() {
     let input = "NC_TEST.1:g.[260_261del;262_263insA;264delinsAC]";
     let normalized = normalize(core, input);
 
-    // The re-spelling exposes a del and an ins that then cancel further, so the
-    // fixed point is the reduced form rather than the re-spelled one — which is
-    // why the repair runs inside the normalization loop and not after it.
+    // The re-spelling exposes a del and an ins that then cancel further, and the
+    // fixed point is the re-derivation of what remains — which is why the repair
+    // runs inside the normalization loop and not after it.
+    //
+    // Was `NC_TEST.1:g.[261del;263_264insA]` until the input-relative weight
+    // bound was deleted
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`). Same
+    // block as `issue_1284_transcript_axis_collision`, reached from an unrelated
+    // input: `CAG` -> `AGA`, EQUAL length 3/3, three consecutive changed
+    // columns, so `DNA/delins.md:16` gives the single `delins`. The old form was
+    // the input's spelling surviving a refusal, not a derived answer.
     assert_eq!(
-        normalized, "NC_TEST.1:g.[261del;263_264insA]",
-        "expected the colliding `262dup` to be re-spelled and then reduced"
+        normalized, "NC_TEST.1:g.261_263delinsAGA",
+        "expected the colliding `262dup` to be re-spelled and then re-derived"
     );
     parse_hgvs(&normalized).unwrap_or_else(|e| {
         panic!("`{input}` normalized to `{normalized}`, which ferro cannot re-parse: {e}")

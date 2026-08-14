@@ -20,7 +20,7 @@ use crate::project::protein::{
     edit_reaches_initiation_codon, edit_spans_cds_into_3utr, group_consecutive_by,
     predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
     read_cds_start_codon, render_silent_identity, try_project_cis_combined,
-    whole_exon_deletion_span, CisCombined, RefProteinBundle,
+    whole_exon_deletion_span, CisCombined, CisResidueOutcome, RefProteinBundle,
 };
 use crate::project::result::{AxisDeclineReasons, VariantProjection};
 use crate::reference::transcript::Transcript;
@@ -654,8 +654,15 @@ fn combine_cis_members_by_residue(
     bundle: &RefProteinBundle,
     members: &[(i64, i64, &NaEdit)],
     protein_accession: &str,
-) -> Option<HgvsVariant> {
-    let diff = combined_cis_residue_changes(transcript, bundle, members)?;
+) -> CisResidueRendering {
+    let diff = match combined_cis_residue_changes(transcript, bundle, members) {
+        CisResidueOutcome::Diff(diff) => diff,
+        // Passed straight through: the caller must BUILD this one, because its
+        // decline path names members individually and past a terminator the
+        // combination introduces there is no residue to be a consequence of.
+        CisResidueOutcome::TerminatorMoved => return CisResidueRendering::TerminatorMoved,
+        CisResidueOutcome::NotResidueWise => return CisResidueRendering::Declined,
+    };
     let accession = parse_accession(protein_accession);
     let gene_symbol = transcript.gene_symbol.clone();
 
@@ -663,14 +670,17 @@ fn combine_cis_members_by_residue(
     // members rewrote — grouped into runs, never the 5'-most member's residue
     // alone, and never `p.(=)` while a codon can be named (#1099).
     if diff.changed.is_empty() {
-        let residues = codon_residues(&diff.rewritten_codons, &bundle.ref_protein_with_stop)?;
+        let Some(residues) = codon_residues(&diff.rewritten_codons, &bundle.ref_protein_with_stop)
+        else {
+            return CisResidueRendering::Declined;
+        };
         let initiator = bundle.ref_protein_with_stop.first().copied();
-        return Some(render_silent_identity(
+        return CisResidueRendering::Rendered(Box::new(render_silent_identity(
             residues,
             initiator,
             &accession,
             &gene_symbol,
-        ));
+        )));
     }
 
     let spans: Vec<SubSpan> = diff
@@ -685,14 +695,34 @@ fn combine_cis_members_by_residue(
     let groups = group_consecutive_residues(spans);
     if groups.len() != 1 {
         // Separated residues are described individually — the caller's existing
-        // bracketed allele is already the spec-correct rendering (#855).
-        return None;
+        // bracketed allele is already the spec-correct rendering (#855). This is
+        // a description choice made on a product that WAS built, which is what
+        // separates it from `TerminatorMoved` above.
+        return CisResidueRendering::Declined;
     }
-    Some(render_cis_substitution_groups(
+    CisResidueRendering::Rendered(Box::new(render_cis_substitution_groups(
         &groups,
         &accession,
         &gene_symbol,
-    ))
+    )))
+}
+
+/// What [`combine_cis_members_by_residue`] concluded.
+///
+/// Three outcomes rather than an `Option`, because the caller's fallback for a
+/// decline is to describe the members **separately** and that is the wrong
+/// answer for exactly one of the two things an `Option::None` used to carry.
+enum CisResidueRendering {
+    /// One protein consequence over the combined product's changed residues.
+    ///
+    /// Boxed because `HgvsVariant` is ~560 bytes while the other two variants
+    /// carry nothing, and every caller moves the value straight out.
+    Rendered(Box<HgvsVariant>),
+    /// The combined product moves the terminator (premature stop or stop-loss).
+    /// It has its own spec form; the caller must build it rather than fall back.
+    TerminatorMoved,
+    /// Nothing this path can say. The caller keeps its existing behaviour.
+    Declined,
 }
 
 /// Map an LRG transcript accession (`LRG_<gnum>t<tnum>`) to its protein
@@ -4197,9 +4227,44 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 .collect();
             if members.len() > 1 {
                 let prot_acc = cis_member_protein_accession(inner_projections, transcript_id);
-                if let Some(pv) = combine_cis_members_by_residue(&tx, &bundle, &members, &prot_acc)
-                {
-                    return Ok((false, Some(pv)));
+                match combine_cis_members_by_residue(&tx, &bundle, &members, &prot_acc) {
+                    CisResidueRendering::Rendered(pv) => return Ok((false, Some(*pv))),
+                    // The combination moves the terminator: a premature stop or a
+                    // stop-loss. Build it, exactly as the net-frameshift arm above
+                    // builds its product, rather than falling through to the
+                    // per-member bracket.
+                    //
+                    // Falling through is what produced `p.[(Val2Ter);(Lys3=)]` on
+                    // `NM_FSSTOP.1:c.[4_5delinsTA;9A>G]`: the members are
+                    // individually a nonsense substitution and a silent change, so
+                    // each per-member prediction is correct **about the reference**
+                    // and the bracket of them describes a protein that is not
+                    // translated — `Lys3` lies past a terminator the pair itself
+                    // introduces. `frameshift.md:22` forbids `fsTer1` and requires
+                    // the nonsense substitution `p.(Val2Ter)`, which is what
+                    // `try_project_cis_combined` builds from the combined product.
+                    //
+                    // This arm is reached only where the earlier one is not: it
+                    // needs `net_in_frame` and no member carrying its own
+                    // frameshift consequence, which is precisely the pair above
+                    // (net 0, and each member's `is_frameshift` false).
+                    CisResidueRendering::TerminatorMoved => {
+                        match try_project_cis_combined(&tx, &bundle, &members, &prot_acc) {
+                            Ok(CisCombined::InFrame(pv)) | Ok(CisCombined::Frameshift(pv)) => {
+                                // Read off the built consequence, as the arm above
+                                // does — an immediate stop is a nonsense
+                                // substitution and not a frameshift.
+                                let flag = protein_consequence_is_frameshift(&pv);
+                                return Ok((flag, Some(*pv)));
+                            }
+                            Err(FerroError::UnsupportedProjection { .. })
+                            | Err(FerroError::ProteinSequenceUnavailable { .. }) => {
+                                return Ok((base_flag, build_cis_frameshift_unknown()));
+                            }
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    CisResidueRendering::Declined => {}
                 }
             }
         }
@@ -14155,7 +14220,17 @@ mod tests {
             .zip(edits.iter())
             .map(|((lo, hi, _), edit)| (*lo, *hi, edit))
             .collect();
-        combine_cis_members_by_residue(&tx, &bundle, &spans, "NP_X.1").map(|v| v.to_string())
+        // `TerminatorMoved` is deliberately rendered as a readable sentinel
+        // rather than folded into `None`: it is not a decline, and a test that
+        // reaches it should fail saying so instead of silently reading as "this
+        // path declined".
+        match combine_cis_members_by_residue(&tx, &bundle, &spans, "NP_X.1") {
+            CisResidueRendering::Rendered(v) => Some(v.to_string()),
+            CisResidueRendering::TerminatorMoved => {
+                Some("<terminator moved: build the combined product>".to_string())
+            }
+            CisResidueRendering::Declined => None,
+        }
     }
 
     /// #1079 (unit): the reported shape — a decomposed `delins` whose members
@@ -14718,25 +14793,47 @@ mod tests {
     /// frameshift *consequence*, so this is also the regression guard for reading
     /// `is_frameshift` off the built consequence rather than off the arm.
     ///
-    /// The single-variant spelling of the identical sequence change
-    /// (`c.4_12delinsTAAAAGGGG`) is projected here too. It used to be asserted
-    /// **not** to be byte-identical, because measured it was not: the projector
-    /// normalizes first, which re-partitioned that delins into three same-codon
-    /// substitutions (`c.4G>T`, `c.5T>A`, `c.9A>G`), and the substitution-
-    /// combination path answered `p.[(Val2Ter);(Lys3=)]` — carrying a silent
-    /// residue downstream of a terminator. That divergence was pinned rather than
-    /// adjudicated correct, so that "a fix to the substitution path has to come
-    /// past this test rather than silently changing one side".
+    /// # The divergence this used to pin is CLOSED, and the pin is what closed it
     ///
-    /// **#1835 is that fix arriving, and it comes past this test.** The partition
-    /// default flip re-derives the block instead of cutting it into three isolated
-    /// substitutions, so the combined path answers and both spellings now give
-    /// `p.(Val2Ter)`. The assertion below is therefore an equality between the two
-    /// spellings rather than two separate pins. The builder-level equivalence this
-    /// module already owned is still asserted by
-    /// `cis_combined_frameshift_arm_matches_the_single_member_builder` in
-    /// `protein::indel`; what has changed is that the projector-level equivalence
-    /// now holds too.
+    /// The single-variant spelling of the identical sequence change
+    /// (`c.4_12delinsTAAAAGGGG`) is projected here too. This test used to assert
+    /// the two were **not** byte-identical, because measured they were not: the
+    /// projector normalizes first, and the pair fell through to the per-member
+    /// bracket `p.[(Val2Ter);(Lys3=)]` — naming a silent residue **downstream of
+    /// a terminator the pair itself introduces**. `Lys3` is not translated in a
+    /// product that stops at residue 2, so the bracket described a protein that
+    /// does not exist. That was a defect on `main`, pinned here as a divergence
+    /// precisely so a fix would have to come past this test rather than change
+    /// one side silently. It has — and **two separate changes each close it, for
+    /// different reasons**, which a later reader removing one of them needs to
+    /// know.
+    ///
+    /// **The dispatch fix (#1616) is the one that addresses the defect.**
+    /// `combined_cis_residue_changes` reported "the combined protein changes
+    /// length" as the same `None` as every other decline, and the caller's
+    /// decline path is to describe the members separately. It now reports
+    /// `CisResidueOutcome::TerminatorMoved`, which routes to
+    /// `try_project_cis_combined` — the same builder the net-frameshift arm above
+    /// uses, and the one `cis_combined_frameshift_arm_matches_the_single_member_builder`
+    /// (`protein::indel`) already pinned as agreeing with the single-member
+    /// builder. Both routes land on `frameshift.md:22`'s required nonsense
+    /// substitution.
+    ///
+    /// **The partition default flip (#1835) only removes one route INTO the
+    /// defect.** It re-derives the block instead of cutting it into three
+    /// isolated substitutions, so this input no longer reaches the
+    /// substitution-combination path at all. That makes the two spellings agree
+    /// even without the dispatch fix — but it repairs nothing, because any other
+    /// input still reaching the broken arm would still get a bracket naming a
+    /// residue past its own terminator. Do not read the flip as having made the
+    /// dispatch fix redundant.
+    ///
+    /// Why it surfaced on the cis pair only after #1616: with the input-relative
+    /// weight bound in place, `c.[4del;10dup]` was refused re-derivation and kept
+    /// its authored members, which took the net-frameshift arm and answered
+    /// `p.(Val2Ter)` correctly. Deleting that bound converged the two spellings
+    /// on one DNA description — which is the point — and that description reached
+    /// the broken dispatch arm.
     #[test]
     fn project_cis_net_in_frame_but_mid_shift_stop_takes_the_frameshift_arm() {
         use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
@@ -14796,26 +14893,11 @@ mod tests {
         let multi_protein = format!("{}", proj.protein.expect("protein expected"));
         assert_eq!(multi_protein, "NP_FSSTOP.1:p.(Val2Ter)");
 
-        // #1835 — THE DIVERGENCE IS CLOSED, DELIBERATELY.
-        //
-        // This was pinned as a divergence — "NOT adjudicated correct — so that
-        // closing it is a deliberate act rather than a silent one". The partition
-        // default flip closes it, and this is that act.
-        //
-        // The single-variant spelling `c.4_12delinsTAAAAGGGG` used to normalize
-        // into three same-codon substitutions (`c.4G>T`, `c.5T>A`, `c.9A>G`),
-        // which sent it down the substitution-combination path and produced
-        // `p.[(Val2Ter);(Lys3=)]` — **a silent residue downstream of a
-        // terminator**, which is not a describable consequence of anything. Under
-        // the default arm that block is re-derived and no longer presents as three
-        // isolated substitutions, so the combined path answers, and the two
-        // spellings of one sequence change now agree on `p.(Val2Ter)`.
-        //
-        // `frameshift.md:22` is what makes `p.(Val2Ter)` the right answer for both:
-        // the first changed residue is itself the terminator, which may not be
-        // spelled `fsTer1` and is required as the nonsense substitution. The
-        // multi-member spelling already gave it; the single-member one now does
-        // too.
+        // Closed: the two spellings of one sequence change now get one protein
+        // consequence. Closed TWICE OVER and by different mechanisms — the #1616
+        // dispatch fix, which repairs the defect, and the #1835 partition
+        // default, which stops this particular input reaching it. See the doc
+        // comment above before removing either.
         //
         // Asserted as an EQUALITY between the two spellings rather than as two
         // string pins, so a future change that moves them apart fails on the
@@ -14824,9 +14906,9 @@ mod tests {
         assert_eq!(single_protein, "NP_FSSTOP.1:p.(Val2Ter)");
         assert_eq!(
             single_protein, multi_protein,
-            "the single-member and multi-member spellings of one sequence change must \
-             agree on the protein consequence; they diverged until #1835, with the \
-             single-member side carrying a silent residue after a terminator"
+            "the same sequence change must get the same protein consequence \
+             whether it is spelled as one member or as two — and neither may be \
+             a bracket naming a residue past the terminator the change introduces"
         );
 
         // `build_frameshift_variant` emitted a NONSENSE substitution here, not a

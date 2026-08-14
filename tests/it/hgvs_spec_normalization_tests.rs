@@ -1127,6 +1127,33 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // its true value with a tripwire; re-pinning one to zero for a green build
     // is the move the record forbids.
     ("separation-rule-force-modal-or-negation", "decided"),
+    // Whether the eight coding-axis merges #1616 introduces are a `general.md:34`
+    // deviation at all, given that the partition they derive to is a SINGLE
+    // member and a single member has no separations. **Decided by operator
+    // ruling (2026-08-13): they ARE a deviation**, disclosed and pinned with a
+    // tripwire, and the tripwire is #1710's instrument re-pinned 0 -> 8 in both
+    // directions in `spec_conformance_axis.rs`. The chain: no member is
+    // gap-bearing (a split of pure deletions inserts nothing), so
+    // `DNA/delins.md:47` does not reach the rows on
+    // `delins-recommendation-reach-when-the-input-arrives-split`'s reading — the
+    // one #1760 lands — leaving `DNA/delins.md:17` and `general.md:34`
+    // unqualified, and `general.md:35`'s codon exception cannot reach a
+    // separation of two by its own stated antecedent.
+    // `derivation-may-not-be-bounded-by-the-inputs-spelling` removed an
+    // input-relative comparand and says in terms that it does not license the
+    // merges the comparand was blocking, so #1616 is not authority for its own
+    // eight rows. `separation-rule-force-modal-or-negation` grades
+    // `general.md:34` as rule 2, whose remedy is disclosure plus a tripwire
+    // rather than a release block. The record also carries the reading that was
+    // put to the operator and DECLINED — that the separation is read off the
+    // derived partition, which is one member, so `:34` has no antecedent here —
+    // together with the ground for declining it, and the falsifier: a row that
+    // gains a gap-bearing member leaves the set, so 8 is a set to re-derive and
+    // not a constant to defend.
+    (
+        "coding-axis-merges-are-a-disclosed-general-34-deviation",
+        "decided",
+    ),
     // Whether `standards.md`'s **RNA** symbol table (`:47`–`:61`) plus
     // `general.md:50`'s lower-case bullet exclude an `x` from an `r.`
     // description, the way `:39`'s dagger plus `general.md:48`'s CAPITALS
@@ -1156,11 +1183,17 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // is exactly the `delins.md:44-47` coincidence — so it refused every merge
     // `:47` recommends. (It did not refuse every merge unconditionally; #1591's
     // `a_span_outweighs_a_split_that_keeps_reference_bases` pins the gap-free
-    // counter-example, and the record carries the correction.) The deletion
-    // itself is #1616 and is NOT on this branch — this entry pins the record's
-    // status only. Measurements quoted in the record are #1616's to re-derive;
-    // the +3,245/+3,251 and +3,244/+3,249 pairs quoted through its review are
-    // on superseded bases and are not to be re-quoted.
+    // counter-example, and the record carries the correction.) **The deletion
+    // is on this branch** (#1616), together with the two gates the ruling's own
+    // scope paragraph asks for: `general.md:34` still governs the merges the
+    // deleted comparand happened to be blocking, so `DNA/delins.md:44-47`'s
+    // payload-coincidence carve-out is scoped to `c.` inside the shipping
+    // partitioner, and a block `MAX_SPLIT_BLOCK` hands back **unexamined** may
+    // not be emitted as one spanning member off that axis either.
+    // `spec_conformance_axis`'s `guard_violations` is 0 in both directions as a
+    // result, having read 18 and then 2 on the way. The +3,245/+3,251 and
+    // +3,244/+3,249 pairs quoted through review are on superseded bases and are
+    // not to be re-quoted.
     (
         "derivation-may-not-be-bounded-by-the-inputs-spelling",
         "decided",

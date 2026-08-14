@@ -83,11 +83,18 @@
 //! and `delins-recommendation-reach-when-the-input-arrives-split` — have landed
 //! on `main` in their turn and are now base as well, which is the same rot a
 //! second time. `rna-axis-alignment-only-symbol-reach` was the delta named here
-//! in its turn and has landed as well, which is the third instance. Measured
+//! in its turn and has landed as well, which is the third instance.
+//! `c-and-n-positions-are-flat-transcript-offsets` was the fourth, named here as
+//! this branch's whole delta and since landed on `main` as #1619. Measured
 //! against the merge base, what this branch adds is one record:
 //!
-//! - `c-and-n-positions-are-flat-transcript-offsets` — ruled 2026-08-12
-//!   (#1619), with `docs/background/numbering.md:52` governing
+//! - `coding-axis-merges-are-a-disclosed-general-34-deviation` — ruled
+//!   2026-08-13, deviating from `docs/recommendations/general.md:34` and its
+//!   axis-local twin `DNA/delins.md:17`, with `DNA/delins.md:81` governing as
+//!   the clause whose "**preferably**" carries the force. The roles are split
+//!   that way because `common::rulings` refuses one clause being both the
+//!   authority and the departure, which is the shape a disclosed deviation
+//!   otherwise wants; the record says so in its own rationale
 //!
 //! This paragraph used to predict that the pins below "will move once more on
 //! the next rebase", naming `codon-carve-out-shape-restriction` and
@@ -103,7 +110,6 @@
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
-//! ```text
 //! CLAUSE -> RECORD INDEX
 //! 29 records, 26 decided / 3 undecided
 //! 112 clause lines, of which 33 are named by more than one record
@@ -226,6 +232,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
@@ -243,6 +250,7 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
@@ -253,6 +261,7 @@
 //! docs/recommendations/DNA/delins.md:80
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:81  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:82
@@ -348,6 +357,7 @@
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
@@ -355,7 +365,8 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
-//! docs/recommendations/general.md:35
+//! docs/recommendations/general.md:35  [MULTI]
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //! docs/recommendations/general.md:39
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
@@ -458,6 +469,7 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
@@ -473,12 +485,14 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
 //! docs/recommendations/DNA/delins.md:47
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:81
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:83
@@ -505,6 +519,7 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
@@ -512,6 +527,9 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//! docs/recommendations/general.md:35
+//!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
+//!     `codon-carve-out-shape-restriction` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
@@ -544,7 +562,6 @@
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
-//! ```
 //! <!-- END GENERATED INDEX -->
 //!
 //! # Reading the mixed-verdict block

@@ -454,6 +454,56 @@ pub fn assert_normalizes_preserving_in(
     );
 }
 
+/// Normalize `input` against a synthetic genomic reference built from `core`,
+/// assert the output denotes the same bases the input does, and return the
+/// rendered output.
+///
+/// The sequence check runs **before** the caller compares strings, which is the
+/// opposite of `assert_normalizes_preserving_in`'s order and deliberate: a
+/// string mismatch there means its sequence check never ran, so a re-blessed
+/// expectation can silently carry a changed sequence with it. Here the sequence
+/// is the assertion and the string is the record.
+///
+/// Shared rather than copied per module. Two modules had byte-identical copies
+/// of this — `issue_1592_reduced_member_junction_clamp` and
+/// `issue_1600_reduced_delins_tract_demotion` — and the assertion order above is
+/// a contract, so a future edit weakening it in one copy only is exactly the
+/// failure the duplication invited.
+pub fn normalized_preserving_in(
+    core: &str,
+    input: &str,
+    direction: ferro_hgvs::ShuffleDirection,
+) -> String {
+    use crate::common::synthetic::{padded, SyntheticBuilder};
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
+
+    let provider = SyntheticBuilder::genomic(core).build();
+    let reference = padded(core);
+    let normalizer = Normalizer::with_config(
+        provider.clone(),
+        NormalizeConfig::default().with_direction(direction),
+    );
+    let output = normalizer
+        .normalize(&parse_hgvs(input).expect("parse"))
+        .expect("normalize")
+        .to_string();
+
+    let from_input = apply_with(&provider, &reference, input).expect("input applies");
+    let from_output = apply_with(&provider, &reference, &output).unwrap_or_else(|| {
+        panic!("`{input}` -> `{output}` has no resulting sequence (overlapping or unconvertible)")
+    });
+    assert_eq!(
+        from_output, from_input,
+        "`{input}` -> `{output}` denotes a different sequence"
+    );
+    output
+}
+
+/// [`normalized_preserving_in`] in the default 3' direction.
+pub fn normalized_preserving(core: &str, input: &str) -> String {
+    normalized_preserving_in(core, input, ferro_hgvs::ShuffleDirection::ThreePrime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -161,6 +161,52 @@ const SELF_PATH: &str = "tests/it/ruling_citation_currency.rs";
 /// and turns the retired id into a fact the ledger states rather than one a
 /// reader has to infer. [`no_retired_id_is_also_a_live_record`] stops an entry
 /// masking a live record.
+/// Record ids that are cited here BEFORE the record itself has landed.
+///
+/// A ruling can be decided and implemented across two PRs — the record in one,
+/// the behaviour and its citations in another — and whichever merges second
+/// would otherwise be the one that breaks, for no defect of its own. This is
+/// the same merge-order problem `RETIRED_RECORD_IDS`' second entry records from
+/// the other direction, and it is declared for the same reason: so the order
+/// does not matter.
+///
+/// **Kept honest by [`no_forthcoming_id_is_already_live`]**, which fails once
+/// the record does land. That is the point — the entry must be deleted in the
+/// commit that lands the record, so this list cannot become a way to cite
+/// records that never arrive. It is not an exemption from the ledger; it is a
+/// dated promise with an expiry the build enforces.
+///
+/// **Empty is the steady state, not a gap.** The list holds an id only while a
+/// decided record is in flight in another PR, so it should be empty most of the
+/// time and every entry should be short-lived. Its one entry —
+/// `separation-rule-force-modal-or-negation` — expired here: the record landed
+/// on `main` as #1725, so the id now resolves live and
+/// [`no_forthcoming_id_is_already_live`] required the entry's deletion. Nothing
+/// downstream needed changing, because both consumers use this purely as an
+/// allowlist for ids the ledger does not yet carry.
+const FORTHCOMING_RECORD_IDS: &[(&str, &str)] = &[];
+
+/// A forthcoming id must not name a record the ledger already has.
+///
+/// Without this, [`FORTHCOMING_RECORD_IDS`] would silently outlive its purpose:
+/// the record lands, the entry stays, and the next dangling citation of that id
+/// is waved through by an allowlist nobody remembers adding.
+#[test]
+fn no_forthcoming_id_is_already_live() {
+    let live: BTreeSet<String> = rulings::records().into_iter().map(|r| r.id).collect();
+    let landed: Vec<&str> = FORTHCOMING_RECORD_IDS
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| live.contains(*id))
+        .collect();
+    assert!(
+        landed.is_empty(),
+        "these ids are listed as forthcoming but are now live records in \
+         {LEDGER_RELATIVE_PATH}: {landed:?} — delete them from \
+         `FORTHCOMING_RECORD_IDS`, whose whole purpose is to expire"
+    );
+}
+
 const RETIRED_RECORD_IDS: &[(&str, &str)] = &[
     (
         "inversion-vs-two-substitutions-76-83",
@@ -495,10 +541,11 @@ fn the_scan_reads_the_tree_it_claims_to() {
 #[test]
 fn every_cited_ruling_id_exists_in_the_ledger() {
     let ledger = ledger();
+    let forthcoming: BTreeSet<&str> = FORTHCOMING_RECORD_IDS.iter().map(|(id, _)| *id).collect();
     let mut unknown: Vec<String> = Vec::new();
     for line in source_lines() {
         for token in id_shaped_citations(&line.text) {
-            if !ledger.contains_key(&token) {
+            if !ledger.contains_key(&token) && !forthcoming.contains(token.as_str()) {
                 unknown.push(format!("{}:{} cites `{token}`", line.path, line.number));
             }
         }
@@ -607,6 +654,7 @@ fn every_record_to_record_citation_resolves() {
     let records = rulings::records();
     let live: BTreeSet<&str> = records.iter().map(|r| r.id.as_str()).collect();
     let retired: BTreeMap<&str, &str> = RETIRED_RECORD_IDS.iter().copied().collect();
+    let forthcoming: BTreeSet<&str> = FORTHCOMING_RECORD_IDS.iter().map(|(id, _)| *id).collect();
 
     let mut unknown: Vec<String> = Vec::new();
     let mut checked = 0usize;
@@ -616,7 +664,10 @@ fn every_record_to_record_citation_resolves() {
                 continue;
             }
             checked += 1;
-            if !live.contains(cited.as_str()) && !retired.contains_key(cited.as_str()) {
+            if !live.contains(cited.as_str())
+                && !retired.contains_key(cited.as_str())
+                && !forthcoming.contains(cited.as_str())
+            {
                 unknown.push(format!("`{}` cites `{cited}`", record.id));
             }
         }
@@ -626,7 +677,9 @@ fn every_record_to_record_citation_resolves() {
         unknown.is_empty(),
         "these rationales in {LEDGER_RELATIVE_PATH} name a record the ledger does not have. \
          Fix the id, restore the record, or — if the reference is to a former id on purpose — \
-         add it to `RETIRED_RECORD_IDS` with the record that carries the question now:\n  {}",
+         add it to `RETIRED_RECORD_IDS` with the record that carries the question now, or, if \
+         the record has been decided and is landing in another PR, to \
+         `FORTHCOMING_RECORD_IDS`:\n  {}",
         unknown.join("\n  ")
     );
 

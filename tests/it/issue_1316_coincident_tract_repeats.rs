@@ -50,7 +50,19 @@ fn the_seeds_deletion_survives_the_combination() {
     // The proptest's own case, which carries a distant deletion. It is outside
     // the tract and must come through untouched.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[261_262insAA;262_263insAA;269del]");
-    assert_eq!(output, "NC_TEST.1:g.[262A[5];269del]");
+    // **Re-blessed with the deletion of the input-relative weight bound**
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`). The
+    // distant deletion no longer keeps the allele out of the sequence-first
+    // derivation — the bound was what made it decline — so the whole thing is
+    // re-derived and the repeat notation does not survive.
+    //
+    // SPEC-SILENT: the block is `GTCAGCG` -> `AAAAGTCAGC`, unequal 7/10, so no
+    // column correspondence exists and `delins.md:15`/`:16`/`:17` have no
+    // defined input. `DNA/repeated.md` requires repeat notation for a tandem
+    // repeat *of a span*, and which spans exist is exactly the partition choice
+    // the spec does not make on an unequal-length block; the sibling row above
+    // still pins the repeat where the allele really is one tract.
+    assert_eq!(output, "NC_TEST.1:g.[263_265delinsAAA;268_269delinsTCAGC]");
 }
 
 #[test]
