@@ -335,17 +335,83 @@ where
     ))
 }
 
+/// Read a same-reference span `[start, end]` (1-based inclusive) to its literal
+/// bases, reverse-complementing when `invert`, and fold the result through the
+/// output alphabet — the one place the fetch-invert-fold logic lives.
+///
+/// Both the top-level `ins50_57`/`ins50_57inv` shape and a `[…;213_271;…]`
+/// bracket part resolve through here, so a coordinate span reads identically
+/// however it was spelled. Declines with `MissingReferenceData` when no provider
+/// is available to read the span, propagating any fetch failure otherwise.
+fn read_reference_span<P>(
+    accession: &str,
+    start: u64,
+    end: u64,
+    invert: bool,
+    alphabet: AlphabetMode,
+    kind: InsCoordKind,
+    provider: Option<&P>,
+) -> Result<String, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    let provider = provider.ok_or_else(|| ConversionError::MissingReferenceData {
+        description: format!(
+            "position-range insertion {start}_{end} names bases in the same reference; \
+             a provider is required to read them"
+        ),
+    })?;
+    // `start`/`end` are written in the enclosing description's own coordinate
+    // system; the fetch is on the accession the SPDI is emitted against.
+    let (start, end) = resolve_payload_span(accession, start, end, kind, provider)?;
+    let bases = fetch_reference_bases(provider, accession, start, end)?;
+    let bases = if invert {
+        reverse_complement(&bases)
+    } else {
+        bases
+    };
+    Ok(apply_alphabet(&bases, alphabet))
+}
+
+/// Expand a repeat `unit` `count` times, folded through the output alphabet —
+/// the one place the overflow and [`MAX_REPEAT_EXPANSION_BASES`] cap checks
+/// live, so a top-level `insA[10]` and a `[…;A[10];…]` bracket part expand
+/// identically. `unit` is the literal unit spelled once.
+fn expand_repeat_unit(
+    unit: &str,
+    count: u64,
+    alphabet: AlphabetMode,
+) -> Result<String, ConversionError> {
+    let unit = apply_alphabet(unit, alphabet);
+    let count = count as usize;
+    let expansion_bases =
+        unit.len()
+            .checked_mul(count)
+            .ok_or_else(|| ConversionError::UnsupportedEditType {
+                description: format!(
+                    "repeat expansion {} x {} overflows usize",
+                    unit.len(),
+                    count
+                ),
+            })?;
+    if expansion_bases > MAX_REPEAT_EXPANSION_BASES {
+        return Err(ConversionError::UnsupportedEditType {
+            description: format!(
+                "repeat expansion {} bases exceeds SPDI ins-string cap of {} bases",
+                expansion_bases, MAX_REPEAT_EXPANSION_BASES
+            ),
+        });
+    }
+    Ok(unit.repeat(count))
+}
+
 /// Resolve a same-reference position-range insert (`ins50_57`, `ins50_57inv`)
 /// to its literal bases by reading them from the reference, mirroring how the
 /// omitted bases of `del`/`dup`/`delins` are fetched.
 ///
-/// `start`/`end` are 1-based inclusive coordinates **in the enclosing
-/// description's own coordinate system**, translated onto the fetch axis by
-/// [`resolve_payload_span`] before the read; `invert` reverse-complements the
-/// slice (for the `…inv` form). Returns `Ok(None)` when `seq` is not a
-/// position-range insert, so the caller can fall back to literal handling.
-/// Returns an error when the shape is a range but no provider is available to
-/// read it, or the provider cannot serve the span.
+/// Returns `Ok(None)` when `seq` is not a position-range insert, so the caller
+/// can fall back to literal handling. The read itself is [`read_reference_span`],
+/// shared with the bracket-part path so both spell a span identically.
 fn resolve_position_range_insert<P>(
     seq: &InsertedSequence,
     accession: &str,
@@ -359,20 +425,7 @@ where
     let Some((start, end, invert)) = position_range_insert(seq) else {
         return Ok(None);
     };
-    let provider = provider.ok_or_else(|| ConversionError::MissingReferenceData {
-        description: format!(
-            "position-range insertion {start}_{end} names bases in the same reference; \
-             a provider is required to read them"
-        ),
-    })?;
-    let (fetch_start, fetch_end) = resolve_payload_span(accession, start, end, kind, provider)?;
-    let bases = fetch_reference_bases(provider, accession, fetch_start, fetch_end)?;
-    let bases = if invert {
-        reverse_complement(&bases)
-    } else {
-        bases
-    };
-    Ok(Some(apply_alphabet(&bases, alphabet)))
+    read_reference_span(accession, start, end, invert, alphabet, kind, provider).map(Some)
 }
 
 /// An inserted sequence whose bases are an exact tandem repeat, decomposed to
@@ -414,9 +467,8 @@ fn exact_repeat_insert(seq: &InsertedSequence) -> Option<(String, u64)> {
 /// short-form `Repeat` edit arm expands its own explicit unit and exact count.
 ///
 /// Returns `Ok(None)` when `seq` is not an exact repeat, so the caller can fall
-/// back to literal handling. The expansion is a `u64`-scaled `String`, so the
-/// same overflow and [`MAX_REPEAT_EXPANSION_BASES`] cap the `Repeat` arm applies
-/// are enforced here before allocating.
+/// back to literal handling. The expansion itself is [`expand_repeat_unit`],
+/// shared with the bracket-part path so both apply the same overflow and cap.
 fn resolve_exact_repeat_insert(
     seq: &InsertedSequence,
     alphabet: AlphabetMode,
@@ -424,27 +476,105 @@ fn resolve_exact_repeat_insert(
     let Some((unit, count)) = exact_repeat_insert(seq) else {
         return Ok(None);
     };
-    let unit = apply_alphabet(&unit, alphabet);
-    let count = count as usize;
-    let expansion_bases =
-        unit.len()
-            .checked_mul(count)
-            .ok_or_else(|| ConversionError::UnsupportedEditType {
-                description: format!(
-                    "repeat expansion {} x {} overflows usize",
-                    unit.len(),
-                    count
-                ),
-            })?;
-    if expansion_bases > MAX_REPEAT_EXPANSION_BASES {
-        return Err(ConversionError::UnsupportedEditType {
+    expand_repeat_unit(&unit, count, alphabet).map(Some)
+}
+
+/// Resolve one part of a compound insert to its literal bases, dispatching each
+/// determinate shape to the same leaf helper the single-part path uses.
+///
+/// A `PositionRange`/`PositionRangeInv` reads through [`read_reference_span`], an
+/// exact `Repeat` expands through [`expand_repeat_unit`], and a `Literal` is
+/// rendered directly — the same three leaves that back
+/// [`resolve_position_range_insert`] and [`resolve_exact_repeat_insert`], so a
+/// part spells its bases identically whether it stands alone or inside a bracket.
+/// The remaining shapes name bases this path cannot yet read out and decline as
+/// `UnsupportedEditType`: a non-exact repeat count (`N[2800]`, `A[10_15]`), a CDS
+/// position range carrying intronic offsets, or an external reference SPDI
+/// cannot dereference.
+fn resolve_inserted_part<P>(
+    part: &crate::hgvs::edit::InsertedPart,
+    accession: &str,
+    alphabet: AlphabetMode,
+    kind: InsCoordKind,
+    provider: Option<&P>,
+) -> Result<String, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    use crate::hgvs::edit::InsertedPart;
+
+    match part {
+        InsertedPart::Literal(seq) => Ok(apply_alphabet(&seq.to_string(), alphabet)),
+        InsertedPart::PositionRange { start, end } => {
+            read_reference_span(accession, *start, *end, false, alphabet, kind, provider)
+        }
+        InsertedPart::PositionRangeInv { start, end } => {
+            read_reference_span(accession, *start, *end, true, alphabet, kind, provider)
+        }
+        InsertedPart::Repeat {
+            base,
+            count: RepeatCount::Exact(n),
+        } => expand_repeat_unit(&base.to_char().to_string(), *n, alphabet),
+        // A non-exact `Repeat` count (`N[2800]`, `A[10_15]`) names no determinate
+        // expansion.
+        InsertedPart::Repeat { base, count } => Err(ConversionError::UnsupportedEditType {
             description: format!(
-                "repeat expansion {} bases exceeds SPDI ins-string cap of {} bases",
-                expansion_bases, MAX_REPEAT_EXPANSION_BASES
+                "compound insert part {base}{count} has no determinate expansion; \
+                 this shape is not yet encodable as SPDI"
             ),
-        });
+        }),
+        InsertedPart::CdsPositionRange(range) => Err(ConversionError::UnsupportedEditType {
+            description: format!(
+                "compound insert part {range} names CDS positions with intronic offsets; \
+                 this shape is not yet encodable as SPDI"
+            ),
+        }),
+        InsertedPart::ExternalRef(reference) => Err(ConversionError::UnsupportedEditType {
+            description: format!(
+                "compound insert part {reference} references an external sequence SPDI \
+                 cannot dereference; this shape is not yet encodable as SPDI"
+            ),
+        }),
     }
-    Ok(Some(unit.repeat(count)))
+}
+
+/// Resolve a multi-part `Complex` insert whose every part names determinate
+/// bases — a literal, an exact tandem repeat, or a same-reference position
+/// range (optionally inverted) — to the single string of bases they spell in
+/// order, mirroring how `del`/`dup` resolve their omitted bases.
+///
+/// This is the bracketed-composition sibling of [`resolve_position_range_insert`]
+/// and [`resolve_exact_repeat_insert`], which each handle only a *single*-part
+/// `Complex`. A compound insert that mixes shapes — `delins[T;213_271]`, a
+/// literal followed by a reference span — is one contiguous inserted sequence
+/// once each part is read out, so it encodes to SPDI just as a plain literal
+/// does. Each part is resolved by [`resolve_inserted_part`], which shares its
+/// leaf helpers with the single-part path, so no shape logic is duplicated.
+///
+/// Returns `Ok(None)` when `seq` is not a `Complex`, so the caller falls back to
+/// its single-shape resolvers and literal handling. Any part whose bases are
+/// genuinely undetermined declines the whole insert as `UnsupportedEditType`.
+fn resolve_complex_insert<P>(
+    seq: &InsertedSequence,
+    accession: &str,
+    alphabet: AlphabetMode,
+    kind: InsCoordKind,
+    provider: Option<&P>,
+) -> Result<Option<String>, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    let InsertedSequence::Complex(parts) = seq else {
+        return Ok(None);
+    };
+
+    let mut resolved = String::new();
+    for part in parts {
+        resolved.push_str(&resolve_inserted_part(
+            part, accession, alphabet, kind, provider,
+        )?);
+    }
+    Ok(Some(resolved))
 }
 
 /// Helper to get start position from an interval.
@@ -1843,6 +1973,10 @@ where
                 resolved
             } else if let Some(resolved) = resolve_exact_repeat_insert(inserted, alphabet)? {
                 resolved
+            } else if let Some(resolved) =
+                resolve_complex_insert(inserted, &sequence, alphabet, ins_coords, provider)?
+            {
+                resolved
             } else {
                 let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
                     ConversionError::MissingReferenceData {
@@ -1936,6 +2070,10 @@ where
             {
                 resolved
             } else if let Some(resolved) = resolve_exact_repeat_insert(ins_seq, alphabet)? {
+                resolved
+            } else if let Some(resolved) =
+                resolve_complex_insert(ins_seq, &sequence, alphabet, ins_coords, provider)?
+            {
                 resolved
             } else {
                 let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
