@@ -15,6 +15,12 @@
 //!   bulk parser fixtures (cmrg, paraphase, clinvar 500K + unique). See
 //!   `failure_expectations.rs` for the snapshot shape and contract;
 //!   tracking issue: #174.
+//! - `minimal_alignment`: enumerates every minimal alignment of a
+//!   `(reference, alternate)` block and intersects them, so
+//!   `rulings[unchanged-is-read-over-every-minimal-alignment]`'s "unchanged
+//!   iff matched in every minimal alignment" can be computed rather than
+//!   argued. The cost model is an explicit parameter because the record does
+//!   not state one.
 //! - `manifest`: the sibling of `bulk_fixtures` for the other input that can
 //!   go missing without anything going red — a ferro-prepared reference. Every
 //!   reference-aware guard skips green without one, so
@@ -43,6 +49,7 @@ pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;
 pub mod manifest;
+pub mod minimal_alignment;
 pub mod rulings;
 pub mod spec_enumeration;
 pub mod spec_fixture;

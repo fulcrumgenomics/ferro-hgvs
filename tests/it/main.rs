@@ -428,6 +428,8 @@ mod lrg_inference_tests;
 mod m_shift_matrix;
 mod mavedb_tests;
 mod merge_consecutive_edits_tests;
+mod minimal_alignment_enumeration;
+mod minimal_alignment_enumeration_proptest;
 mod mito_circular_audit;
 mod mito_heteroplasmy_audit;
 mod mosaic_chimeric_compact;
