@@ -22,6 +22,17 @@ pub struct MappingResult<T> {
 #[derive(Debug, Clone, Default)]
 pub struct MappingInfo {
     /// The transcript used for mapping.
+    ///
+    /// Every [`CoordinateMapper`] method that returns a [`MappingResult`]
+    /// populates this on success, in both directions, with the accession the
+    /// caller asked the mapping to be performed against. (`new`, `cdot` and
+    /// `find_overlapping_transcripts` return no `MappingInfo` at all.)
+    ///
+    /// It stays `Option` for backwards compatibility of a `pub` field, not
+    /// because of the [`Default`] derive above — `String` implements
+    /// [`Default`], so the derive would be satisfied either way. A `None`
+    /// therefore means the value was default-constructed rather than produced
+    /// by a successful mapping (#1895).
     pub transcript_id: Option<String>,
     /// Exon number(s) involved.
     pub exon_numbers: Vec<u32>,
@@ -519,11 +530,32 @@ impl CoordinateMapper {
         genome_pos: &GenomePos,
         transcript_id: &str,
     ) -> Result<(CdsPos, MappingInfo), FerroError> {
-        // No in-tree consumer reads `MappingInfo::transcript_id`, so it is left
-        // None: that avoids a `String::from` allocation per call (~400 calls per
-        // SNP project_all on chr17 fan-out). `transcript_id` is still named in
-        // the inverted-CDS refusal below, which allocates only on the error path.
-        let mut info = MappingInfo::default();
+        // Populated on every success, matching `cds_pos_to_genome_pos` and the
+        // field's own documentation (#1895).
+        //
+        // This used to be left `None` to avoid a `String::from` per call (~400
+        // calls per SNP `project_all` on a chr17 fan-out), on the ground that no
+        // in-tree consumer reads it. Two things retire that reasoning:
+        //
+        // - `MappingInfo` is `pub` and re-exported from `crate::data`, so "no
+        //   in-tree consumer" is not the bar. An external consumer reading a
+        //   documented `Option<String>` could not tell "this path does not
+        //   populate it" from "no transcript could be determined" — and the
+        //   sibling direction, `cds_pos_to_genome_pos`, allocates the same
+        //   string unconditionally, so the contract was direction-dependent and
+        //   said so nowhere.
+        // - The saving is ~0.3% of the work it sits inside. Measured in a
+        //   release build, interleaved A/B over a 400-transcript fan-out
+        //   repeated 500 times: 36.5 ns/call without, 51.9 ns/call with
+        //   (min-of-10) — so this line costs +15.4 ns. But the unit a fan-out
+        //   actually repeats is a whole per-transcript projection, and
+        //   `VariantProjector::project` costs 4,596 ns (min-of-5, spread 1.4%)
+        //   on a 9-base mock transcript — a floor for a real one. +15.4 ns
+        //   against >=4,596 ns is +0.33% of a fan-out, or better.
+        let mut info = MappingInfo {
+            transcript_id: Some(transcript_id.to_string()),
+            ..Default::default()
+        };
 
         // Check if position is in an exon. `locate_genome_pos` returns both
         // the exon and the converted tx position in a single scan; before
@@ -996,6 +1028,138 @@ mod tests {
             end.base,
             end.offset.unwrap_or(0),
         );
+    }
+
+    fn cds(base: i64) -> CdsPos {
+        CdsPos {
+            base,
+            offset: None,
+            utr3: false,
+            special: None,
+        }
+    }
+
+    /// #1895: `MappingInfo::transcript_id` is `pub` on a re-exported struct and
+    /// its doc comment promises the transcript the mapping used, so every
+    /// [`CoordinateMapper`] success path must actually carry it.
+    ///
+    /// Before #1895 the g. -> c. direction (`genome_pos_to_cds_pos`) left it
+    /// `None` while the c. -> g. direction populated it, so the contract was
+    /// direction-dependent and undocumented — an external consumer could not
+    /// tell "this path does not populate it" from "no transcript could be
+    /// determined". Every row below whose method reaches `genome_pos_to_cds_pos`
+    /// fails without that fix.
+    ///
+    /// Deliberately covers both directions, both strands, both the single-
+    /// position and the interval entry points, and every exonic region kind
+    /// (`CdsPosition::{Cds, FivePrimeUtr, ThreePrimeUtr}`) plus the intronic
+    /// arm, because the field is set in one place per direction and a future
+    /// refactor that splits either one would otherwise be free to drop it on a
+    /// single arm.
+    ///
+    /// One arm is absent, and its absence is structural rather than an
+    /// oversight: both of `create_test_mapper`'s transcripts put `cds_end`
+    /// inside their last exon, so no intron flanks a 3'UTR boundary and the
+    /// intronic-3'UTR arm — the one carrying the inverted-CDS refusal — is
+    /// unreachable from this fixture. Reaching it needs a third transcript.
+    #[test]
+    fn every_mapping_success_reports_the_transcript_it_used() {
+        let mapper = create_test_mapper();
+
+        // (label, accession, the resulting MappingInfo)
+        let observed: Vec<(&str, &str, MappingInfo)> = vec![
+            (
+                "cds_to_genome (CDS, plus)",
+                "NM_TEST.1",
+                mapper.cds_to_genome("NM_TEST.1", &cds(1)).unwrap().info,
+            ),
+            (
+                "cds_to_genome_on_build (CDS, plus)",
+                "NM_TEST.1",
+                mapper
+                    .cds_to_genome_on_build("NM_TEST.1", &cds(1), None)
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "cds_interval_to_genome (plus)",
+                "NM_TEST.1",
+                mapper
+                    .cds_interval_to_genome("NM_TEST.1", &CdsInterval::new(cds(1), cds(51)))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_to_cds (exonic CDS, plus)",
+                "NM_TEST.1",
+                mapper
+                    .genome_to_cds("NM_TEST.1", &GenomePos::new(1050))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_to_cds_on_build (exonic CDS, plus)",
+                "NM_TEST.1",
+                mapper
+                    .genome_to_cds_on_build("NM_TEST.1", &GenomePos::new(1050), None)
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_to_cds (5'UTR, plus)",
+                "NM_TEST.1",
+                mapper
+                    .genome_to_cds("NM_TEST.1", &GenomePos::new(1020))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                // Exon 3 is genome [3000, 3150] = tx [300, 450] and `cds_end`
+                // is tx 400, so genome 3105 is tx 405 — six bases into the
+                // 3'UTR (`c.*6`).
+                "genome_to_cds (exonic 3'UTR, plus)",
+                "NM_TEST.1",
+                mapper
+                    .genome_to_cds("NM_TEST.1", &GenomePos::new(3105))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_to_cds (intronic, plus)",
+                "NM_TEST.1",
+                mapper
+                    .genome_to_cds("NM_TEST.1", &GenomePos::new(1500))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_to_cds (intronic, minus)",
+                "NM_MINUS.1",
+                mapper
+                    .genome_to_cds("NM_MINUS.1", &GenomePos::new(2205))
+                    .unwrap()
+                    .info,
+            ),
+            (
+                "genome_interval_to_cds (intron-flanked, minus)",
+                "NM_MINUS.1",
+                mapper
+                    .genome_interval_to_cds(
+                        "NM_MINUS.1",
+                        &GenomeInterval::new(GenomePos::new(1995), GenomePos::new(2205)),
+                    )
+                    .unwrap()
+                    .info,
+            ),
+        ];
+
+        for (label, accession, info) in &observed {
+            assert_eq!(
+                info.transcript_id.as_deref(),
+                Some(*accession),
+                "{label}: MappingInfo::transcript_id must name the transcript the mapping used",
+            );
+        }
     }
 
     /// Build a mapper with a single-exon transcript carrying a CIGAR
