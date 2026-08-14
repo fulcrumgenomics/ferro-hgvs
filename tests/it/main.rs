@@ -298,6 +298,7 @@ mod issue_1578_followup_equivalence_rungs;
 mod issue_1578_followup_ring_declines;
 mod issue_1578_followup_self_cancelling_rings;
 mod issue_1578_ring_validator_escapes;
+mod issue_1610_lone_unequal_length_delins;
 mod issue_1612_refseq_mismatch_coordinate;
 mod issue_1615_denoted_sequence_oracle;
 mod issue_1619_flat_transcript_frame;
