@@ -95,6 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needed its bases. It now reads those bases from the reference exactly as `del`/`dup`/`delins`
   read their omitted bases, so `sequence_normalize` re-derives the literal `g.100_101insCGTA…`
   form. `delins` with a same-reference range insert is resolved on the same path.
+- **Exact tandem-repeat insertions are now expanded rather than refused.** An insertion whose bases
+  are named by a spelled unit and an exact copy count — `g.100_101insC[4]`, `g.100_101insCG[3]` —
+  was rejected as "not a literal sequence" whenever a provider-backed path needed its bases. It now
+  expands the unit the named number of times, exactly as the short-form repeat edit does, so
+  `sequence_normalize` re-derives the literal `g.100_101insCCCC` / `g.100_101insCGCGCG` form (the
+  same `MAX_REPEAT_EXPANSION_BASES` cap applies). `delins` with an exact repeat insert is resolved
+  on the same path. Uncertain or range counts (`insC[10_15]`, `insC[?]`) remain undetermined and
+  still decline.
 
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
