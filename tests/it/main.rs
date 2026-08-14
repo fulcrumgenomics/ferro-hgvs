@@ -24,6 +24,7 @@ mod issue_1472_zero_length_read;
 mod issue_1524_adjacent_split_members;
 mod issue_1539_split_member_separation;
 mod issue_1592_reduced_member_junction_clamp;
+mod issue_1597_repeat_clamp_unit;
 mod issue_1600_reduced_delins_tract_demotion;
 mod issue_1607_protein_residue_one_guard;
 mod issue_1627_named_element_alphabet_reach;
