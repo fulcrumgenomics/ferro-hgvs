@@ -1655,13 +1655,11 @@ where
             // SPDI cannot dereference), and shapes that *are* determinable but
             // are not expanded here yet (an exact `Repeat` such as `insA[10]`).
             // Both currently decline; only the first is a hard limit.
-            let ins_str = match resolve_position_range_insert(
-                inserted, &sequence, alphabet, provider,
-            )? {
-                Some(resolved) => resolved,
-                None => {
-                    let literal =
-                        inserted_sequence_to_string(inserted).ok_or_else(|| {
+            let ins_str =
+                match resolve_position_range_insert(inserted, &sequence, alphabet, provider)? {
+                    Some(resolved) => resolved,
+                    None => {
+                        let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
                             ConversionError::MissingReferenceData {
                                 description: "insertion sequence is neither a literal sequence \
                                               nor a same-reference position range; this shape is \
@@ -1669,21 +1667,16 @@ where
                                     .to_string(),
                             }
                         })?;
-                    apply_alphabet(&literal, alphabet)
-                }
-            };
+                        apply_alphabet(&literal, alphabet)
+                    }
+                };
             // SPDI is 0-based interbase: position N is the boundary
             // AFTER 1-based base N (equivalently between 1-based bases
             // N and N+1). For HGVS `g.{start}_{start+1}ins{seq}` the
             // matching SPDI position is `start_one_based` directly
             // (NOT the -1 conversion used for substitution/deletion,
             // which references a specific base). Closes #390 item 1.
-            Ok(SpdiVariant::new(
-                sequence,
-                start_one_based,
-                "",
-                ins_str,
-            ))
+            Ok(SpdiVariant::new(sequence, start_one_based, "", ins_str))
         }
         NaEdit::Duplication {
             sequence: dup_seq, ..
@@ -1754,13 +1747,11 @@ where
             // `Repeat` such as `insA[10]`). Both decline as `UnsupportedEditType`
             // for now — matching the sibling arms — but only the first is a hard
             // limit.
-            let ins_str = match resolve_position_range_insert(
-                ins_seq, &sequence, alphabet, provider,
-            )? {
-                Some(resolved) => resolved,
-                None => {
-                    let literal =
-                        inserted_sequence_to_string(ins_seq).ok_or_else(|| {
+            let ins_str =
+                match resolve_position_range_insert(ins_seq, &sequence, alphabet, provider)? {
+                    Some(resolved) => resolved,
+                    None => {
+                        let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
                             ConversionError::UnsupportedEditType {
                                 description:
                                     "delins inserted sequence is neither a literal sequence \
@@ -1769,9 +1760,9 @@ where
                                         .to_string(),
                             }
                         })?;
-                    apply_alphabet(&literal, alphabet)
-                }
-            };
+                        apply_alphabet(&literal, alphabet)
+                    }
+                };
             let del_str = match deleted {
                 Some(seq) => sequence_to_string(seq),
                 None => match provider {
