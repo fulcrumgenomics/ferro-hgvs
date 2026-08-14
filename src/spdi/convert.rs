@@ -218,6 +218,65 @@ fn inserted_sequence_to_string(seq: &InsertedSequence) -> Option<String> {
     }
 }
 
+/// A same-reference position-range insert, decomposed to `(start, end, invert)`
+/// 1-based inclusive coordinates, or `None` when `seq` is not one.
+///
+/// Recognises the bare `PositionRange`/`PositionRangeInv` variants and the
+/// single-part `Complex([PositionRange | PositionRangeInv])` shape the parser
+/// produces for range inserts — both denote one contiguous slice of the same
+/// accession. Multi-part `Complex` payloads, external references and every
+/// non-range variant return `None`, so the caller keeps its existing handling
+/// for them.
+fn position_range_insert(seq: &InsertedSequence) -> Option<(u64, u64, bool)> {
+    use crate::hgvs::edit::InsertedPart;
+    match seq {
+        InsertedSequence::PositionRange { start, end } => Some((*start, *end, false)),
+        InsertedSequence::PositionRangeInv { start, end } => Some((*start, *end, true)),
+        InsertedSequence::Complex(parts) => match parts.as_slice() {
+            [InsertedPart::PositionRange { start, end }] => Some((*start, *end, false)),
+            [InsertedPart::PositionRangeInv { start, end }] => Some((*start, *end, true)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Resolve a same-reference position-range insert (`ins50_57`, `ins50_57inv`)
+/// to its literal bases by reading them from the reference, mirroring how the
+/// omitted bases of `del`/`dup`/`delins` are fetched.
+///
+/// `start`/`end` are 1-based inclusive coordinates on `accession`; `invert`
+/// reverse-complements the slice (for the `…inv` form). Returns `Ok(None)` when
+/// `seq` is not a position-range insert, so the caller can fall back to literal
+/// handling. Returns an error when the shape is a range but no provider is
+/// available to read it, or the provider cannot serve the span.
+fn resolve_position_range_insert<P>(
+    seq: &InsertedSequence,
+    accession: &str,
+    alphabet: AlphabetMode,
+    provider: Option<&P>,
+) -> Result<Option<String>, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    let Some((start, end, invert)) = position_range_insert(seq) else {
+        return Ok(None);
+    };
+    let provider = provider.ok_or_else(|| ConversionError::MissingReferenceData {
+        description: format!(
+            "position-range insertion {start}_{end} names bases in the same reference; \
+             a provider is required to read them"
+        ),
+    })?;
+    let bases = fetch_reference_bases(provider, accession, start, end)?;
+    let bases = if invert {
+        reverse_complement(&bases)
+    } else {
+        bases
+    };
+    Ok(Some(apply_alphabet(&bases, alphabet)))
+}
+
 /// Helper to get start position from an interval.
 fn get_start_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.start.inner().map(|p| p.base)
@@ -1585,11 +1644,34 @@ where
             apply_alphabet(&alternative.to_string(), alphabet),
         )),
         NaEdit::Insertion { sequence: inserted } => {
-            let ins_str = inserted_sequence_to_string(inserted).ok_or_else(|| {
-                ConversionError::MissingReferenceData {
-                    description: "insertion sequence is not a literal sequence".to_string(),
+            // An inserted sequence reaches SPDI when its exact bases are known.
+            // Two shapes are handled here: a literal, and a same-reference range
+            // insert (`ins50_57`, `ins50_57inv`), which is resolved from the
+            // reference first — exactly as `del`/`dup` resolve their omitted
+            // bases — before falling back to the literal path. The fallback
+            // rejects everything else, which is a mix of two cases: shapes whose
+            // bases are genuinely undetermined (`Count` `ins10`, `Range`
+            // `ins(10_20)`, `Uncertain` `ins(?)`, and named/external references
+            // SPDI cannot dereference), and shapes that *are* determinable but
+            // are not expanded here yet (an exact `Repeat` such as `insA[10]`).
+            // Both currently decline; only the first is a hard limit.
+            let ins_str = match resolve_position_range_insert(
+                inserted, &sequence, alphabet, provider,
+            )? {
+                Some(resolved) => resolved,
+                None => {
+                    let literal =
+                        inserted_sequence_to_string(inserted).ok_or_else(|| {
+                            ConversionError::MissingReferenceData {
+                                description: "insertion sequence is neither a literal sequence \
+                                              nor a same-reference position range; this shape is \
+                                              not yet encodable as SPDI"
+                                    .to_string(),
+                            }
+                        })?;
+                    apply_alphabet(&literal, alphabet)
                 }
-            })?;
+            };
             // SPDI is 0-based interbase: position N is the boundary
             // AFTER 1-based base N (equivalently between 1-based bases
             // N and N+1). For HGVS `g.{start}_{start+1}ins{seq}` the
@@ -1600,7 +1682,7 @@ where
                 sequence,
                 start_one_based,
                 "",
-                apply_alphabet(&ins_str, alphabet),
+                ins_str,
             ))
         }
         NaEdit::Duplication {
@@ -1660,19 +1742,36 @@ where
             deleted_length: _,
             substitution_reference: None,
         } => {
-            // Closes #394 item 3. Non-literal delins inserted sequences
-            // (any `InsertedSequence` variant other than `Literal`) are
-            // a shape SPDI cannot encode, not a missing-reference
-            // problem. Matches the sibling arms for Repeat / Inversion /
-            // Conversion which already use `UnsupportedEditType` for the
-            // same category.
-            let ins_str = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
-                ConversionError::UnsupportedEditType {
-                    description: "delins inserted sequence is not a literal sequence; \
-                                  non-literal inserts cannot be encoded as SPDI"
-                        .to_string(),
+            // Closes #394 item 3. An inserted sequence reaches SPDI when its
+            // exact bases are known. Two shapes are handled: a literal, and a
+            // same-reference position-range insert (`delins50_57`,
+            // `delins50_57inv`), resolved from the reference exactly as
+            // `del`/`dup` resolve their omitted bases. The fallback rejects
+            // everything else, which is a mix: shapes whose bases are genuinely
+            // undetermined (`Count` `ins10`, `Range` `ins(10_20)`, `Uncertain`,
+            // and named/external references SPDI cannot dereference), and shapes
+            // that *are* determinable but are not expanded here yet (an exact
+            // `Repeat` such as `insA[10]`). Both decline as `UnsupportedEditType`
+            // for now — matching the sibling arms — but only the first is a hard
+            // limit.
+            let ins_str = match resolve_position_range_insert(
+                ins_seq, &sequence, alphabet, provider,
+            )? {
+                Some(resolved) => resolved,
+                None => {
+                    let literal =
+                        inserted_sequence_to_string(ins_seq).ok_or_else(|| {
+                            ConversionError::UnsupportedEditType {
+                                description:
+                                    "delins inserted sequence is neither a literal sequence \
+                                     nor a same-reference position range; this shape is not yet \
+                                     encodable as SPDI"
+                                        .to_string(),
+                            }
+                        })?;
+                    apply_alphabet(&literal, alphabet)
                 }
-            })?;
+            };
             let del_str = match deleted {
                 Some(seq) => sequence_to_string(seq),
                 None => match provider {
@@ -1690,7 +1789,7 @@ where
                 sequence,
                 spdi_pos,
                 apply_alphabet(&del_str, alphabet),
-                apply_alphabet(&ins_str, alphabet),
+                ins_str,
             ))
         }
         NaEdit::Identity {

@@ -177,3 +177,52 @@ fn an_unbounded_interior_tract_is_declined() {
         "the refusal must name the unsettled side: {msg}",
     );
 }
+
+/// A reference-span insertion (`ins{start}_{end}`) names its inserted bases by
+/// position in the same reference rather than spelling them. `sequence_normalize`
+/// reads the reference, so it must resolve those bases and re-derive the literal
+/// description — closing the gap where a range insert was refused as "not a
+/// literal sequence".
+#[test]
+fn a_reference_span_insertion_resolves_to_its_literal_bases() {
+    // 1-based:  1234567890123456789012
+    //           AAAACGTAAAAATTTTGGGGCC
+    // Positions 5..=8 carry "CGTA"; the insertion site (12_13) sits in unique
+    // flanking sequence so the re-derived description cannot shuffle.
+    let seq = "AAAACGTAAAAATTTTGGGGCC";
+    let nz = Normalizer::new(provider(seq));
+
+    assert_eq!(
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.12_13ins5_8",
+            ShuffleDirection::ThreePrime,
+            false,
+        ),
+        "NC_TEST.1:g.12_13insCGTA",
+        "a reference-span insertion must resolve to the bases it names",
+    );
+}
+
+/// The inverted form (`ins{start}_{end}inv`) inserts the reverse complement of
+/// the named span.
+#[test]
+fn an_inverted_reference_span_insertion_resolves_to_the_reverse_complement() {
+    let seq = "AAAACGTAAAAATTTTGGGGCC";
+    let nz = Normalizer::new(provider(seq));
+
+    // Positions 5..=8 are "CGTA"; reverse complement is "TACG". Inserting it at
+    // 12_13 lands in a run that lets the derivation shuffle 3' to the equivalent
+    // canonical `g.13_14insACGT` — the point pinned here is that the range insert
+    // is resolved to its literal bases at all, not refused.
+    assert_eq!(
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.12_13ins5_8inv",
+            ShuffleDirection::ThreePrime,
+            false,
+        ),
+        "NC_TEST.1:g.13_14insACGT",
+        "an inverted reference-span insertion must resolve to the reverse complement",
+    );
+}
