@@ -191,10 +191,11 @@ impl Ord for SpdiKey {
 /// - **A stated deletion that disagrees with the reference** — the description
 ///   and the provider cannot both be right, and picking one would key the
 ///   variant off bases it does not describe.
-/// - **Edits SPDI cannot represent.** Inserted-range payloads
-///   (`g.10_11ins20_30`), uncertain or unspecified inserted lengths (`ins(10)`),
-///   named elements (`insAluYb8`), and intronic `c.`/`n.`/`r.` offsets, which
-///   SPDI has no notation for.
+/// - **Edits SPDI cannot represent.** Uncertain or unspecified inserted lengths
+///   (`ins(10)`), named elements (`insAluYb8`), and intronic `c.`/`n.`/`r.`
+///   offsets, which SPDI has no notation for. (A same-reference position-range
+///   insert — `g.10_11ins20_30`, `ins20_30inv` — *does* key: its bases are read
+///   from the reference exactly as `del`/`dup` read their omitted bases.)
 /// - **Reference bases the provider cannot serve** — an absent accession, or a
 ///   window it declines. A key derived from a truncated window is a *different*
 ///   key, not a smaller one.
@@ -404,7 +405,6 @@ mod tests {
                 "stated base disagrees with the reference",
             ),
             ("NC_ABSENT.1:g.3A>G", "the provider cannot serve the bases"),
-            ("NC_KEY.1:g.10_11ins20_30", "inserted-range payload"),
             ("NC_KEY.1:g.10_11ins(10)", "unspecified inserted length"),
         ] {
             assert_eq!(
@@ -440,6 +440,21 @@ mod tests {
     #[test]
     fn a_stated_insertion_order_still_keys() {
         assert!(key("NC_KEY.1:g.5_6insAC").is_some());
+    }
+
+    /// A same-reference position-range insert names its bases by position, so
+    /// once the provider resolves them (as `del`/`dup` resolve their omitted
+    /// bases) it keys off exactly those bases. The 40-base contig holds
+    /// `GGCATTAGCCT` at 9..=19, so `g.5_6ins9_19` and the literal spelling of
+    /// the same bases must reach one key.
+    #[test]
+    fn a_same_reference_range_insert_keys_off_its_resolved_bases() {
+        let ranged = key("NC_KEY.1:g.5_6ins9_19").expect("a resolvable range insert keys");
+        let literal = key("NC_KEY.1:g.5_6insGGCATTAGCCT").expect("the literal spelling keys");
+        assert_eq!(
+            ranged, literal,
+            "a range insert must key off the bases it names, not its spelling"
+        );
     }
 
     #[test]
