@@ -12,36 +12,443 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Representation changes
 
 - *(normalize)* [**breaking**] make canonical-coalesced the default partition rule ([#1835](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1835))
+  > this is the largest representation change the
+  > project has made. On the 11,272-class designed cis corpus every
+  > divergent class but one converges: 2,910 classes change their normalized
+  > form at 3' and 2,905 at 5', with `sequence_changed` 0 on both sides, so
+  > every move is a re-spelling and none changes denoted bases. Direction of
+  > movement is overwhelmingly merge — a payload-coincidence split becomes
+  > the spanning `delins` on the `c.` axis, and members that `live` left as
+  > the input's own spelling are re-derived from the resulting sequence. On
+  > the manifest-backed conformance axes a further 45 rows move, all one
+  > mechanism and all net insertions where the split form is canonical. A
+  > consumer keying on the exact normalized string must expect
+  > previously-accepted inputs to return a different, still-conformant
+  > description, and must pin `FERRO_PARTITION=live` to reproduce
+  > pre-v0.15.0 output. The real-corpus row count over
+  > ClinVar/CMRG/Paraphase is NOT supplied here and remains owed; it is
+  > tracked as #1885. The earlier reason given for its absence — that the
+  > unresolved inversion family would contaminate it — is stale now that
+  > #1706 has merged, so the honest statement is that it is derivable and
+  > has not been run.
 - *(normalize)* anchor a 5'-edge cis insertion on -1, not the axis's absent 0 ([#1777](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1777))
+  > 1 shape moves. A cis allele that nets to a pure
+  > insertion at the 5' edge of the window on the `n.` axis respells from
+  > `n.0_1insA` to `n.-1_1insA` — measured on `NM_TEST.1:n.[1G>A;1dup]`. The
+  > previous output names a position that does not exist and `parse_hgvs`
+  > rejects it, so no consumer can be holding it as a parsed value; this
+  > replaces an unreadable description with a readable one. The `c.` and
+  > `r.` equivalents do **not** move (`c.-1dup` and `r.-1dup` on both sides,
+  > measured), because their malformed intermediate was already repaired
+  > downstream by the `base == 0` conversion arms. No genomic-axis row
+  > moves, and no row away from the axis origin moves.
 - *(reference)* never trade a cdot exon table for a supplemental record that carries nothing ([#1724](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1724))
+  > 50 accessions move from declining ("Transcript
+  > has no CDS") to served on the c./n. axes. Previously-erroring inputs now
+  > produce output, so this is a real change for a consumer that keyed on
+  > the decline.
 - *(normalize)* recognise inversions post hoc over blocks and runs of pieces ([#1706](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1706))
+  > 62 of 2,075 rows move. An authored inversion that
+  > was shredded into an allele comes back as the single `inv`;
+  > previously-accepted inputs, so a real migration for a consumer keying on
+  > the string. Denotation is unchanged on all 62, verified through the SPDI
+  > applier with a firing negative control. Re-derived by set difference
+  > against `origin/main` at `cc8407bc`, not carried forward from any
+  > earlier measurement: the same 62 rows. Denotation is re-stated from the
+  > `1ea75334` run rather than re-derived here; see the table below, which
+  > marks which figures were re-run at this base and which were not.
 - *(spdi)* emit a transcript-axis SPDI on the transcript, not the compound accession ([#1821](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1821))
+  > SPDI output only (`hgvs_to_spdi` /
+  > `canonical_spdi`), and only for compound `NG_xxx(NM_yyy)` references on
+  > the c./n./r. axes — the `sequence` field becomes the inner transcript
+  > and the del/ins bases it carries become the transcript's instead of the
+  > genomic parent's. No HGVS description string changes: normalize and
+  > project output is byte-identical, and the g./m./o. axes are untouched.
+  >
+  > ```
+  > NG_008939.1(NM_000532.5):n.192_197del
+  >   before ->  NG_008939.1(NM_000532.5):191:CACACA:      (parent's bases at a transcript offset)
+  >   after  ->  NM_000532.5:191:ACGCCG:                   (= what the bare NM_000532.5 spelling already gave)
+  > ```
+  >
+  > The affected rows' normalized outputs are byte-identical (`c.101del` →
+  > `c.102del`, and so on for the other six). The genomic axes keep
+  > `Display` deliberately: there the coordinates *are* the parent's, so
+  > stripping the wrapper would name the transcript for a genomic offset —
+  > the same defect with the frames swapped.
 - *(normalize)* carry junction-exit provenance per leaf, from the gate that makes it ([#1726](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1726))
+  > 1 shape moves, and it is a repair — a
+  > manufactured intronic offset on a SECOND bare transcript accession now
+  > carries the genomic reference `checklist.md:20` requires, where #1704
+  > left it bare. 0 rows of any committed corpus or fixture move: the 3'
+  > census reads `outputs_leaving_the_transcript: 0` /
+  > `outputs_intronic_under_a_genomic_wrapper: 371`, byte-identical to
+  > #1704. That zero is STRUCTURAL and is a claim about the corpus, not
+  > about the change — the spec corpus's junction stratum builds
+  > single-accession descriptions and so cannot emit a two-accession allele
+  > at all; the moved shape is constructed explicitly in
+  > `defect_371_transcript_exit::a_second_bare_accession_is_repaired_too`.
+  > Every other output, including the mixed-allele residue, is
+  > byte-identical to #1704.
 - *(normalize)* test the span the codon-frame merge authorises, not one edge ([#1720](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1720))
+  > 6 of the 1,221 coding separation-one corpus rows
+  > move, and 0 of the 592 real multi-member cis alleles harvested from
+  > 9,949,738 ClinVar/CMRG/Paraphase rows. Every moved row is a merge whose
+  > `delins` span crossed a codon boundary; the merge is withdrawn and the
+  > two variants are described individually per `general.md:34`. The
+  > real-corpus zero is a property of that corpus rather than of the change
+  > — the reproducers are real transcripts (`NM_004006.2` / `LRG_199t1`),
+  > the shape just does not occur in ClinVar.
 - *(convert)* resolve a c./n. position on the flat transcript axis ([#1735](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1735))
+  > moves representation on transcripts whose cdot
+  > exon table has a transcript-coordinate gap (58 of 474,818 GRCh38
+  > multi-exon builds, 23-2718 bases; 159 of 190,754 on GRCh37). On such an
+  > accession every c./n. position, and therefore every SPDI triple and
+  > every applied base derived from one, moves onto the flat transcript
+  > offset the accession's own numbering names. The movement is NOT the gap
 - render a junction-crossing output against its genomic reference ([#1704](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1704)) ([#1708](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1708))
+  > 371 rows respell (389 under
+  > `canonical-coalesced`), all accession-only; 4 of 2,075 real-transcript
+  > inversion-sweep rows and 6 spec-enumeration rows move, 2 of those from
+  > "no genomic representation" to a rendered `g.`. No coordinate moves
+  > anywhere.
 - *(hgvs)* refuse an alignment-only symbol on the r. axis ([#1721](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1721))
+  > yes — descriptions previously accepted and
+  > re-emitted are now refused. Every `r.` description whose insert reaches
+  > `InsertedSequence::Named` and states a non-leading lower-case `x` moves
+  > from re-emitted to refused; 0 respell, 0 merge, 0 split. 0 corpus rows
+  > move, and that zero is STRUCTURAL rather than reassuring —
+  > `RefShape::all()` builds no `r.` reference at all, so 0 of 58,552
+  > spellings are on this axis and no corpus counter could move in either
+  > direction; the population is established by construction instead, which
+  > is what `REACHING_SHAPES` is. Every affected description states a masked
+  > base and therefore denotes no sequence, so nothing that currently
+  > produces a legal description changes. The refusal is newly reachable by
+  > lenient and silent callers, which previously got the string back; strict
+  > callers now fail one stage earlier, at parse. The generated spec fixture
+  > and enumeration are byte-identical against a baseline generated from
+  > `origin/main`'s sources — 934 and 2172 rows, 0 added, 0 removed, 0 field
+  > differences.
 - *(normalize)* require a gap-bearing insert before the delins.md:44-47 merge ([#1698](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1698))
+  > 4,616 of 8,855,661 compared rows split on the
+  > unstable `FERRO_PARTITION=canonical-coalesced` evaluation arm across
+  > ClinVar 500k, ClinVar unique, CMRG and Paraphase, plus 4 CMRG rows that
+  > become clean `W4007` declines. The shipped `live` arm never runs this
+  > pass and 0 rows move there — measured on the same four corpora against
+  > base `ce933533`, and re-confirmed at `2f4e3bb9` by regenerating both
+  > spec artifacts at base and head and comparing them byte-identical. 0
+  > rows change the bases they denote, verified with
+  > `Normalizer::canonical_spdi` over all 4,002 unique changed pairs against
+  > a negative control that fired 3,050 times.
 - *(hgvs)* refuse an alignment-only symbol, at the stage the ruling names ([#1684](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1684))
+  > 24 rows move (3' and 5' alike), all from
+  > re-emitted to refused; 0 respell, 0 merge, 0 split. Every affected row's
+  > output is invalid today — a description stating `X` denotes no sequence
+  > — so nothing that currently produces a legal description changes. The
+  > refusal is newly reachable by lenient and silent callers, which
+  > previously got a string back; strict callers now fail one stage earlier,
+  > at parse. The generated spec fixture and enumeration are byte-identical
+  > (934 and 2172 rows, zero status changes).
 - *(normalize)* grow the fetch window so a long homopolymer converges ([#1697](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1697))
+  > two classes move. (1) A `g.` or `m.` description
+  > whose 3' shuffle runs past `window_size` (100 bases) now converges on
+  > the tract's 3' end instead of advancing 100 bases per normalize call.
+  > (2) Past the 64 KiB growth cap the shift is refused but the
+  > reference-aware edit type is no longer refused with it, so a description
+  > that is really a duplication, substitution or inversion is now spelled
+  > as one — `g.65_66insA` -> `g.67dup`, `g.65delinsG` -> `g.65A>G` — where
+  > before it was echoed in the authored edit type. Repeat notation stays
+  > refused past the cap, because its `<first>_<last>unit[N]` extent is
+  > unreadable there. Measured 0 of 85,642 corpus rows moved, but that zero
+  > is STRUCTURAL and is not evidence of safety — the corpus's largest shift
+  > is 14 bases and no member is 64 KiB long, so it cannot reach either
+  > changed path.
 - *(normalize)* let the splitter express two deletions, not just two insertions ([#1649](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1649))
+  > 9 confluence censuses move and none regresses;
+  > `converged` rises 8027->8361 (3') and 8023->8367 (5') in
+  > cis_confluence_axis, 9141->9402 and 8944->9228 in spec_conformance_axis,
+  > and by 167/167/172/172 across cis_confluence_nr_axis's n./r. x 3'/5'
+  > pins, while multi_member_cis_axis's respelling_converged goes 395->401
+  > with 0 rows lost - that last one measured against a local prepared
+  > reference and NOT pre-merge coverage, since multi_member_cis_axis is
+  > manifest-gated and skips silently on PR CI; only the nightly runs it.
+  > In every one of those censuses the three split-arity deltas sum EXACTLY
+  > to the converged delta, so each moved family converged outright rather
+  > than dropping an arity.
+  > Measured by dumping the full divergence row-id lists on origin/main and
+  > on this branch and diffing the sets, not by reading the nets: 0 families
+  > lose convergence, 0 rise in arity, and 0 become divergent that were not,
+  > on any corpus in either direction.
+  > Moving the other way, 3 spec-enumeration rows go from projection-pinned
+  > to projection-splits-single-member (1168->1165 and 9->12) - the three
+  > projections project-{c,n,r} of NM_004006.3:r.123_127delinsag,
+  > sequence-preserving via spdi::compare_denoted_sequences, ruled a fix on
+  > n., unruled on r., and one deferred residue on c.
+  > Six previously-accepted pinned strings also move: the 3' and 5' outputs
+  > of 1419-r1/span, 1419-r2/span and 1419-r3/span in
+  > reported_partition_verdicts, which converge each pair onto its /cis
+  > sibling's form - a real migration for any consumer storing those.
 - *(normalize)* carry the reference copies a re-phased repeat absorbs ([#1678](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1678))
+  > 13 shapes move, all on an anchored
+  > single-position repeat
+  >   whose spelled unit tiles a different tract than the rotation the tract
+  > maximization picks. Measured against origin/main (d5f26fcb) on the
+  > branch's own
+  > synthetic references (core base 1 = g.257), 3'-shuffle, in three
+  > classes.
+  > A. SEEDED OVERLAP -- and here THE EMITTED EDIT KIND CHANGES, not only
+  > the count.
+  > The spelled unit's tract SPANS the anchor, so it seeds the maximization,
+  > and a
+  > strictly longer overlapping rotation displaces it; the count is then
+  > re-based by
+  > the copies the wider window swallows. Because a repeat whose count sits
+  > one unit
+  > either side of the reference tract's count is rendered as `del` or `dup`
+  > rather
+  > than as a repeat, shifting the count by one also shifts WHICH count
+  > renders as
+  > WHICH edit. On core ATGTGTGTGA anchored at g.259 with unit GT -- a
+  > 3-copy GT
+  > tract sitting inside a 4-copy TG tract -- every count 1..8 moves and
+  > four of them
+  >   change kind:
+  >     g.259GT[1]  g.258_265TG[1]  -> g.258_265TG[2]
+  >     g.259GT[2]  g.258_265TG[2]  -> g.264_265del    repeat -> del
+  > g.259GT[3] g.264_265del -> g.259GT[3] del -> repeat, left alone
+  >     g.259GT[4]  g.259GT[4]      -> g.264_265dup    repeat -> dup
+  >     g.259GT[5]  g.264_265dup    -> g.258_265TG[6]  dup    -> repeat
+  >     g.259GT[6]  g.258_265TG[6]  -> g.258_265TG[7]
+  >     g.259GT[7]  g.258_265TG[7]  -> g.258_265TG[8]
+  >     g.259GT[8]  g.258_265TG[8]  -> g.258_265TG[9]
+  > So a consumer holding a stored `repeat` for one of these inputs can read
+  > back a
+  > `del` or a `dup`, and one holding a stored `del` or `dup` can read back
+  > a repeat.
+  > This class is NOT merely a count change, and "the count now carries the
+  > copies
+  > the wider window swallows" does not predict it. The family is unbounded
+  > in the
+  >   count; 1..8 is what is measured and asserted.
+  > B. OVERLAPPING but NOT seeded -- the spelled unit's tract ends AT the
+  > anchor, so
+  > the span filter rejects it as a seed. The count carries the copies the
+  > wider
+  >   window swallows and the edit kind is unchanged --
+  >     AAGTGTTA      g.262TG[6]  g.259_262GT[6] -> g.259_262GT[7]
+  > C. DISJOINT tracts -- the re-phase is declined and the count stands
+  > against the
+  > tract it was written for, because relocating the window denotes
+  > different bases
+  >   whatever the count --
+  >     AATGTGTGGTAA  g.265TG[6]  g.265_266GT[6] -> g.259_264TG[6]
+  >     AATGTGTGGTAA  g.265TG[2]  g.265_266dup   -> g.263_264del
+  >     AATGTGTGGTAA  g.265TG[1]  g.265TG[1]     -> g.259_264TG[1]
+  >     GGACCAGG      g.261AC[5]  g.261_262CA[5] -> g.259_260AC[5]
+  >   Every new output denotes its input's bases, checked with
+  >   `spdi::compare_denoted_sequences` through `hgvs_to_spdi`, not with the
+  > normalizer. Eleven of the thirteen previously denoted a DIFFERENT
+  > sequence rather
+  > than merely a different spelling -- 7 of the 8 in A and 4 of the 5 in B
+  > and C
+  > together (an earlier revision of this trailer said 3 of 5; re-measured,
+  > it is 4,
+  > because GGACCAGG g.261AC[5] shipped a same-LENGTH, different-BASES
+  > output) -- so
+  > a stored string of those shapes changes and the new one is the correct
+  > one.
+  > Unmoved and asserted: a pure re-phase (`repeated.md:97`'s CFTR
+  > `g.258TG[13]`), an
+  > expansion (`g.258GT[17]`), and the arm where the spelled unit tiles
+  > nowhere at
+  > the anchor (`g.259TG[6]`), which is pinned as a limit rather than fixed
+  > --
+  > `hgvs_to_spdi` reads that input as denoting no sequence, so there is no
+  > baseline
+  >   to conserve. Not measured against a real corpus:
+  > `examples/dump_normalized_corpus.rs` cannot build a repeat whose spelled
+  > unit is
+  > out of phase with a different tract, so a zero from it would be
+  > structural rather
+  >   than evidence.
+  >
+  > Closes #1618
 - *(error_handling)* keep the repeat unit when the W3013 range disagrees with it ([#1661](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1661))
+  > 1 pinned (row, mode) result moves —
+  > `NM_024312.4:r.-6_-3g[6]` under `--error-mode lenient` and `--error-mode
+  > silent`, from `r.-6_-3[6]` to `r.-6_-3g[6]`. Previously **accepted**, so
+  > it is a real migration for a consumer storing that string — but the
+  > previously stored string denoted a different variant (24 nt against 6
+  > nt), so the migration is a correction rather than a re-spelling. The
+  > affected family is exactly the W3013 repair path where the range's span
+  > differs from the unit's length; the equal-length arm is unchanged and
+  > pinned. Measured by the full suite (one pinned row moved, nothing else)
+  > and by the four-oracle A/B above. `examples/dump_normalized_corpus.rs`
+  > is **structurally incapable** of measuring this and was not run for it:
+  > it parses with `parse_hgvs`, which applies no `ErrorConfig`, so no
+  > corpus row ever reaches the preprocessor and a `0 moved` from it would
+  > be a fact about the harness.
 - *(project)* decide the codon-frame delins exception per rendered axis ([#1672](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1672))
+  > 3 rows move, all on the transcript axes of a
+  > codon delins
+  > authored on the genomic axis, whose partition was decided without a
+  > frame and
+  >   then inherited. `REF:g.4_6delinsATA` projects as `c.4_6delinsATA` (was
+  >   `c.[4C>A;6G>A]`), `n.4_6delinsATA` (was `n.[4C>A;6G>A]`) and
+  > `r.(4_6delinsaua)` (was `r.[(4c>a;6g>a)]`). Toward the form
+  > `DNA/delins.md:42`
+  > asks for on an axis that declares a reading frame; the `r.` row merges
+  > on
+  > `RNA/delins.md:18`'s own authority. The `g.` axis does NOT move -- it
+  > stays
+  > `g.[4C>A;6G>A]`, which is #79's scope, and the projection census
+  > constants are
+  > byte-identical to main (`ProjectionSplitsSingleMember` 9,
+  > `ProjectionPinned`
+  > 1168), so the two `LRG_199t1` spec rows this PR argues about are
+  > unchanged
+  > rather than reversed. Previously-accepted inputs, so a migration on
+  > paper for
+  > anyone storing a projected `c.`/`n.`/`r.` string of this shape.
+  > Normalization
+  >   itself is untouched.
 - *(normalize)* decline a protein delins whose affix trim lands on the initiation codon ([#1670](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1670))
+  > a protein `delins` whose affix trim leaves a
+  > single-residue residual at residue 1 replacing the initiator `Met` is
+  > now left as authored instead of being rewritten to a start-loss
+  > substitution. The old output (`p.Met1_Ala3delinsValAlaAla` ->
+  > `p.Met1Val`) **does not parse**, so no consumer can be holding a legal
+  > string that changed. 0 rows move across the four committed corpora.
+  >
+  > Closes #1607
 - *(normalize)* scope the delins payload-coincidence carve-out to coding DNA ([#1682](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1682))
+  > The shipped default is unaffected —
+  > `FERRO_PARTITION` unset is `live`, which never runs this pass; measured
+  > at **0 rows moved** over 785,461 normalized ClinVar and Paraphase rows.
+  > What moves is the opt-in `FERRO_PARTITION=canonical-coalesced` arm,
+  > which stops merging across unchanged bases on axes with no reading
 - *(normalize)* coalesce protein cis adjacency created by the 3'-shift, and add the corpus axis that found it ([#1614](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1614))
+  > 171 of 85642 corpus rows move (0.2%), all in
+  > `protein_cis_separated`. The forms: a two-member protein bracket allele
+  > whose members became adjacent under the 3'-shift,
+  > `p.[Gly16Ala;Gly17del]`, becomes the merged delins
+  > `p.Gly16_Gly17delinsAla`. Direction: TOWARD the already-shipped form,
+  > not away from it — those 171 rows were not fixed points, so a second
+  > normalization pass already produced the merged form; the change moves
+  > pass one onto the answer pass two was giving, and toward the spec's
+  > stated form, since `protein/substitution.md:32` marks the split spelling
+  > `class="invalid"` (the decided
+  > `delins-adjacent-members-when-both-consume-reference` record scopes that
+  > to members which both consume reference bases, as a substitution and a
+  > single-residue deletion do). 0 of the moved rows were previously
+  > accepted forms: all 171 were not fixed points, so nothing downstream
+  > holds them and the move is free. Measured by dumping this branch before
+  > and after the fix over the identical 85,642-row corpus.
 - *(normalize)* canonicalize a member whose span crosses a CDS boundary ([#1651](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1651))
+  > 1826 of 78298 corpus rows move (2.3%) — 1747
+  > respell and 79 change member count. Re-measured on this branch rebased
+  > onto bfcc1802, not carried over from the base it was opened against.
+  > 1460 of the moved rows were previously accepted forms; the other 366
+  > were not fixed points, so moving those is free. Every move is a
+  > straddling member being re-typed or affix-trimmed against the bases it
+  > already denoted; no move changes what a description denotes.
 - *(equivalence)* expose a groupable SPDI key for bucketing by denoted bases ([#1609](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1609))
+  > SPDI keys move on a soft-masked reference.
+  > `canonical_spdi`'s emitted `deletion` and `insertion` are now folded
+  > through `apply_alphabet`, so a lowercase repeat-masked contig keys
+  > `2:ATTAC:GGCTA` where it previously keyed `2:attac:GGCTA`, and an
+  > `r.`-axis provider serving uracil now folds to the RefSeq DNA spelling
+  > wherever the fold reaches (see above for the three shapes it does not,
+  > none reachable from a RefSeq-spelled provider). No normalized HGVS
+  > string changes, and no key derived from an uppercase reference changes.
+  > The affected consumer is any that keys off a soft-masked FASTA, for whom
+  > the previous keys split buckets that denote identical bases — so this is
+  > a fix to the type's contract, migrated by re-deriving keys once.
 - *(normalize)* split an equal-length protein delins whose interior is unchanged ([#1606](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1606))
+  > Protein axis only — an equal-length `p.` delins
+  > whose interior residue is unchanged now splits into its members, a split
+  > and never a merge. Measured blast radius is zero on all three corpora
+  > available, each for a stated reason (see Blast radius); the gate cannot
+  > fire against the prepared reference at all, since it carries no protein
+  > FASTAs.
 - *(normalize)* gate the coding delins carve-out on the amino-acid precondition ([#1599](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1599))
+  > 1581 of 78298 corpus rows move, all merge ->
+  > split; 124 previously accepted (a real migration), 1457 previously not a
+  > fixed point. On cis_confluence_axis both census pins are re-blessed
+  > upward (3' 8026->8027, 5' 8021->8023). On the harsher
+  > spec_conformance_axis corpus the move is mixed and is re-blessed in both
+  > directions here: 3' non_idempotent_outputs 7->4 (three rows fixed), 3'
+  > converged 9140->9139 (six classes lose convergence against five gaining
+  > it, all six the spanning-delins respelling, promoted to
+  > spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not),
+  > 3' split_two 2435->2436, 5' split_two 2696->2698 and split_three
+  > 204->202. Three mutalyzer conformance rows leave agreement and carry a
+  > spec_citation.
 - *(rulings)* decide the exon-junction duplication and codon carve-out records ([#1623](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1623))
+  > 0 rows move in this PR — no ferro output changes
+  > here, and the corpus is untouched. What is declared is the DECISION:
+  > `exon-junction-dup-converge-from-the-far-side` is now decided for
+  > convergence, so every stored `c.3922dup`-shaped description will change
+  > to `c.3921dup` and its projected genomic form will shift 2,790 bp once
+  > #1621 implements it; and `codon-carve-out-shape-restriction` is decided
+  > for widening, whose implementation #1599 measures at 1,581 of 78,298
+  > corpus rows. Recorded here so both decisions are disclosed in the
+  > release they were made in, not only in the release that ships the moves.
 - *(project)* describe the protein consequence of a net-frameshift cis allele ([#1590](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1590))
+  > 62 of the 402 protein-projectable `:c.` rows in
+  > the committed multi-member cis fixture (15.4%) move off `p.?` onto a
+  > concrete consequence — 59 onto a `p.(…fs…)`, and 3 onto the nonsense
+  > substitution `p.(…Ter)` that the immediate-stop rule requires in place
+  > of an illegal `fsTer1`. Nothing moves the other way and no
+  > already-concrete form changes, so this is a gain of information, not a
+  > re-spelling. Those same 3 rows are the only ones whose `is_frameshift`
+  > moves (true -> false): the flag is now read off the built consequence,
+  > so it agrees with the single-member spelling of the same sequence change
+  > instead of with member arity. One further population is reachable but
+  > empty on this corpus (0 rows): a net-in-frame combined product on a
+  > reference CDS with no terminal stop, previously `p.?` and now described
+  > — again matching what the single-member spelling has always produced.
+  > The g./c./n. axes and `normalize` output are untouched.
 - *(normalize)* demote a tract-wide repeat that a reducing delins grew ([#1602](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1602))
+  > the wrong-sequence outputs this fixes move — each
+  > previously denoted different bases than its input, so there is no
+  > correct stored string to migrate from. The committed corpus measures 0
+  > changed of 78,298 rows compared, which is a STRUCTURAL zero for the
+  > reasons given above, and not evidence of safety.
 - *(normalize)* bound the junction of a member that reduces to an insertion ([#1598](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1598))
+  > 371 rows move of 5,629,002 swept; all 371 were
+  > previously incorrect — 321 denoted the wrong bases outright and 50
+  > denoted no sequence at all because their members overlapped. This is a
+  > correctness repair, not a respelling: no row that already denoted its
+  > input's bases changes.
 - *(error-handling)* only read codon-aligned windows in the amino-acid case detector ([#1594](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1594))
+  > 82 previously-rejected inputs now parse; no
+  > normalized output moves. Measured over 368,870 ClinVar protein
+  > descriptions in both strict and lenient mode — nothing previously
+  > accepted is now rejected and no previously-accepted output changed.
 - *(parser)* validate ring segments and sup inners in every post-parse check via a shared leaf walker ([#1578](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1578)) ([#1583](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1583))
+  > zero normalized outputs move; previously-accepted
+  > invalid ring/sup spellings across six validators now reject,
+  > lenient/silent modes reject a ring del<size> they previously passed
+  > verbatim, and member/segment repair-suggestion text changes.
+  >
+  > **NB** Same disclaimer as #1576 that I'm new to both Rust & the
+  > material. This all "feels right" but I could be off base in a few
+  > different dimensions.
 - *(normalize)* widen the axis gate to c./n./r. ([#1484](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1484))
+  > 2 027 rows move of 5 761 302 (0.035 %), measured
+  > against `origin/main` with both sides built locally and row counts
+  > validated; 2 016 gain a member, 0 lose, 11 same arity. Arity change, not
+  > respelling, so a consumer keying on the normalized string sees the shape
+  > of their data change — a real migration. By axis: 1 827 `c.`, 126 `n.`,
+  > 74 `g.` — the `g.` rows are pre-existing `general.md:34` violations the
+  > axis gate never touched, fixed by the axis-neutral member audit.
+  > Confluence improves: 1 373 classes of 11 272 from the gate, plus 23 (3')
+  > / 18 (5') from the member audit, with `declined`, `underdetermined` and
+  > `sequence_changed` all 0. Separation violations fall by a net 874 (−14.7
+  > %) before the member audit and further after it. One genuine
+  > canonical-form move in the tail (`NM_000342.4`, 5-member → 4-member);
+  > the other five tail rows are confluence fixes.
 
 ### Other
 
