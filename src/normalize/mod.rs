@@ -5229,6 +5229,97 @@ struct WindowedNormalization {
     warnings: Vec<NormalizationWarning>,
 }
 
+/// Where the 1-based span [`Normalizer::normalize_na_edit`] is handed sits,
+/// relative to a coordinate a reader can act on.
+///
+/// That function indexes `ref_seq` from `start`, so its positions are always in
+/// the frame of the *slice it was given*. For most callers the slice is the
+/// whole sequence the description addresses and the two coincide; for the
+/// callers that fetch a window they do not, and a diagnostic built from the raw
+/// numbers reports the window's own offsets as if they were coordinates
+/// (#1612 — `NC_000001.11:g.201C>T` reported `100-100`).
+///
+/// # What the rendered coordinate promises
+///
+/// **The 1-based inclusive span on the reference sequence that was actually
+/// read**, in that sequence's own numbering — not the description's axis. That
+/// is the promise the cis producer already documents and implements
+/// (`merge::authored_reference_mismatch`, "the sequence-axis span, via
+/// `region_sequence_delta`"), and the two must agree because the dedupe in
+/// `normalize_core` is keyed on nothing but this string. So a `c.5C>T` on a
+/// transcript whose CDS starts at 21 reports `25-25`, the transcript offset,
+/// on both producers — that is deliberate and is not what #1612 is about.
+///
+/// On `g.`/`m.` the sequence read is the contig, so the span *is* the
+/// description's own coordinate. On `c.`/`n.`/`r.` the sequence read is the
+/// transcript, so it is the transcript offset. In both cases the accession is
+/// the one the description names, and the bare `<start>-<end>` form is
+/// unambiguous.
+///
+/// [`Self::GenomicWindow`] is the case where it is not: an intronic or
+/// boundary-spanning transcript description is shuffled against the **genomic
+/// contig**, which is not the sequence its accession names. A bare number there
+/// would be a coordinate in a space the reader has no way to guess, so that
+/// arm qualifies it with the contig accession. Nothing dedupes against it — the
+/// cis producer declines every offset position (`merge::simple_cds_pos`), so no
+/// duplicate of an intronic finding can exist to match.
+#[derive(Debug, Clone, Copy)]
+enum MismatchFrame<'a> {
+    /// The slice is the whole sequence the description addresses, so the span
+    /// is already the coordinate to report. Every transcript-axis caller.
+    SequenceAxis,
+    /// The slice is a window opening `window_start` bases into that sequence
+    /// (0-based), so `sequence = window_relative + window_start` — the same
+    /// reconstruction [`WindowedNormalization`] documents for the *result*
+    /// positions, applied to the reported ones.
+    Window { window_start: u64 },
+    /// The slice is a window on the genomic contig `accession`, opening at
+    /// 1-based `seq_start`, and flipped into transcript view when `strand` is
+    /// minus. The reported coordinate is genomic and says so.
+    GenomicWindow {
+        accession: &'a str,
+        seq_start: u64,
+        strand: Strand,
+        window_len: u64,
+    },
+}
+
+impl MismatchFrame<'_> {
+    /// Render the 1-based inclusive slice-relative span `[start, end]` as the
+    /// coordinate a reader should be shown.
+    fn render(&self, start: u64, end: u64) -> String {
+        match *self {
+            Self::SequenceAxis => format!("{start}-{end}"),
+            Self::Window { window_start } => format!(
+                "{}-{}",
+                start.saturating_add(window_start),
+                end.saturating_add(window_start)
+            ),
+            Self::GenomicWindow {
+                accession,
+                seq_start,
+                strand,
+                window_len,
+            } => {
+                // The same unflip the caller applies to the *result* positions,
+                // so the two cannot drift. Clamped rather than trusted: the
+                // helper subtracts from `window_len`, and every span reaching
+                // here is in-window by construction (`flip_intronic_for_strand`
+                // refuses otherwise), but a clamp costs nothing and a debug
+                // overflow panic in a diagnostic path costs a lot.
+                let (lo, hi) = unflip_intronic_positions(
+                    strand,
+                    window_len,
+                    start.min(window_len),
+                    end.min(window_len),
+                );
+                let genomic = |rel: u64| rel.saturating_add(seq_start).saturating_sub(1);
+                format!("{accession}:{}-{}", genomic(lo), genomic(hi))
+            }
+        }
+    }
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Clamp a window-fetch upper bound to the contig length.
     ///
@@ -5344,6 +5435,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // reading frame; both callers passed this before the growth
                 // loop was factored out of them.
                 CodonGate::NotApplicable,
+                MismatchFrame::Window { window_start },
             )?;
 
             let seq_len = ref_seq.len() as u64;
@@ -5463,6 +5555,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // Same reasoning as the growth loop's own call: neither axis
             // reaching here carries a reading frame.
             CodonGate::NotApplicable,
+            MismatchFrame::Window {
+                window_start: slice_start,
+            },
         )?;
 
         // Extent claim, arrived at from the other direction — an `ins` or `dup`
@@ -6577,8 +6672,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
             tx_start,
             tx_end,
         );
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, gate)?;
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                seq,
+                edit,
+                tx_start,
+                tx_end,
+                &boundaries,
+                gate,
+                MismatchFrame::SequenceAxis,
+            )?;
 
         // Substitutions are validated-then-returned-unchanged by
         // `normalize_na_edit`'s `Substitution` arm; nothing downstream (axis
@@ -6700,8 +6803,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ShuffleDirection::ThreePrime => cheap_right,
             };
             let (left_clamp_fired, right_clamp_fired) = if direction_could_clamp {
-                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) =
-                    self.normalize_na_edit(seq, edit, tx_start, tx_end, &exon_only, gate)?;
+                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) = self
+                    .normalize_na_edit(
+                    seq,
+                    edit,
+                    tx_start,
+                    tx_end,
+                    &exon_only,
+                    gate,
+                    MismatchFrame::SequenceAxis,
+                )?;
                 let exon_only_start_0 = exon_only_start.saturating_sub(1);
                 (
                     cheap_left && exon_only_start_0 < boundaries.left,
@@ -7307,6 +7418,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             tx_end,
             &boundaries,
             CodonGate::NotApplicable,
+            MismatchFrame::SequenceAxis,
         )?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
@@ -9067,8 +9179,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let gate = CodonGate::for_input_span(cds_info, tx_start, tx_end);
         // `mut` bindings are #1202's (its transcript-bound clamp rewrites these
         // in place).
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, gate)?;
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                seq,
+                edit,
+                tx_start,
+                tx_end,
+                &boundaries,
+                gate,
+                MismatchFrame::SequenceAxis,
+            )?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
@@ -10064,6 +10184,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             CodonGate::NotApplicable,
+            // The bases read here are the CONTIG's, not the transcript the
+            // description names, and `work_*` are offsets into a window that
+            // is reverse-complemented on a minus-strand transcript. So the
+            // reported coordinate is genomic and is qualified by the contig
+            // accession — see [`MismatchFrame::GenomicWindow`] (#1612).
+            MismatchFrame::GenomicWindow {
+                accession: chromosome,
+                seq_start,
+                strand: transcript.strand,
+                window_len: work_seq.len() as u64,
+            },
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -10247,6 +10378,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             CodonGate::NotApplicable,
+            // The bases read here are the CONTIG's, not the transcript the
+            // description names, and `work_*` are offsets into a window that
+            // is reverse-complemented on a minus-strand transcript. So the
+            // reported coordinate is genomic and is qualified by the contig
+            // accession — see [`MismatchFrame::GenomicWindow`] (#1612).
+            MismatchFrame::GenomicWindow {
+                accession: chromosome,
+                seq_start,
+                strand: transcript.strand,
+                window_len: work_seq.len() as u64,
+            },
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -10414,6 +10556,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             CodonGate::NotApplicable,
+            // The bases read here are the CONTIG's, not the transcript the
+            // description names, and `work_*` are offsets into a window that
+            // is reverse-complemented on a minus-strand transcript. So the
+            // reported coordinate is genomic and is qualified by the contig
+            // accession — see [`MismatchFrame::GenomicWindow`] (#1612).
+            MismatchFrame::GenomicWindow {
+                accession: chromosome,
+                seq_start,
+                strand: transcript.strand,
+                window_len: work_seq.len() as u64,
+            },
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -10863,6 +11016,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             CodonGate::NotApplicable,
+            // The bases read here are the CONTIG's, not the transcript the
+            // description names, and `work_*` are offsets into a window that
+            // is reverse-complemented on a minus-strand transcript. So the
+            // reported coordinate is genomic and is qualified by the contig
+            // accession — see [`MismatchFrame::GenomicWindow`] (#1612).
+            MismatchFrame::GenomicWindow {
+                accession: chromosome,
+                seq_start,
+                strand: transcript.strand,
+                window_len: work_seq.len() as u64,
+            },
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -10899,6 +11063,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Core normalization for nucleic acid edits
     ///
     /// Returns (new_start, new_end, new_edit, warnings)
+    ///
+    /// `frame` says where `start`/`end` sit relative to something a reader can
+    /// act on; it is used only to render a diagnostic coordinate and never
+    /// influences the normalization itself. See [`MismatchFrame`] — every
+    /// caller must state it, because a caller that hands this function a
+    /// *window* and says nothing is exactly how #1612 shipped.
+    ///
+    /// `too_many_arguments`: `frame` is the eighth and takes it one over the
+    /// threshold. It is deliberately a **parameter** rather than something
+    /// derived here — this function cannot see whether `ref_seq` is a whole
+    /// sequence or a window, which is why the wrong coordinate shipped at all,
+    /// and only the caller can answer. Bundling it with `boundaries`/`gate`
+    /// into a context struct was the alternative; it buys nothing semantically
+    /// (the three are independent) and would re-touch fourteen call sites.
+    #[allow(clippy::too_many_arguments)]
     fn normalize_na_edit(
         &self,
         ref_seq: &[u8],
@@ -10910,6 +11089,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `input_span_is_coding()` for the input edit's own span,
         // `span_is_coding(a, b)` for any other (a shuffled tract, say).
         gate: CodonGate,
+        frame: MismatchFrame<'_>,
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
         let mut warnings = Vec::new();
 
@@ -10958,8 +11138,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     // interpolates the *outer* one, and two `edit`s a line apart
                     // meaning different things is a trap.
                     Some(delins) => {
-                        let (delins_start, delins_end, canonical, delins_warnings) =
-                            self.normalize_na_edit(ref_seq, &delins, 1, 1, boundaries, gate)?;
+                        let (delins_start, delins_end, canonical, delins_warnings) = self
+                            .normalize_na_edit(ref_seq, &delins, 1, 1, boundaries, gate, frame)?;
                         warnings.extend(delins_warnings);
                         Ok((delins_start, delins_end, canonical, warnings))
                     }
@@ -11023,7 +11203,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             warnings.push(NormalizationWarning::RefSeqMismatch {
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),
-                position: format!("{}-{}", start, end),
+                // NOT `start`/`end`: those are offsets into whatever slice this
+                // function was handed, and for a windowed caller that is not a
+                // coordinate anyone can act on. `frame` converts them back.
+                // (#1612 — this used to report `100-100` for `g.201C>T`, and
+                // the same string is strict mode's `FerroError::ReferenceMismatch`
+                // `location` and the key the cis dedupe matches on.)
+                position: frame.render(start, end),
                 corrected,
                 details: validation.warning,
             });
@@ -11095,7 +11281,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             sequence: InsertedSequence::Literal(Sequence::new(expanded)),
                         };
                         let (new_start, new_end, new_edit, mut child_warnings) = self
-                            .normalize_na_edit(ref_seq, &literal, start, end, boundaries, gate)?;
+                            .normalize_na_edit(
+                                ref_seq, &literal, start, end, boundaries, gate, frame,
+                            )?;
                         warnings.append(&mut child_warnings);
                         return Ok((new_start, new_end, new_edit, warnings));
                     }
@@ -11153,7 +11341,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         sequence: None,
                         length: None,
                     };
-                    return self.normalize_na_edit(ref_seq, &del, start, end, boundaries, gate);
+                    return self
+                        .normalize_na_edit(ref_seq, &del, start, end, boundaries, gate, frame);
                 }
 
                 // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
@@ -11238,6 +11427,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     e0 as u64,
                                     boundaries,
                                     gate,
+                                    frame,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -11298,6 +11488,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     (after_index + 1) as u64,
                                     boundaries,
                                     gate,
+                                    frame,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -11343,6 +11534,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     e0 as u64,
                                     boundaries,
                                     gate,
+                                    frame,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -11553,7 +11745,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             // transcript, so the same CDS bounds (#1185).
                             let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
                                 .normalize_na_edit(
-                                    ref_seq, &ins_edit, ins_start, ins_end, boundaries, gate,
+                                    ref_seq, &ins_edit, ins_start, ins_end, boundaries, gate, frame,
                                 )?;
                             warnings.append(&mut rec_warnings);
                             return Ok((rec_start, rec_end, rec_edit, warnings));
@@ -12116,6 +12308,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
                                     .normalize_na_edit(
                                         ref_seq, &ins_edit, ins_start, ins_end, boundaries, gate,
+                                        frame,
                                     )?;
                                 let mut merged = warnings;
                                 merged.append(&mut rec_warnings);
