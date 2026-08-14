@@ -3172,6 +3172,56 @@ mod tests {
         assert_eq!(spdi.insertion, "CGT");
     }
 
+    /// A same-reference position-range insertion (`ins{start}_{end}`) names its
+    /// inserted bases by position rather than spelling them, so `hgvs_to_spdi`
+    /// must read them from the reference — exactly as `del`/`dup` read their
+    /// omitted bases. On the `ACGT…` contig positions 5..=8 hold `ACGT`.
+    #[test]
+    fn a_reference_span_insertion_reads_its_bases_from_the_reference() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_11ins5_8").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        // SPDI interbase position 10 sits AFTER 1-based base 10 (#390).
+        assert_eq!(spdi.position, 10);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "ACGT");
+    }
+
+    /// The inverted form (`ins{start}_{end}inv`) inserts the reverse complement
+    /// of the named span. Positions 5..=7 hold `ACG`, whose reverse complement
+    /// is `CGT` (a non-palindromic span, so the inversion is observable).
+    #[test]
+    fn an_inverted_reference_span_insertion_reads_the_reverse_complement() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_11ins5_7inv").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 10);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "CGT");
+    }
+
+    /// A range insert names bases in the reference, so without a provider to
+    /// read them the conversion must decline rather than invent them.
+    #[test]
+    fn a_reference_span_insertion_without_a_provider_is_declined() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_11ins5_8").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::MissingReferenceData { .. })),
+            "a same-reference range insert cannot be resolved without a provider: {result:?}"
+        );
+    }
+
+    /// The `delins` arm resolves a same-reference range insert on the same path,
+    /// fetching both the deleted span and the inserted span from the reference.
+    /// del at 10..=12 is `CGT`; ins 5..=8 is `ACGT`.
+    #[test]
+    fn a_reference_span_delins_reads_both_spans_from_the_reference() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins5_8").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "ACGT");
+    }
+
     #[test]
     fn an_unspelled_identity_fetches_on_the_non_genomic_axes_too() {
         // The arm is shared by g./m./n./r./c., and the r. path additionally
