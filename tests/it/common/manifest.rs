@@ -18,5 +18,5 @@
 // disappears whenever its last caller does is one nobody can find again.
 #[allow(unused_imports)]
 pub use ferro_hgvs::conformance::manifest_gate::{
-    absent, manifest_is_required, MANIFEST_ENV, REQUIRE_ENV,
+    absent, manifest_is_required, unserved, MANIFEST_ENV, REQUIRE_ENV,
 };
