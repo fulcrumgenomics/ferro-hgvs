@@ -48,8 +48,13 @@
 //!    output cannot come from the splitter; see the collision census below.
 //!
 //!    Which side of a pair carries the override is not uniform, and that is the
-//!    record of what has been fixed. `#422-two-member` and `#1262a-split` carry
-//!    it, the shape this group was named for. `#999-neg-spanning`,
+//!    record of what has been fixed. `#1262a-split` carries it, the shape this
+//!    group was named for. `#422` **flipped sides**: its recorded spanning count
+//!    came from `split_buys_no_higher_priority_type`, whose licence is
+//!    `delins.md:44-47` and which the operator ruling
+//!    `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes to
+//!    `c.` — and #422 is filed on `NC_000022.10:g.`, so it is now the *spanning*
+//!    row that the splitter no longer reproduces. `#999-neg-spanning`,
 //!    `#1260a-spanning`, `#1260b-spanning` and `#1262b-spanning` carry it
 //!    *inverted*: the two-gap alignment (#1260, PR #1285) and a separation
 //!    threshold of one unchanged base made the splitter answer the **split**
@@ -74,10 +79,12 @@
 //! Six block pairs each carry two different recorded member counts. Since a
 //! pure function of the pair returns one answer, at most one of each pair's two
 //! recorded counts can be a splitter decision. [`COLLISIONS`] pins all six:
-//! **one** is recorded with both answers asserted correct in the repo (`#422`,
-//! the deliberate pin), **one** remains a known defect (`#1262a`), and **four**
-//! are **resolved at the splitter**, which now answers their split count rather
-//! than their spanning one. `the_census_is_one_correct_pin_one_known_defect_and_four_resolved`
+//! **none** is now recorded with both answers asserted correct, **one** remains
+//! a known defect (`#1262a`), and **five** are **resolved at the splitter**,
+//! which answers their split count rather than their spanning one. `#422` was
+//! the both-correct pin and moved into the resolved group when
+//! `delins.md:44-47`'s carve-out was scoped to `c.`; it is a `g.` issue.
+//! `the_census_is_no_correct_pin_one_known_defect_and_five_resolved`
 //! is the executable statement of that; this sentence is a gloss on it.
 //!
 //! # Recorded but deliberately not asserted here
@@ -107,7 +114,8 @@
 //! blocks pin what the splitter *would* have no choice about, not because the
 //! splitter decides them.
 
-use super::{partition_block, Piece};
+use super::tests::NO_AXIS;
+use super::{partition_block, CoincidenceCarveOut, Piece};
 
 /// The `LRG_199t1:c.850_901` reference block, 52 nt of real sequence, copied
 /// from the literal already committed in `seqfirst::partition` (`LRG199_REF`)
@@ -133,6 +141,15 @@ struct BlockRow {
     splitter_returns: Option<(usize, &'static str)>,
     /// One line about the block itself.
     note: &'static str,
+    /// Which axis the reproducer was filed on, as far as
+    /// `DNA/delins.md:44-47`'s payload-coincidence carve-out is concerned.
+    ///
+    /// Almost every row is frameless — most reproducers are `g.` — so
+    /// [`row`] and [`diverging`] default to [`NO_AXIS`] and the coding rows say
+    /// so with [`coding`]. The distinction is load-bearing only where the
+    /// carve-out fires, which is why it was invisible while `partition_block`
+    /// applied the carve-out on every axis.
+    carve_out: CoincidenceCarveOut,
 }
 
 impl BlockRow {
@@ -158,6 +175,7 @@ const fn row(
         recorded_members,
         splitter_returns: None,
         note,
+        carve_out: NO_AXIS,
     }
 }
 
@@ -177,6 +195,7 @@ const fn diverging(
         recorded_members,
         splitter_returns: Some(splitter_returns),
         note,
+        carve_out: NO_AXIS,
     }
 }
 
@@ -186,6 +205,69 @@ const fn diverging(
 /// learned to derive the split count, and carry their own reasons.
 const SPELLING: &str = "recorded count is the two-member spelling's output; the block \
                         is shared with this row's spanning sibling";
+
+/// Why a row recorded as one spanning member now partitions into several.
+///
+/// `DNA/delins.md:44-47`'s payload-coincidence carve-out reaches the coding DNA
+/// axis and nothing else, per the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. #422 is filed on
+/// `NC_000022.10:g.`, so the collapse that produced its recorded count is
+/// unlicensed there and `general.md:34` governs.
+const FRAMELESS_CARVE_OUT: &str = "recorded on the axis-blind splitter; #422 is a `g.` issue and \
+                                   `delins.md:44-47` reaches `c.` only";
+
+/// The same as [`row`], for a reproducer filed on the **coding DNA** axis.
+///
+/// `DNA/delins.md:44-47`'s payload-coincidence carve-out reaches `c.` and
+/// nothing else (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`),
+/// so a `c.` row and a `g.` row with the same bytes can legitimately record
+/// different member counts. Spell the axis rather than leaving it to the
+/// default: the two `LRG_199` rows below are the spec's own worked example, and
+/// reading them as frameless makes the spec look like it contradicts itself.
+const fn coding(
+    id: &'static str,
+    ref_block: &'static str,
+    alt_block: &'static str,
+    recorded_members: usize,
+    note: &'static str,
+) -> BlockRow {
+    BlockRow {
+        id,
+        ref_block,
+        alt_block,
+        recorded_members,
+        splitter_returns: None,
+        note,
+        carve_out: CoincidenceCarveOut::InReach,
+    }
+}
+
+/// [`diverging`], for a reproducer filed on the **coding DNA** axis.
+///
+/// The pair to [`coding`], for the same reason and with the same hazard: a `c.`
+/// row left on [`diverging`]'s [`NO_AXIS`] default runs through the splitter as
+/// though it were frameless, so the carve-out path the row exists to exercise is
+/// never taken and its recorded count is pinned against the wrong axis. That is
+/// invisible in the assertion — the count still matches — which is what makes
+/// the default the wrong thing to inherit here.
+const fn coding_diverging(
+    id: &'static str,
+    ref_block: &'static str,
+    alt_block: &'static str,
+    recorded_members: usize,
+    splitter_returns: (usize, &'static str),
+    note: &'static str,
+) -> BlockRow {
+    BlockRow {
+        id,
+        ref_block,
+        alt_block,
+        recorded_members,
+        splitter_returns: Some(splitter_returns),
+        note,
+        carve_out: CoincidenceCarveOut::InReach,
+    }
+}
 
 /// The corpus.
 ///
@@ -220,10 +302,10 @@ const CORPUS: &[BlockRow] = &[
     row("#182-c", "CCTGATCC", "AATTCTAA", 3, "unchanged bases at offsets 2 and 5"),
     row("#182-d", "CTGA", "ATTC", 2, "a single-base run stays its own piece"),
     row("#182-e", "GATCTC", "TCTATA", 3, "unchanged bases at offsets 2 and 4"),
-    row("#422-spanning", "CTATAG", "AAACCCC", 1,
+    diverging("#422-spanning", "CTATAG", "AAACCCC", 1, (2, FRAMELESS_CARVE_OUT),
         "6 nt replaced by 7 nt with one coincidentally preserved interior base"),
-    diverging("#422-two-member", "CTATAG", "AAACCCC", 2, (1, SPELLING),
-        "same block as #422-spanning: collision, both counts pinned correct"),
+    row("#422-two-member", "CTATAG", "AAACCCC", 2,
+        "same block as #422-spanning: collision, and both now reach the same count"),
 
     // --- cluster B: blocks that must SPLIT ----------------------------------
     row("#1232", "CAATT", "TA", 2, "5 nt -> 2 nt; the minimal edit set is not unique"),
@@ -240,10 +322,10 @@ const CORPUS: &[BlockRow] = &[
     row("#1230", "GATG", "CATC", 2,
         "only offsets 0 and 3 change; the interior AT is untouched"),
     row("#1235-n", "CAA", "TAG", 2, "no reading frame, so the separation stands"),
-    diverging("#1235-c-codon-exception", "CAA", "TAG", 1,
+    coding_diverging("#1235-c-codon-exception", "CAA", "TAG", 1,
         (2, "the coding-axis one-amino-acid merge runs after partitioning"),
         "the same block as #1235-n and #1241, on a coding axis"),
-    row("#1235-c-codon-boundary", "ATT", "GTA", 2,
+    coding("#1235-c-codon-boundary", "ATT", "GTA", 2,
         "separation 1 on a coding axis still splits when the codon differs"),
     diverging("#1235-r-coding", "CAA", "TAG", 1,
         (2, "the coding-axis one-amino-acid merge runs after partitioning"),
@@ -256,10 +338,10 @@ const CORPUS: &[BlockRow] = &[
     row("#1234-lone-del", "CCA", "", 1, "the lone-deletion negative control"),
 
     // --- calibration --------------------------------------------------------
-    row("LRG_199", LRG199_REF, LRG199_ALT, 1,
-        "the spec's own worked example: 52 nt -> 14 nt must stay one member"),
-    row("LRG_199-standin", "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT", LRG199_ALT, 1,
-        "the periodic synthetic stand-in for the row above, same net-deletion regime"),
+    coding("LRG_199", LRG199_REF, LRG199_ALT, 1,
+        "the spec's own worked example, on its own `c.` axis: 52 nt -> 14 nt must stay one member"),
+    coding("LRG_199-standin", "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT", LRG199_ALT, 1,
+        "the periodic synthetic stand-in for the row above, same net-deletion regime and same axis"),
     row("long-delins-40nt",
         "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
         "CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG", 2,
@@ -354,7 +436,14 @@ const COLLISIONS: &[Collision] = &[
     Collision {
         spanning: "#422-spanning",
         split: "#422-two-member",
-        pinning: Pinning::BothCorrect,
+        // Was `BothCorrect`, the one collision the repo pinned on both sides.
+        // #422 is filed on `NC_000022.10:g.`, and the collapse that produced its
+        // spanning count is `delins.md:44-47`'s payload-coincidence carve-out,
+        // which `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+        // scopes to `c.`. With the carve-out off that axis the splitter derives
+        // the split count from the sequence, so the pair resolves like the four
+        // beside it and there is no longer a collision pinned on both sides.
+        pinning: Pinning::ResolvedToSplit,
     },
     Collision {
         spanning: "#999-neg-spanning",
@@ -421,7 +510,11 @@ fn apply(reference: &[u8], pieces: &[Piece]) -> Vec<u8> {
 fn corpus_blocks_partition_as_the_live_splitter_does() {
     let mut wrong = Vec::new();
     for row in CORPUS {
-        let pieces = partition_block(row.ref_block.as_bytes(), row.alt_block.as_bytes());
+        let pieces = partition_block(
+            row.ref_block.as_bytes(),
+            row.alt_block.as_bytes(),
+            row.carve_out,
+        );
         if pieces.len() != row.expected() {
             wrong.push(format!(
                 "  {}: ({}, {}) expected {} pieces, got {} {:?}\n    recorded as: {}",
@@ -446,7 +539,7 @@ fn corpus_blocks_partition_as_the_live_splitter_does() {
 fn corpus_pieces_reconstruct_every_alt_block() {
     for row in CORPUS {
         let reference = row.ref_block.as_bytes();
-        let pieces = partition_block(reference, row.alt_block.as_bytes());
+        let pieces = partition_block(reference, row.alt_block.as_bytes(), row.carve_out);
         assert_eq!(
             String::from_utf8_lossy(&apply(reference, &pieces)),
             row.alt_block,
@@ -470,7 +563,7 @@ fn recorded_and_splitter_counts_diverge_on_exactly_these_rows() {
     assert_eq!(
         diverging,
         vec![
-            "#422-two-member",
+            "#422-spanning",
             "#1235-c-codon-exception",
             "#1235-r-coding",
             "#1260a-spanning",
@@ -520,7 +613,16 @@ fn colliding_block_pairs_are_one_splitter_input_with_two_recorded_answers() {
 
         // Which side the splitter reproduces is the census's whole content, so
         // it is asserted per-pinning rather than assumed to be the spanning one.
-        let pieces = partition_block(spanning.ref_block.as_bytes(), spanning.alt_block.as_bytes());
+        // The pair's own axis, not a default: a collision between a `c.` row and
+        // a `g.` row would otherwise be scored on whichever axis this line
+        // happened to name. Both sides carry the same block, and
+        // `the_two_sides_of_a_collision_share_an_axis` pins that they share an
+        // axis too, so either side's value would do.
+        let pieces = partition_block(
+            spanning.ref_block.as_bytes(),
+            spanning.alt_block.as_bytes(),
+            spanning.carve_out,
+        );
         let (reproduced, not_reproduced) = match collision.pinning {
             Pinning::ResolvedToSplit => (split, spanning),
             Pinning::BothCorrect | Pinning::KnownDefect => (spanning, split),
@@ -540,19 +642,25 @@ fn colliding_block_pairs_are_one_splitter_input_with_two_recorded_answers() {
     }
 }
 
-/// One collision is recorded with both answers correct (`#422`, the deliberate
-/// pin), one remains a known defect (`#1262a`), and **four are now resolved at
-/// the splitter** — the two-gap alignment plus a separation threshold of one
-/// unchanged base made the splitter derive the split count from sequence alone.
-/// That split is the census's whole point, so it is pinned.
+/// No collision is now pinned on both sides, one remains a known defect
+/// (`#1262a`), and **five are resolved at the splitter** — the two-gap
+/// alignment, a separation threshold of one unchanged base, and (for `#422`)
+/// scoping `delins.md:44-47`'s carve-out to `c.` each made the splitter derive
+/// the split count from sequence alone. That split is the census's whole point,
+/// so it is pinned.
+///
+/// `BothCorrect` is deliberately left in [`Pinning`] with an empty membership
+/// rather than deleted: a future collision that genuinely wants both answers
+/// pinned should be spelled, not re-invented, and asserting the empty set is
+/// what makes its reappearance visible.
 #[test]
-fn the_census_is_one_correct_pin_one_known_defect_and_four_resolved() {
+fn the_census_is_no_correct_pin_one_known_defect_and_five_resolved() {
     let correct: Vec<&str> = COLLISIONS
         .iter()
         .filter(|c| c.pinning == Pinning::BothCorrect)
         .map(|c| c.split)
         .collect();
-    assert_eq!(correct, vec!["#422-two-member"]);
+    assert_eq!(correct, Vec::<&str>::new());
 
     let defects: Vec<&str> = COLLISIONS
         .iter()
@@ -569,12 +677,29 @@ fn the_census_is_one_correct_pin_one_known_defect_and_four_resolved() {
     assert_eq!(
         resolved,
         vec![
+            "#422-two-member",
             "#999-neg-split",
             "#1260a-split",
             "#1260b-split",
             "#1262b-split"
         ]
     );
+}
+
+/// Both sides of a collision are one splitter input, so they must also be one
+/// splitter *question* — the same block on two different axes is two questions
+/// and the census's arithmetic would not mean anything.
+#[test]
+fn the_two_sides_of_a_collision_share_an_axis() {
+    for collision in COLLISIONS {
+        assert_eq!(
+            find(collision.spanning).carve_out,
+            find(collision.split).carve_out,
+            "{} and {} are recorded as a collision but sit on different axes",
+            collision.spanning,
+            collision.split
+        );
+    }
 }
 
 /// The corpus is a table, so a duplicated or renamed id would silently shadow a

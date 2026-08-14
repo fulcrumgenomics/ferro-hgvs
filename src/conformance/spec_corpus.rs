@@ -2500,12 +2500,18 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 ///   It is narrower than "may ferro merge an authored split", which
 ///   `canonical-form-choice-when-both-legal` already answers.
 ///
-/// **So neither a rise nor the zero means one thing.** Within the
+/// **So neither a rise nor a given value means one thing.** Within the
 /// payload-coincidence subclass the first record *ratifies* the merge on this
 /// axis, so a rise there is a decided ruling arriving on the shipped rule, and
-/// the shipping arm's `0` is that ruling **not yet implemented** rather than a
-/// clean bill. Outside that shape `general.md:34` governs and a rise is a
-/// population that needs explaining. The counter cannot separate them, which is
+/// the shipping arm's original `0` was that ruling **not yet implemented**
+/// rather than a clean bill. That figure is no longer zero: **#1835 took it to
+/// 3**, pinned on `spec_conformance_axis::THREE_PRIME` with its three rows named
+/// and adjudicated individually there. The operator ruling of 2026-08-13 —
+/// `coding-axis-merges-are-a-disclosed-general-34-deviation` — holds a merge of
+/// this shape to be a disclosed `general.md:34` deviation rather than the
+/// ratified one whenever no member of it is gap-bearing. Read that record before
+/// reading anything into the number. Outside that shape `general.md:34` governs
+/// and a rise is a population that needs explaining. The counter cannot separate them, which is
 /// precisely why it counts and does not adjudicate. The sharpest illustration is
 /// that the pass producing every merge this counter sees on the
 /// `canonical-coalesced` arm, `merge::coalesce_payload_alignment_split`, cites
@@ -2520,7 +2526,12 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 /// separated by exactly one merge, and **0 of 997** at two or more. (Both were
 /// first derived at `1ea75334` and re-derived unchanged after the rebase;
 /// `git diff 1ea75334 origin/main -- src/` is empty, so no figure on this axis
-/// could have moved between the two.)
+/// could have moved between the two.) **Both figures predate #1835's default
+/// flip. The second is now 3 of 997, pinned on
+/// `spec_conformance_axis::THREE_PRIME`, and this branch leaves it there — the
+/// whole census is asserted equal to that pin.** The floor-of-two argument below
+/// is unaffected either way: it turns on which rows the exception's own conjunct
+/// can reach, not on how many of them merge.
 ///
 /// A floor of one would therefore have to open at a non-zero pin, summing rows
 /// with three different verdicts into one figure no later reader could take
@@ -2578,8 +2589,10 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 ///
 /// What the record does *not* license is re-pinning such a counter to zero for
 /// a green build — in its own words, "the one move this record forbids". This
-/// counter's zero is pinned at its measured value on a population that sits
-/// **above** these rows, so nothing here is being pinned away; the 7 are named
+/// counter is pinned at its measured value on a population that sits **above**
+/// these rows — 8 since #1616, disclosed by
+/// `coding-axis-merges-are-a-disclosed-general-34-deviation` under exactly that
+/// rule-2 remedy — so nothing here is being pinned away; the 7 are named
 /// precisely because they are below its floor and it cannot see them.
 ///
 /// ## The 5 were filed under a status word, and the record answers them
@@ -3763,8 +3776,8 @@ mod tests {
     ///
     /// Without this the counter's denominator is a number nobody checked: a
     /// predicate that silently admitted a `g.` row, or a separation of one,
-    /// would make the census's zero mean something other than what its docs say
-    /// — and `spec_conformance_axis` asserts only that the denominator is
+    /// would make the census's figure mean something other than what its docs
+    /// say — and `spec_conformance_axis` asserts only that the denominator is
     /// non-zero, never what is in it.
     ///
     /// It also pins the disjointness the instrument is built on: no row may
@@ -3778,9 +3791,12 @@ mod tests {
     /// it as a conjunct and [`build_family`] computes it, but a `Row` does not
     /// carry the triples the check needs, so this test cannot re-derive it.
     /// Dropping that conjunct leaves this test **green** while moving the
-    /// denominator 997 -> 2,527 and the census numerator 0 -> 74 — so the
-    /// property is real and load-bearing, and it is defended by the two census
-    /// pins rather than here. Do not read this test as covering it.
+    /// denominator 997 -> 2,527 and the census numerator 0 -> 74 (measured on an
+    /// `origin/main` whose shipped numerator was still 0, i.e. before #1835 took
+    /// it to 3; the mutation has not been re-run since, so read the direction and
+    /// not the second digit) — so the property is real and load-bearing, and it
+    /// is defended by the two census pins rather than here. Do not read this test
+    /// as covering it.
     #[test]
     fn the_coding_axis_merge_population_is_what_it_says_it_is() {
         let built = corpus(&CorpusBounds::default());

@@ -50,6 +50,19 @@ fn the_seeds_deletion_survives_the_combination() {
     // The proptest's own case, which carries a distant deletion. It is outside
     // the tract and must come through untouched.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[261_262insAA;262_263insAA;269del]");
+    // **Re-pinned, and the row now does what this test's own docstring asks.**
+    // The sibling `two_insertions_growing_one_tract_combine_their_copies` pins
+    // `g.262A[5]` for the same two insertions without the deletion, and the
+    // comment above says the distant deletion "is outside the tract and must
+    // come through untouched". Both hold here now: the tract renders as one
+    // repeat and `269del` is carried through verbatim.
+    //
+    // An intermediate revision of this branch pinned
+    // `g.[263_265delinsAAA;268_269delinsTCAGC]` and explained it as the repeat
+    // notation not surviving re-derivation. That was measured against a base
+    // where `MAX_SPLIT_BLOCK` was 1024; it dissolved the repeat AND rewrote the
+    // deletion, satisfying neither half of the intent stated above. It is
+    // withdrawn rather than reworded.
     assert_eq!(output, "NC_TEST.1:g.[262A[5];269del]");
 }
 

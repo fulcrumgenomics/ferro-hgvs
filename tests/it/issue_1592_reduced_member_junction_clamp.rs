@@ -73,49 +73,26 @@
 //! a change to it is a representation change to be declared and re-blessed
 //! deliberately, not a test to repair by pasting the new output.
 
-use crate::common::cis_apply_oracle::apply_with;
-use crate::common::synthetic::{padded, SyntheticBuilder};
-use ferro_hgvs::{parse_hgvs, Normalizer, ShuffleDirection};
+use crate::common::cis_apply_oracle;
+use ferro_hgvs::ShuffleDirection;
 
 /// The core every case here is drawn against. Two lone `A`s two bases apart
 /// (`g.265` and `g.267`) inside an `AT` tract is what makes a mis-anchored
 /// repeat member land on the wrong one while still rendering legally.
 const CORE: &str = "TCCAGCAGATAT";
 
-/// Normalize `input` against [`CORE`] in `direction`, assert the output denotes
-/// the same bases the input does, and return the rendered output.
+/// [`common::cis_apply_oracle::normalized_preserving_in`] bound to [`CORE`].
 ///
-/// The sequence check runs **before** the caller compares strings, which is the
-/// opposite of `assert_normalizes_preserving_in`'s order and deliberate: a
-/// string mismatch there means its sequence check never ran, so a re-blessed
-/// expectation can silently carry a changed sequence with it. Here the sequence
-/// is the assertion and the string is the record.
+/// The helper is shared rather than copied: it encodes a deliberate contract —
+/// the `apply_with` sequence check runs before the caller compares strings — and
+/// a contract kept in two places can be weakened in one of them.
 fn normalized_preserving_in(input: &str, direction: ShuffleDirection) -> String {
-    let provider = SyntheticBuilder::genomic(CORE).build();
-    let reference = padded(CORE);
-    let normalizer = Normalizer::with_config(
-        provider.clone(),
-        ferro_hgvs::NormalizeConfig::default().with_direction(direction),
-    );
-    let output = normalizer
-        .normalize(&parse_hgvs(input).expect("parse"))
-        .expect("normalize")
-        .to_string();
-
-    let from_input = apply_with(&provider, &reference, input).expect("input applies");
-    let from_output = apply_with(&provider, &reference, &output).unwrap_or_else(|| {
-        panic!("`{input}` -> `{output}` has no resulting sequence (overlapping or unconvertible)")
-    });
-    assert_eq!(
-        from_output, from_input,
-        "`{input}` -> `{output}` denotes a different sequence"
-    );
-    output
+    cis_apply_oracle::normalized_preserving_in(CORE, input, direction)
 }
 
 /// [`normalized_preserving_in`] in the default 3' direction.
 fn normalized_preserving(input: &str) -> String {
-    normalized_preserving_in(input, ShuffleDirection::ThreePrime)
+    cis_apply_oracle::normalized_preserving(CORE, input)
 }
 
 #[test]
@@ -140,9 +117,19 @@ fn the_spanning_delins_spelling_reaches_the_same_answer() {
 #[test]
 fn the_bracketed_spelling_of_that_haplotype_agrees() {
     // The spelling the confluence proptest draws. It already reached the right
-    // answer — the weight bound in `canonicalize_from_sequence` declines the
-    // derivation for it — and is pinned here so the fix is shown to converge the
-    // two spellings rather than merely to move one of them.
+    // answer, and is pinned here so the fix is shown to converge the two
+    // spellings rather than merely to move one of them.
+    //
+    // **How it reaches it has changed, and the old reason is gone.** It used to
+    // be that the input-relative weight bound in `canonicalize_from_sequence`
+    // declined the derivation for this spelling, so the per-member pipeline
+    // answered and the input's own partition survived. That bound is deleted
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), so this
+    // spelling is now re-derived like any other and reaches
+    // `g.[259del;267A[3]]` by the same route the spanning spelling above does —
+    // #1592's own fix, the reduced-member junction clamp this file is named for.
+    // The two spellings therefore agree because they are derived together, not
+    // because one of them was exempted.
     let output = normalized_preserving("NC_TEST.1:g.[258del;266_267insAA]");
     assert_eq!(output, "NC_TEST.1:g.[259del;267A[3]]");
 }
