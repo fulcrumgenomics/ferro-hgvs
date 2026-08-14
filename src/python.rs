@@ -1524,14 +1524,48 @@ impl PyDerivedDescription {
     /// it denotes the same bases and carries the same canonical SPDI.
     #[getter]
     fn placement_bounded_by_window(&self) -> bool {
-        self.inner.placement_bounded_by_window
+        self.inner.placement_bounded_by_window()
+    }
+
+    /// Whether a member rests on the window's **5' edge**.
+    ///
+    /// `placement_bounded_by_window` is `bounded_at_start or bounded_at_end`;
+    /// this says whether the 5' side specifically is the one on an edge. A
+    /// caller widening a window one side at a time reads it to decide whether
+    /// widening 5' could move the answer — and, together with the window already
+    /// starting at base 1, to recognise a placement pinned to the sequence start
+    /// that no widening can move.
+    #[getter]
+    fn bounded_at_start(&self) -> bool {
+        self.inner.bounded_at_start
+    }
+
+    /// Whether a member rests on the window's **3' edge**.
+    ///
+    /// The 3' counterpart of `bounded_at_start`; see it. A placement on the 3'
+    /// edge of a window that already ends at the sequence's last base is settled
+    /// by the sequence, not the window.
+    #[getter]
+    fn bounded_at_end(&self) -> bool {
+        self.inner.bounded_at_end
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "DerivedDescription(variant={:?}, placement_bounded_by_window={})",
+            "DerivedDescription(variant={:?}, placement_bounded_by_window={}, \
+             bounded_at_start={}, bounded_at_end={})",
             self.inner.variant.to_string(),
-            if self.inner.placement_bounded_by_window {
+            if self.inner.placement_bounded_by_window() {
+                "True"
+            } else {
+                "False"
+            },
+            if self.inner.bounded_at_start {
+                "True"
+            } else {
+                "False"
+            },
+            if self.inner.bounded_at_end {
                 "True"
             } else {
                 "False"
@@ -1661,7 +1695,9 @@ fn from_sequences(
 /// edge.
 ///
 /// Returns:
-///     DerivedDescription with `variant` and `placement_bounded_by_window`.
+///     DerivedDescription with `variant`, `placement_bounded_by_window`, and the
+///     two per-side flags it is the OR of — `bounded_at_start` and
+///     `bounded_at_end`.
 #[pyfunction]
 #[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None))]
 #[pyo3(text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None)")]
@@ -2119,6 +2155,55 @@ impl PyNormalizer {
         })
         .map(|inner| PyHgvsVariant { inner })
         .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+    }
+
+    /// Re-derive a description from the bases it denotes: the "one canonical
+    /// description per variant" round trip, as a single call.
+    ///
+    /// Args:
+    ///     description: The HGVS description to re-derive. Its axis must be one
+    ///         `from_sequences` emits — genomic `g.` (and `m.` on the two rCRS
+    ///         mitochondrial accessions); any other is refused.
+    ///     max_grid_cells: As `from_sequences`.
+    ///     normalize: Route the derived description through `normalize` before
+    ///         returning it. Defaults to False, which yields the
+    ///         alignment-derived form (conformant + deterministic) rather than
+    ///         ferro's recommended form. Set True for the recommended,
+    ///         reference-anchored form.
+    ///
+    /// Returns:
+    ///     The canonical HGVS description, as a string.
+    ///
+    /// Raises:
+    ///     ParseError: `description` does not parse.
+    ///     ValueError: for a `max_grid_cells` of 0, as `from_sequences`.
+    ///     NormalizationError: everything else — a variant with no single
+    ///         resulting sequence, a non-genomic axis, a grid over
+    ///         `max_grid_cells`, or a placement still resting on the edge of the
+    ///         widest window the loop reads (a repeat tract whose shift depends
+    ///         on how much reference is read). Plus any refusal from `normalize`
+    ///         when `normalize=True`. A refusal that a wider window would answer
+    ///         — the pure insertion anchoring 5' of the window — is retried by
+    ///         the loop rather than raised.
+    #[pyo3(signature = (description, *, max_grid_cells=None, normalize=false))]
+    #[pyo3(text_signature = "(description, *, max_grid_cells=None, normalize=False)")]
+    fn sequence_normalize(
+        &self,
+        py: Python<'_>,
+        description: &str,
+        max_grid_cells: Option<usize>,
+        normalize: bool,
+    ) -> PyResult<String> {
+        // Parsed before detaching, as in `normalize`: it touches no reference,
+        // so it keeps the `ParseError` mapping a plain `?` rather than threading
+        // a two-variant error enum through the closure.
+        let variant = parse_hgvs(description)
+            .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
+        let options = from_sequences_options(max_grid_cells, self.config.shuffle_direction)?;
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        py.detach(|| normalizer.sequence_normalize(&variant, &options, normalize))
+            .map(|inner| inner.to_string())
+            .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
     }
 
     /// Normalize an HGVS variant
