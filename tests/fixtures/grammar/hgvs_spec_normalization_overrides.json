@@ -346,6 +346,12 @@
       "governing": "docs/recommendations/DNA/delins.md:47",
       "question": "When two variants are separated by two or more nucleotides and part of an inserted sequence aligns with the reference, does `delins.md:17`'s instruction to describe them individually govern, or `delins.md:47`'s recommendation of the delins format?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/cis_confluence_adjudication.rs::a_spanning_delins_and_its_aligned_split_are_two_fixed_points",
+          "tests/it/cis_adjudication_enumeration.rs::the_spanning_versus_split_class_partitions_as_measured"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:17",
@@ -397,6 +403,13 @@
       "id": "inversion-vs-two-delins-76-83",
       "question": "For `c.76_83inv`, whose reverse complement coincides with the reference at its four interior columns, is the edit one inversion or the two `delins` members those columns separate?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_delins_members_is_an_inversion",
+          "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_substitutions_stays_split",
+          "tests/it/inversion_sweep.rs::the_delins_spelling_converges_on_the_spec_inversion"
+        ]
+      },
       "governing": "docs/recommendations/DNA/inversion.md:5",
       "clauses": [
         {
@@ -429,6 +442,11 @@
       "id": "inversion-vs-a-mixed-member-competitor",
       "question": "When a whole-span reverse complement competes with a multi-member description that is neither uniformly `delins` nor uniformly substitutions, but a mix of substitutions and multi-column members, which form is canonical?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_mixed_members_is_an_inversion"
+        ]
+      },
       "governing": "docs/recommendations/DNA/inversion.md:5",
       "clauses": [
         {
@@ -454,6 +472,12 @@
       "id": "adjudication-precedence-order",
       "question": "Where the spec does not settle a normalization question, what ranks next — the reference implementation, the downstream consumer's already-shipped representation, or the filer's open issues?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/readme_normalization_rules.rs::the_ledgers_pointer_at_the_readme_ruleset_resolves",
+          "tests/it/hgvs_spec_normalization_tests.rs::precedence_escalations_are_censused"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:56",
@@ -487,6 +511,12 @@
       "id": "canonical-form-choice-when-both-legal",
       "question": "When two descriptions of one variant are both legal under the recommendations, which one does ferro ship?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/spec_worked_example_rules.rs::the_two_svd_wg010_spellings_converge_on_the_conformant_split",
+          "tests/it/cis_junction_crossing_shift.rs::the_three_member_spelling_and_its_one_member_form_are_two_fixed_points"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:157",
@@ -520,6 +550,12 @@
       "id": "codon-carve-out-shape-restriction",
       "question": "`delins.md:18`'s exception names no edit type, but ferro applies it only to a substitution / unchanged base / substitution shape. Does the exception reach other shapes?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1716_codon_frame_merged_span.rs::frameshift_pair_inside_one_codon_is_left_open",
+          "tests/it/spec_corpus_regressions.rs::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:18",
@@ -542,6 +578,12 @@
       "id": "delins-codon-carve-out-gap-one",
       "question": "Do two variants separated by exactly one nucleotide, together affecting one amino acid, merge into a delins?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/merge_consecutive_edits_tests.rs::coding_length_changing_block_across_codons_is_described_individually",
+          "tests/it/lenient_overlap_and_projection_split.rs::the_codon_delins_merges_only_on_an_axis_that_declares_a_frame"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:18",
@@ -584,6 +626,12 @@
       "id": "exon-junction-dup-converge-from-the-far-side",
       "question": "When a duplication is already spelled on the far (3') side of an exon/exon junction — `LRG_199t1:c.3922dup`, which denotes the same transcript sequence as `c.3921dup` because both positions carry a `T` — must normalization shift it 5' back to `c.3921dup`, or is `c.3922dup` a legitimate description of a different genomic event that happens to yield the same transcript?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/spec_worked_examples.rs::the_exon_junction_pair_does_not_converge_and_that_is_recorded",
+          "tests/it/spec_worked_examples.rs::the_decided_target_is_convergence_on_the_near_side"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/duplication.md:26",
@@ -611,6 +659,9 @@
     {
       "id": "rna-repeat-range-plus-unit-redundancy",
       "status": "undecided",
+      "guard": {
+        "none": "Undecided: the record puts upstream's own conflict on the record (`RNA/repeated.md:22` calls the shape invalid, `:27` publishes it) and names no side, so there is no ruling for a test to enforce. The record states in terms that ferro's present agreement with `:27` is an artifact of two independent passes rather than the question being decided, so pinning that agreement would read as enforcement of a ruling nobody made."
+      },
       "question": "On an RNA reference, may a repeat be written with BOTH a position range and the repeat unit (`r.-6_-3g[6]`)? `RNA/repeated.md:22` marks that shape invalid as redundant; `:27` publishes exactly that shape as valid.",
       "clauses": [
         {
@@ -630,6 +681,12 @@
       "id": "delins-adjacent-members-when-both-consume-reference",
       "question": "When a normalized cis allele leaves two members with no unchanged nucleotide between them, and both members consume reference bases, is that a description the recommendations admit?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/cis_confluence_adjudication.rs::two_adjacent_members_that_both_consume_reference_are_one_delins",
+          "tests/it/cis_adjudication_enumeration.rs::the_dup_flush_carve_out_class_partitions_as_measured"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:16",
@@ -685,6 +742,12 @@
       "id": "separation-is-a-property-of-the-spelling-not-of-the-variant",
       "question": "The separation rule keys on the number of unchanged nucleotides between two variants, but two spellings of one variant can present different separations. On which of them is the rule to be evaluated?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/cis_confluence_adjudication.rs::the_separation_two_members_present_is_not_a_property_of_the_variant",
+          "tests/it/cis_adjudication_enumeration.rs::the_separation_class_converges_over_its_whole_description_space"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:34",
@@ -721,6 +784,9 @@
       "id": "separation-rule-force-modal-or-negation",
       "question": "Does the negation in “should be described individually and not as a ‘delins’” carry prohibition force of its own, making `general.md:34` a README rule 1 (Conformant, absolute), or does the modal grade the whole clause, making it rule 2 (Recommended form, best effort)?",
       "status": "decided",
+      "guard": {
+        "none": "Decided and deliberately unguarded, because the ruling grades a clause rather than mandating an output: `general.md:34` is README rule 2 in its entirety, and the record's own closing sentence is that this `changes classification only`. No description's normalized form turns on it, so there is no behaviour a test could fail on. What the grading buys is that a departure is a disclosable deviation rather than a rule-7 bug; that obligation is carried by the `Representation-Change` check and by the tripwires in `tests/it/codon_frame_deep_window_offset.rs`, whose module doc cites this record for exactly that reason \u2014 and neither of those fails if the grading itself is reversed."
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:34",
@@ -750,6 +816,13 @@
       "id": "coding-axis-merges-are-a-disclosed-general-34-deviation",
       "question": "#1616 merges eight coding-axis multi-member alleles whose members are authored two or more unchanged nucleotides apart. `general.md:34` and `DNA/delins.md:17` say such members are described individually. Is that a deviation to disclose, or does `general.md:34` fail to reach a partition that re-derives to a single member?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/spec_conformance_axis.rs::three_prime_conformance_census",
+          "tests/it/spec_conformance_axis.rs::five_prime_conformance_census",
+          "tests/it/spec_conformance_axis.rs::the_coding_axis_merge_counter_can_observe_a_merge"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:34",
@@ -783,6 +856,11 @@
       "id": "contiguous-insertion-split-by-a-blocked-derivation",
       "question": "A single contiguous insertion inside a tandem tract can be spelled as an insertion at one junction plus a duplication inserting at the next, with one unchanged reference base between them. Does `general.md:34` license that two-member description?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/cis_junction_crossing_shift.rs::the_three_member_spelling_and_its_one_member_form_are_two_fixed_points"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:34",
@@ -813,6 +891,12 @@
       "id": "self-cancelling-across-ring-junctions",
       "question": "Does `general.md:58`'s prohibition on removing part of a reference sequence and replacing it with part of the same sequence reach the `::`-joined segments of a ring chromosome, as it reaches the members of a `[a;b]` cis allele?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/ring_segment_wellformedness.rs::the_three_malformed_rings_the_ruling_named_are_now_rejected",
+          "tests/it/issue_1578_followup_self_cancelling_rings.rs::the_specs_own_ring_shapes_are_accepted"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:56",
@@ -870,6 +954,12 @@
       "id": "alignment-only-symbol-in-a-description",
       "question": "`background/standards.md` lists `X` and `-` in the DNA symbol table and daggers both, footnoting them at `:39` as used in alignment only. May a description state one of them, and if not, is refusing it a conformance requirement or a style preference?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/corpus_prohibited_inputs.rs::an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash",
+          "tests/it/spec_corpus_regressions.rs::an_alignment_only_x_base_is_refused_rather_than_re_emitted"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/background/standards.md:36",
@@ -895,6 +985,12 @@
       "id": "bare-transcript-intronic-position",
       "question": "`checklist.md:20` says an `NM_` reference can describe an intronic position only when a genomic reference sequence is given. Must ferro refuse a bare `NM_…:c.20+2del`, and in which input-hygiene mode?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only",
+          "tests/it/defect_371_transcript_exit.rs::an_authored_intronic_position_is_left_as_authored"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/checklist.md:20",
@@ -916,6 +1012,12 @@
       "id": "conflicting-member-geometry-refusal-scope",
       "question": "`general.md:58` prohibits one member-vs-member geometry outright and illustrates it with a `del` beside an overlapping `dup`. Does the prohibition reach the CLASS of alleles whose members claim intersecting reference territory — nested, partially overlapping, and two insertions at one interbase — or only the edit-type pair it names?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/corpus_prohibited_inputs.rs::the_three_conflicting_geometries_are_refused_in_strict_mode_on_every_axis",
+          "tests/it/corpus_prohibited_inputs.rs::a_nested_pair_is_refused_on_geometry_not_on_redundancy"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/alleles.md:5",
@@ -941,6 +1043,12 @@
       "id": "absolute-prohibition-enforcement-stage",
       "question": "The checklist enumerates the spec's absolute prohibitions. Is a violation to be refused at PARSE — unconditionally, in every mode — or at strict-mode normalize, where a caller can opt out of it?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/corpus_prohibited_inputs.rs::the_absolute_prohibitions_ferro_refuses_at_parse",
+          "tests/it/corpus_prohibited_inputs.rs::the_decided_target_is_a_mode_gated_refusal"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/checklist.md:5",
@@ -966,6 +1074,9 @@
       "id": "ring-telomere-anchoring",
       "question": "Must a ring chromosome's first `::` segment start at `pter` and its last end at `qter`, so that a ring whose segments name only interior coordinates is refused?",
       "status": "undecided",
+      "guard": {
+        "none": "Undecided: the record asks whether a ring naming only interior coordinates must be refused, and answers neither way. `tests/it/ring_segment_wellformedness.rs::a_ring_with_no_telomere_anchor_is_still_accepted` pins today's acceptance, which the record itself calls the status quo rather than a ruling \u2014 it would go on passing under one answer and would have to be deleted under the other, so it is not this record's guard."
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/complex.md:28",
@@ -990,6 +1101,11 @@
       "id": "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
       "question": "`delins.md:47` recommends the single `delins` where a split exists only because payload bases coincide with reference bases. Which axes does that carve-out reach?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "src/normalize/merge.rs::the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:17",
@@ -1029,6 +1145,11 @@
       "id": "delins-recommendation-reach-when-the-input-arrives-split",
       "question": "`DNA/delins.md:44-47` recommends the spanning `delins` where parts of the payload align with the reference, while `:17` and `general.md:34` describe separated variants individually. `canonical-form-choice-when-both-legal` settles that the input's spelling does not decide. Which of the two clauses then selects the form a re-derivation must land on?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "src/normalize/merge.rs::an_all_survivor_payload_is_not_an_alignment_artifact"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:47",
@@ -1059,6 +1180,11 @@
       "id": "projection-codon-exception-is-decided-by-the-rendered-axis",
       "question": "When a coding description merges under `DNA/delins.md:18`, does its derived genomic axis inherit that merge?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/lenient_overlap_and_projection_split.rs::the_codon_delins_merges_only_on_an_axis_that_declares_a_frame"
+        ]
+      },
       "governing": "docs/recommendations/DNA/delins.md:42",
       "applies_to": [
         "LRG_199t1:c.145_147delinsTGG",
@@ -1100,6 +1226,12 @@
       "id": "confluence-gate-is-apply-equality-on-every-determined-axis",
       "question": "Is \"equivalent inputs produce one canonical output\" still the release gate, and what does \"equivalent\" mean when it cannot be defined by the normalizer the gate is about?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/equivalence_cross_axis_rung.rs::normalized_match_can_neither_satisfy_nor_be_a_gate",
+          "tests/it/equivalence_cross_axis_rung.rs::a_junction_straddling_dup_pair_agrees_on_the_transcript_and_not_on_the_genome"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/general.md:43",
@@ -1125,6 +1257,11 @@
       "id": "rna-axis-alignment-only-symbol-reach",
       "question": "`background/standards.md` prints TWO symbol tables. The DNA one (`:19`-`:37`) daggers `X` and `-`; the RNA one (`:47`-`:61`) is the DNA table's fifteen NON-daggered rows lowercased with `u` for `t`, and lists neither daggered row. `general.md:50` puts an `r.` description's nucleotides in lower case. Does an `r.` description therefore state no `x`, so that ferro must refuse `r.10delinsacgux` exactly as `alignment-only-symbol-in-a-description` makes it refuse `g.10delinsACGTX`?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1715_rna_alignment_symbol_reach.rs::a_lowercase_masked_nucleotide_on_the_rna_axis_is_refused_at_the_ruled_stage"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/background/standards.md:36",
@@ -1155,6 +1292,12 @@
       "governing": "docs/recommendations/DNA/delins.md:47",
       "question": "May a canonicalization be refused because the description it derives is 'heavier' than the spelling the input happened to use?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/weight_bound_worked_examples.rs::a_span_outweighs_a_split_that_keeps_reference_bases",
+          "tests/it/reported_confluence_pairs.rs::the_1420_v2_pair_does_not_converge_by_re_derivation"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:47",
@@ -1195,6 +1338,12 @@
       "id": "c-and-n-positions-are-flat-transcript-offsets",
       "question": "A `c.`/`n.` position is written against a transcript accession whose cdot exon table has a transcript-coordinate gap. Does it name the base at that offset in the flat transcript sequence, or the base reached by walking the exon table across the gap?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1619_flat_transcript_frame.rs::a_coding_position_resolves_on_the_flat_transcript_axis",
+          "tests/it/normalization_transcripts_exon_contract.rs::fixture_exercises_the_contiguity_property"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/background/numbering.md:21",
@@ -1220,6 +1369,9 @@
       "id": "junction-exit-wrapper-scope-in-a-mixed-allele",
       "question": "An allele holds one member whose intronic offset ferro MANUFACTURED and one the author spelled intronic, both on one bare transcript. `checklist.md:20` wants a genomic reference for the manufactured member; `DNA/alleles.md:16` wants one reference factored out of the whole allele. Lift the wrapper to the whole description, or expand to per-member accessions?",
       "status": "undecided",
+      "guard": {
+        "none": "Undecided: #1723 made both answers expressible and picked neither, so ferro's present decline is the status quo the record names rather than a ruling. `tests/it/defect_371_transcript_exit.rs::a_mixed_allele_still_ships_a_manufactured_offset_bare` pins that status quo and would go on passing whichever way the question is settled, so it is not this record's guard."
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/checklist.md:20",
@@ -1236,6 +1388,11 @@
       "id": "duplication-must-ranks-the-label-not-the-partition",
       "question": "`DNA/duplication.md:18` is one of the spec's genuine MUSTs: a variant that can be described as a duplication must be. Does it bind on each MEMBER of a cis allele — so that a partition exposing a describable duplication is required, and a coarser derivation that merges the `dup` away evades the clause — or does it bind on each CHANGE ferro derives from the resulting sequence, ranking only the type label applied to it?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/duplication_label_not_partition.rs::no_emitted_insertion_repeats_its_five_prime_flank"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/duplication.md:17",
@@ -1278,6 +1435,14 @@
       "id": "c-description-against-an-unresolvable-cds-is-refused",
       "question": "The reference serves a transcript's bases but resolves no CDS start. A `c.` description against it is conformant as a string, but ferro has no origin to number from. Does it normalize silently — returning the input as its own output — or is it refused?",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1870_cds_less_transcript_refusal.rs::the_refusal_is_unconditional_across_every_mode",
+          "tests/it/issue_1870_cds_less_transcript_refusal.rs::the_n_axis_still_shifts_on_the_same_record",
+          "tests/it/issue_1870_cds_less_transcript_refusal.rs::a_record_whose_cds_resolves_is_untouched_and_still_shifts",
+          "tests/it/issue_1870_cds_less_transcript_refusal.rs::a_bare_genomic_parent_is_out_of_scope_and_still_answers"
+        ]
+      },
       "clauses": [
         {
           "clause": "docs/background/numbering.md:21",
@@ -1302,6 +1467,12 @@
     {
       "id": "unchanged-is-read-over-every-minimal-alignment",
       "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_1284_transcript_axis_collision.rs::a_noncoding_del_dup_collision_is_repaired",
+          "tests/it/normalize_reparse_invariant.rs::a_del_beside_a_dup_re_spells_instead_of_colliding"
+        ]
+      },
       "governing": "docs/recommendations/general.md:34",
       "question": "`general.md:34` keys on variants 'separated by one or more nucleotides' and `DNA/delins.md:16` on 'two or more consecutive nucleotides'. Both quantify over nucleotides being unchanged or changed, and neither names an alignment. Against WHICH alignment is a reference base judged unchanged — the position-wise correspondence available when the two sides are the same length, or the minimal-edit alignment?",
       "clauses": [
