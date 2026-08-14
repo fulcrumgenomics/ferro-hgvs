@@ -375,6 +375,78 @@ where
     Ok(Some(apply_alphabet(&bases, alphabet)))
 }
 
+/// An inserted sequence whose bases are an exact tandem repeat, decomposed to
+/// `(unit, count)` — the literal unit spelled once and the exact number of
+/// copies — or `None` when `seq` is not one.
+///
+/// Recognises the single-base `Repeat` (`insA[10]`), the multi-base
+/// `SequenceRepeat` (`insAT[3]`), and the single-part `Complex([Repeat])` shape
+/// the parser produces for a lone repeat unit. Only an [`RepeatCount::Exact`]
+/// count is a determinate string of bases; every uncertain or range count
+/// (`insA[10_15]`, `insA[?]`, …) names no single expansion and returns `None`,
+/// so the caller keeps declining it. Multi-part `Complex` payloads and every
+/// non-repeat variant also return `None`.
+fn exact_repeat_insert(seq: &InsertedSequence) -> Option<(String, u64)> {
+    use crate::hgvs::edit::InsertedPart;
+    let exact = |count: &RepeatCount| match count {
+        RepeatCount::Exact(n) => Some(*n),
+        _ => None,
+    };
+    match seq {
+        InsertedSequence::Repeat { base, count } => {
+            Some((base.to_char().to_string(), exact(count)?))
+        }
+        InsertedSequence::SequenceRepeat { sequence, count } => {
+            Some((sequence_to_string(sequence), exact(count)?))
+        }
+        InsertedSequence::Complex(parts) => match parts.as_slice() {
+            [InsertedPart::Repeat { base, count }] => {
+                Some((base.to_char().to_string(), exact(count)?))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Resolve an exact tandem-repeat insert (`insA[10]`, `insAT[3]`) to its literal
+/// bases by expanding the unit the named number of times, mirroring how the
+/// short-form `Repeat` edit arm expands its own explicit unit and exact count.
+///
+/// Returns `Ok(None)` when `seq` is not an exact repeat, so the caller can fall
+/// back to literal handling. The expansion is a `u64`-scaled `String`, so the
+/// same overflow and [`MAX_REPEAT_EXPANSION_BASES`] cap the `Repeat` arm applies
+/// are enforced here before allocating.
+fn resolve_exact_repeat_insert(
+    seq: &InsertedSequence,
+    alphabet: AlphabetMode,
+) -> Result<Option<String>, ConversionError> {
+    let Some((unit, count)) = exact_repeat_insert(seq) else {
+        return Ok(None);
+    };
+    let unit = apply_alphabet(&unit, alphabet);
+    let count = count as usize;
+    let expansion_bases =
+        unit.len()
+            .checked_mul(count)
+            .ok_or_else(|| ConversionError::UnsupportedEditType {
+                description: format!(
+                    "repeat expansion {} x {} overflows usize",
+                    unit.len(),
+                    count
+                ),
+            })?;
+    if expansion_bases > MAX_REPEAT_EXPANSION_BASES {
+        return Err(ConversionError::UnsupportedEditType {
+            description: format!(
+                "repeat expansion {} bases exceeds SPDI ins-string cap of {} bases",
+                expansion_bases, MAX_REPEAT_EXPANSION_BASES
+            ),
+        });
+    }
+    Ok(Some(unit.repeat(count)))
+}
+
 /// Helper to get start position from an interval.
 fn get_start_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.start.inner().map(|p| p.base)
@@ -1755,31 +1827,32 @@ where
         )),
         NaEdit::Insertion { sequence: inserted } => {
             // An inserted sequence reaches SPDI when its exact bases are known.
-            // Two shapes are handled here: a literal, and a same-reference range
-            // insert (`ins50_57`, `ins50_57inv`), which is resolved from the
-            // reference first — exactly as `del`/`dup` resolve their omitted
-            // bases — before falling back to the literal path. The fallback
-            // rejects everything else, which is a mix of two cases: shapes whose
-            // bases are genuinely undetermined (`Count` `ins10`, `Range`
-            // `ins(10_20)`, `Uncertain` `ins(?)`, and named/external references
-            // SPDI cannot dereference), and shapes that *are* determinable but
-            // are not expanded here yet (an exact `Repeat` such as `insA[10]`).
-            // Both currently decline; only the first is a hard limit.
-            let ins_str = match resolve_position_range_insert(
-                inserted, &sequence, alphabet, ins_coords, provider,
-            )? {
-                Some(resolved) => resolved,
-                None => {
-                    let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
-                        ConversionError::MissingReferenceData {
-                            description: "insertion sequence is neither a literal sequence \
-                                              nor a same-reference position range; this shape is \
-                                              not yet encodable as SPDI"
-                                .to_string(),
-                        }
-                    })?;
-                    apply_alphabet(&literal, alphabet)
-                }
+            // Three shapes are handled here: a literal; a same-reference range
+            // insert (`ins50_57`, `ins50_57inv`), resolved from the reference
+            // exactly as `del`/`dup` resolve their omitted bases; and an exact
+            // tandem-repeat insert (`insA[10]`, `insAT[3]`), expanded from its
+            // spelled unit exactly as the short-form `Repeat` arm expands its
+            // own. The fallback rejects everything else, which is now uniformly
+            // shapes whose bases are genuinely undetermined: `Count` (`ins10`),
+            // `Range` (`ins(10_20)`), `Uncertain` (`ins(?)`), an uncertain or
+            // range repeat count (`insA[10_15]`), and named/external references
+            // SPDI cannot dereference.
+            let ins_str = if let Some(resolved) =
+                resolve_position_range_insert(inserted, &sequence, alphabet, ins_coords, provider)?
+            {
+                resolved
+            } else if let Some(resolved) = resolve_exact_repeat_insert(inserted, alphabet)? {
+                resolved
+            } else {
+                let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
+                    ConversionError::MissingReferenceData {
+                        description: "insertion sequence is neither a literal sequence, a \
+                                      same-reference position range, nor an exact tandem repeat; \
+                                      this shape is not yet encodable as SPDI"
+                            .to_string(),
+                    }
+                })?;
+                apply_alphabet(&literal, alphabet)
             };
             // SPDI is 0-based interbase: position N is the boundary
             // AFTER 1-based base N (equivalently between 1-based bases
@@ -1847,32 +1920,33 @@ where
             substitution_reference: None,
         } => {
             // Closes #394 item 3. An inserted sequence reaches SPDI when its
-            // exact bases are known. Two shapes are handled: a literal, and a
+            // exact bases are known. Three shapes are handled: a literal; a
             // same-reference position-range insert (`delins50_57`,
             // `delins50_57inv`), resolved from the reference exactly as
-            // `del`/`dup` resolve their omitted bases. The fallback rejects
-            // everything else, which is a mix: shapes whose bases are genuinely
-            // undetermined (`Count` `ins10`, `Range` `ins(10_20)`, `Uncertain`,
-            // and named/external references SPDI cannot dereference), and shapes
-            // that *are* determinable but are not expanded here yet (an exact
-            // `Repeat` such as `insA[10]`). Both decline as `UnsupportedEditType`
-            // for now — matching the sibling arms — but only the first is a hard
-            // limit.
-            let ins_str = match resolve_position_range_insert(
-                ins_seq, &sequence, alphabet, ins_coords, provider,
-            )? {
-                Some(resolved) => resolved,
-                None => {
-                    let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
-                        ConversionError::UnsupportedEditType {
-                            description: "delins inserted sequence is neither a literal sequence \
-                                     nor a same-reference position range; this shape is not yet \
-                                     encodable as SPDI"
-                                .to_string(),
-                        }
-                    })?;
-                    apply_alphabet(&literal, alphabet)
-                }
+            // `del`/`dup` resolve their omitted bases; and an exact tandem-repeat
+            // insert (`delinsA[10]`, `delinsAT[3]`), expanded from its spelled
+            // unit exactly as the short-form `Repeat` arm expands its own. The
+            // fallback rejects everything else, which is now uniformly shapes
+            // whose bases are genuinely undetermined (`Count` `ins10`, `Range`
+            // `ins(10_20)`, `Uncertain`, an uncertain or range repeat count, and
+            // named/external references SPDI cannot dereference), and declines as
+            // `UnsupportedEditType` — matching the sibling arms.
+            let ins_str = if let Some(resolved) =
+                resolve_position_range_insert(ins_seq, &sequence, alphabet, ins_coords, provider)?
+            {
+                resolved
+            } else if let Some(resolved) = resolve_exact_repeat_insert(ins_seq, alphabet)? {
+                resolved
+            } else {
+                let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
+                    ConversionError::UnsupportedEditType {
+                        description: "delins inserted sequence is neither a literal sequence, a \
+                                      same-reference position range, nor an exact tandem repeat; \
+                                      this shape is not yet encodable as SPDI"
+                            .to_string(),
+                    }
+                })?;
+                apply_alphabet(&literal, alphabet)
             };
             let del_str = match deleted {
                 Some(seq) => sequence_to_string(seq),

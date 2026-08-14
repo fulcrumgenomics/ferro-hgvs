@@ -226,3 +226,48 @@ fn an_inverted_reference_span_insertion_resolves_to_the_reverse_complement() {
         "an inverted reference-span insertion must resolve to the reverse complement",
     );
 }
+
+/// An exact tandem-repeat insertion (`ins{unit}[{n}]`) names its inserted bases
+/// by a spelled unit and an exact copy count rather than writing them out.
+/// `sequence_normalize` resolves the bases, so it must expand the unit `n` times
+/// and re-derive the literal description — closing the gap where an exact repeat
+/// insert was refused as "not a literal sequence".
+#[test]
+fn an_exact_repeat_insertion_expands_to_its_literal_bases() {
+    // 1-based:  1234567890123456789012
+    //           AAAACGTAAAAATTTTGGGGCC
+    // The insertion site (12_13) sits between A and T, and the inserted `C`
+    // run matches neither flank, so the expanded description cannot shuffle.
+    let seq = "AAAACGTAAAAATTTTGGGGCC";
+    let nz = Normalizer::new(provider(seq));
+
+    assert_eq!(
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.12_13insC[4]",
+            ShuffleDirection::ThreePrime,
+            false,
+        ),
+        "NC_TEST.1:g.12_13insCCCC",
+        "an exact single-base repeat insertion must expand to its literal bases",
+    );
+}
+
+/// A multi-base exact tandem-repeat insertion (`ins{unit}[{n}]` with a
+/// multi-base unit, e.g. `insCG[3]`) expands the whole unit `n` times.
+#[test]
+fn an_exact_multibase_repeat_insertion_expands_to_its_literal_bases() {
+    let seq = "AAAACGTAAAAATTTTGGGGCC";
+    let nz = Normalizer::new(provider(seq));
+
+    assert_eq!(
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.12_13insCG[3]",
+            ShuffleDirection::ThreePrime,
+            false,
+        ),
+        "NC_TEST.1:g.12_13insCGCGCG",
+        "an exact multi-base repeat insertion must expand the whole unit n times",
+    );
+}
