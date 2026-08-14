@@ -37,6 +37,7 @@ mod issue_1767_unknown_offset_splice_classifiers;
 mod issue_1796_base_zero_names_no_nucleotide;
 mod issue_1841_option_returning_splice_classifiers;
 mod issue_1870_cds_less_transcript_refusal;
+mod issue_1916_intron_distance_underflow;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;
