@@ -975,6 +975,67 @@ is **spec-explicit > Mutalyzer > our judgement**. Where the spec is explicit and
 that is a deliberate divergence and it gets a record saying so — otherwise the next person
 measures Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
 
+### Assert the property. Measure the count. Never let a count BE the property
+
+The section below is the mechanized half of this one, and this one had never been written down —
+so it kept being re-derived, one instance at a time, by whoever it had just cost a day.
+
+**A guard that pins a number is a change detector for that number.** It is a guard for the
+property only for as long as the two agree, and nothing makes them agree. When they drift, the
+guard follows the number, stays green, and reads as coverage.
+
+Three shapes, in ascending order of how convincing the wrong answer looks.
+
+**1. A count restated instead of imported.** `the_corpus_emits_a_block_past_the_split_cap`
+(`examples/dump_normalized_corpus.rs:2381`) opens `const SPLIT_CAP: u64 = 1024;` and asserts the
+corpus builds a block wider than it. `MAX_SPLIT_BLOCK` is **4096** (`src/normalize/merge.rs:2000`,
+derived from `MAX_CANONICAL_WINDOW`), raised from `1024` by #1899. The corpus's long cores are
+`[1024, 1100]` and were chosen — the comment says so — as "the pair a change to the cap moves
+between". The cap moved, both cores landed on the same side, and `1100 > 1024` kept the guard
+green. It even carries a comment instructing the reader to update the literal if the constant
+moves; **that comment is the defect, not a mitigation.** A guard that restates the value it guards
+cannot observe that value changing. Import the constant. If it is private, make it `pub(crate)` —
+that is cheaper than the class of failure it buys out of. Filed as #1925.
+
+**2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs`
+has now been blind six times — geometry (#1456), scale (#1460), sequence structure (#1517),
+transcript geometry (#1478), molecule type (#1606), and reversed ranges (#1917) — and its own
+header records the governing fact: **fixing one blindness does not reveal the next.** Each time,
+a `0` was available to quote as safety. So before quoting one, **name the property your change
+keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
+claim about the instrument. Report a structural zero *as* structural, in those words.
+
+**3. A rule generalised from the one case you reproduced.** #1917 reported an underflow and stated
+the rule as "any reversed range whose span exceeds `window_size`". Measured, the failure is three
+bands in `start - end` against the window: `<= w` fails somewhere else entirely (a backwards
+slice), `(w, 2w]` is the reported underflow, and `> 2w` never failed at all — the fetch bounds
+themselves invert and the provider rejects the read. The rule was wrong in **both** directions,
+and the issue's own two real-corpus rows were in the band that never panicked. One reproducer
+establishes that a defect exists. It does not establish its extent, and the extent is what a fix
+is scoped against.
+
+**Two more ways a number arrives already wrong**, both seen here:
+
+- **Right for a reason that is not the code.** #1917's widest band passed before the fix *and*
+  after it — because `JsonProvider` rejects an inverted read. That is a property of the installed
+  provider, not of the thing under test. A passing case is only evidence once you know what made
+  it pass.
+- **Two confirmations sharing one stale source are one observation.** Two agents "independently
+  confirmed" a set of `merge.rs` line numbers; both had read `main/`'s working tree, ~950 lines
+  stale. Independence is a property of the derivation, not of the number of people who reported it.
+
+**So, when you write a guard:**
+
+- Assert the **property**, in the words you would use to explain it. `longest_block > <the cap the
+  normalizer actually applies>` is a property; `longest > 1024` is a number.
+- If a count is genuinely the right assertion — a census, a ledger cardinality — say what it counts
+  and against which denominator, and pin it somewhere a change to the thing it counts must touch.
+- **Prove the guard can fail.** Sabotage it once, watch it go red, restore. An assertion never
+  observed failing is indistinguishable from one that cannot. The `ORACLE_EXCLUDE` invariants and
+  `issue_1615_denoted_sequence_oracle` are both built this way; imitate them.
+- When you report the number, report what it is made of. "46 checks" and "42 pass, 1 skipping, 3
+  cancelled corpses" describe one run, and only the second is usable.
+
 ### A generator must account for what it dropped
 
 This is the mechanized half of **"a corpus zero is a claim about the corpus, not about the
