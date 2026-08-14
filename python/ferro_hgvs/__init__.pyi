@@ -1377,8 +1377,17 @@ class EffectPredictor:
         """Classify an indel by frame effect."""
         ...
 
-    def classify_splice_variant(self, offset: int) -> ProteinEffect:
-        """Classify a splice site variant by distance from splice site."""
+    def classify_splice_variant(self, offset: int) -> ProteinEffect | None:
+        """Classify a splice site variant by distance from splice site.
+
+        Returns ``None`` when the offset is unknown -- ``+?`` / ``-?``, carried
+        as the sentinels ``2**63 - 1`` and ``-2**63``. Such a description states
+        no distance from the splice site, so there is nothing to classify.
+
+        Args:
+            offset: Distance from splice site (negative for acceptor, positive
+                for donor)
+        """
         ...
 
     def classify_utr_variant(self, is_5_prime: bool) -> ProteinEffect:

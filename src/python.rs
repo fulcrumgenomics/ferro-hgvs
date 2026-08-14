@@ -4038,11 +4038,16 @@ impl PyEffectPredictor {
     ///     offset: Distance from splice site (negative for acceptor, positive for donor)
     ///
     /// Returns:
-    ///     ProteinEffect with consequences and impact
-    fn classify_splice_variant(&self, offset: i64) -> PyProteinEffect {
-        PyProteinEffect {
-            inner: self.inner.classify_splice_variant(offset),
-        }
+    ///     ProteinEffect with consequences and impact, or None when the offset
+    ///     is unknown (`+?` / `-?`, carried as the sentinels 2**63-1 and
+    ///     -2**63). Such a description states no distance, so there is nothing
+    ///     to classify — see #1841. This returned ProteinEffect where it now
+    ///     returns None, so a caller that reads `.consequences` unconditionally
+    ///     must check for None first.
+    fn classify_splice_variant(&self, offset: i64) -> Option<PyProteinEffect> {
+        self.inner
+            .classify_splice_variant(offset)
+            .map(|inner| PyProteinEffect { inner })
     }
 
     /// Classify a UTR variant

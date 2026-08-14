@@ -387,30 +387,50 @@ impl EffectPredictor {
         }
     }
 
-    /// Classify a splice site variant by distance.
+    /// Classify a splice site variant by distance, or decline.
     ///
-    /// An unknown offset (`+?` / `-?`, carried as `i64::MAX` / `i64::MIN`) is
-    /// reported as [`Consequence::IntronVariant`]. This entry point returns a
-    /// bare `ProteinEffect` and so cannot decline the way the `Option`-returning
-    /// classifiers do, and `IntronVariant` is the weakest true statement
-    /// available: the position is known to be intronic and its distance from the
-    /// boundary is not known at all. Before #1767 the sentinel's `.abs()`
+    /// Returns `None` for an unknown offset (`+?` / `-?`, carried as
+    /// `i64::MAX` / `i64::MIN`). This function's whole input is a distance, so
+    /// a description that declines to state one leaves it nothing to classify.
+    ///
+    /// The history is worth keeping, because two earlier answers were both
+    /// worse and both looked reasonable. Before #1767 the sentinel's `.abs()`
     /// overflowed — a panic under `overflow-checks`, and in release a wrap back
     /// to `i64::MIN`, which is negative and so passed `<= 2` and was reported as
-    /// a canonical splice site with HIGH impact.
+    /// a canonical splice site with HIGH impact. #1767 replaced that with
+    /// [`Consequence::IntronVariant`] / `Impact::Modifier`, the weakest *true*
+    /// statement available under a signature that could not decline — but a
+    /// caller matching on the consequence still reads a positive
+    /// classification. #1841 took the API break so the answer can be "no
+    /// answer".
     ///
-    /// The returned `intronic_offset` still carries the sentinel, so a caller
-    /// that needs to distinguish "unknown" from "far" can.
-    pub fn classify_splice_variant(&self, offset: i64) -> ProteinEffect {
-        let is_unknown = crate::hgvs::parser::position::is_unknown_offset(offset);
+    /// A caller that wants the old behaviour writes it out, and is thereby
+    /// stating the assumption:
+    ///
+    /// ```
+    /// # use ferro_hgvs::effect::{Consequence, EffectPredictor, ProteinEffect};
+    /// # let predictor = EffectPredictor::new();
+    /// # let offset = i64::MIN;
+    /// let effect = predictor
+    ///     .classify_splice_variant(offset)
+    ///     .unwrap_or_else(|| ProteinEffect {
+    ///         consequences: vec![Consequence::IntronVariant],
+    ///         impact: Consequence::IntronVariant.impact(),
+    ///         amino_acid_change: None,
+    ///         intronic_offset: Some(offset),
+    ///     });
+    /// # assert_eq!(effect.consequences, vec![Consequence::IntronVariant]);
+    /// ```
+    pub fn classify_splice_variant(&self, offset: i64) -> Option<ProteinEffect> {
+        if crate::hgvs::parser::position::is_unknown_offset(offset) {
+            return None;
+        }
         // `unsigned_abs` rather than `abs`: total for every `i64`, so the
         // ladder cannot overflow even on a magnitude that is not a sentinel
         // (`i64::MIN` is the only such value, and it is reachable here).
         let abs_offset = offset.unsigned_abs();
 
-        let consequence = if is_unknown {
-            Consequence::IntronVariant
-        } else if abs_offset <= 2 {
+        let consequence = if abs_offset <= 2 {
             if offset > 0 {
                 Consequence::SpliceDonorVariant
             } else {
@@ -422,12 +442,12 @@ impl EffectPredictor {
             Consequence::IntronVariant
         };
 
-        ProteinEffect {
+        Some(ProteinEffect {
             consequences: vec![consequence],
             impact: consequence.impact(),
             amino_acid_change: None,
             intronic_offset: Some(offset),
-        }
+        })
     }
 
     /// Classify a UTR variant.
@@ -1286,7 +1306,9 @@ mod tests {
     #[test]
     fn test_classify_splice_donor() {
         let predictor = EffectPredictor::new();
-        let effect = predictor.classify_splice_variant(1);
+        let effect = predictor
+            .classify_splice_variant(1)
+            .expect("a measured offset classifies");
 
         assert_eq!(effect.consequences[0], Consequence::SpliceDonorVariant);
         assert_eq!(effect.impact, Impact::High);
@@ -1295,7 +1317,9 @@ mod tests {
     #[test]
     fn test_classify_splice_acceptor() {
         let predictor = EffectPredictor::new();
-        let effect = predictor.classify_splice_variant(-2);
+        let effect = predictor
+            .classify_splice_variant(-2)
+            .expect("a measured offset classifies");
 
         assert_eq!(effect.consequences[0], Consequence::SpliceAcceptorVariant);
         assert_eq!(effect.impact, Impact::High);
@@ -1304,7 +1328,9 @@ mod tests {
     #[test]
     fn test_classify_splice_region() {
         let predictor = EffectPredictor::new();
-        let effect = predictor.classify_splice_variant(5);
+        let effect = predictor
+            .classify_splice_variant(5)
+            .expect("a measured offset classifies");
 
         assert_eq!(effect.consequences[0], Consequence::SpliceRegionVariant);
         assert_eq!(effect.impact, Impact::Low);
@@ -1313,10 +1339,32 @@ mod tests {
     #[test]
     fn test_classify_intron() {
         let predictor = EffectPredictor::new();
-        let effect = predictor.classify_splice_variant(50);
+        let effect = predictor
+            .classify_splice_variant(50)
+            .expect("a measured offset classifies");
 
         assert_eq!(effect.consequences[0], Consequence::IntronVariant);
         assert_eq!(effect.impact, Impact::Modifier);
+    }
+
+    /// The #1841 break. `i64::MIN + 1` and `i64::MAX - 1` are the
+    /// discriminating neighbours: they are not sentinels, so they must still
+    /// classify, which keeps the decline keyed on the sentinel rather than on
+    /// "a very large magnitude" — the #1765 gap, applied here.
+    #[test]
+    fn test_classify_splice_variant_declines_an_unknown_offset() {
+        let predictor = EffectPredictor::new();
+
+        assert!(predictor.classify_splice_variant(i64::MIN).is_none());
+        assert!(predictor.classify_splice_variant(i64::MAX).is_none());
+
+        for offset in [i64::MIN + 1, i64::MAX - 1] {
+            let effect = predictor
+                .classify_splice_variant(offset)
+                .expect("a non-sentinel magnitude still classifies");
+            assert_eq!(effect.consequences[0], Consequence::IntronVariant);
+            assert_eq!(effect.intronic_offset, Some(offset));
+        }
     }
 
     #[test]

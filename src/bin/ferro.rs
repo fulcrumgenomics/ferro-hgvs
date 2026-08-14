@@ -2712,7 +2712,38 @@ fn run_effect(
                     // Check for intronic offsets
                     if let Some(start_pos) = cv.loc_edit.location.start.inner() {
                         if let Some(offset) = start_pos.offset {
-                            predictor.classify_splice_variant(offset)
+                            // `classify_splice_variant` declines an unknown
+                            // offset (`c.100-?`), whose whole content is that
+                            // the distance is not stated (#1841). Refuse the
+                            // description rather than print a consequence, in
+                            // the same register as the unsupported-type arm
+                            // below — printing `intron_variant`/MODIFIER, which
+                            // is what this arm did before, reads as a
+                            // prediction to anything parsing the output.
+                            //
+                            // This is a CLI output change, so state what it
+                            // does to each consumer. Single-variant mode:
+                            // stdout gains no line (for `-f json`, no JSON
+                            // object at all) and the process exits non-zero,
+                            // where it previously printed
+                            // `intron_variant (MODIFIER)` and exited 0. Batch
+                            // mode (`--input` / stdin): the two loops below
+                            // already catch a per-line `Err`, report it to
+                            // **stderr** as `ERROR: <line> - <e>` and continue,
+                            // so one such line does not truncate the stream —
+                            // the #1764 failure mode is not reintroduced here.
+                            match predictor.classify_splice_variant(offset) {
+                                Some(effect) => effect,
+                                None => {
+                                    return Err(format!(
+                                        "Cannot predict an effect for an unknown intronic \
+                                         offset (`+?`/`-?`), which states no distance from \
+                                         the splice site: {}",
+                                        v
+                                    )
+                                    .into());
+                                }
+                            }
                         } else {
                             ProteinEffect {
                                 consequences: vec![Consequence::CodingSequenceVariant],
