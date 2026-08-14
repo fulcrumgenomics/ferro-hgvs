@@ -784,6 +784,16 @@ fn spec_equivalence_classes_converge() {
 /// is what stops one being upgraded to `decided` without a reviewable diff, and
 /// stops an inconvenient record being deleted.
 const RULING_STATUSES: &[(&str, &str)] = &[
+    // Against WHICH alignment is a reference base judged unchanged? **Decided
+    // 2026-08-07** while building the forced-unchanged-column detector for
+    // #1539/#1540, and recorded in the ledger only on 2026-08-14 — two agents
+    // re-derived it differently within an hour that day, which is the cost the
+    // "record every adjudication" policy exists to prevent. The notion is
+    // COLUMN-based over EVERY MINIMAL alignment, not cell-based and not
+    // position-wise. Equal length does not imply no indel: `CAG -> AGA` has
+    // edit distance 2, so its two middle bases are unchanged and
+    // `general.md:34` describes the changes individually.
+    ("unchanged-is-read-over-every-minimal-alignment", "decided"),
     // `DNA/delins.md:42`'s codon carve-out against `DNA/delins.md:17`'s
     // default, on the axis a PROJECTION renders. **Decided by operator ruling
     // (2026-08-11)**: `:42` reaches only an axis that declares a reading

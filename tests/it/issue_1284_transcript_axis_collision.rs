@@ -71,16 +71,27 @@ fn a_noncoding_del_dup_collision_is_repaired() {
     assert_repairs_to(
         &provider,
         "NR_TEST.1:n.[7_8del;9_10insA;11delinsAC]",
-        // Re-blessed with the deletion of the input-relative weight bound
-        // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`).
-        // The block is `CAG` -> `AGA`, EQUAL length 3/3, so the column
-        // correspondence is unique and all three columns change:
-        // `DNA/delins.md:16` — "changes involving two or more consecutive
-        // nucleotides are described as deletion/insertion (delins) variants" —
-        // gives `n.8_10delinsAGA` directly. The old `[8del;10_11insA]` was the
-        // input's own spelling handed back, which no clause derives from the
-        // sequence; the bound produced it by refusing the derivation.
-        "NR_TEST.1:n.8_10delinsAGA",
+        // The two members stay individual. The block is `CAG` -> `AGA`, equal
+        // length 3/3, and an intermediate revision of this branch read that as
+        // "the column correspondence is unique and all three columns change",
+        // citing `DNA/delins.md:16` for the spanning `n.8_10delinsAGA`. That is
+        // withdrawn — the correspondence is NOT unique:
+        //
+        //     position-wise:            C->A, A->G, G->A            cost 3
+        //     del C, A=A, G=G, ins A                                cost 2  <- minimal
+        //
+        // `general.md:34` is COLUMN-based — "is this reference base unchanged in
+        // EVERY minimal alignment?" — the notion established 2026-08-07 on
+        // #1539/#1540, on the sibling shape `GACA -> AGAT`. Every cost-2
+        // alignment here matches ref offsets 1 and 2, so those bases are
+        // genuinely unchanged, the two changes are separated by them, and `:34`
+        // describes them individually. `delins.md:16` has no antecedent: under
+        // the minimal alignment there are no two CONSECUTIVE CHANGED nucleotides.
+        //
+        // Same block and same reasoning as
+        // `normalize_reparse_invariant::a_del_beside_a_dup_re_spells_instead_of_colliding`,
+        // reached from an unrelated input; see that row for the full write-up.
+        "NR_TEST.1:n.[8del;10_11insA]",
     );
 }
 

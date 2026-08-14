@@ -280,7 +280,6 @@ mod issue_1578_followup_ring_declines;
 mod issue_1578_followup_self_cancelling_rings;
 mod issue_1578_ring_validator_escapes;
 mod issue_1615_denoted_sequence_oracle;
-mod issue_1616_unexamined_block_stays_split;
 mod issue_1619_flat_transcript_frame;
 mod issue_1629_error_mode_is_not_a_warning_gate;
 mod issue_1631_repeat_label_repair;

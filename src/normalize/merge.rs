@@ -1905,10 +1905,7 @@ const CANONICAL_PAD: i64 = 128;
 /// [`MAX_CANONICAL_WINDOW`], the widest window the canonicalizer will fetch at
 /// all.
 ///
-/// This is a cost bound, not a policy, and a block this long is a structural
-/// event rather than a few nucleotide changes. It is deliberately far above the
-/// size at which the separation rule (`delins.md:17`) is the interesting
-/// question.
+/// This is a cost bound, not a policy.
 ///
 /// It does **not** bound a quadratic cost, despite what an earlier revision of
 /// this comment claimed. A placement scores in O(1) because the score is
@@ -1916,6 +1913,69 @@ const CANONICAL_PAD: i64 = 128;
 /// ranking a tie by what it separates — carries its own and tighter bound in
 /// [`MAX_TIE_BREAK_SWEEP`], which binds first at every length this constant
 /// reaches.
+///
+/// # Why it is 4096 and no longer 1024
+///
+/// It was 1024, and 1024 was **picked** while every sibling bound here is
+/// derived: [`MAX_SEQFIRST_GRID_CELLS`] is a square at [`MAX_CANONICAL_WINDOW`],
+/// and [`MAX_TIE_BREAK_SWEEP`] bounds the one step that is actually quadratic.
+/// A picked length cap in front of a linear sweep bounds the cheap case, and the
+/// paragraph above concedes the dear one — an equal-length 4 kb `delins`, ~310 MB
+/// and seconds — is not bounded here at all, being exempt by length.
+///
+/// Raising it to [`MAX_CANONICAL_WINDOW`] makes it derived like the rest: a block
+/// is partitionable exactly when the canonicalizer would fetch a window for it.
+///
+/// MEASURED, one rep each, same tree and reference, full suite, on an Apple M2
+/// Max (12 cores, macOS 26.5.2) under `cargo nextest run --features dev
+/// --no-fail-fast`. The host is stated because the ~2% conclusion is a
+/// difference between two of these numbers, and a wall clock nobody can place
+/// is not one a later reader can re-derive:
+///
+/// | `MAX_SPLIT_BLOCK` | [`MAX_SEPARATION_AUDIT_WIDTH`] | wall |
+/// |---|---|---|
+/// | 1024 | 1024 | 260.1 s |
+/// | 4096 | *aliased to 4096* | 300.0 s |
+/// | 4096 | 1024 | **266.4 s** |
+///
+/// So raising this constant costs ~2%, within noise. The 15% in the middle row
+/// belonged entirely to the audit width, which used to be an alias of this
+/// constant and was dragged up with it — see [`MAX_SEPARATION_AUDIT_WIDTH`],
+/// now pinned to its own literal for exactly that reason. A measurement that
+/// moves both at once reads this bound as ~8x more expensive than it is, and
+/// that misreading was made here before it was caught.
+///
+/// **This is load-bearing for the weight-bound deletion, and must land with it.**
+/// At 1024 a block past the cap comes back **unexamined**, so the per-member
+/// pipeline answers and the input's own partition survives. While the
+/// input-relative weight bound existed that was masked; with the bound deleted it
+/// is not. Measured 2026-08-14 by reverting this constant in place and running
+/// the full gate: `case_harvest`'s 1,193 bp genomic row regresses from the pinned
+/// `g.[4517618_4517622del;4517624_4518489del;4518497_4518812del]` back to the
+/// authored `g.4517618_4518810delinsTCATAA`, and **both** `spec_conformance_axis`
+/// censuses move. At [`MAX_CANONICAL_WINDOW`] every one of those passes. That row
+/// is the only case in the committed corpora sitting in the 1024..4096 band, and
+/// it is there precisely because a length-gated change is invisible to a corpus
+/// of 20-mers (#1460) — it earned its keep here.
+///
+/// **A withdrawn claim, kept because the error is instructive.** An earlier
+/// revision said this recovered "18 (3') and 14 (5')" `spec_conformance_axis`
+/// classes. That figure predates #1835's flip of the default arm to
+/// `CanonicalCoalesced` and does not reproduce. Worse, the check that appeared to
+/// confirm its withdrawal was run on a tree where the axis gate below had
+/// *already* been deleted — a third configuration, not the one a 1024 cap
+/// actually produces — and it exercised only the censuses, not `case_harvest`.
+/// Two wrong readings of the same constant, both from measuring a configuration
+/// that was not the one under test.
+///
+/// The axis gate is deleted here because at cap == [`MAX_CANONICAL_WINDOW`] it
+/// **cannot fire**: the window test refuses the same blocks one step earlier and
+/// on every axis (verified with a 4,200-base block, whose `c.` positive control
+/// failed). A gate that cannot fire reads as protection while providing none.
+///
+/// Raising it further is not obviously wrong but is **unmeasured**: past
+/// [`MAX_CANONICAL_WINDOW`] the canonicalizer declines the window anyway, so
+/// there is nothing above this to reach.
 ///
 /// It is *not* the `delins.md:44-47` "coincidental alignment" guard. That
 /// concern — a large replacement whose interior only accidentally aligns, which
@@ -1937,16 +1997,16 @@ const CANONICAL_PAD: i64 = 128;
 /// for all of them (#1271). It used to be joined by a second, smaller bound for
 /// net deletions, which `separations_are_meaningful` did not reach; extending
 /// that rule retired it. See its doc comment for the measurement.
-const MAX_SPLIT_BLOCK: usize = 1024;
+const MAX_SPLIT_BLOCK: usize = MAX_CANONICAL_WINDOW as usize;
 
 /// Whether [`MAX_SPLIT_BLOCK`] will make [`partition_block`] hand this block back
 /// **unexamined**.
 ///
-/// One statement of the cap, consulted by [`partition_block`] itself and by
-/// [`canonicalize_from_sequence`], because the two must not be able to disagree
-/// about which blocks were looked at. See
-/// [`CoincidenceCarveOut::block_may_be_asserted_unexamined`] for why the caller
-/// asks at all.
+/// A defensive cost short-circuit, and no longer a policy input. It is stated
+/// once so [`partition_block`] cannot be handed an unbounded block by a direct
+/// caller; the shipping path cannot reach it at all, because
+/// [`canonicalize_from_sequence`]'s window test refuses anything this wide first
+/// ([`MAX_CANONICAL_WINDOW`] against a block plus `2 * CANONICAL_PAD`).
 fn past_the_split_cap(reference: &[u8], result: &[u8]) -> bool {
     reference.len() != result.len()
         && (reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK)
@@ -2244,47 +2304,6 @@ impl CoincidenceCarveOut {
 
     /// Whether a separation `general.md:34` would accept may be refused here.
     fn may_disbelieve_a_separation(self) -> bool {
-        matches!(self, Self::InReach)
-    }
-
-    /// Whether a block [`past_the_split_cap`] may still be emitted as the single
-    /// spanning member [`partition_block`] returns for it.
-    ///
-    /// # The cap is a cost guard, and a cost guard may not decide a clause
-    ///
-    /// Over [`MAX_SPLIT_BLOCK`] the length short-circuit returns the whole block
-    /// **before any rule about the derived pieces runs** — so the one member that
-    /// comes back is not a finding that the block holds one variant, it is the
-    /// absence of a finding. Emitting it anyway asserts "there is no separation
-    /// here" on a block nothing examined.
-    ///
-    /// Off the coding DNA axis that assertion has no licence. `general.md:34` —
-    /// "two variants separated by one or more nucleotides should be described
-    /// individually and **not** as a 'delins'" — governs unopposed there, and the
-    /// one passage that could override it for this shape, `DNA/delins.md:44-47`,
-    /// reaches `c.` and nothing else per the decided
-    /// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`. So
-    /// the derivation **declines** and the per-member pipeline answers, which is
-    /// the individual form `:34` asks for. On `c.` the carve-out is in reach and
-    /// `:47` recommends the spanning `delins`, so the block stands as returned.
-    ///
-    /// # This is not the deleted weight bound wearing a new name
-    ///
-    /// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` deleted a
-    /// refusal whose comparand was **the input's own member list**. This one has
-    /// no term for the input at all: it reads the block's two lengths against a
-    /// constant and the axis off [`AxisFrame`]. An input spelled as one 2 065-base
-    /// `delins` and the same variant spelled as two members reach it identically,
-    /// which is exactly what that ruling requires and what the deleted bound could
-    /// not do.
-    ///
-    /// # It is the axis KIND, not `AxisFrame::reading_frame`
-    ///
-    /// A coding `r.` carries a reading frame and is still out of reach: a `DNA/`
-    /// clause has no jurisdiction over the RNA axis, and that ruling names this
-    /// trap by name. [`CoincidenceCarveOut::for_axis`] is the one place the
-    /// question is asked.
-    fn block_may_be_asserted_unexamined(self) -> bool {
         matches!(self, Self::InReach)
     }
 }
@@ -3217,19 +3236,37 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // counted, so the run can tell "the candidate agreed" from "the candidate
     // was not asked" (see `PartitionDeclineCounts`).
     let carve_out = CoincidenceCarveOut::for_axis(frame.kind);
-    // `general.md:34`, on a block no rule ever looked at. Over `MAX_SPLIT_BLOCK`
-    // the splitter short-circuits on length and hands back one spanning member;
-    // off the coding DNA axis that member is an unlicensed assertion rather than
-    // a derivation, so decline and let the per-member pipeline emit the
-    // individual descriptions `:34` asks for. See
-    // `CoincidenceCarveOut::block_may_be_asserted_unexamined` for the authority,
-    // for why the axis KIND rather than the reading frame decides it, and for why
-    // this is not the deleted input-relative weight bound under another name.
-    if past_the_split_cap(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-        && !carve_out.block_may_be_asserted_unexamined()
-    {
-        return None;
-    }
+    // There is deliberately NO unexamined-block gate here any more, and the
+    // reason is arithmetic rather than a change of mind about the principle.
+    //
+    // An earlier revision of this function declined, off the coding DNA axis,
+    // when [`past_the_split_cap`] said the splitter would hand the block back
+    // unexamined — a block nothing looked at being the absence of a finding
+    // rather than a finding of no separation. That reasoning is sound and is
+    // now enforced one step earlier and on EVERY axis: the window test above
+    // (`w_hi - w_lo + 1 > MAX_CANONICAL_WINDOW`) returns `None` for exactly the
+    // blocks the cap would have caught, because the window is the block plus
+    // `2 * CANONICAL_PAD` and the cap is now [`MAX_CANONICAL_WINDOW`] itself.
+    // Any block wide enough to trip the cap is therefore already refused, and
+    // the refusal lands in the same place — the per-member pipeline, emitting
+    // the individual descriptions `general.md:34` asks for.
+    //
+    // MEASURED, not reasoned: with the cap at 4096 a 4 200-base block reaches
+    // the per-member pipeline on the `c.` axis too, so the axis carve-out could
+    // not be exercised by any input. A gate that cannot fire is worse than no
+    // gate, because it reads as protection while providing none.
+    //
+    // `carve_out` is still consulted BELOW, where it decides the payload-
+    // coincidence question it was built for — that half is live and axis-scoped
+    // by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+    //
+    // On coverage, because this function is shared and the two are not
+    // interchangeable: `canonicalize_from_sequence` is reached by BOTH public
+    // normalizing methods, but the idempotency corpora — `idempotency_tests.rs`,
+    // `normalize_property_tests.rs`, `normalize_idempotency_proptest.rs` — go
+    // through `normalize()` only. They are a starting point for a change here,
+    // not the whole of it; `normalize_with_diagnostics()` is exercised by the
+    // several dozen other `tests/it/` files that call it.
     let mut pieces = partition_block_for_rule(
         partition_rule(),
         &ref_bytes[lo..hi_ref],
@@ -5136,9 +5173,19 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
         }]
     };
     // Scoped to length-changing blocks, because that is the only regime the cap
-    // reaches at all. An equal-length block has no gap to place, so
-    // `best_alignment` returns the position-wise pairing on its first statement
-    // and the whole partition is linear — there is no search here to bound.
+    // reaches at all. On an equal-length block `best_alignment` returns the
+    // position-wise pairing on its first statement, so the whole partition is
+    // linear and there is no search here to bound.
+    //
+    // **Do not restate that as "an equal-length block has no gap to place."** It
+    // used to say exactly that, and the premise is FALSE: a balanced del+ins
+    // pair is an equal-length block with two gaps, and `CAG -> AGA` has edit
+    // distance 2 rather than 3. What is true is narrower — `best_alignment`
+    // *declines to look*, which bounds the cost here and is why this exemption is
+    // sound as a COST scope. It is not evidence that the position-wise pairing is
+    // the right answer; see
+    // `rulings[unchanged-is-read-over-every-minimal-alignment]`, which is what
+    // that reading got wrong.
     //
     // Note what the cap does *not* do, even where it applies: it does not bound
     // a quadratic cost. Scoring one placement is O(1) because the score is
@@ -5163,10 +5210,12 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
     // would say nothing. Left as recorded history rather than re-asserted.
     //
     // What comes back here is the block **unexamined**, which is not the same
-    // claim as the two rule-driven `whole()` returns below. Off the coding DNA
-    // axis it may not be emitted at all — see
-    // [`CoincidenceCarveOut::block_may_be_asserted_unexamined`], which
-    // [`canonicalize_from_sequence`] consults before it ever gets here.
+    // claim as the two rule-driven `whole()` returns below. That distinction used
+    // to be acted on by an axis gate in `canonicalize_from_sequence`; it is not
+    // any more, because with the cap derived from `MAX_CANONICAL_WINDOW` the
+    // window test refuses every block wide enough to reach here, on every axis.
+    // This return is therefore a defensive path for a direct caller, not the
+    // shipping one.
     if past_the_split_cap(reference, result) {
         return whole();
     }
@@ -5178,8 +5227,14 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
         return whole();
     }
     // Every length-changing block, not just net insertions (#1271). Equal-length
-    // blocks are exempt because `best_alignment` compares position-wise there —
-    // there is no gap to place, so no search to seize on a coincidental match.
+    // blocks are exempt because `best_alignment` compares position-wise there,
+    // so there is no search that could seize on a coincidental match.
+    //
+    // The exemption is about what this arm SEARCHES, not about what the block
+    // contains: an equal-length block can carry a balanced del+ins pair, and
+    // `rulings[unchanged-is-read-over-every-minimal-alignment]` records that
+    // reading the absence of a search as the absence of an indel is what put
+    // `Live` and the canonical family on different answers for `CAG -> AGA`.
     if reference.len() != result.len()
         && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()), carve_out)
     {
@@ -5218,11 +5273,30 @@ const MAX_SEPARATION_AUDIT_CELLS: usize = 1 << 20;
 
 /// Widest member [`concealed_separations`] will audit, in reference columns.
 ///
-/// Matches [`MAX_SPLIT_BLOCK`], so a member no wider than the widest block
-/// `partition_block` will itself cut is auditable. It also bounds the recursion
-/// depth of [`split_concealed_separations`], since every split strictly narrows
-/// the piece it replaces.
-const MAX_SEPARATION_AUDIT_WIDTH: usize = MAX_SPLIT_BLOCK;
+/// It also bounds the recursion depth of [`split_concealed_separations`], since
+/// every split strictly narrows the piece it replaces.
+///
+/// # This is deliberately a literal, and must NOT go back to being an alias
+///
+/// It read `= MAX_SPLIT_BLOCK`, on the reasoning that a member no wider than the
+/// widest block `partition_block` will cut should be auditable. That coupling is
+/// wrong in the direction that costs: **this audit is `Θ(ref · alt)` per piece
+/// and recurses**, while [`MAX_SPLIT_BLOCK`] fronts a linear sweep. Aliasing a
+/// quadratic bound to a linear one means any change to the linear one silently
+/// moves the quadratic one.
+///
+/// That is not hypothetical. Raising [`MAX_SPLIT_BLOCK`] 1024 -> 4096 through the
+/// alias moved the full suite 260.1 s -> 300.0 s; pinning this back to 1024 and
+/// raising only that one gives 266.4 s. So ~15% of a 4x cap raise was this
+/// constant coming along uninvited, and it was briefly attributed to the cap.
+///
+/// The two are independent questions. This one bounds how much work an audit of
+/// an already-accepted member may do; that one bounds which blocks are
+/// partitionable at all. Widening this is a separate change with its own
+/// measurement, and [`MAX_SEPARATION_AUDIT_CELLS`] beside it is the bound that
+/// should grow first, being stated in the work the audit actually does rather
+/// than in a length.
+const MAX_SEPARATION_AUDIT_WIDTH: usize = 1024;
 
 /// Reference columns that **every** minimal alignment of `reference` to
 /// `payload` leaves unchanged, together with the alternate offset a single fixed
@@ -5541,10 +5615,17 @@ fn denoted_by(parts: &[Piece], ref_start: usize, ref_end: usize, ref_bytes: &[u8
 ///
 /// # Why only a length-changing block is audited
 ///
-/// On an equal-length block [`best_alignment`] compares position-wise: there is
-/// no gap to place, so a matched column is a genuine coordinate-wise identity
-/// rather than an artefact of where the gap landed, and [`partition_block`] has
-/// already cut at every one of them. Every member of such a partition is a
+/// On an equal-length block [`best_alignment`] compares position-wise, and
+/// [`partition_block`] has already cut at every column that pairing calls
+/// matched.
+///
+/// **That is a statement about this arm's search, not about the block.** An
+/// earlier revision justified it with "there is no gap to place, so a matched
+/// column is a genuine coordinate-wise identity" — which is false for a balanced
+/// del+ins pair, whose minimal alignment is strictly cheaper than the
+/// position-wise one. `rulings[unchanged-is-read-over-every-minimal-alignment]`
+/// decides which of the two the spec's "unchanged" means, and it is not this
+/// one. Every member of such a partition is a
 /// maximal run of positional mismatch, so a forced-unchanged column found by
 /// re-aligning that member *on its own* comes from admitting indels the block
 /// never needed — which is precisely the coincidence-manufacturing the
@@ -15749,53 +15830,6 @@ mod tests {
                 !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Rna),
                 "`r.` is the RNA axis; `DNA/delins.md:47` does not reach it and \
                  `RNA/delins.md` states no counterpart"
-            );
-        }
-
-        /// The three `delins.md:47` axis gates carry **one** scope, including the
-        /// unexamined-block one.
-        ///
-        /// The sibling of `the_two_delins_47_gates_share_one_axis_scope`, extended
-        /// to the gate `canonicalize_from_sequence` consults over
-        /// [`MAX_SPLIT_BLOCK`]. Same clause, same ruling, so a future change to
-        /// `:47`'s jurisdiction must move all three or one of them is re-spelling
-        /// a merge the ruling withdrew.
-        #[test]
-        fn the_unexamined_block_gate_shares_the_delins_47_axis_scope() {
-            for kind in [
-                CisKind::Genome,
-                CisKind::Mt,
-                CisKind::Cds,
-                CisKind::Tx,
-                CisKind::Rna,
-            ] {
-                assert_eq!(
-                    CoincidenceCarveOut::for_axis(kind).block_may_be_asserted_unexamined(),
-                    payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
-                    "the unexamined-block gate disagrees with `payload_coalesce_applies` \
-                     about {kind:?}; all three `:47` gates answer to one ruling"
-                );
-            }
-        }
-
-        /// A coding `r.` is out of reach here too — the **kind**, not the frame.
-        ///
-        /// Its own assertion for the reason `a_coding_rna_row_is_outside_the_dna_carve_out`
-        /// records: `AxisFrame::reading_frame` is **true** for [`CisKind::Rna`]
-        /// whenever the transcript resolves a `cds_start`, so a gate written in
-        /// terms of the frame would silently readmit the RNA axis to a `DNA/`
-        /// clause. That is how the sibling defect (#1711) arose.
-        #[test]
-        fn a_coding_rna_block_may_not_be_asserted_unexamined() {
-            assert!(
-                !CoincidenceCarveOut::for_axis(CisKind::Rna).block_may_be_asserted_unexamined(),
-                "`r.` is the RNA axis; `DNA/delins.md:44-47` does not reach it, so an \
-                 unexamined block may not be emitted as one spanning member there"
-            );
-            assert!(
-                CoincidenceCarveOut::for_axis(CisKind::Cds).block_may_be_asserted_unexamined(),
-                "`c.` is the one axis the carve-out reaches, and `:47` recommends the \
-                 spanning `delins` there"
             );
         }
 

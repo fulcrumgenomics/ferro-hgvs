@@ -110,9 +110,10 @@
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
+//! ```text
 //! CLAUSE -> RECORD INDEX
-//! 29 records, 26 decided / 3 undecided
-//! 112 clause lines, of which 33 are named by more than one record
+//! 31 records, 28 decided / 3 undecided
+//! 112 clause lines, of which 34 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -120,6 +121,7 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/background/glossary.md:310
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
 //! docs/background/glossary.md:311
@@ -231,6 +233,7 @@
 //! docs/recommendations/DNA/delins.md:16  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -320,6 +323,7 @@
 //! docs/recommendations/DNA/substitution.md:32  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:18
@@ -365,6 +369,7 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
 //! docs/recommendations/general.md:35  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -435,6 +440,7 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/background/numbering.md:21
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (governing)
@@ -468,6 +474,7 @@
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -517,6 +524,7 @@
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -527,6 +535,7 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
 //! docs/recommendations/general.md:35
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -562,6 +571,7 @@
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//! ```
 //! <!-- END GENERATED INDEX -->
 //!
 //! # Reading the mixed-verdict block
@@ -878,7 +888,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (29, 26, 3),
+        (31, 28, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1042,7 +1052,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        33,
+        34,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

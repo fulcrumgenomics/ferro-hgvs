@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**29 adjudication records — 26 decided, 3 open.**
+**31 adjudication records — 28 decided, 3 open.**
 
 ## What this document is
 
@@ -111,6 +111,7 @@ for the knob and its traps.
 - [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
 - [`separation-is-a-property-of-the-spelling-not-of-the-variant`](#separation-is-a-property-of-the-spelling-not-of-the-variant)
 - [`separation-rule-force-modal-or-negation`](#separation-rule-force-modal-or-negation)
+- [`unchanged-is-read-over-every-minimal-alignment`](#unchanged-is-read-over-every-minimal-alignment)
 
 ## The records
 
@@ -1557,3 +1558,43 @@ WHAT THIS DOES NOT LICENSE. Rule 2 is a rule. README states that a preference cl
 WHAT WAS REFUTED, RECORDED SO IT IS NOT RE-DERIVED. Two readings were argued at length before this ruling and both are WITHDRAWN. (1) That the bolded “not” in `general.md:34` is prohibition force under README rule 1's “prose force rather than keyword casing” clause — refuted by the complement argument above and by `delins.md:81`. (2) That the clause splits, rule 2 on the positive half and rule 1 on the negative — refuted by the same complement argument; the split reading requires the alternatives NOT to exhaust the space, which is the `duplication.md:18` shape and not this one.
 
 SCOPE. This record rules on the FORCE of the separation rule, and on the reading of “and not” generally. It does not decide which form ferro emits where several remain legal — that is `canonical-form-choice-when-both-legal`; nor the reach of the codon exception — that is `projection-codon-exception-is-decided-by-the-rendered-axis`; nor `delins.md:47`'s carve-out — that is `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. Nor does it disturb `delins-merge-vs-individual-gap-two-or-more`, which scopes WHEN `:34` yields to `delins.md:44-47`; this record is about how strongly `:34` speaks when it does apply.
+
+#### `unchanged-is-read-over-every-minimal-alignment`
+
+**Status:** decided
+
+**The question.** `general.md:34` keys on variants 'separated by one or more nucleotides' and `DNA/delins.md:16` on 'two or more consecutive nucleotides'. Both quantify over nucleotides being unchanged or changed, and neither names an alignment. Against WHICH alignment is a reference base judged unchanged — the position-wise correspondence available when the two sides are the same length, or the minimal-edit alignment?
+
+**Governing clause.**
+
+- `docs/recommendations/general.md:34`
+  > two variants separated by one or more nucleotides should be described individually and **not** as a "delins"
+
+**Also cited.**
+
+- `docs/recommendations/DNA/delins.md:16`
+  > changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants
+- `docs/recommendations/DNA/substitution.md:32`
+  > changes involving two or more consecutive nucleotides are described as deletion-insertion (delins) so the description
+- `docs/background/basics.md:38`
+  > The recommendations for the description of sequence variants are designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**
+
+**The ruling.**
+
+DECIDED 2026-08-07, while building the forced-unchanged-column detector for #1539/#1540; RECORDED HERE 2026-08-14, because it was never written down and the cost of that came due twice in one hour.
+
+THE RULING. A reference base is unchanged iff it is matched in EVERY MINIMAL alignment of the block. The notion is COLUMN-based, not cell-based and not position-wise. `general.md:34`'s 'separated by one or more nucleotides' and `delins.md:16`'s 'two or more consecutive nucleotides' are both evaluated against that notion.
+
+THE DISTINCTION THAT FORCED IT, from the 2026-08-07 work: `Dominators::matched_ref()` asks 'is one (ref, alt) CELL a Match on every minimal path?', while the clause asks 'is this reference BASE unchanged in every minimal alignment?'. On `GACA -> AGAT` the two cost-3 alignments both match ref offset 1, but to different alt offsets, so the cell-based notion sees nothing while the base is unchanged either way. That is a notion mismatch, not a bug: `dominators()` was checked against its own brute-force oracle and agrees with it.
+
+THE WORKED CASE THAT MADE THIS URGENT, and the reason it is recorded rather than left in a session log. `CAG -> AGA` is EQUAL LENGTH, and equal length does NOT imply no indel: position-wise: C->A, A->G, G->A cost 3 del C, A=A, G=G, ins A cost 2 <- minimal Every cost-2 alignment matches ref offsets 1 and 2, so those bases ARE unchanged, the two changes ARE separated by them, and `general.md:34` describes them individually. `delins.md:16` has no antecedent here because under the minimal alignment there are no two CONSECUTIVE CHANGED nucleotides. `substitution.md:32` does not reach it either: its own example `GC -> TT` is one where two substitutions IS the minimal alignment, so the decomposition it marks `class="invalid"` was never a minimal one.
+
+WHAT THIS RULES OUT, stated because it is the reading two independent agents reached on 2026-08-14 before finding this record's evidence: that the separation in `g.[261del;263_264insA]` is an ARTIFACT of choosing a del+ins decomposition, so `delins.md:16` fires and the split is a rule-1 violation of `substitution.md:32`. It is not an artifact. It is what the minimal alignment says, and the position-wise pairing that makes it look like an artifact is the thing with no authority behind it.
+
+THE CODE PREMISE THIS FALSIFIES. `src/normalize/merge.rs` justifies three separate equal-length exemptions with the claim that an equal-length block 'has no gap to place, so there is no search' and therefore 'every matched base is a genuine coordinate-wise identity'. That premise is FALSE — a balanced del+ins pair is an equal-length block with two gaps — and all three guards key on `reference.len() != result.len()`, so each exempts precisely the class that breaks it. `FERRO_PARTITION=live` reaches the position-wise answer on this shape for that reason; the canonical family, which searches, does not.
+
+SCOPE, AND WHAT IS NOT MEASURED. The affected class is every equal-length block whose minimal alignment is cheaper than the position-wise one, i.e. any balanced del+ins pair; `CAG -> AGA` is the smallest instance. How many corpus rows that reaches is UNMEASURED. The property to key a generator on is edit distance against block length, not block length alone — a corpus that varies only length cannot vary this.
+
+WHY IT IS NOT A MINIMALITY PRINCIPLE. `basics.md:38` omits minimality from the spec's design values, and this record does not smuggle it back in: minimal alignment is used to decide which BASES ARE UNCHANGED, a factual question about the sequences, not to prefer a shorter DESCRIPTION. `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` and `rulings[canonical-form-choice-when-both-legal]` continue to govern which of several legal descriptions ships.
+
+NO `applies_to` ROWS, deliberately. The two reproducers are synthetic (`NC_TEST.1:g.[260_261del;262_263insA;264delinsAC]` and its `n.` twin), not spec-harvested, and the generator refuses an `applies_to` naming a non-fixture row. They are pinned as ordinary tests instead: `normalize_reparse_invariant::a_del_beside_a_dup_re_spells_instead_of_colliding` and `issue_1284_transcript_axis_collision::a_noncoding_del_dup_collision_is_repaired`, both of which carry this record's reasoning in full.
