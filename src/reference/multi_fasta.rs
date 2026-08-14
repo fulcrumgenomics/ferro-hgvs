@@ -3080,6 +3080,86 @@ fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+/// The first LRG coordinate at which a mapping stops being an affine (#1499),
+/// or `None` when it never does.
+///
+/// **An LRG↔chromosome alignment is not affine, and one `<mapping_span>` does
+/// not make it one.** Alongside the span the record lists `<diff>` elements —
+/// the vocabulary is closed at `mismatch`, `lrg_ins` (bases present in the LRG
+/// with no chromosome counterpart) and `other_ins` (the reverse), verified over
+/// all 1 294 LRG records in the prepared reference. The two insertion kinds
+/// shift every coordinate past them, in opposite directions, and
+/// [`GenomicPlacement`] is a pure affine with nowhere to carry them: composing
+/// it with cdot's `NM_`→`NC_` step therefore drifts by the *net* indel count
+/// between the LRG origin and the projected position.
+///
+/// `LRG_292` is the worked case. One span, `1..193689` onto
+/// `NC_000017.11:43024295..43217981` — but the chromosome side is 193 687
+/// bases, two short, from 3 `lrg_ins` bases against 1 `other_ins` base.
+/// Measured against the frozen `LRG_292g` record, the affine is exact up to
+/// `LRG_292:g.13168` and then off by +2 for the remaining ~93 % of the record,
+/// so `LRG_292(NM_007294.4):c.1del` projected to `LRG_292:g.93888del` where the
+/// record's own frame says `g.93890del`. The result is well-formed and
+/// in-bounds, so none of the four normalization oracles can see it.
+///
+/// Returning the departure point rather than a bare "is it affine" lets the
+/// caller keep the exact prefix instead of dropping the accession. That matters:
+/// over the prepared reference, refusing the whole of every indel-bearing record
+/// would have refused 31 projections that were already landing on the right
+/// base, alongside the 51 that were not.
+///
+/// `mismatch` is deliberately absent: it substitutes a base and shifts nothing,
+/// so the affine still maps every coordinate exactly — and since #1490 the bases
+/// themselves come from the LRG's own frozen record rather than being
+/// synthesized from the chromosome, so a mismatch has no remaining consequence
+/// here. Over the prepared reference that is the difference between narrowing 46
+/// records and narrowing 165.
+///
+/// **Fails closed.** An indel `<diff>` whose coordinate attribute is missing or
+/// unparseable yields a horizon of `0`, which the caller reads as "nothing is
+/// affine" and declines the placement outright. Skipping such a diff would leave
+/// the span *wider* than the data supports — a silently wrong coordinate rather
+/// than a refusal, which is the direction this whole fix exists to close.
+fn affine_horizon(mapping_body: &str) -> Option<u64> {
+    mapping_body
+        .match_indices("<diff ")
+        .filter_map(|(i, _)| {
+            let rest = &mapping_body[i..];
+            let tag = &rest[..rest.find('>').unwrap_or(rest.len())];
+            let attr = match xml_attr(tag, "type") {
+                // LRG bases `lrg_start..=lrg_end` are unaligned: `lrg_start` is
+                // the first coordinate the affine cannot reach.
+                Some("lrg_ins") => "lrg_start",
+                // Chromosome bases sit *between* the flanking LRG coordinates,
+                // so `lrg_start` still maps and `lrg_end` is the first that
+                // does not.
+                Some("other_ins") => "lrg_end",
+                // The one type that is legitimately skipped: a `mismatch`
+                // substitutes a base and shifts no coordinate, so the affine
+                // still maps everything past it exactly.
+                Some("mismatch") => return None,
+                // Absent, or outside the closed vocabulary. Skipping it would
+                // leave the span *wider* than the data supports, which is the
+                // silently-wrong-coordinate direction this whole pass exists to
+                // close — the identical argument the missing-coordinate case
+                // below is already decided on, so it gets the identical answer:
+                // horizon `0`, and the caller declines the placement.
+                //
+                // Measured non-firing on real data: over all 1 294 LRG records
+                // of the prepared reference the `<diff type=…>` vocabulary is
+                // exactly `mismatch` (7 945), `lrg_ins` (1 030) and `other_ins`
+                // (907), and **0** `<diff>` elements carry no `type` at all.
+                _ => return Some(0),
+            };
+            Some(
+                xml_attr(tag, attr)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+            )
+        })
+        .min()
+}
+
 /// Parse an LRG's chromosomal placement from its XML record (#480).
 ///
 /// Reads the `<mapping type="main_assembly" …>` element (the current assembly,
@@ -3089,6 +3169,21 @@ fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 /// a parseable accession, or it is not a single contiguous span (a single
 /// affine placement cannot represent a gapped mapping — the projector then
 /// keeps the chromosome coordinates rather than mis-anchor).
+///
+/// The span is additionally narrowed to its affine-exact prefix when the mapping
+/// carries indel `<diff>`s — see [`affine_horizon`] — and `None` is returned when
+/// that prefix is empty. Every coordinate the returned placement still accepts is
+/// one the affine maps exactly; the rest are declined by
+/// [`GenomicPlacement::nc_to_parent`] / [`GenomicPlacement::parent_to_nc`]
+/// returning `None`, which
+/// [`VariantProjector::reanchor_genome_to_parent`](crate::project::VariantProjector)
+/// already turns into an `UnsupportedProjection` rather than a drifted
+/// coordinate under the parent accession (#480/#655).
+///
+/// Base *serving* is unaffected: `get_sequence` / `get_sequence_length` consult a
+/// placement only when `own_record(id).is_none()`, and every one of the 1 294 LRG
+/// records in the prepared reference has its own `LRG_<N>g` record (measured), so
+/// no LRG reaches `synthesize_parent_sequence` at all (#1462/#1490).
 fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
     let mut search = xml;
     loop {
@@ -3122,6 +3217,7 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
             if spans.len() != 1 {
                 return None;
             }
+
             let span = spans[0];
             let parent_start: u64 = xml_attr(span, "lrg_start")?.parse().ok()?;
             let o1: u64 = xml_attr(span, "other_start")?.parse().ok()?;
@@ -3131,6 +3227,36 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
                 _ => crate::reference::transcript::Strand::Plus,
             };
             let (nc_start, nc_end) = if o1 <= o2 { (o1, o2) } else { (o2, o1) };
+
+            // A single span is necessary but **not sufficient** for an affine
+            // (#1499) — so narrow the span to the part that genuinely is one.
+            // `body` is this mapping's own inner text, so the GRCh37
+            // `other_assembly` mapping's diffs (967 `lrg_ins` / 860 `other_ins`
+            // across the prepared reference) are correctly out of scope.
+            let (nc_start, nc_end) = match affine_horizon(body) {
+                None => (nc_start, nc_end),
+                // Nothing at or after `parent_start` aligns: no usable affine.
+                Some(h) if h <= parent_start => return None,
+                Some(h) => {
+                    // Bases past the anchor that still map exactly. `parent_start`
+                    // is the parent coordinate of `nc_start` on the plus strand
+                    // and of `nc_end` on the minus strand, so the trim always
+                    // comes off the end *away* from the anchor and the anchor
+                    // itself is untouched.
+                    let placed = h - 1 - parent_start;
+                    use crate::reference::transcript::Strand;
+                    match strand {
+                        Strand::Minus => (nc_end.checked_sub(placed)?.max(nc_start), nc_end),
+                        // The parser above emits only Plus/Minus; `Unknown` is
+                        // spelled out rather than left to a wildcard so a new
+                        // variant has to be considered here. It follows
+                        // `parent_to_nc`, which also treats Unknown as ascending.
+                        Strand::Plus | Strand::Unknown => {
+                            (nc_start, nc_start.checked_add(placed)?.min(nc_end))
+                        }
+                    }
+                }
+            };
             return Some(GenomicPlacement {
                 nc,
                 parent_start,
@@ -3582,25 +3708,41 @@ impl ReferenceProvider for MultiFastaProvider {
         // coordinates as past-the-end.
         //
         // **`nc_end - nc_start` is a chromosome-frame width standing in for a
-        // parent-frame one, and the two differ exactly when the alignment
-        // carries indels.** `GenomicPlacement` is a pure affine with no
-        // `parent_end`: the LRG parser reads `lrg_end` and discards it (see
+        // parent-frame one, and the two differ whenever the alignment carries
+        // indels.** `GenomicPlacement` is a pure affine with no `parent_end`:
+        // the LRG parser reads `lrg_end` and discards it (see
         // `genomic_placement_on_build`), and `parent_to_nc` reconstructs the
         // parent's end the same way. `LRG_1075` shows the gap — its GRCh38 span
         // is `lrg_start=1049 lrg_end=15267` onto
         // `NC_000004.12:190173122-190187909`, so the LRG side is 14 219 wide
-        // and the chromosome side 14 788. This expression yields 15 836 where
-        // the `LRG_1075g` record is 15 267 bases (i.e. exactly `lrg_end`).
+        // and the chromosome side 14 788, against a `LRG_1075g` record of
+        // 15 267 bases (i.e. exactly `lrg_end`).
         //
-        // Latent rather than live: an accession reaches this branch only when
-        // `own_record` finds nothing, and `LRG_1075` *has* a record, so it is
-        // served from that instead. Every #728 derived `NG_` has
-        // `parent_start == 1` and an exact affine. So nothing in the reachable
-        // population is affected today — but a record-less, indel-bearing
-        // parent would be over-long here, and the fix is to carry `parent_end`
-        // on the placement rather than to re-derive it from the other frame.
-        // That touches `parent_to_nc` and therefore projection, so it wants its
-        // own measurement rather than riding along with this change.
+        // Since #1499 that record's span is **narrowed** to its affine-exact
+        // prefix, so this expression now under-reports rather than over-reports
+        // — 8 211 rather than the pre-#1499 15 836, against a true 15 267.
+        //
+        // **The two directions are not equivalent, and under-reporting is the
+        // worse one.** An over-reporting length is permissive; an
+        // under-reporting one is restrictive, so every bounds check keyed on it
+        // — `FERRO_ASSERT_IN_BOUNDS` among them — turns a legitimate placed
+        // coordinate into a spurious past-the-end failure. That is the same
+        // symptom #1494 closed, arriving from a different cause: #1494's was
+        // the span width dropping the `parent_start - 1` bases beneath the
+        // placement (see `a_record_less_parent_length_counts_from_coordinate_one`),
+        // this one is the narrowed span no longer reaching the parent's end.
+        //
+        // Either way it is not the parent's extent, which is #1503's point:
+        // carry `parent_end` on the placement rather than re-derive it from the
+        // other frame. That touches `parent_to_nc` and therefore projection, so
+        // it wants its own measurement rather than riding along with this.
+        //
+        // Latent rather than live, and #1499 narrowed the exposed population
+        // further: an accession reaches this branch only when `own_record`
+        // finds nothing, every one of the prepared reference's 1 294 LRG
+        // records has its own `LRG_<N>g` record (measured), and every #728
+        // derived `NG_` has `parent_start == 1` and an exact affine. So nothing
+        // in the reachable population is affected today.
         if self.own_record(id).is_none() {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
@@ -3878,6 +4020,243 @@ mod tests {
           </mapping>
         "#;
         assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    }
+
+    // ----------------------------------------------------------------------
+    // #1499 — a single-span mapping is not automatically an affine one
+    // ----------------------------------------------------------------------
+
+    /// `LRG_292`'s real GRCh38 main-assembly mapping, trimmed to the span, one
+    /// of its `mismatch` diffs and all three of its indel `<diff>`s. One span,
+    /// so the `spans.len() != 1` guard above passes it — and the span is still
+    /// not an affine: the record is 193 689 bases while the chromosome side is
+    /// `43217981 - 43024295 + 1 = 193 687`, the difference being 3 `lrg_ins`
+    /// bases against 1 `other_ins` base.
+    ///
+    /// Measured on the prepared reference before this fix, by comparing an
+    /// 11-base window of the `LRG_292g` record against the chromosome around
+    /// `parent_to_nc`'s answer: exact (offset 0) up to `LRG_292:g.13000`, then
+    /// **+2** from the first `lrg_ins` on, **+1** between the `other_ins` and
+    /// the last `lrg_ins`, and **+2** for the remaining ~93 % of the record.
+    /// End to end that made `LRG_292(NM_007294.4):c.1del` project to
+    /// `LRG_292:g.93888del` where the record's own frame says `g.93890del`.
+    const LRG_292_INDEL_MAPPING: &str = r#"
+      <mapping coord_system="GRCh38.p13" other_name="17" other_id="NC_000017.11" other_start="43024295" other_end="43217981" type="main_assembly">
+        <mapping_span lrg_start="1" lrg_end="193689" other_start="43024295" other_end="43217981" strand="-1">
+          <diff type="mismatch" lrg_start="2600" lrg_end="2600" other_start="43215382" other_end="43215382" lrg_sequence="G" other_sequence="A" />
+          <diff type="lrg_ins" lrg_start="13169" lrg_end="13170" other_start="43204813" other_end="43204814" lrg_sequence="TT" other_sequence="-" />
+          <diff type="other_ins" lrg_start="15459" lrg_end="15460" other_start="43202524" other_end="43202524" lrg_sequence="-" other_sequence="T" />
+          <diff type="lrg_ins" lrg_start="15804" lrg_end="15804" other_start="43202179" other_end="43202180" lrg_sequence="T" other_sequence="-" />
+        </mapping_span>
+      </mapping>
+    "#;
+
+    #[test]
+    fn an_indel_bearing_span_is_narrowed_to_its_affine_exact_prefix() {
+        // The whole point of the fixture: it has exactly ONE `<mapping_span>`,
+        // so the gapped-mapping guard does not reach it, and it is still not
+        // expressible as an affine.
+        assert_eq!(LRG_292_INDEL_MAPPING.matches("<mapping_span ").count(), 1);
+        let p = parse_lrg_main_assembly_placement(LRG_292_INDEL_MAPPING)
+            .expect("the prefix below the first indel is still a valid affine");
+
+        // Minus strand, so `parent_start` anchors at `nc_end`; the trim comes
+        // off `nc_start`. The first departure is the `lrg_ins` at LRG 13169, so
+        // the last exactly-placed base is LRG 13168 at chromosome
+        // 43217981 - 13167 = 43204814.
+        assert_eq!(p.nc_end, 43217981, "the anchored end must not move");
+        assert_eq!(p.nc_start, 43204814);
+        assert_eq!(p.parent_start, 1);
+
+        // Everything inside the narrowed span still maps, and maps exactly.
+        assert_eq!(p.nc_to_parent(43217981), Some(1));
+        assert_eq!(p.nc_to_parent(43204814), Some(13168));
+        assert_eq!(p.parent_to_nc(13168), Some(43204814));
+
+        // And the drifted region is declined rather than mis-mapped. Chromosome
+        // 43204813 is LRG 13171 in the record's own frame; the affine would have
+        // called it 13169 (measured, +2 — see `LRG_292_INDEL_MAPPING`).
+        assert_eq!(p.nc_to_parent(43204813), None);
+        assert_eq!(p.parent_to_nc(13169), None);
+        assert_eq!(p.parent_to_nc(160875), None);
+    }
+
+    #[test]
+    fn a_chromosome_insertion_narrows_the_span_too() {
+        // `other_ins` shifts coordinates just as `lrg_ins` does, in the other
+        // direction — the horizon must not key on `lrg_ins` only. Its LRG
+        // coordinates are the *flanks*, so `lrg_start` (4) still maps and
+        // `lrg_end` (5) is the first that does not.
+        let xml = r#"
+          <mapping other_id="NC_000017.11" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="9" other_start="100" other_end="109" strand="1">
+              <diff type="other_ins" lrg_start="4" lrg_end="5" other_start="104" other_end="104" lrg_sequence="-" other_sequence="T" />
+            </mapping_span>
+          </mapping>
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml).expect("the prefix is a valid affine");
+        // Plus strand: the anchor is `nc_start`, so the trim comes off `nc_end`.
+        assert_eq!(p.nc_start, 100);
+        assert_eq!(p.nc_end, 103);
+        assert_eq!(p.parent_to_nc(4), Some(103));
+        assert_eq!(p.parent_to_nc(5), None);
+        assert_eq!(p.nc_to_parent(104), None);
+    }
+
+    /// `LRG_1075`'s real GRCh38 shape: plus strand **and `lrg_start` 1049**, the
+    /// prepared reference's only placement with `parent_start > 1`. That is
+    /// where the `h - 1 - parent_start` arithmetic can go wrong without any
+    /// other test noticing, and it is not a hypothetical shape — the same record
+    /// is indel-bearing, so it goes through the narrowing path.
+    #[test]
+    fn the_prefix_is_measured_from_parent_start_not_from_one() {
+        let xml = r#"
+          <mapping other_id="NC_000004.12" type="main_assembly">
+            <mapping_span lrg_start="1049" lrg_end="15267" other_start="190173122" other_end="190187909" strand="1">
+              <diff type="lrg_ins" lrg_start="8212" lrg_end="8975" other_start="190180284" other_end="190180285" lrg_sequence="GAGT" other_sequence="-" />
+            </mapping_span>
+          </mapping>
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml).expect("the prefix is a valid affine");
+        assert_eq!(p.parent_start, 1049);
+        assert_eq!(p.nc_start, 190173122, "the anchored end must not move");
+        // 8212 - 1 - 1049 = 7162 bases past the anchor.
+        assert_eq!(p.nc_end, 190173122 + 7162);
+        assert_eq!(p.parent_to_nc(1049), Some(190173122));
+        assert_eq!(p.parent_to_nc(8211), Some(190180284));
+        assert_eq!(p.parent_to_nc(8212), None);
+        // Below `parent_start` was already outside the span and stays outside.
+        assert_eq!(p.parent_to_nc(1048), None);
+    }
+
+    /// An indel `<diff>` whose coordinate cannot be read must **narrow to
+    /// nothing**, not be skipped. Skipping it leaves the span wider than the
+    /// data supports, which is the silently-wrong-coordinate direction this
+    /// whole change exists to close.
+    #[test]
+    fn an_unreadable_indel_diff_declines_the_placement() {
+        for tag in [
+            r#"<diff type="lrg_ins" lrg_end="9" other_start="104" other_end="105" />"#,
+            r#"<diff type="lrg_ins" lrg_start="not-a-number" lrg_end="9" />"#,
+            r#"<diff type="other_ins" lrg_start="4" other_start="104" other_end="104" />"#,
+            // The `type` attribute is unreadable in exactly the sense the three
+            // above are, and it fails open unless it is handled: with no
+            // recognised type there is no way to tell an indel from a
+            // `mismatch`, so skipping the element leaves the span wider than
+            // the data supports. `mismatch` is the only value that may be
+            // skipped, and it has its own arm; everything else declines.
+            r#"<diff lrg_start="4" lrg_end="5" other_start="104" other_end="104" />"#,
+            r#"<diff type="lrg_delins" lrg_start="4" lrg_end="5" other_start="104" other_end="104" />"#,
+        ] {
+            let xml = format!(
+                r#"
+              <mapping other_id="NC_000017.11" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1">
+                  {tag}
+                </mapping_span>
+              </mapping>
+            "#
+            );
+            assert!(
+                parse_lrg_main_assembly_placement(&xml).is_none(),
+                "an unreadable indel diff must fail closed: {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_placement_when_the_affine_exact_prefix_is_empty() {
+        // The first LRG base is itself unaligned, so there is no prefix to keep
+        // and the placement is declined outright — the same answer the
+        // gapped-mapping guard gives, reached the same way.
+        let xml = r#"
+          <mapping other_id="NC_000017.11" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="108" strand="1">
+              <diff type="lrg_ins" lrg_start="1" lrg_end="1" other_start="99" other_end="100" lrg_sequence="A" other_sequence="-" />
+            </mapping_span>
+          </mapping>
+        "#;
+        assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    }
+
+    /// The discriminating case: a `mismatch` diff substitutes a base and shifts
+    /// **nothing**, so the affine still maps every coordinate correctly and the
+    /// span must not be narrowed. 119 of the prepared reference's 1 294 LRG
+    /// records are in exactly this state (against 46 carrying an indel diff);
+    /// keying the horizon on any `<diff>` at all would truncate all 119 for no
+    /// reason, and the bases those mismatches name are already served from the
+    /// record itself since #1490.
+    #[test]
+    fn mismatch_diffs_alone_do_not_narrow_a_placement() {
+        let xml = r#"
+          <mapping other_id="NC_000017.11" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1">
+              <diff type="mismatch" lrg_start="4" lrg_end="4" other_start="103" other_end="103" lrg_sequence="G" other_sequence="A" />
+            </mapping_span>
+          </mapping>
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml)
+            .expect("a mismatch-only mapping is still a valid affine");
+        assert_eq!(p.parent_start, 1);
+        assert_eq!(p.nc_start, 100);
+        assert_eq!(p.nc_end, 109);
+        // And it still maps: the mismatch changes a base, not a coordinate.
+        assert_eq!(p.nc_to_parent(103), Some(4));
+        assert_eq!(p.parent_to_nc(4), Some(103));
+    }
+
+    /// An indel `<diff>` under a *non*-main mapping (the GRCh37 `other_assembly`
+    /// mapping, or a transcript mapping) says nothing about the main-assembly
+    /// alignment and must not narrow it. Across the prepared reference the
+    /// non-main mappings carry 967 `lrg_ins` and 860 `other_ins` diffs the
+    /// main-assembly mappings do not.
+    #[test]
+    fn an_indel_diff_under_another_mapping_does_not_narrow_the_placement() {
+        let xml = r#"
+          <mapping coord_system="GRCh37.p13" other_id="NC_000017.10" type="other_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="1" other_end="9" strand="1">
+              <diff type="lrg_ins" lrg_start="5" lrg_end="5" other_start="4" other_end="5" lrg_sequence="T" other_sequence="-" />
+            </mapping_span>
+          </mapping>
+          <mapping coord_system="GRCh38.p13" other_id="NC_000017.11" type="main_assembly">
+            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1" />
+          </mapping>
+        "#;
+        let p = parse_lrg_main_assembly_placement(xml)
+            .expect("an indel in the GRCh37 mapping must not decline the GRCh38 placement");
+        assert_eq!(p.nc_start, 100);
+        assert_eq!(p.nc_end, 109);
+    }
+
+    /// End-to-end provider path: an indel-bearing LRG XML resolves to the
+    /// narrowed placement, so a coordinate past the horizon reaches
+    /// `VariantProjector::reanchor_genome_to_parent`'s "endpoint falls outside
+    /// the placed genomic span" arm and is declined with
+    /// `UnsupportedProjection` instead of being stamped, drifted, under the
+    /// `LRG_` accession (#480/#655).
+    #[test]
+    fn provider_narrows_an_indel_bearing_lrg_placement() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(xml_dir.join("LRG_292.xml"), LRG_292_INDEL_MAPPING).unwrap();
+        std::fs::write(xml_dir.join("LRG_999.xml"), LRG_XML_SAMPLE).unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        let indel = crate::hgvs::variant::Accession::new("LRG", "292", None);
+        let p = provider
+            .genomic_placement(&indel)
+            .expect("the affine-exact prefix is still placed");
+        assert_eq!((p.nc_start, p.nc_end), (43204814, 43217981));
+        assert_eq!(p.parent_to_nc(160875), None);
+        // The cache round-trips the narrowed placement, not the raw span.
+        let again = provider.genomic_placement(&indel).expect("cached");
+        assert_eq!(again, p);
+
+        // Control: the indel-free record beside it is unaffected.
+        let plain = crate::hgvs::variant::Accession::new("LRG", "999", None);
+        let q = provider.genomic_placement(&plain).expect("placed");
+        assert_eq!((q.nc_start, q.nc_end), (50182096, 50206639));
     }
 
     /// End-to-end provider path: `genomic_placement` reads the LRG XML from the

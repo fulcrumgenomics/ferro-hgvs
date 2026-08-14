@@ -26,6 +26,17 @@ use crate::reference::Strand;
 /// chromosome (`Minus` ⇒ the parent sequence is the reverse complement of the
 /// chromosome region, so coordinates count down as chromosome coordinates count
 /// up, and edits must be reverse-complemented into the parent frame).
+///
+/// **The placed span may be narrower than the parent, and for an LRG whose
+/// alignment carries indels it is (#1499)** — 46 of the 1 294 records in a
+/// prepared GRCh38 reference. A real LRG↔chromosome alignment
+/// is not affine — the record's `<diff>` list carries `lrg_ins`/`other_ins`
+/// elements this type cannot express — so `parse_lrg_main_assembly_placement`
+/// trims the span to the prefix that *is* affine and the rest is declined by
+/// [`Self::nc_to_parent`] / [`Self::parent_to_nc`]. Read `nc_start`/`nc_end` as
+/// "the region this transform maps exactly", never as "where the parent sits on
+/// the chromosome", and do not re-derive the parent's extent from their width
+/// (#1503).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenomicPlacement {
     /// The chromosome (`NC_`) accession the parent is placed on.
