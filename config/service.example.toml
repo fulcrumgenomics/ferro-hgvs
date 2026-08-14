@@ -18,7 +18,6 @@ max_concurrent_batches = 10
 [tools.ferro]
 enabled = true
 reference_dir = "data/ferro-reference"
-shuffle_direction = "3prime"
 error_mode = "lenient"
 
 # Mutalyzer runs as a local Python subprocess for reproducibility and offline

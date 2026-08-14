@@ -8,7 +8,6 @@ use crate::hgvs::interval::Interval;
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::HgvsVariant;
-use crate::normalize::ShuffleDirection;
 use crate::reference::provider::ReferenceProvider;
 
 /// Get the variant type as a string
@@ -83,32 +82,13 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
     }
 }
 
-/// Parse a direction string into a [`ShuffleDirection`].
-///
-/// Recognizes only the documented aliases (case-insensitively). Returns `None`
-/// for anything else so callers can reject unrecognized input loudly rather than
-/// silently defaulting (#1016):
-/// - `3prime`, `3'`, `3` -> `Some(ThreePrime)`
-/// - `5prime`, `5'`, `5` -> `Some(FivePrime)`
-/// - anything else -> `None`
-///
-/// # Examples
-///
-/// ```
-/// use ferro_hgvs::python_helpers::parse_direction;
-/// use ferro_hgvs::ShuffleDirection;
-///
-/// assert!(matches!(parse_direction("3prime"), Some(ShuffleDirection::ThreePrime)));
-/// assert!(matches!(parse_direction("5'"), Some(ShuffleDirection::FivePrime)));
-/// assert!(parse_direction("5prim").is_none());
-/// ```
-pub fn parse_direction(direction: &str) -> Option<ShuffleDirection> {
-    match direction.to_lowercase().as_str() {
-        "3prime" | "3'" | "3" => Some(ShuffleDirection::ThreePrime),
-        "5prime" | "5'" | "5" => Some(ShuffleDirection::FivePrime),
-        _ => None,
-    }
-}
+// `parse_direction` was removed with the ten Python `direction=` keywords it
+// backed (`README.md` rule 6: there are no user options for normalization
+// form). #1016's property — reject an unrecognized spelling rather than
+// silently defaulting to 3' — is preserved and strengthened by the removal:
+// PyO3 raises `TypeError` for a keyword it does not know, so no spelling of
+// `direction=` reaches ferro at all. Its unit tests moved to
+// `normalize::config`, re-pointed at the retained internal `FromStr` impl.
 
 /// Get the reference accession from a variant
 ///
@@ -655,66 +635,13 @@ mod tests {
         assert_eq!(get_indel_length(&variant), None);
     }
 
-    // ===== parse_direction Tests =====
-
-    #[test]
-    fn test_parse_direction_three_prime() {
-        assert!(matches!(
-            parse_direction("3prime"),
-            Some(ShuffleDirection::ThreePrime)
-        ));
-        assert!(matches!(
-            parse_direction("3'"),
-            Some(ShuffleDirection::ThreePrime)
-        ));
-        assert!(matches!(
-            parse_direction("3"),
-            Some(ShuffleDirection::ThreePrime)
-        ));
-    }
-
-    #[test]
-    fn test_parse_direction_five_prime() {
-        assert!(matches!(
-            parse_direction("5prime"),
-            Some(ShuffleDirection::FivePrime)
-        ));
-        assert!(matches!(
-            parse_direction("5'"),
-            Some(ShuffleDirection::FivePrime)
-        ));
-        assert!(matches!(
-            parse_direction("5"),
-            Some(ShuffleDirection::FivePrime)
-        ));
-    }
-
-    #[test]
-    fn test_parse_direction_unrecognized_is_none() {
-        // Unrecognized spellings must return None so the Python boundary can
-        // reject them rather than silently defaulting to 3' (#1016).
-        assert!(parse_direction("unknown").is_none());
-        assert!(parse_direction("").is_none());
-        assert!(parse_direction("5prim").is_none());
-        assert!(parse_direction("3prine").is_none());
-        assert!(parse_direction("five").is_none());
-    }
-
-    #[test]
-    fn test_parse_direction_case_insensitive() {
-        assert!(matches!(
-            parse_direction("5PRIME"),
-            Some(ShuffleDirection::FivePrime)
-        ));
-        assert!(matches!(
-            parse_direction("5Prime"),
-            Some(ShuffleDirection::FivePrime)
-        ));
-        assert!(matches!(
-            parse_direction("3PRIME"),
-            Some(ShuffleDirection::ThreePrime)
-        ));
-    }
+    // The four `test_parse_direction_*` tests that stood here moved to
+    // `normalize::config`'s test module when `parse_direction` was deleted
+    // with the Python `direction=` keywords. They are re-pointed at the
+    // retained internal `FromStr` impl, so the coverage is relocated rather
+    // than dropped; `test_parse_direction_unrecognized_is_none` became
+    // `test_parse_direction_unrecognized_is_err`, since `FromStr` reports the
+    // same refusal as an `Err` rather than a `None`.
 
     // ===== get_variant_reference Tests =====
 

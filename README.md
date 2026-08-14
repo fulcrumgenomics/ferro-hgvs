@@ -35,7 +35,7 @@ correctness or stability.
 ## Features
 
 - **Full HGVS Parsing**: All coordinate systems (g/c/n/r/p/m/o) and edit types
-- **Variant Normalization**: 3'/5' shifting per HGVS specification
+- **Variant Normalization**: 3' shifting per HGVS specification
 - **High Performance**: ~5M variants/sec single-threaded parsing (>12M/s parallel), zero-copy with nom
 - **Type-Safe**: Leverages Rust's type system for correctness
 
@@ -203,9 +203,14 @@ ferro's normalizer follows four rules about its output, and three about how it h
       feature request, worth making but never a reason to hold a release.
 
 6. **Among multiple conformant forms:** the maintainers choose. **There are no user options for
-   normalization form.** Error mode is an orthogonal axis and stays available. The 3'/5' knob is
-   **not** orthogonal — it selects the frame every rule is evaluated in, so rules 2 and 3 are
-   claimed *per direction* rather than across the two.
+   normalization form.** Error mode is an orthogonal axis and stays available. The 3'/5' shuffle
+   direction was the one exception, and it is now removed from the public surface rather than
+   excused: it is **not** orthogonal — it selects the frame every rule is evaluated in — so it was
+   a user option for normalization form sitting inside this rule. ferro shifts 3', the only
+   direction the HGVS recommendations describe, and no CLI flag, Python keyword or service config
+   key selects otherwise. The 5' arm survives internally as a differential oracle over ferro's own
+   test suite; an instrument is not a user option, and rules 2 and 3 are now claimed once rather
+   than per direction.
 
 7. **Disclosure.** Any change to these rules, and any different choice made under 5 or 6, is
    disclosed: in the changelog before v1, by a major version bump after. Output that *violates*
@@ -350,10 +355,11 @@ description on any machine, against any reference build, with no hidden input. `
 1-based, and `reference` is taken on trust: verifying it would need the reference and would make
 the provider a hidden input, costing exactly the determinism the function exists to provide.
 
-That is five values, not four. The options are not inert — `direction` moves a placement within
-the window and `max_grid_cells` decides whether an answer is produced at all — so the
-"four arguments" this section and the Rust docs both used to claim is withdrawn. Purity is the
-property; the count was wrong.
+That is five values, not four. `max_grid_cells` is not inert — it decides whether an answer is
+produced at all — so the "four arguments" this section and the Rust docs both used to claim is
+withdrawn. Purity is the property; the count was wrong. (`FromSequencesOptions` carries a
+`direction` too, but it is not a caller-facing knob: it is `#[doc(hidden)]`, always 3' on every
+shipped path, and exists for the internal differential oracle described under rule 6.)
 
 ### How to: one canonical description per variant
 
@@ -645,7 +651,7 @@ The `ferro` CLI provides commands beyond parsing and normalization:
 | `prepare` | Download and prepare reference data for normalization |
 | `check` | Verify reference data setup |
 | `parse` | Parse and validate HGVS variants |
-| `normalize` | Normalize HGVS variants (3'/5' shifting) |
+| `normalize` | Normalize HGVS variants (3' shifting) |
 | `explain` | Explain error/warning codes (e.g., `ferro explain W1001`) |
 | `annotate-vcf` | Annotate VCF files with HGVS notation |
 | `vcf-to-hgvs` | Convert VCF records to HGVS |

@@ -3,20 +3,46 @@
 use crate::error_handling::{ErrorConfig, ErrorMode, ErrorOverride, ErrorType, ResolvedAction};
 use serde::{Deserialize, Serialize};
 
-/// Direction for variant shuffling during normalization
+/// Direction for variant shuffling during normalization.
+///
+/// **This is an internal differential-testing instrument, not a supported
+/// option.** No ferro entry point lets a caller select a direction: the CLI has
+/// no `--direction` flag, the Python bindings take no `direction=` keyword, and
+/// the web service has no `shuffle_direction` key. Every shipped path
+/// normalizes 3', which is the only direction the HGVS recommendations
+/// describe. `README.md` rule 6 — "there are no user options for normalization
+/// form" — is what removed them: a direction is not orthogonal to the form,
+/// because it selects the frame every other rule is evaluated in.
+///
+/// [`FivePrime`](ShuffleDirection::FivePrime) survives because 3'/5' *disagreement*
+/// is an oracle nothing else replaces. It has twice caught a defect in the
+/// shipped 3' output that every other check passed — see #1542 / PR #1840,
+/// where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only
+/// `live`/3' diverged, and `tests/it/cis_confluence_axis.rs`'s `enclosing_exon`
+/// off-by-one, which only the 5' walk reached. The type therefore stays `pub`
+/// so the integration-test suite in `tests/` can drive it, and is
+/// `#[doc(hidden)]` so it is not published as API. Do not reintroduce a
+/// user-facing way to reach it.
 ///
 /// Marked `#[non_exhaustive]` so a future shuffling direction is additive. It
 /// is carried as a `pub` field of [`crate::normalize::NormalizationInfo`]'s
 /// `ShuffleApplied` variant, which is already `#[non_exhaustive]` — without
 /// this the protection there was only half applied, since downstream still had
 /// to match the direction exhaustively.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum ShuffleDirection {
-    /// Shuffle towards 3' end (default for HGVS)
+    /// Shuffle towards the 3' end. The only direction ferro ships.
     #[default]
     ThreePrime,
-    /// Shuffle towards 5' end (for VCF compatibility)
+    /// Shuffle towards the 5' end.
+    ///
+    /// **Reachable only from ferro's own tests.** The doc comment here read
+    /// "for VCF compatibility" from the initial commit until it was removed as
+    /// false: no VCF path has ever selected it. VCF left-alignment in this
+    /// crate is the anchor-base rules in `src/vcf/from_hgvs.rs` (#261/#81 K2),
+    /// which choose which base to attach rather than which end to shift to.
     FivePrime,
 }
 
@@ -63,7 +89,11 @@ impl std::str::FromStr for ShuffleDirection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NormalizeConfig {
-    /// Direction to shuffle variants (default: 3')
+    /// Direction to shuffle variants. Always 3' on every shipped path.
+    ///
+    /// `pub` only so ferro's own integration tests can drive the 5' arm as a
+    /// differential oracle; see [`ShuffleDirection`]. Not a supported knob.
+    #[doc(hidden)]
     pub shuffle_direction: ShuffleDirection,
 
     /// Whether to allow crossing exon-intron boundaries
@@ -120,9 +150,17 @@ impl NormalizeConfig {
         Self::default()
     }
 
-    /// Build the configuration for an **entry point** — a seam where a shuffle
-    /// direction and an error mode arrive from outside the library (the CLI,
-    /// the PyO3 bindings, the web service).
+    /// Build the configuration for an **entry point** — a seam where an error
+    /// mode arrives from outside the library (the CLI, the PyO3 bindings, the
+    /// web service).
+    ///
+    /// The `direction` argument is **always
+    /// [`ShuffleDirection::ThreePrime`] at every such seam**: no entry point
+    /// accepts a direction from a caller any more.
+    /// It is still a parameter so that the internal 3'/5' differential can
+    /// build an entry-point-shaped config, and so that the `#1197` lint below
+    /// keeps binding the *error* argument, which is what that constructor
+    /// exists for.
     ///
     /// Both settings are required arguments, which is the whole point:
     /// `NormalizeConfig::default().with_direction(d)` silently fills in every
@@ -190,7 +228,13 @@ impl NormalizeConfig {
         }
     }
 
-    /// Set shuffle direction
+    /// Set the shuffle direction.
+    ///
+    /// **Internal test instrument, not a supported knob** — see
+    /// [`ShuffleDirection`]. Kept `pub` because `tests/it/` is an external
+    /// integration-test crate and roughly 130 call sites across 60 modules
+    /// drive the 3'/5' differential through it.
+    #[doc(hidden)]
     pub fn with_direction(mut self, direction: ShuffleDirection) -> Self {
         self.shuffle_direction = direction;
         self
@@ -540,6 +584,69 @@ mod tests {
             "5prime".parse::<ShuffleDirection>().unwrap(),
             ShuffleDirection::FivePrime
         );
+    }
+
+    // The three tests below carry the assertions that used to live on the two
+    // string parsers deleted with the public direction surface —
+    // `cli::parse_shuffle_direction` and `python_helpers::parse_direction`.
+    // They are re-pointed at the retained internal [`FromStr`] impl rather than
+    // dropped, so no coverage of direction-string handling is lost.
+
+    #[test]
+    fn test_parse_direction_three_prime() {
+        for spelling in ["3prime", "3'", "three_prime"] {
+            assert_eq!(
+                spelling.parse::<ShuffleDirection>().unwrap(),
+                ShuffleDirection::ThreePrime,
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_direction_five_prime() {
+        for spelling in ["5prime", "5'", "five_prime"] {
+            assert_eq!(
+                spelling.parse::<ShuffleDirection>().unwrap(),
+                ShuffleDirection::FivePrime,
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_direction_case_insensitive() {
+        assert_eq!(
+            "5PRIME".parse::<ShuffleDirection>().unwrap(),
+            ShuffleDirection::FivePrime
+        );
+        assert_eq!(
+            "5Prime".parse::<ShuffleDirection>().unwrap(),
+            ShuffleDirection::FivePrime
+        );
+        assert_eq!(
+            "3PRIME".parse::<ShuffleDirection>().unwrap(),
+            ShuffleDirection::ThreePrime
+        );
+    }
+
+    /// An unrecognized direction string must be an `Err`, never a silent 3'.
+    ///
+    /// This is the property #1016 fixed on the Python side and #1863 filed
+    /// against the CLI: `cli::parse_shuffle_direction` answered
+    /// `ThreePrime` for *any* unrecognized input, so a typo — or a script
+    /// asking for a direction that no longer exists — 3'-shifted and reported
+    /// success. That parser is now gone along with the flag that fed it, and
+    /// this pins that the one remaining string->direction conversion in the
+    /// crate refuses rather than guesses.
+    #[test]
+    fn test_parse_direction_unrecognized_is_err() {
+        for spelling in ["unknown", "", "5prim", "3prine", "five", "5", "3", "banana"] {
+            assert!(
+                spelling.parse::<ShuffleDirection>().is_err(),
+                "{spelling} must not silently resolve to a direction"
+            );
+        }
     }
 
     #[test]

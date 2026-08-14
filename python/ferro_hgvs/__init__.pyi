@@ -31,12 +31,11 @@ def parse(hgvs_string: str) -> HgvsVariant:
     """
     ...
 
-def normalize(hgvs_string: str, direction: str = "3prime") -> str:
+def normalize(hgvs_string: str) -> str:
     """Normalize an HGVS variant string.
 
     Args:
         hgvs_string: The HGVS variant description to normalize
-        direction: Shuffle direction - "3prime" (default) or "5prime"
 
     Returns:
         The normalized HGVS string
@@ -44,8 +43,6 @@ def normalize(hgvs_string: str, direction: str = "3prime") -> str:
     Raises:
         ParseError: If the HGVS string cannot be parsed (a subclass of
             ValueError).
-        ValueError: If ``direction`` is not one of
-            "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         NormalizationError: If normalization fails (a subclass of RuntimeError).
 
     Example:
@@ -54,9 +51,7 @@ def normalize(hgvs_string: str, direction: str = "3prime") -> str:
     """
     ...
 
-def normalize_with_warnings(
-    hgvs_string: str, direction: str = "3prime"
-) -> NormalizeResultWithWarnings:
+def normalize_with_warnings(hgvs_string: str) -> NormalizeResultWithWarnings:
     """Normalize an HGVS variant string, returning the warnings with it.
 
     The warning-bearing sibling of :func:`normalize`, which returns only the
@@ -72,7 +67,6 @@ def normalize_with_warnings(
 
     Args:
         hgvs_string: The HGVS variant description to normalize
-        direction: Shuffle direction - "3prime" (default) or "5prime"
 
     Returns:
         A NormalizeResultWithWarnings.
@@ -80,8 +74,6 @@ def normalize_with_warnings(
     Raises:
         ParseError: If the HGVS string cannot be parsed (a subclass of
             ValueError).
-        ValueError: If ``direction`` is not one of
-            "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         NormalizationError: If normalization fails (a subclass of RuntimeError).
 
     Example:
@@ -104,7 +96,6 @@ def from_sequences(
     alternate: str,
     *,
     max_grid_cells: int | None = None,
-    direction: str = "3prime",
 ) -> HgvsVariant:
     """Derive an HGVS description from a reference/alternate sequence pair.
 
@@ -138,15 +129,13 @@ def from_sequences(
             build. Defaults to ``(4096 + 1) ** 2``, about 310 MB at roughly 18
             bytes a cell. Exceeding it raises rather than answering with a
             weaker rule.
-        direction: Which end of an ambiguous run a pure indel is placed at —
-            "3prime" (default) or "5prime".
 
     Returns:
         The derived HgvsVariant.
 
     Raises:
-        ValueError: for an unrecognized ``direction``, or a ``max_grid_cells``
-            of 0. These two are checked at the binding, before any derivation.
+        ValueError: for a ``max_grid_cells`` of 0, checked at the binding
+            before any derivation.
         NormalizationError: for everything the derivation itself refuses — a
             zero position, an empty reference, a non-nucleotide symbol, a
             transcript or protein accession, a grid over budget, or an inserted
@@ -172,7 +161,6 @@ def from_sequences_detailed(
     alternate: str,
     *,
     max_grid_cells: int | None = None,
-    direction: str = "3prime",
 ) -> DerivedDescription:
     """:func:`from_sequences`, reporting also whether the derivation reached a window edge.
 
@@ -641,15 +629,12 @@ class HgvsVariant:
         """Check if this variant causes a frameshift (indel_length % 3 != 0)."""
         ...
 
-    def normalize(self, direction: str = "3prime") -> HgvsVariant:
+    def normalize(self) -> HgvsVariant:
         """Normalize this variant.
 
         Args:
-            direction: Shuffle direction - "3prime" (default) or "5prime".
 
         Raises:
-            ValueError: If ``direction`` is not one of
-                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         """
         ...
 
@@ -756,28 +741,23 @@ class Normalizer:
     def __init__(
         self,
         reference_json: str | None = None,
-        direction: str = "3prime",
         error_config: ErrorConfig | None = None,
     ) -> None:
         """Create a new normalizer.
 
         Args:
             reference_json: Optional path to a transcripts.json file
-            direction: Shuffle direction - "3prime" (default) or "5prime"
-            error_config: Optional ErrorConfig controlling reference-mismatch
+                error_config: Optional ErrorConfig controlling reference-mismatch
                 handling (e.g. ``ErrorConfig.strict()`` to reject
                 wrong-reference variants). Defaults to lenient.
 
         Raises:
-            ValueError: If ``direction`` is not one of
-                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         """
         ...
 
     @staticmethod
     def from_manifest(
         manifest_path: str,
-        direction: str = "3prime",
         error_config: ErrorConfig | None = None,
     ) -> Normalizer:
         """Create a normalizer from a reference manifest written by ``ferro prepare``.
@@ -785,7 +765,6 @@ class Normalizer:
         Args:
             manifest_path: Path to a manifest.json file (typically inside a
                 directory produced by ``ferro prepare``).
-            direction: Shuffle direction - "3prime" (default) or "5prime".
             error_config: Optional ErrorConfig controlling reference-mismatch
                 handling (e.g. ``ErrorConfig.strict()`` to reject
                 wrong-reference variants). Defaults to lenient.
@@ -794,8 +773,6 @@ class Normalizer:
             A Normalizer backed by a MultiFastaProvider.
 
         Raises:
-            ValueError: If ``direction`` is not one of
-                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
             ReferenceDataError: If the manifest cannot be loaded (a subclass of
                 RuntimeError and ValueError).
         """
@@ -964,9 +941,6 @@ class Normalizer:
         make the provider a hidden input. This one holds a provider, so it does
         check, and refuses an interval running past the end of the sequence. It
         also offers ``normalize``, which the free function cannot.
-
-        The shuffle direction is this normalizer's own, set when it was
-        constructed, rather than a separate keyword.
 
         Args:
             accession: The sequence the window is on.
@@ -1541,9 +1515,7 @@ class SequencePair:
         """
         ...
 
-    def derive(
-        self, *, max_grid_cells: int | None = None, direction: str = "3prime"
-    ) -> DerivedDescription:
+    def derive(self, *, max_grid_cells: int | None = None) -> DerivedDescription:
         """Derive an HGVS description from this window.
 
         :func:`from_sequences` over the four values this pair already carries,
@@ -1552,8 +1524,7 @@ class SequencePair:
         accidentally pair a pre-trim position with post-trim bases.
 
         Raises:
-            ValueError: for an unrecognized ``direction``, or a
-                ``max_grid_cells`` of 0.
+            ValueError: for a ``max_grid_cells`` of 0.
             NormalizationError: as the free :func:`from_sequences`.
         """
         ...
@@ -2694,7 +2665,6 @@ class VariantProjector:
     def __init__(
         self,
         reference_json: str | None = None,
-        direction: str = "3prime",
         assembly: str | None = None,
         protein_stop: str = "ter",
         amino_acid_code: str = "three",
@@ -2705,7 +2675,6 @@ class VariantProjector:
         Args:
             reference_json: Path to a transcripts.json file. If None, uses
                 built-in test data (limited; not for production).
-            direction: Shuffle direction passed to the internal normalizer
                 ("3prime" or "5prime").
             assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
                 aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
@@ -2720,7 +2689,7 @@ class VariantProjector:
                 wrong-reference variants). Defaults to lenient.
 
         Raises:
-            ValueError: If ``direction``, ``assembly``, ``protein_stop``, or
+            ValueError: If ``assembly``, ``protein_stop``, or
                 ``amino_acid_code`` is not a recognized value.
         """
         ...
@@ -2728,7 +2697,6 @@ class VariantProjector:
     @staticmethod
     def from_manifest(
         manifest_path: str,
-        direction: str = "3prime",
         assembly: str | None = None,
         protein_stop: str = "ter",
         amino_acid_code: str = "three",
@@ -2738,7 +2706,6 @@ class VariantProjector:
 
         Args:
             manifest_path: Path to manifest.json produced by `ferro prepare`.
-            direction: Shuffle direction ("3prime" or "5prime").
             assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
                 aliases "hg19"/"hg38") for build-agnostic inputs.
             protein_stop: Stop-codon spelling for rendered p. names — "ter"
@@ -2753,7 +2720,7 @@ class VariantProjector:
             A VariantProjector backed by MultiFastaProvider with cdot data.
 
         Raises:
-            ValueError: If ``direction``, ``assembly``, ``protein_stop``, or
+            ValueError: If ``assembly``, ``protein_stop``, or
                 ``amino_acid_code`` is not a recognized value.
             RuntimeError: If the manifest cannot be loaded.
         """
@@ -2929,12 +2896,9 @@ class VariantProjector:
 
         By default (``normalize=True``) the result is the projector-normalized
         genomic form — what most callers want; a Genome input is canonicalized
-        too. The normalizer follows this projector's configured shuffle
-        direction (``VariantProjector(direction=...)``): with the default
-        ``direction="3prime"`` that is the spec-canonical, 3'-shifted form (e.g.
-        a non-3'-most ``g.1003del`` in a poly-A run → ``g.1007del``); a
-        ``direction="5prime"`` projector instead returns the 5'-anchored form.
-        Pass ``normalize=False`` for the raw pivot, which intentionally does not
+        too. That is the spec-canonical, 3'-shifted form (e.g. a non-3'-most
+        ``g.1003del`` in a poly-A run → ``g.1007del``); 3' is the only direction
+        ferro shifts. Pass ``normalize=False`` for the raw pivot, which intentionally does not
         normalize its input (#785): a non-canonical input then yields a
         non-canonical genomic output, and a Genome input passes through
         unchanged (idempotent).

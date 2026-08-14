@@ -194,10 +194,18 @@ class TestEquivalenceError:
 class TestArgumentValidationStaysPlain:
     """Pure argument-validation errors are plain ValueError, not FerroError."""
 
-    def test_unrecognized_direction_is_plain_value_error(self) -> None:
-        with pytest.raises(ValueError) as info:
+    def test_a_removed_direction_keyword_is_a_plain_type_error(self) -> None:
+        """``direction=`` was removed from every entry point (``README.md``
+        rule 6), so the fault it used to raise — a ``ValueError`` naming an
+        unrecognized *value* — no longer exists. What replaces it is a
+        ``TypeError`` about the *keyword*, and it must stay just as plain: a
+        caller catching ``FerroError`` must not swallow it, or a request for a
+        direction ferro no longer has would look like a normalization failure
+        rather than an API change."""
+        with pytest.raises(TypeError) as info:
             ferro_hgvs.normalize("NM_000088.3:c.100A>G", direction="sideways")
         assert not isinstance(info.value, ferro_hgvs.FerroError)
+        assert "direction" in str(info.value)
 
     def test_empty_ref_base_is_plain_value_error(self) -> None:
         with pytest.raises(ValueError) as info:

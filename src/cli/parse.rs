@@ -1,7 +1,6 @@
 //! Parsing utilities for CLI operations
 
 use crate::error::FerroError;
-use crate::normalize::ShuffleDirection;
 use crate::reference::transcript::GenomeBuild;
 use crate::vcf::VcfRecord;
 
@@ -30,29 +29,14 @@ pub fn parse_genome_build(build: &str) -> GenomeBuild {
     }
 }
 
-/// Parse a shuffle direction string into a ShuffleDirection enum
-///
-/// Accepts various common formats:
-/// - 3prime, 3', 3 -> ThreePrime
-/// - 5prime, 5', 5 -> FivePrime
-/// - Other values default to ThreePrime
-///
-/// # Examples
-///
-/// ```
-/// use ferro_hgvs::cli::parse_shuffle_direction;
-/// use ferro_hgvs::ShuffleDirection;
-///
-/// assert!(matches!(parse_shuffle_direction("3prime"), ShuffleDirection::ThreePrime));
-/// assert!(matches!(parse_shuffle_direction("5'"), ShuffleDirection::FivePrime));
-/// assert!(matches!(parse_shuffle_direction("unknown"), ShuffleDirection::ThreePrime));
-/// ```
-pub fn parse_shuffle_direction(direction: &str) -> ShuffleDirection {
-    match direction.to_lowercase().as_str() {
-        "5prime" | "5'" | "5" => ShuffleDirection::FivePrime,
-        _ => ShuffleDirection::ThreePrime,
-    }
-}
+// `parse_shuffle_direction` was removed here with the `ferro normalize
+// --direction` flag it existed to serve (`README.md` rule 6: there are no user
+// options for normalization form). Its fallback arm was `_ => ThreePrime`, so
+// an unrecognized value 3'-shifted and reported success — the #1863 footgun,
+// and the reason removing the flag had to be a hard clap rejection rather than
+// a quietly-ignored argument. Its assertions live on
+// `normalize::config`'s `FromStr` tests; the removal itself is pinned by
+// `tests/it/five_prime_public_surface_removed.rs`.
 
 /// Parse a VCF line into a VcfRecord
 ///
@@ -221,63 +205,15 @@ mod tests {
     }
 
     // ===== Shuffle Direction Parsing Tests =====
-
-    #[test]
-    fn test_parse_shuffle_direction_three_prime() {
-        assert!(matches!(
-            parse_shuffle_direction("3prime"),
-            ShuffleDirection::ThreePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction("3'"),
-            ShuffleDirection::ThreePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction("3"),
-            ShuffleDirection::ThreePrime
-        ));
-    }
-
-    #[test]
-    fn test_parse_shuffle_direction_five_prime() {
-        assert!(matches!(
-            parse_shuffle_direction("5prime"),
-            ShuffleDirection::FivePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction("5'"),
-            ShuffleDirection::FivePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction("5"),
-            ShuffleDirection::FivePrime
-        ));
-    }
-
-    #[test]
-    fn test_parse_shuffle_direction_case_insensitive() {
-        assert!(matches!(
-            parse_shuffle_direction("5PRIME"),
-            ShuffleDirection::FivePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction("5Prime"),
-            ShuffleDirection::FivePrime
-        ));
-    }
-
-    #[test]
-    fn test_parse_shuffle_direction_default() {
-        // Unknown values should default to ThreePrime
-        assert!(matches!(
-            parse_shuffle_direction("unknown"),
-            ShuffleDirection::ThreePrime
-        ));
-        assert!(matches!(
-            parse_shuffle_direction(""),
-            ShuffleDirection::ThreePrime
-        ));
-    }
+    //
+    // The four `test_parse_shuffle_direction_*` tests that stood here moved to
+    // `normalize::config`'s test module when `parse_shuffle_direction` was
+    // deleted with the `--direction` flag. Three of them are re-pointed at the
+    // retained internal `FromStr` impl unchanged; the fourth,
+    // `test_parse_shuffle_direction_default`, is the one that changed meaning —
+    // it asserted that an unrecognized value resolves to `ThreePrime`, which is
+    // exactly the silent-3' behaviour #1863 filed, and it is now
+    // `test_parse_direction_unrecognized_is_err`.
 
     // ===== VCF Line Parsing Tests =====
 

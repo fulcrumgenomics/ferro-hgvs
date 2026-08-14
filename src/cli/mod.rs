@@ -14,9 +14,7 @@ pub use format::{
     output_project_error, output_projection, output_result, NormalizeTsvFailure,
     NormalizeTsvOutcome, NormalizeTsvRow, OutputFormat, NORMALIZE_TSV_HEADER,
 };
-pub use parse::{
-    parse_genome_build, parse_shuffle_direction, parse_vcf_line, parse_vcf_line_with_build,
-};
+pub use parse::{parse_genome_build, parse_vcf_line, parse_vcf_line_with_build};
 pub use project::{project_axis, Axis, AxisOutcome, ProjectCliError};
 
 /// UTF-8 BOM (Byte Order Mark) constant

@@ -699,14 +699,6 @@ def poly_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
     return ferro_hgvs.VariantProjector(reference_json=_write_poly_reference(tmp_path))
 
 
-@pytest.fixture
-def poly_projector_5prime(tmp_path: Path) -> ferro_hgvs.VariantProjector:
-    """5'-shifting projector over the shared poly-A reference (#867 direction)."""
-    return ferro_hgvs.VariantProjector(
-        reference_json=_write_poly_reference(tmp_path), direction="5prime"
-    )
-
-
 class TestProjectToGenomicNormalize:
     """#867: project_to_genomic(normalize=...) — default normalizes, False=raw."""
 
@@ -743,17 +735,29 @@ class TestProjectToGenomicNormalize:
             str(poly_projector.project_to_genomic(v, normalize=False)) == "NC_000001.11:g.1003del"
         )
 
-    def test_normalize_follows_projector_direction(
-        self, poly_projector_5prime: ferro_hgvs.VariantProjector
-    ) -> None:
-        # normalize=True must honor the projector's configured shuffle direction,
-        # not hard-code 3'. c.8del is the last A of the poly-A run (c.4..c.8 →
-        # g.1003..1007), so its raw pivot is the 3'-anchored g.1007del; a
-        # 5'-shifting projector re-shuffles that to the 5'-anchored g.1003del.
-        # (The default 3'-shifting projector would leave it at g.1007del.)
+    def test_the_projector_takes_no_direction(self, tmp_path: Path) -> None:
+        """``VariantProjector`` has no ``direction=`` keyword to configure.
+
+        This test used to build a 5'-shifting projector and assert that
+        ``normalize=True`` honoured it rather than hard-coding 3' — the only
+        check that could tell a re-shuffle from a pass-through, since ``c.8del``
+        pivots to the 3'-anchored ``g.1007del`` already. The keyword was removed
+        with the rest of ferro's public 5' surface (``README.md`` rule 6), and
+        that property moved to
+        ``tests/it/issue_867_project_to_genomic_normalized.rs``'s
+        ``project_to_genomic_normalized_follows_the_configured_direction``,
+        which drives the internal direction type and asserts the same
+        ``g.1007del`` -> ``g.1003del`` pair. What remains to pin here is the
+        Python boundary: the keyword must be refused, not ignored, or a caller
+        asking for 5' would silently receive the 3' answer."""
+        reference = _write_poly_reference(tmp_path)
+        with pytest.raises(TypeError, match="unexpected keyword argument 'direction'"):
+            ferro_hgvs.VariantProjector(reference_json=reference, direction="5prime")
+
+        # And the 3' behaviour the removed fixture's sibling rows relied on is
+        # unchanged: c.8del's pivot is already 3'-anchored, so normalization is
+        # a no-op on it rather than a move.
+        projector = ferro_hgvs.VariantProjector(reference_json=reference)
         v = ferro_hgvs.parse("NC_000001.11(NM_POLY.1):c.8del")
-        assert str(poly_projector_5prime.project_to_genomic(v)) == "NC_000001.11:g.1003del"
-        assert (
-            str(poly_projector_5prime.project_to_genomic(v, normalize=False))
-            == "NC_000001.11:g.1007del"
-        )
+        assert str(projector.project_to_genomic(v)) == "NC_000001.11:g.1007del"
+        assert str(projector.project_to_genomic(v, normalize=False)) == "NC_000001.11:g.1007del"

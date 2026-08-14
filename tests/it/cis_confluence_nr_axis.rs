@@ -240,9 +240,14 @@ const R_THREE_PRIME: Census = Census {
     sequence_changed: 0,
 };
 
-/// The `n.` 5'-direction census, pinned. `--direction 5prime` is a supported
-/// public option and confluence is a property of the normalizer rather than of
-/// one shuffle direction, so it is measured in full rather than spot-checked.
+/// The `n.` 5'-direction census, pinned. Confluence is a property of the
+/// normalizer rather than of one shuffle direction, so it is measured in full
+/// rather than spot-checked.
+///
+/// The 5' direction is **no longer a public option** — see `README.md` rule 6
+/// and `tests/it/five_prime_public_surface_removed.rs`. That changes the reason
+/// this census exists, not its scope: the 5' arm is ferro's differential oracle over its own 3' output — the instrument that found #1542, where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only the shipped `live`/3' arm diverged. An arm that is only spot-checked
+/// cannot serve as that oracle.
 ///
 /// Re-blessed alongside [`N_THREE_PRIME`]: `converged` 2_625 -> 4_011,
 /// `split_two` 2_954 -> 1_569, `split_three` 53 -> 52, every other field

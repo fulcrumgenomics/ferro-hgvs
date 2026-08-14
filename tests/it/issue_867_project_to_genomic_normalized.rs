@@ -115,3 +115,52 @@ fn project_to_genomic_splits_raw_vs_normalized_for_transcript_input() {
         "raw and normalized must differ for a non-3'-most transcript input"
     );
 }
+
+/// `project_to_genomic_normalized` re-shuffles into the projector's *own*
+/// configured direction rather than hard-coding 3'.
+///
+/// Relocated from `tests/python/test_variant_projection.py`'s
+/// `test_normalize_follows_projector_direction`, which built a
+/// `VariantProjector(direction="5prime")`. That keyword was removed with the
+/// rest of ferro's public 5' surface (`README.md` rule 6), so the property is
+/// pinned here instead, against the internal `ShuffleDirection` — the test is
+/// relocated, not dropped.
+///
+/// What it guards is not the 5' output for its own sake: it is that the
+/// normalize step is a *re-shuffle of the pivot* and not a constant. `c.8del`
+/// is the last A of the poly-A run (c.4..c.8 -> g.1003..1007), so its raw pivot
+/// is already the 3'-anchored `g.1007del`. A projector that hard-coded 3' would
+/// return `g.1007del` here and be indistinguishable from one that simply passed
+/// the pivot through. Only the mirror direction separates the two.
+#[test]
+fn project_to_genomic_normalized_follows_the_configured_direction() {
+    use ferro_hgvs::error_handling::ErrorConfig;
+    use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection};
+
+    let vp = poly_a_fixture().with_normalize_config(NormalizeConfig::for_entry_point(
+        ShuffleDirection::FivePrime,
+        ErrorConfig::lenient(),
+    ));
+
+    let v = parse_hgvs("NC_000001.11(NM_POLY.1):c.8del").unwrap();
+
+    let raw = format!("{}", vp.project_to_genomic(&v).expect("raw"));
+    assert_eq!(
+        raw, "NC_000001.11:g.1007del",
+        "the raw pivot of c.8del is the 3'-anchored end of the run"
+    );
+
+    let norm = format!(
+        "{}",
+        vp.project_to_genomic_normalized(&v).expect("normalized")
+    );
+    assert_eq!(
+        norm, "NC_000001.11:g.1003del",
+        "normalization must re-shuffle into the projector's configured direction, \
+         not return the pivot unchanged"
+    );
+    assert_ne!(
+        raw, norm,
+        "a projector that hard-coded 3' would leave this row at g.1007del"
+    );
+}

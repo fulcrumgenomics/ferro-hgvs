@@ -58,7 +58,6 @@ enable_cors = true
 [tools.ferro]
 enabled = true
 reference_dir = "/path/to/ferro-reference"
-shuffle_direction = "3prime"
 error_mode = "lenient"
 
 [tools.mutalyzer]
@@ -99,7 +98,6 @@ Config:
 [tools.ferro]
 enabled = true
 reference_dir = "/path/to/ferro-reference"
-shuffle_direction = "3prime"  # or "5prime"
 error_mode = "lenient"        # or "strict", "silent"
 ```
 
