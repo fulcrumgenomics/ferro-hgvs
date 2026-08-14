@@ -34,14 +34,15 @@
 //! `reported_partition_verdicts` now pins what each of the eighteen spellings
 //! prints — under 3' *and* under 5' — together with the form its issue asks for
 //! and what backs that form under the project's precedence policy
-//! (**spec-explicit > Mutalyzer > our judgement**). Six of those eighteen
-//! spellings — three pairs — have a spec line that answers them outright, which
-//! is the split `the_spec_authority_census_holds` pins next door as `(6, 12)`
-//! rows; #1419's six and #1421's six do not, because `delins.md:44-47`
-//! recommends the merged delins for the same alignment coincidence each pair's
-//! split relies on (`general.md:56` for #1419, the unchanged interior
-//! reappearing in the payload for #1421) — so those stay recorded rather than
-//! targeted.
+//! (**spec-explicit > Mutalyzer > our judgement**). Twelve of those eighteen
+//! spellings — six pairs — have a spec line that answers them outright, which is
+//! the split `the_spec_authority_census_holds` pins next door as `(12, 6)` rows:
+//! #1420's six on `delins.md:16`/`:17`, and #1421's six on `:17`, whose only
+//! competitor `delins.md:47` is scoped away from the `g.` axis and away from net
+//! insertions by two decided ledger records. #1419's six do not, because
+//! `delins.md:46-47` recommends the merged delins for the alignment coincidence
+//! their split relies on, and their `wanted` form is that recommendation's own
+//! answer — so those stay recorded rather than targeted.
 //!
 //! So this module keeps exactly one job: the **ratchet**.
 //! [`CONVERGING_PAIRS_THREE_PRIME`] and [`CONVERGING_PAIRS_FIVE_PRIME`] are the
