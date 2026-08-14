@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Normalizer::from_sequences`** — the same derivation against a held reference, which lets it
   additionally range-check the interval and optionally `normalize` the result.
 
+- **`Normalizer::sequence_normalize`** — the "one canonical description per variant" round trip, as
+  a single call. It takes a parsed description to the bases it denotes (`to_sequences`), re-derives
+  a description from those bases alone (`from_sequences`), and — while a member still rests on a
+  window edge that can still move — doubles the pad and retries, so two spellings of one variant
+  reach one description decided by the observed bases rather than by how either was written. The
+  widening loop reads the two per-side flags apart, so a placement pinned to the sequence's own 5'
+  or 3' terminus is recognised as settled rather than chased; an interior tract wider than the
+  widest window it will read is declined, naming the unsettled side, rather than answered over a
+  truncated window. Available as `Normalizer::sequence_normalize` in Rust and
+  `Normalizer.sequence_normalize` in Python.
+
 - **Re-anchoring, for callers whose variant must stay inside a region.** `SequencePair::trim_to`
   narrows a window to given bounds, trimming matching bases only and needing no reference;
   `Normalizer::reanchor` moves both edges, padding from the reference where it must widen. Bounds
