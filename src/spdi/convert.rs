@@ -3594,6 +3594,94 @@ mod tests {
         assert_eq!(spdi.insertion, "CGCGCG");
     }
 
+    /// A compound insert bracket mixing a literal with a same-reference
+    /// coordinate span (`delins[{literal};{start}_{end}]`) is one contiguous
+    /// inserted sequence once each part is read out. This is the shape the
+    /// original request named — `185_201delins[T;213_271]` — reduced onto the
+    /// `ACGT…` contig: del at 10..=12 is `CGT`; the payload is the literal `T`
+    /// followed by the span 5..=8 (`ACGT`), so the insertion is `TACGT`.
+    #[test]
+    fn a_compound_insert_mixing_a_literal_and_a_reference_span_reads_both() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[T;5_8]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "TACGT");
+    }
+
+    /// The parts are concatenated in the order written, so swapping them swaps
+    /// the resulting bases — `[5_8;T]` is `ACGTT`, not `TACGT`. Pins that the
+    /// compound resolver preserves part order rather than sorting or merging.
+    #[test]
+    fn a_compound_insert_concatenates_its_parts_in_order() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[5_8;T]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "ACGTT");
+    }
+
+    /// An inverted span inside a compound bracket reads the reverse complement
+    /// of that part only, leaving the surrounding literal untouched. Span 5..=7
+    /// is `ACG`, reverse-complemented to `CGT`, so `[A;5_7inv]` is `ACGT`.
+    #[test]
+    fn a_compound_insert_reverse_complements_an_inverted_span_part() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[A;5_7inv]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "ACGT");
+    }
+
+    /// A compound bracket may combine an exact repeat part with a literal; the
+    /// repeat expands through the same leaf a bare `insC[3]` uses. `[C[3];A]`
+    /// is `CCCA`.
+    #[test]
+    fn a_compound_insert_expands_an_exact_repeat_part() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[C[3];A]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "CCCA");
+    }
+
+    /// A compound insert on the `ins` arm resolves on the same path as `delins`,
+    /// with no deletion. `[T;5_8]` at `g.10_11` inserts `TACGT` after base 10.
+    #[test]
+    fn a_compound_insertion_reads_on_the_ins_arm_too() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_11ins[T;5_8]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 10);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "TACGT");
+    }
+
+    /// A compound insert whose only undetermined content is a coordinate span
+    /// still needs a provider to read that span, so the provider-less path must
+    /// decline rather than emit a triple missing those bases.
+    #[test]
+    fn a_compound_insert_with_a_span_part_needs_a_provider() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[T;5_8]").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::MissingReferenceData { .. })),
+            "a coordinate-span part cannot be resolved without a provider: {result:?}"
+        );
+    }
+
+    /// A part whose bases are genuinely undetermined declines the whole insert.
+    /// A non-exact repeat count (`N[10_15]`) inside the bracket names no single
+    /// expansion, so even with a provider the compound insert is unsupported.
+    #[test]
+    fn a_compound_insert_with_an_undetermined_part_is_declined() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[N[10_15];A]").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::UnsupportedEditType { .. })),
+            "a non-exact repeat count part names no single expansion: {result:?}"
+        );
+    }
+
     #[test]
     fn an_unspelled_identity_fetches_on_the_non_genomic_axes_too() {
         // The arm is shared by g./m./n./r./c., and the r. path additionally
