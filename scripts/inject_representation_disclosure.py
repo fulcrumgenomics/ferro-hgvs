@@ -149,6 +149,18 @@ EDITORIAL_CORRECTIONS: dict[str, list[str]] = {
         "it either. Read this as neither more nor less conformant: the measurement supports\n"
         "neither claim. 3' only, because #1879 removes the 5' direction from the public\n"
         "surface in this same release.",
+        "**Editorial correction (#1885) — not the trailer's words.** The real-corpus row\n"
+        "count this trailer defers is now measured. Over all four bulk corpora in full —\n"
+        "**9,949,738** stored ClinVar, CMRG and Paraphase expressions, each normalized\n"
+        "through both arms of one build — **11,491 normalized strings move (0.115%)**:\n"
+        "11,476 respellings whose SPDI key is unchanged, 15 whose denotation SPDI cannot\n"
+        "key, and **0 that denote different bases**. No row starts or stops normalizing.\n"
+        "A further 9,418 rows (0.095%) are excluded by a deterministic coordinate-span\n"
+        "bound rather than found unchanged — the #1846 cost defect, which cannot\n"
+        "terminate on them — and are recorded as excluded rather than folded into the\n"
+        "total. The measurement keys on which partitioner cuts the block, a property\n"
+        "86.5% of the corpus reaches, so the zero above is a measured zero and not a\n"
+        "structural one.",
     ],
 }
 
