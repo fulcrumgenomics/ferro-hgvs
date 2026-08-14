@@ -229,10 +229,13 @@ Rules 2 and 3 depend on the spec **determining an answer**, and sometimes it doe
   prefers an insertion for inverted copies. No single output satisfies both.
 - **The same clause has two versions.** `general.md`'s current text and its forthcoming NOTE give
   opposite answers for variants separated by one nucleotide.
-- **The variant's decomposition is not recoverable.** For an equal-length block the column
-  correspondence is unique, so "two variants separated by N nucleotides" is a fact about the
-  variant. For an unequal-length block there is no correspondence — recovering one means *choosing*
-  an alignment, and the spec does not say which. There is no derivable form to converge on.
+- **The variant's decomposition is not recoverable.** Recovering one means *choosing* an alignment,
+  and the spec does not say which, so there is no derivable form to converge on. **Block length does
+  not settle it**: an equal-length block can still carry a balanced del+ins pair, so its column
+  correspondence need not be unique — `CAG -> AGA` is equal length with edit distance 2, not the
+  position-wise 3. What decides whether a reference base is unchanged is whether **every minimal
+  alignment** matches it, so the property to key on is edit distance against block length, never
+  length alone. See `rulings[unchanged-is-read-over-every-minimal-alignment]`.
 - **The preference keys on information a normalizer does not hold.** A "frequently occurring
   variant" (`RNA/delins.md:41`); a repeat "variable in the population" (`RNA/repeated.md:33`,
   `protein/repeated.md:22`); two variants "reported (or might occur) individually" (`DNA/delins.md:83`).
