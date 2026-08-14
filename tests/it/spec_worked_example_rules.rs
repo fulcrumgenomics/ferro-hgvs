@@ -1181,11 +1181,22 @@ const DIVERGENT: &[Divergence] = &[
               `:44-47`'s own example three lines from the clause recommending the \
               merge. Only the ruled line satisfies both at once.\n\n\
               Why the codon exception does not rescue the published two-member \
-              form: this row is on the CODING axis, where `general.md:35` is live, \
-              but `rulings[codon-carve-out-shape-restriction]` limits that exception \
-              to the sub/unchanged/sub shape and this pair is an 11-nt deletion \
-              beside a substitution. The antecedent is unsatisfied, so the clause \
-              does not fire.\n\n\
+              form TODAY: this row is on the CODING axis, where `general.md:35` \
+              is live, and ferro's `apply_coding_codon_exception` fires only on \
+              the sub/unchanged/sub shape while this pair is an 11-nt deletion \
+              beside a substitution. READ THE AUTHORITY CAREFULLY: that \
+              restriction is ferro's IMPLEMENTATION, not the ruling. \
+              `rulings[codon-carve-out-shape-restriction]` decided the OPPOSITE \
+              — WIDEN, the exception applying wherever its stated precondition \
+              holds 'regardless of edit type' — and that widening is \
+              UNIMPLEMENTED. An earlier revision of this note said the record \
+              'limits' the exception to that shape; it does not, and citing it \
+              that way put words in a decided record's mouth. So this row's \
+              place in the registry rests on today's implementation rather than \
+              on the ruling, and whoever implements the widening must re-derive \
+              whether W58 still diverges: 'together affecting one amino acid' is \
+              a question about the resulting sequence, and nobody has asked it \
+              of this pair.\n\n\
               **This is the only registered divergence from a published worked \
               example, and it must stay a set of one unless another is ruled.** \
               Promoting a second row here without a ledger record naming it is the \
