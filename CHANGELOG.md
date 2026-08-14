@@ -115,6 +115,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose bases are genuinely undetermined — an uncertain or range repeat count, a CDS position range
   carrying intronic offsets, or an external reference SPDI cannot dereference — still declines the
   whole insert.
+- **A pure insertion flush against the 5' edge of another member now applies rather than reading as
+  an overlap.** When applying a cis allele to its reference, a zero-width insertion abutting the 5'
+  edge of a substitution, deletion, or inversion — `g.[10_11insAC;11C>T]`, `g.[10_11insAC;11_13del]`,
+  `g.[10_11insAC;11_13inv]` — was declined as an overlapping-member conflict. Such a combination is
+  well defined: the base-claiming member is applied first, then the insertion lands at the junction
+  5' of it. `apply_triples` (shared with `EquivalenceChecker`, `canonical_spdi`, and
+  apply-to-reference) now walks the members with a `claimed_from` watermark and orders longer
+  deletions first among members at one position, so a flush insertion sitting *at* the watermark is
+  accepted while one *interior* to a span (`g.[10_13del;11_12insAC]`) still reaches past it and
+  declines. The two applier walks that had diverged over this shape are unified onto the one walk,
+  removing the standalone `triples_are_disjoint` guard.
 
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
