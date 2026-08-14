@@ -139,6 +139,29 @@ fn a_run_at_the_contig_start_settles_at_position_one_under_five_prime() {
     );
 }
 
+/// A multi-substitution allele whose leftmost edit sits at position 1 normalizes
+/// rather than being dropped at the contig-start boundary. This is the real-run
+/// shape (`1A>C`/`1A>T`-anchored primer/adapter reads): `to_sequences` pads the
+/// window, but the 5' side already begins at the accession's first base, so it
+/// cannot widen. The three changed columns are contiguous, so the canonical
+/// derivation coalesces them into one `delins` — the point is it settles on that
+/// form in both shuffle directions rather than failing at the boundary.
+#[test]
+fn a_multi_substitution_anchored_at_position_one_normalizes() {
+    // 1-based:  123456789
+    //           GTGCTAGCT   (first three bases GTG match 1G>C;2T>A;3G>T)
+    let seq = "GTGCTAGCT";
+    let nz = Normalizer::new(provider(seq));
+
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            seqnorm(&nz, "NC_TEST.1:g.[1G>C;2T>A;3G>T]", direction, false),
+            "NC_TEST.1:g.1_3delinsCAT",
+            "a position-1-anchored multi-substitution must normalize, not drop ({direction:?})",
+        );
+    }
+}
+
 /// `normalize = true` routes the derived description through `normalize`. For a
 /// placement already at its 3'-most, reference-anchored base that is a no-op, so
 /// the result matches the `normalize = false` derivation — what this pins is
