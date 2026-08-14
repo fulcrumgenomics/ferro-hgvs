@@ -802,7 +802,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // time**, by 284, and the same three measured zeros hold as at 3': no family
     // loses convergence, rises in arity, or becomes divergent that was not.
     // #1627 does not move it either: a refused row contributes no family.
-    converged: 10_753,
+    // #1542 (PR #1840) moves it +2 — see the note on `split_two` below.
+    converged: 10_755,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -822,7 +823,21 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // class converged outright. The 5' direction gains 1 525 against the 3'
     // direction's 1 614; the two moving by different amounts is the asymmetry
     // every entry above records, and both move the same way.
-    split_two: 981,
+    //
+    // #1542 (PR #1840): `converged` 10 753 -> 10 755, `split_two` 981 -> 979,
+    // `split_three` and `split_more` unchanged — the two deltas cancel, so both
+    // moved families converged outright and none rose in arity. **Every other
+    // field in this census is unmoved**, so nothing traded a rank-2 gain for a
+    // rank-1 loss.
+    //
+    // This is the FIRST entry to move 5' and leave 3' alone: `THREE_PRIME` is
+    // untouched by the same change. That asymmetry is the point rather than a
+    // side effect — the change makes the *member count* independent of the
+    // shuffle direction, which it does by having each direction adopt the other's
+    // partition where that one merges and this one did not. On these two families
+    // the 3' partition was already the merged one, so only 5' had anywhere to
+    // move; convergence is what agreeing with 3' looks like from here.
+    split_two: 979,
     split_three: 124,
     split_more: 24,
     underdetermined: 0,

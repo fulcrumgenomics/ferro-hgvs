@@ -1429,9 +1429,26 @@ fn the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence() {
     );
     let re_derived = derived.variant.to_string();
 
+    // Unwrapped on each side before comparing, never compared as `Option`s.
+    // `member_footprints` returns `None` when a member does not convert to SPDI,
+    // and `assert_eq!(None, None)` is a **pass** — so an `Option` comparison
+    // here would go green on the day both sides stopped converting, which is the
+    // one outcome that must not read as agreement. Proven discriminating:
+    // forcing either side to `None` fails this test rather than satisfying it.
+    let output_footprints = member_footprints(&output, &provider).unwrap_or_else(|| {
+        panic!(
+            "#1542: the emitted `{output}` has no SPDI footprint, so this row's geometry cannot \
+             be compared and the comparison below would pass vacuously"
+        )
+    });
+    let re_derived_footprints = member_footprints(&re_derived, &provider).unwrap_or_else(|| {
+        panic!(
+            "#1542: the re-derived `{re_derived}` has no SPDI footprint, so this row's geometry \
+             cannot be compared and the comparison below would pass vacuously"
+        )
+    });
     assert_eq!(
-        member_footprints(&output, &provider),
-        member_footprints(&re_derived, &provider),
+        output_footprints, re_derived_footprints,
         "#1542: `{}` -> `{output}`, whose members do not sit where a partition re-derived from \
          the resulting sequence puts them (`{re_derived}`). A member boundary interior to a run \
          of change is read off a placement, not off the sequence.",
