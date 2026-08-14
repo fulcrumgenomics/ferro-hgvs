@@ -5382,6 +5382,22 @@ mod tests {
     }
 
     #[test]
+    fn a_cds_axis_compound_insert_reads_its_span_part_on_the_cds_axis() {
+        let provider = make_test_provider();
+        // A span *inside a bracket* resolves through the same leaf as a bare
+        // one, so it must land in the same frame. `[T;3_5]` is the literal `T`
+        // followed by `c.3_5` == tx 8..=10 == `CCC`.
+        let hgvs = parse_hgvs("NM_TEST.1:c.1_2ins[T;3_5]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 6);
+        assert_eq!(
+            spdi.insertion, "TCCC",
+            "a bracketed span part must be read on the same axis as a bare one; \
+             unshifted it would give TAAA"
+        );
+    }
+
+    #[test]
     fn a_noncoding_axis_range_insert_reads_its_payload_unshifted() {
         let provider = make_test_provider();
         // The negative control: `n.` positions ARE transcript offsets, so the
