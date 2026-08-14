@@ -9733,6 +9733,48 @@ pub(crate) fn derive_block_members(
     coalesce_adjacent_pieces(&mut pieces);
     shrink_pieces_to_differences(&mut pieces, reference);
 
+    // Contig-start escape: rescue the one pure insertion that has no HGVS
+    // anchor from the one window where the anchor genuinely does not exist.
+    //
+    // When `w_lo == 1` the window begins at the accession's first base, so
+    // `reference[0]` *is* the contig's first base — not merely the first base
+    // this call was handed. A pure insertion the 5'-shuffle rolled to interbase
+    // 0 would then be spelled `0_1ins…`, naming a position that does not exist
+    // rather than one this caller simply did not supply (`DerivedBlock`).
+    //
+    // But interbase 0 and interbase 1 denote the *same* sequence whenever the
+    // payload's leading base equals the terminal base `reference[0]`: the
+    // insertion sits in an ambiguous run reaching the terminus, and inserting
+    // `alt` before base 1 equals inserting `rotate_left(1)(alt)` before base 2
+    // (the algebra is `alt[0] == reference[0]`, exactly `shuffle`'s own 3'-step
+    // predicate). When it holds, present the insertion at the leftmost
+    // *nameable* interbase — offset 1 — instead of refusing. This is the
+    // terminal analogue of the 3'-most rule: the 5'-most position is off the
+    // sequence, so the run's leftmost expressible position stands in for it.
+    //
+    // Guarded to `w_lo == 1` alone. At any interior window the correct answer is
+    // to widen the 5' flank (`Normalizer::sequence_normalize` does), not to
+    // relabel; only at the true contig start is widening impossible and the
+    // relabel forced. A payload that cannot cross the terminal base
+    // (`alt[0] != reference[0]`) is genuinely an insertion before base 1 and
+    // still refuses. `verify_round_trip` re-applies the escaped members, so a
+    // mis-step here surfaces as an error rather than a wrong sequence.
+    if w_lo == 1 {
+        let next_is_clear = pieces.get(1).is_none_or(|next| next.ref_start >= 1);
+        if next_is_clear {
+            if let Some(first) = pieces.first_mut() {
+                let is_pure_insertion =
+                    first.ref_start == 0 && first.ref_end == 0 && !first.alt.is_empty();
+                let crosses_terminus = reference.first() == first.alt.first();
+                if is_pure_insertion && crosses_terminus {
+                    first.alt.rotate_left(1);
+                    first.ref_start = 1;
+                    first.ref_end = 1;
+                }
+            }
+        }
+    }
+
     // Read after the three passes above, not before: each can move a piece onto
     // or off the edge, and the answer that matters is about what is emitted.
     let bounded_at_start = pieces.iter().any(|piece| piece.ref_start == 0);

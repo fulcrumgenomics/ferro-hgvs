@@ -1109,6 +1109,49 @@ mod tests {
         assert!(d.placement_bounded_by_window(), "OR must hold");
     }
 
+    /// **Contig-start escape.** An insertion in an ambiguous run reaching the
+    /// accession's first base has no 5'-most HGVS anchor — the 5'-shuffle rolls
+    /// it to interbase 0, which is spelled `0_1ins…` and names a position that
+    /// does not exist. Because `w_lo == 1` here, that interbase *is* the contig
+    /// start, so widening cannot rescue it. It is instead re-presented at the
+    /// leftmost nameable interbase (offset 1), the terminal analogue of the
+    /// 3'-most rule: inserting `AT` before base 1 equals inserting `TA` before
+    /// base 2, and only the latter can be written. This is the shape the real
+    /// run's `1A>C`/`1A>T`-anchored multi-substitution alleles hit.
+    #[test]
+    fn a_contig_start_insertion_escapes_to_the_leftmost_nameable_interbase() {
+        let derived = from_sequences(
+            "NC_TEST.1",
+            1,
+            "ATATATG",
+            "ATATATATG",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect("the ambiguous-run insertion escapes to interbase 1 rather than refusing");
+        assert_eq!(derived.to_string(), "NC_TEST.1:g.1_2insTA");
+    }
+
+    /// The escape is not a blanket amnesty for interbase 0: a payload that
+    /// cannot cross the terminal base (`alt[0] != reference[0]`) is genuinely an
+    /// insertion *before* base 1, denoting a sequence no other placement does,
+    /// and still refuses with the 5'-anchor message. Here a leading `G` sits
+    /// before a `C`, so there is no run to shuffle along.
+    #[test]
+    fn a_contig_start_insertion_that_cannot_cross_the_terminus_still_refuses() {
+        let err = from_sequences(
+            "NC_TEST.1",
+            1,
+            "CATATG",
+            "GCATATG",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect_err("an insertion genuinely before base 1 has no HGVS anchor");
+        assert!(
+            err.to_string().contains("5' of the window's first base"),
+            "{err}"
+        );
+    }
+
     /// A change spanning the whole window rests on both edges at once, so both
     /// per-side flags fire. Neither side can be dismissed as settled, which is
     /// what makes a two-sided widen the right response.

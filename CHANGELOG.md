@@ -120,6 +120,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose bases are genuinely undetermined — an uncertain or range repeat count, a CDS position range
   carrying intronic offsets, or an external reference SPDI cannot dereference — still declines the
   whole insert.
+- **A `from_sequences` derivation whose insertion rolls to the contig's first base is now
+  re-anchored rather than refused.** When the observed window begins at position 1 — a variant
+  anchored at `1A>C`/`1A>T`, say — the 5'-shuffle can roll a pure insertion in an ambiguous run
+  onto interbase 0, whose only HGVS spelling names position 0, a base that does not exist. Because
+  the window already starts at the accession's first base, `sequence_normalize` cannot widen the 5'
+  flank to escape it, so these derivations were dropped with "the derivation places an inserted
+  payload immediately 5' of the window's first base". Interbase 0 and interbase 1 denote the same
+  sequence whenever the payload's leading base equals the terminal base (the insertion sits in a
+  run reaching the terminus), so the insertion is now presented at the leftmost *nameable*
+  interbase — `1_2ins…`, the payload rotated one base — which is the terminal analogue of the
+  3'-most rule. A payload that genuinely cannot cross the first base still refuses, since it names a
+  sequence no in-window placement does.
 
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
