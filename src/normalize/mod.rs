@@ -1097,41 +1097,18 @@ pub enum NormalizationWarning {
     },
 }
 
-/// True iff any concrete position reachable from `boundary` is intronic —
-/// covering both a `Single` position and either endpoint of a `Range`
-/// boundary (uncertain breakpoints like `c.(100+1_101-1)_(200+1_201-1)del`).
-/// `Unknown` (`?`) and otherwise-absent inner positions contribute `false`.
-fn boundary_has_intronic<T>(
-    boundary: &crate::hgvs::interval::UncertainBoundary<T>,
-    is_intronic: impl Fn(&T) -> bool,
-) -> bool {
-    use crate::hgvs::interval::UncertainBoundary;
-    let mu_intronic = |mu: &crate::hgvs::uncertainty::Mu<T>| mu.inner().is_some_and(&is_intronic);
-    match boundary {
-        UncertainBoundary::Single(mu) => mu_intronic(mu),
-        UncertainBoundary::Range { start, end } => mu_intronic(start) || mu_intronic(end),
-    }
-}
-
 /// EINTRONIC (#486): detect an intronic offset on a **bare transcript
 /// reference** (no `NG_(…)`/`NC_(…)` genomic context). Returns the warning
 /// to emit, or `None`.
 ///
-/// In scope: a bare coding transcript (`NM_`/`XM_` or LRG `LRG_<N>t<k>`) used
-/// with `c.` and a bare non-coding transcript (`NR_`/`XR_` via
-/// `is_noncoding_rna()`, or LRG) used with `n.`, with
-/// `Accession.genomic_context == None`. The spec's "a (non-)coding DNA
-/// reference sequence does not contain introns" rule applies equally to curated
-/// (`NM_`/`NR_`), predicted (`XM_`/`XR_`), and LRG transcript references — an
-/// LRG transcript is itself a bare reference with no `NG_`/`NC_` genomic
-/// context — so all are covered on each axis (#834). Out of scope:
-/// genomic-context forms (`genomic_context: Some`), `NG_`/`NC_` references
-/// (which never reach the c./n. transcript path), Ensembl `ENST`, and the r.
-/// axis. Both `Single`
-/// and `Range` (uncertain-breakpoint) position boundaries are inspected; an
-/// unknown (`?`) offset still counts as intronic (`CdsPos::is_intronic` treats
-/// the unknown-offset sentinel as intronic), which is correct — it is an
-/// intronic position whose exact offset is unspecified.
+/// **The clause reading and its scope live in one place**, and deliberately not
+/// here: [`crate::hgvs::bare_transcript_introns`], which documents what is in
+/// and out of scope on each axis (#834), why `checklist.md:20` is conditional
+/// rather than absolute, and why there is no repair arm. This used to restate
+/// that scope in full, and a clause written out in two places is how the two
+/// come to disagree — which for this clause has already happened once, ferro
+/// having refused a description in strict mode while manufacturing the
+/// identical description in lenient.
 fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<NormalizationWarning> {
     intronic_on_bare_transcript_axis(variant).map(|coordinate_system| {
         NormalizationWarning::IntronicOnBareTranscript {
@@ -1145,57 +1122,22 @@ fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<Normaliz
 /// system (`"c"` or `"n"`) whose bare transcript reference `variant` names an
 /// intronic position on, or `None`.
 ///
-/// **One rule, two callers, and the split is deliberate.** The scope prose above
-/// documents this function as much as the warning constructor — the clause has
-/// exactly one reading in this crate, and that is load-bearing in both
-/// directions: the same question decides whether strict mode *refuses an input*
-/// and whether `#1704` must *re-parent an output*. Two readings of one clause is
-/// how ferro came to refuse a description in strict mode while manufacturing the
-/// identical description in lenient. So the warning is derived from this
-/// predicate rather than the two being written out separately, which is what
-/// makes them unable to drift.
+/// **A one-line re-export, kept as a named seam.** The predicate itself moved to
+/// [`crate::hgvs::bare_transcript_introns`] when #1630 put the strict-mode
+/// refusal at *parse*, where the parser needs it and cannot reach into
+/// `normalize`. The clause now has exactly one reading serving three callers —
+/// strict parse refusal, strict normalize refusal, and `#1704`'s output
+/// re-parenting — which is what makes them unable to drift.
 ///
-/// The reason it is a separate function rather than
-/// `…_warning(v).is_some()` is cost, not taste. Every `normalize()` asks this
-/// question at least twice — once on the strict ladder and once at
-/// [`Normalizer::reparent_junction_exit`] — and the `is_some()` form built a
-/// `NormalizationWarning` carrying `format!("{variant}")`, rendering the whole
-/// description to a `String` only to drop it. The authored-bare-intronic class
-/// is common enough for that to be a real per-call allocation on a path that
-/// wants a `bool`.
+/// The reason it is a separate function from `…_warning(v).is_some()` is cost,
+/// not taste. Every `normalize()` asks this question at least twice — once on
+/// the strict ladder and once at [`Normalizer::reparent_junction_exit`] — and
+/// the `is_some()` form built a `NormalizationWarning` carrying
+/// `format!("{variant}")`, rendering the whole description to a `String` only to
+/// drop it. The authored-bare-intronic class is common enough for that to be a
+/// real per-call allocation on a path that wants a `bool`.
 fn intronic_on_bare_transcript_axis(variant: &HgvsVariant) -> Option<&'static str> {
-    match variant {
-        HV::Cds(v) => {
-            // A bare coding-DNA reference does not contain introns, so an
-            // intronic offset on it is a spec-invalid form regardless of which
-            // transcript namespace addresses it. Curated/predicted RefSeq
-            // (`NM_`/`XM_`) and LRG transcript references (`LRG_<N>t<k>`, which
-            // carry no `NG_`/`NC_` genomic context — the LRG *is* the reference)
-            // are all bare coding transcripts; treat them uniformly (#834).
-            let is_bare_coding_transcript =
-                matches!(&*v.accession.prefix, "NM" | "XM") || v.accession.is_lrg();
-            if !is_bare_coding_transcript || v.accession.genomic_context.is_some() {
-                return None;
-            }
-            let intronic = boundary_has_intronic(&v.loc_edit.location.start, CdsPos::is_intronic)
-                || boundary_has_intronic(&v.loc_edit.location.end, CdsPos::is_intronic);
-            intronic.then_some("c")
-        }
-        HV::Tx(v) => {
-            // Same rule on the non-coding axis: a bare `NR_`/`XR_` or LRG
-            // non-coding transcript reference used with `n.` has no introns
-            // (#834 extends the LRG coverage to match the `c.` arm).
-            let is_bare_noncoding_transcript =
-                v.accession.is_noncoding_rna() || v.accession.is_lrg();
-            if !is_bare_noncoding_transcript || v.accession.genomic_context.is_some() {
-                return None;
-            }
-            let intronic = boundary_has_intronic(&v.loc_edit.location.start, TxPos::is_intronic)
-                || boundary_has_intronic(&v.loc_edit.location.end, TxPos::is_intronic);
-            intronic.then_some("n")
-        }
-        _ => None,
-    }
+    crate::hgvs::bare_transcript_introns::bare_transcript_intronic_axis(variant)
 }
 
 /// One intronic offset ferro **manufactured**, recorded at the `#670` junction

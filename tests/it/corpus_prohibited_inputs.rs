@@ -131,8 +131,11 @@
 //!   project decision. **Decided**: the stage is **mode-dependent** — strict
 //!   fails at parse, lenient does not validate input conformance and fails only
 //!   when it cannot normalize, silent is lenient without messages. See
-//!   [`the_decided_target_is_a_mode_gated_refusal`], which is `#[ignore]`d
-//!   because ferro does not do this yet (#1630).
+//!   [`the_decided_target_is_a_mode_gated_refusal`], which is still `#[ignore]`d
+//!   — but no longer for this clause's sake. #1630 moved `checklist.md:20`'s
+//!   strict arm to parse, so that row passes; what keeps the `#[ignore]` is the
+//!   one row still open, `checklist.md:33`'s `ins6` (#1627). See that test's own
+//!   doc comment for the per-row state.
 //!
 //! # One measurement in this file was taken through the wrong door
 //!
@@ -158,7 +161,7 @@ use ferro_hgvs::conformance::spec_corpus::{
     corpus, corpus_cores, denotation_of, CorpusBounds, Denotation, Frame, RefShape, RowKind,
     SpecCorpus, DENSE_CORE_LEN,
 };
-use ferro_hgvs::error_handling::{ErrorConfig, ErrorMode};
+use ferro_hgvs::error_handling::{ErrorConfig, ErrorMode, ErrorType};
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::reference::transcript::Strand;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
@@ -929,6 +932,116 @@ fn a_bare_transcript_intronic_position_is_refused_in_strict_only() {
     }
 }
 
+/// **Question.** `rulings[absolute-prohibition-enforcement-stage]` puts an
+/// input-conformance check at **parse**, gated by mode. `checklist.md:20` is
+/// enforced with the right mode split but at the wrong **stage** — strict
+/// refuses at *normalize*. Does it refuse at parse?
+///
+/// **It does now (#1630).** This is the third of the three defects the record's
+/// own census names, and the last one whose fix is a stage move rather than a
+/// relaxation:
+///
+/// > **`checklist.md:20`'s refusal is at normalize, not at parse.** It is a
+/// > conditional clause and its own record (`bare-transcript-intronic-position`)
+/// > ratifies the mode split; moving the stage is cosmetic there, but it should
+/// > move for uniformity.
+///
+/// **"Cosmetic" is about the VERDICT, not about what a caller sees**, and the
+/// distinction is the whole reason this is a guard rather than a refactor. A
+/// caller that parses strictly and never normalizes — `parse_hgvs_with_config`
+/// is public API and validating an identifier is its most obvious use — was
+/// told a bare `NM_…:c.20+2del` conforms. It does not, and `checklist.md:20`
+/// is the clause that says so. The record's ground is exactly this: "whether
+/// the INPUT conforms is answered before the input is accepted, not part-way
+/// through normalizing it."
+///
+/// **The mode split is unchanged, and that is deliberate.** Only the strict
+/// arm's stage moves. Lenient still accepts, now with the `W4007` it always
+/// owed a parse-only caller; silent still accepts in silence, which is what
+/// "lenient with no error messages" means. `rulings[bare-transcript-intronic-
+/// position]` decided the split itself and nothing here reopens it.
+///
+/// **The normalize rung stays**, and is still reachable: this file's own
+/// [`strict`] helper parses through the config-less `parse_hgvs` and then
+/// normalizes strictly, which is the shape
+/// [`a_bare_transcript_intronic_position_is_refused_in_strict_only`] pins. A
+/// caller that parses leniently and normalizes strictly takes the same path.
+/// So the two rungs are not redundant — they answer for two different callers,
+/// and removing either would drop one of them.
+///
+/// Both controls are load-bearing. Without the **wrapper** control a bare
+/// `is_err()` is satisfied by refusing intronic positions outright; without the
+/// **exonic** control it is satisfied by refusing bare `NM_` accessions
+/// outright. The claim is narrower than either: it is the *conjunction* that
+/// `checklist.md:20` names.
+#[test]
+fn a_bare_transcript_intronic_position_is_refused_at_parse_in_strict_mode() {
+    // Alone and inside an allele, because a hygiene check that runs once per
+    // description rather than once per member stops firing exactly there.
+    for input in [
+        "NM_TEST.1:c.20+2del",
+        "NM_TEST.1:c.[20+2del;24del]",
+        // The `n.` arm of the same rule, on a bare non-coding transcript.
+        "NR_TEST.1:n.20+2del",
+    ] {
+        // STRICT — refused at PARSE, because strict validates input conformance.
+        let refusal = parse_hgvs_with_config(input, ErrorConfig::strict())
+            .expect_err(
+                "strict mode must refuse a bare-transcript intronic position at PARSE \
+                 (checklist.md:20, rulings[absolute-prohibition-enforcement-stage])",
+            )
+            .to_string();
+        assert!(
+            refusal.contains("W4007"),
+            "the parse refusal of `{input}` must name checklist.md:20's finding by code; \
+             got: {refusal}"
+        );
+
+        // LENIENT — accepts, and says so. Silence here is what left a
+        // parse-only caller with no signal at all.
+        let lenient_parse = parse_hgvs_with_config(input, ErrorConfig::lenient())
+            .expect("lenient mode does not validate input conformance, so it must accept");
+        assert!(
+            lenient_parse
+                .warnings
+                .iter()
+                .any(|w| w.error_type == ErrorType::IntronicOnBareTranscript),
+            "lenient mode must accept `{input}` WITH a W4007 warning; got warnings: {:?}",
+            lenient_parse.warnings
+        );
+
+        // SILENT — lenient with no error messages, per the ruling's third arm.
+        let silent_parse = parse_hgvs_with_config(input, ErrorConfig::silent())
+            .expect("silent mode is lenient, so it must accept");
+        assert!(
+            !silent_parse
+                .warnings
+                .iter()
+                .any(|w| w.error_type == ErrorType::IntronicOnBareTranscript),
+            "silent mode must accept `{input}` WITHOUT a warning; got: {:?}",
+            silent_parse.warnings
+        );
+    }
+
+    // CONTROL 1 — the wrapper form `checklist.md:20` names as correct must
+    // still parse in strict mode. Without this the refusal above is
+    // attributable to intronic positions rather than to the bare reference.
+    assert!(
+        parse_hgvs_with_config("NC_SYNTH.1(NM_TEST.1):c.20+2del", ErrorConfig::strict()).is_ok(),
+        "the NC_(NM_) form is the one the clause names as correct; refusing it would \
+         make this rule a ban on introns"
+    );
+
+    // CONTROL 2 — an EXONIC position on the same bare accession must still
+    // parse in strict mode. Without this the refusal is attributable to the
+    // bare `NM_` accession rather than to the intronic offset on it.
+    assert!(
+        parse_hgvs_with_config("NM_TEST.1:c.20del", ErrorConfig::strict()).is_ok(),
+        "a bare NM_ accession is fine; it is the INTRONIC offset on one that \
+         checklist.md:20 conditions"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The decomposition, measured over the corpus
 // ---------------------------------------------------------------------------
@@ -1200,7 +1313,10 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
 /// and answered for `g.266del`; that half is closed by #1641 and #1734, and the
 /// normalize half by the `W4009` rule, so both now refuse rather than disagree.
 #[test]
-#[ignore = "decided target, not yet implemented — see #1630, #1627, #1628"]
+#[ignore = "one row still open: checklist.md:33's `ins6` — see #1627. The \
+            other three rows pass (#1627's `delinsX`, #1628's two `g.` offsets), \
+            as does checklist.md:20 (#1630), which this test does not yet carry \
+            a row for"]
 fn the_decided_target_is_a_mode_gated_refusal() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);

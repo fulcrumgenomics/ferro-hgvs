@@ -610,7 +610,29 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // gap. That is why the enumeration total drops 2184 -> 2172 rather than
     // staying flat. The generator names the absent transcripts on every run, so
     // the exclusion is reported rather than silent.
-    (Status::ModeDivergencePinned, 120),
+    //
+    // 120 -> 288 (#1630), and the enumeration total 2172 -> 2340 with it. This
+    // status means "per-error-mode outcome pinned as ferro policy", and #1630
+    // put `checklist.md:20`'s strict-mode refusal at PARSE, where
+    // `rulings[absolute-prohibition-enforcement-stage]` says an input-conformance
+    // check belongs. So 56 spec-harvested bare-transcript intronic inputs
+    // — `LRG_199:c.357+1G>A`, `LRG_199t1:c.(6278_6438+69)_(7310-43_7575)del`
+    // and the like — now have three modes that disagree where before they had
+    // three that agreed, and the enumeration emits one row per mode.
+    //
+    // **Attributed, not inferred from the net.** Exactly 56 distinct inputs
+    // carry a `W4007` strict-parse refusal, each contributes exactly 3 rows, and
+    // 288 - 168 leaves precisely the 120 that were here before — so nothing
+    // else moved and nothing left. NOTHING ENTERED FROM ANOTHER STATUS: these
+    // are new rows, because the generator emits a mode row set only when the
+    // modes disagree.
+    //
+    // **The 56 here and the 56 in that record's own census are different sets**,
+    // and the shared digit is a coincidence worth naming rather than a link. The
+    // record's 56 are prohibited-stratum corpus rows refused in no mode
+    // (`ins6`, `X`, and the `g.` offsets); these 56 are spec-harvested strings
+    // on a bare transcript accession. Neither figure is derived from the other.
+    (Status::ModeDivergencePinned, 288),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors

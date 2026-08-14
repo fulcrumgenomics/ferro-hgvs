@@ -204,31 +204,51 @@ fn the_bare_entry_still_trims_surrounding_whitespace() {
     );
 }
 
-/// **Negative control for the intronic question, and the reason it is here.**
+/// **The intronic shape is now a WITNESS for #1632, and it used to be a
+/// negative control. The inversion is the point.**
 ///
-/// A bare-transcript intronic position (`checklist.md:20`) is accepted by
-/// `parse_hgvs` — but it is *equally* accepted by
-/// `parse_hgvs_with_config(_, strict())`. So the missing `ErrorConfig` is not
-/// what lets that shape through: there is no parse-stage rung for it in any
-/// mode. Its refusal lives at strict-mode **normalize**
-/// (`IntronicOnBareTranscript` / `W4007`), which is where the
-/// `bare-transcript-intronic-position` ruling put it — see
-/// `corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only`.
+/// This test previously asserted that `parse_hgvs` and
+/// `parse_hgvs_with_config(_, strict())` *agreed* on a bare-transcript intronic
+/// position (`checklist.md:20`) — both accepting — and concluded that the
+/// missing `ErrorConfig` was not what let that shape through, there being no
+/// parse-stage rung for it in any mode.
 ///
-/// This pin exists so that closing #1632 by routing `parse_hgvs` through a mode
-/// is not mistaken for a fix to the intronic shape, in either direction.
+/// #1630 added that rung, per
+/// `rulings[absolute-prohibition-enforcement-stage]`, so the two entries now
+/// **disagree**: strict refuses at parse (`W4007`) and the config-less entry
+/// still accepts. That is exactly the defect #1632 names — `parse_hgvs`
+/// documents itself as "Uses strict error handling mode by default" and applies
+/// no `ErrorConfig` at all — so this shape has moved from being a control
+/// *against* that reading to being a demonstration *of* it.
+///
+/// The reason to keep it here rather than delete it: the old claim is the kind
+/// that rots into a false one silently. Pinning the disagreement means that
+/// whenever #1632 is closed by routing `parse_hgvs` through a mode, this test
+/// goes red and names the shape whose behaviour that closure changes.
 #[test]
-fn the_missing_config_is_not_what_admits_a_bare_transcript_intronic_position() {
+fn the_config_less_entry_now_disagrees_with_strict_on_a_bare_intronic_position() {
     let input = "NM_TEST.1:c.20+2del";
-    assert_eq!(bare(input).as_deref(), Ok(input));
+
+    // The config-less entry: still accepts, because it applies no mode (#1632).
     assert_eq!(
-        with_config(input, ErrorConfig::strict()).as_deref(),
+        bare(input).as_deref(),
         Ok(input),
-        "strict input hygiene has no rung for checklist.md:20 either — the \
-         refusal is a normalize-stage one"
+        "`parse_hgvs` applies no ErrorConfig, so no conformance rung runs (#1632)"
     );
+
+    // The mode-aware entry, strict: refuses at parse (#1630).
+    let refusal = with_config(input, ErrorConfig::strict())
+        .expect_err("strict validates input conformance, and checklist.md:20 is a rung");
+    assert!(
+        refusal.contains("W4007"),
+        "the strict parse refusal must name checklist.md:20's finding; got: {refusal}"
+    );
+
+    // Lenient still accepts — the mode split `rulings[bare-transcript-intronic-
+    // position]` decided is untouched; only the strict arm's STAGE moved.
     assert_eq!(
         with_config(input, ErrorConfig::lenient()).as_deref(),
-        Ok(input)
+        Ok(input),
+        "lenient does not validate input conformance"
     );
 }

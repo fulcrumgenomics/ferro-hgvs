@@ -4,6 +4,7 @@
 //! and a nom-based parser for parsing HGVS strings.
 
 pub mod alignment_symbols;
+pub mod bare_transcript_introns;
 pub mod edit;
 pub mod genomic_offsets;
 pub mod interval;
