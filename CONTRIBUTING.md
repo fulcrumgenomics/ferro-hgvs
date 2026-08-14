@@ -177,6 +177,21 @@ Four things belong in it, and the last is the one a consumer actually acts on:
    it is a migration. This distinction cannot be recovered later — nobody
    reading the diff in six months can tell — so it has to be written down now.
 
+**Do not name a release version in the trailer.** Which release carries your
+change is not knowable when you write it: `release-plz.toml` sets
+`features_always_increment_minor`, so what a `feat:` cuts depends on the base
+version at release time, a `feat:` landing before yours moves it, and a cycle can
+be re-cut. Say **"to reproduce output from before this change"**, not "to
+reproduce pre-vX.Y.Z output". The version-free form is correct under every cut
+and loses nothing, because the changelog heading the trailer is quoted under
+already names the release the reader is holding.
+
+This is the house form because it has already been got wrong the other way:
+#1835's trailer told consumers to pin `FERRO_PARTITION=live` to reproduce
+**pre-v0.15.0** output, for a change shipping in **v0.14.0** ([#1886]) —
+which reads to a consumer as "this lands next cycle" rather than "this is the
+release you are reading", and could not be fixed in the trailer once merged.
+
 Two related habits, from `CLAUDE.md`:
 
 - **"Fixes non-confluence" is not a sufficient description.** Confluence (two
@@ -203,6 +218,7 @@ whatever its type, so a `fix:` that correctly declined is not listed under
 
 [#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
+[#1886]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1886
 
 ### Changelog
 
@@ -222,6 +238,14 @@ CI runs the `--check` form in the `Changelog grouping audit` job, so a release P
 Two consequences for how you write the trailer. Keep it **at column 0 and undecorated** — no backticks, no `>`, no `-`/`*`/`+`, no `#`, no emphasis, and the separator is a hyphen. Anything else and the line is prose: an indented `Representation-Change:` is a continuation of the line above it to git, to release-plz and to both checkers, and a code-spanned one is invisible to all three at once. This is not pedantry about formatting — you would have declared something and nobody would be told, which is the exact failure the trailer exists to prevent — so the checker now refuses a line that looks like a declaration it cannot read, names the character responsible, and does so on every PR rather than only on the ones touching a watched directory. To show the form as an *example* rather than declare it, indent the line — and keep your real, unindented declaration above it, because that is what tells the checker the indented one is a quotation. An indented line on its own is reported as a near miss rather than read as an example, which is the right answer: nothing distinguishes it from a declaration that will never be read. And know that "put it last" is advice the tooling cannot rely on: GitHub appends CodeRabbit's summary after your description, so the script stops the value at the next column-0 trailer token, Markdown heading or HTML comment rather than at the end of the message. Do not put a heading inside the disclosure.
 
 A section that has already been released is a different matter: a release only prepends to `CHANGELOG.md`, leaving earlier sections untouched, and the GitHub release body is never revisited once its tag exists. So a retrospective note — a consolidated representation summary for a release whose commits predate this convention, say — can be added afterwards, by editing the released section and `gh release edit <tag>`. That is the escape hatch for a cycle that shipped without trailers; it is not a substitute for declaring changes as you make them, because nobody can reconstruct the rejected-vs-accepted distinction after the fact.
+
+**Correcting a disclosure that is already merged is a third case, and hand-editing `CHANGELOG.md` is the wrong tool for it.** A trailer cannot be corrected once its commit is on `main` — that would mean rewriting released history — and an edited changelog copy fails twice over: release-plz discards it the next time it regenerates the pending section, and `inject_representation_disclosure.py --check` reports it as drift against the trailer it no longer matches, which is red CI. The durable surface is the injector itself, because it re-renders the block on every run. Register the correction in its `EDITORIAL_CORRECTIONS` table, keyed by PR number, and re-run the script:
+
+```bash
+python scripts/inject_representation_disclosure.py
+```
+
+It is appended under the bullet after the trailer's own words, inside the same blockquote, and `--check` then demands it. One limit to know before you reach for it: the injector *judges* a block that is already on disk rather than rewriting it, so registering a correction against an already-rendered bullet is reported as drift. That resolves itself in the pending section, which release-plz regenerates on every push to `main`; a **released** section is never regenerated, so there you delete the stale block from `CHANGELOG.md` and let the re-run write it back with the correction attached. Two constraints, both load-bearing. Each paragraph must **open by naming itself editorial and citing the issue that raised it** — the release checklist turns on whose words a disclosure carries, and inside the block the label is the only thing that answers it. And a correction states a **fact the trailer got wrong or left out**; it is not a place to re-word, summarise or improve a disclosure, which is what keeps "the trailer's own text" a claim a reader can rely on. Append a paragraph rather than rewriting one, so two corrections to one disclosure conflict visibly instead of silently overwriting each other.
 
 ### Submitting a Pull Request
 
