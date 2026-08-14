@@ -27,6 +27,7 @@ _SPEC.loader.exec_module(check_representation_change)
 check = check_representation_change.check
 find_declaration = check_representation_change.find_declaration
 find_declarations = check_representation_change.find_declarations
+find_near_misses = check_representation_change.find_near_misses
 watched_files = check_representation_change.watched_files
 WATCHED_PREFIXES = check_representation_change.WATCHED_PREFIXES
 
@@ -707,6 +708,232 @@ def test_contributing_documents_the_same_decline_vocabulary() -> None:
         f"CONTRIBUTING.md documents {sorted(documented)} as declines but the checker accepts "
         f"{sorted(check_representation_change.NONE_VALUES)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# A near miss must fail loudly, never read as silence
+#
+# #1838 is the live instance: its description declares on line 3 as
+# `` `Representation-Change: none` `` — inside a code span. The strict parser
+# finds zero trailers, git-cliff's footer rule will not match it, and
+# `inject_representation_disclosure.py` will not attach it. Nothing was lost
+# there, because the PR touches no watched directory and the value was a
+# decline. The *shape* is the hazard: an author can believe they declared while
+# every consumer of the trailer sees silence, and one backtick is the whole
+# difference.
+# ---------------------------------------------------------------------------
+
+
+#: Every near-miss spelling, paired with the word the message must use to name it.
+#: Each is a real Markdown habit rather than an invented one: a code span is how a
+#: token gets quoted, `>`/`*`/`-`/`#` open the four block constructs that indent
+#: nothing visibly, and the un-hyphenated spelling is what an author writes when
+#: they are describing the field rather than copying it.
+_NEAR_MISSES = [
+    # #1838, verbatim.
+    ("`Representation-Change: none`", "code span"),
+    ("`Representation-Change: 3 rows of 500,004 move`", "code span"),
+    ("**Representation-Change:** none", "emphasis"),
+    ("*Representation-Change: none*", "emphasis"),
+    ("_Representation-Change: none_", "emphasis"),
+    ("> Representation-Change: none", "block quote"),
+    ("- Representation-Change: none", "list marker"),
+    ("* Representation-Change: none", "list marker"),
+    ("+ Representation-Change: none", "list marker"),
+    ("## Representation-Change: none", "heading"),
+    ("    Representation-Change: none", "indent"),
+    ("\tRepresentation-Change: none", "indent"),
+    # The hyphen is what git-cliff's footer rule keys on, so a space or an
+    # underscore is exactly as invisible as a backtick.
+    ("Representation Change: none", "spelling"),
+    ("Representation_Change: none", "spelling"),
+    # Nothing between the token and its colon but a keystroke, and all three
+    # consumers anchor on `Representation-Change:` with the colon flush — so these
+    # are as unreadable as the rest. They matched the pattern from the start and
+    # named no reason, which meant they were dropped without a word.
+    ("Representation-Change : none", "separated from its colon"),
+    ("Representation-Change\t: none", "separated from its colon"),
+    ("Representation-Change*: none", "separated from its colon"),
+]
+
+
+@pytest.mark.parametrize(("line", "reason"), _NEAR_MISSES)
+def test_a_near_miss_is_refused_and_the_message_names_it(line: str, reason: str) -> None:
+    """A declaration nobody can read must fail, and say *why* it cannot be read.
+
+    Reporting "no declaration" here is the failure this test exists to prevent: the
+    author has written one, so the message they need is not "add a trailer" but "the
+    trailer you added is invisible, and here is the character responsible".
+    """
+    ok, message = check(["src/normalize/merge.rs"], f"Some prose.\n\n{line}\n")
+    assert not ok, f"{line!r} looks like a declaration and must not pass as silence"
+    assert reason in message, f"the message must name the problem ({reason!r}); got:\n{message}"
+    assert line.strip() in message, "the message must quote the offending line verbatim"
+
+
+@pytest.mark.parametrize(("line", "reason"), _NEAR_MISSES)
+def test_a_near_miss_is_refused_even_with_no_watched_file(line: str, reason: str) -> None:
+    """The early return is the hole, so the check must sit in front of it.
+
+    This is the same reasoning the two-trailer refusal already carries and is placed
+    ahead of the watched-file test for: the harm is in what the *changelog* renders,
+    which applies to every commit. #1838 is green today only because it touches no
+    watched directory — it reaches the early return before the trailer would have
+    mattered — so a near-miss check behind that return would rebuild the same hole and
+    pass the one PR that motivated it.
+
+    It does make the check stricter on changes it currently ignores entirely. The
+    narrower alternative was measured and rejected: over all 39 open PRs it would
+    report nothing at all.
+    """
+    ok, message = check(["README.md", "docs/x.md"], f"Some prose.\n\n{line}\n")
+    assert not ok, f"{line!r} must be refused even where no declaration is required"
+    assert reason in message
+
+
+def test_find_near_misses_reports_the_line_and_its_reason() -> None:
+    body = "Prose.\n\n`Representation-Change: none`\n"
+    misses = find_near_misses(body)
+    assert len(misses) == 1
+    (line_number, text, reason) = misses[0]
+    assert line_number == 3
+    assert text == "`Representation-Change: none`"
+    assert "code span" in reason
+
+
+def test_every_near_miss_shape_names_a_reason() -> None:
+    """No line the pattern matches may be reported as silence.
+
+    `_NEAR_MISSES` above is a list of the shapes somebody thought of, so it cannot say
+    anything about the ones nobody did. This drives the *cross product* of the decorations
+    the pattern admits and asserts the invariant directly: a line that
+    `NEAR_MISS_RE` matches, and that `TRAILER_RE` does not, is reported with a non-empty
+    reason.
+
+    It is not hypothetical. `Representation-Change : none` — one space, hyphen intact, no
+    lead — matched the pattern and produced no reason, so it was dropped, which reported an
+    unreadable declaration as silence inside the scan written to stop exactly that. Three
+    shapes did. A list-based test could only have caught them by happening to list them.
+    """
+    leads = ["", "  ", "\t", "> ", "- ", "* ", "+ ", "# ", "`", "**", "_"]
+    separators = ["-", "_", " ", ""]
+    gaps = ["", " ", "\t", "*", "`", "_"]
+    tails = ["none", "3 rows of 500,004 move", "none`", "none**"]
+
+    checked = 0
+    for lead in leads:
+        for separator in separators:
+            for gap in gaps:
+                for tail in tails:
+                    line = f"{lead}Representation{separator}Change{gap}: {tail}"
+                    if check_representation_change.TRAILER_RE.match(line):
+                        continue  # a real trailer, not a near miss
+                    if not check_representation_change.NEAR_MISS_RE.match(line):
+                        continue  # the pattern's own business, and not this contract's
+                    misses = find_near_misses(f"Prose.\n\n{line}\n")
+                    assert misses, f"{line!r} matches the pattern and was reported as silence"
+                    assert misses[0][2].strip(), f"{line!r} was reported with an empty reason"
+                    checked += 1
+
+    # Anti-vacuity: a pattern change that stopped matching everything would otherwise leave
+    # this test green while asserting nothing at all.
+    assert checked > 100, f"only {checked} shapes reached the assertion; the battery is hollow"
+
+
+# --- and now the half that keeps it from becoming a nuisance ---------------
+#
+# Every case below is drawn from a real open PR body. Measured over all 39 open
+# PRs on 2026-08-13, this rule fires on exactly one of them (#1838); without
+# either discriminator below it fires on five. The three extra are not defects
+# and failing them would make the check something contributors route around.
+
+
+def test_a_valid_trailer_silences_the_near_miss_scan() -> None:
+    """An author who declared at column 0 has demonstrated they know the form.
+
+    Real instances: #1742 line 5 (`` `Representation-Change: none` is unaffected: no
+    normalized description moves.``) and #1837 line 84, both *discussing* their own
+    declaration in prose while carrying it properly above. Firing on those would
+    punish a PR for explaining itself, which is the #1555 mistake in a new place.
+
+    It also preserves the documented escape hatch: `CONTRIBUTING.md` says to indent a
+    quoted example, and the two-trailer refusal's own message recommends exactly that.
+    """
+    body = (
+        "Representation-Change: 577 rows move, 360 merge.\n"
+        "\n"
+        "`Representation-Change: none` is what the declining form looks like.\n"
+    )
+    assert find_near_misses(body) == [], "a column-0 trailer must silence the scan"
+    ok, _ = check(["src/normalize/merge.rs"], body)
+    assert ok
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # #1753, the release PR, verbatim — both of its reviewer-checklist mentions.
+        "Any PR that moves a normalized output should carry a `Representation-Change:`\ntrailer.",
+        "- [ ] Nothing in it merely *declined*. A decline reads `Representation-Change:\n  none`.",
+        # #1752 line 136, verbatim in shape.
+        "Both closures are tests only, so the `Representation-Change:` disclosure above\nis unaffected.",
+        # The checker's own failure message, pasted into a description.
+        "The check said to add a `Representation-Change:` trailer.",
+    ],
+)
+def test_a_mid_sentence_mention_is_not_a_near_miss(body: str) -> None:
+    """A declaration is a *line*, not a phrase, so the token must open the line.
+
+    This is the discriminator that does the real work: measured over all 39 open PRs, the
+    anchor alone excludes every mention that is not a declaration. All four bodies here are
+    real, and firing on them would fail a PR for naming the mechanism it is complying with.
+    """
+    assert find_near_misses(body) == [], f"{body!r} mentions the field, it does not declare"
+    ok, _ = check(["README.md"], body)
+    assert ok
+
+
+def test_a_line_anchored_mention_with_no_value_is_not_a_near_miss() -> None:
+    """The value requirement, isolated — the anchor cannot save this one.
+
+    Kept deliberately, and deliberately not claimed as measured-necessary: dropping it
+    reports the same single PR over today's 39. What it buys is that naming the field at
+    the start of a line — which is how a checklist or a doc edit refers to it — is not
+    reported as a declaration that failed, because there is no value to lose.
+    """
+    assert find_near_misses("`Representation-Change:`\n") == []
+    assert find_near_misses("> Representation-Change:\n") == []
+
+
+def test_an_empty_trailer_is_still_reported_as_absent_not_as_a_near_miss() -> None:
+    """`Representation-Change:` at column 0 with no value is the #1522 hole itself, and
+    it already has its own verdict. Re-filing it as a near miss would change a settled
+    message for no gain."""
+    assert find_near_misses("Representation-Change:   \n") == []
+    ok, message = check(["src/normalize/merge.rs"], "Representation-Change:   \n")
+    assert not ok
+    assert "can move normalized output" in message, "the absent-trailer message must survive"
+
+
+def test_the_1838_body_is_refused_by_the_check_it_slipped_past() -> None:
+    """End-to-end on the shape that motivated this, with #1838's real file list.
+
+    It touches one fixture JSON and no watched directory, so it reaches the early
+    return today and passes. The point of the fix is that it must not.
+    """
+    body = (
+        "Two rationale-only corrections to decided records, in one PR because they "
+        "touch the same file.\n"
+        "\n"
+        "`Representation-Change: none`\n"
+        "\n"
+        "Measured, not assumed: the ledger is read only at generation time.\n"
+    )
+    assert find_declarations(body) == [], "the strict parser sees nothing — that is the defect"
+    ok, message = check(["tests/fixtures/grammar/hgvs_spec_normalization_overrides.json"], body)
+    assert not ok, "a trailer no consumer can read must not pass as a considered declaration"
+    assert "code span" in message
+    assert "`Representation-Change: none`" in message
 
 
 def test_the_decline_exclusion_precedes_the_inclusion() -> None:
