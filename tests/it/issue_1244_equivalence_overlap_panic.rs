@@ -167,8 +167,8 @@ fn members_that_merely_abut_are_not_treated_as_overlapping() {
 fn pure_insertions_at_one_position_are_not_treated_as_overlapping() {
     // An insertion deletes nothing, so it claims no reference base and cannot
     // clash with anything — not even another insertion at the same interbase
-    // point. `triples_are_disjoint` says so explicitly; this pins it, because
-    // an off-by-one there (`>=` for `>`) would decline the whole family while
+    // point. `apply_triples`' overlap watermark says so explicitly; this pins
+    // it, because an off-by-one there (`>=` for `>`) would decline the whole family while
     // every other test in this file still passed.
     //
     // The assertion is deliberately order-agnostic. Coincident insertions are

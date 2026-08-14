@@ -435,14 +435,30 @@ fn trim_common_flanks<'a>(reference: &'a [u8], resulting: &'a [u8]) -> (usize, &
 /// interval that begins at `win_start` — and return the edited sequence.
 ///
 /// Triples are applied from the 3' end (descending position) so that an earlier
-/// splice never shifts the coordinates of a later one. Each triple's stated
-/// deleted bases are validated against the actual reference bases at that span;
-/// if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the reference
-/// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
-/// (`None`) rather than assert a sequence equivalence we cannot trust. Also
-/// returns `None` if any triple falls outside the window (a defensive guard;
-/// callers build the window to cover every triple), or if two triples overlap
-/// (see [`triples_are_disjoint`]).
+/// splice never shifts the coordinates of a later one, with **longer deletions
+/// first among members at one position** so a base-claiming member is applied
+/// before a zero-length insertion flush against its 5' edge. Each triple's
+/// stated deleted bases are validated against the actual reference bases at that
+/// span; if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the
+/// reference base is not `A`), we cannot faithfully reconstruct the edit, so we
+/// decline (`None`) rather than assert a sequence equivalence we cannot trust.
+/// Also returns `None` if any triple falls outside the window (a defensive
+/// guard; callers build the window to cover every triple), or if two triples
+/// overlap.
+///
+/// # Overlap and the flush insertion
+///
+/// A running `claimed_from` watermark holds the furthest-5' reference offset any
+/// already-applied triple has taken. A triple whose 3' end reaches *past* it
+/// claims a base another member already has, so the description names no single
+/// sequence and we decline — including an insertion *interior* to a span
+/// (`g.[2_3del;2_3insAA]`, #1244). A zero-width insertion **flush against** the
+/// 5' edge of a span sits exactly *at* the watermark, not past it, so it is
+/// accepted and lands at the junction before the span is removed: this is what
+/// makes `g.[10_11insAC;11G>T]` well defined rather than a spurious overlap. Any
+/// number of coincident pure insertions are likewise accepted (each claims no
+/// base); the order between them is not defined here — a path that must not
+/// guess one declines upstream, in [`variant_edit_triples_reason`].
 pub(crate) fn apply_triples(
     reference: &str,
     win_start: u64,
@@ -451,70 +467,43 @@ pub(crate) fn apply_triples(
     let ref_bytes = reference.as_bytes();
     let mut bytes = ref_bytes.to_vec();
     let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
-    ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
-    if !triples_are_disjoint(&ordered) {
-        return None;
-    }
+    ordered.sort_by_key(|t| (std::cmp::Reverse(t.position), std::cmp::Reverse(t.deletion.len())));
+    let mut claimed_from = ref_bytes.len();
     for t in ordered {
         let rel = t.position.checked_sub(win_start)? as usize;
         let end = rel.checked_add(t.deletion.len())?;
         if end > ref_bytes.len() {
             return None;
         }
+        // Overlap: this triple reaches into a base an already-applied (more 3')
+        // member has claimed. A flush zero-width insertion sits exactly at the
+        // watermark and passes; one interior to a span reaches past it (#1244).
+        if end > claimed_from {
+            return None;
+        }
         // Validate the stated deletion against the original reference span.
         // (Checked against `ref_bytes`, not the mutated `bytes`: descending
-        // order means every already-applied splice sits strictly 3' of `rel`,
-        // so this span is untouched either way.)
+        // order means every already-applied splice sits at or 3' of `rel`, so
+        // this span is untouched either way.)
         if !ref_bytes[rel..end].eq_ignore_ascii_case(t.deletion.as_bytes()) {
             return None;
         }
         // The splice targets the mutated buffer, whose length no longer matches
         // the reference once a length-changing edit has been applied. The
-        // disjointness guard above already makes `end <= bytes.len()` hold;
-        // bound it explicitly anyway so a future change cannot turn a logic
-        // slip back into an out-of-bounds panic (#1244).
+        // watermark above already makes `end <= bytes.len()` hold; bound it
+        // explicitly anyway so a future change cannot turn a logic slip back
+        // into an out-of-bounds panic (#1244).
         if end > bytes.len() {
             return None;
         }
         bytes.splice(rel..end, t.insertion.bytes());
+        // Set unconditionally, including for a pure insertion: an insertion
+        // interior to a member 5' of it is an overlap even though it claims no
+        // base of its own. A flush insertion, applied after the span it abuts,
+        // sits exactly at the span's start and so leaves `claimed_from` there.
+        claimed_from = rel;
     }
     String::from_utf8(bytes).ok()
-}
-
-/// Whether no two of `ordered` claim the same reference base.
-///
-/// `ordered` must be sorted by descending position, as [`apply_triples`] leaves
-/// it. That descending application order is what lets each stated deletion be
-/// validated against the pristine reference: every already-applied splice sits
-/// strictly 3' of the next one, so the span about to be read is untouched. The
-/// argument holds only while the triples are disjoint — overlapping ones both
-/// invalidate that validation and can index past the end of the shrinking
-/// buffer, which is the out-of-bounds panic of #1244.
-///
-/// Declining is also the honest answer semantically: an allele whose members
-/// claim the same base has no single well-defined resulting sequence, so there
-/// is nothing to compare. The caller uses the comparison only to *upgrade* a
-/// `NotEquivalent` verdict, so a decline never invents an equivalence.
-///
-/// Two triples that merely abut are disjoint, and so is any number of pure
-/// insertions at one interbase position — an insertion deletes nothing and
-/// therefore claims no base.
-fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
-    // Walk 5' -> 3' (the reverse of `ordered`) carrying the furthest 3' reach
-    // of every triple seen so far. Comparing against the running maximum rather
-    // than the immediate predecessor is what makes this complete: one long
-    // triple can span several shorter ones that do not touch each other.
-    let mut reach: Option<u64> = None;
-    for t in ordered.iter().rev() {
-        let Some(end) = t.position.checked_add(t.deletion.len() as u64) else {
-            return false;
-        };
-        if reach.is_some_and(|r| r > t.position) {
-            return false;
-        }
-        reach = Some(reach.map_or(end, |r| r.max(end)));
-    }
-    true
 }
 
 /// The SPDI triples that make up `variant`'s resulting sequence, and the single
@@ -609,12 +598,13 @@ pub(crate) fn variant_edit_triples_reason<P: ReferenceProvider + ?Sized>(
     // (`ins[A;C]`, general.md:79), so a caller who means an order has a way to
     // say it and a caller who wrote two members has not said one.
     //
-    // **Deliberately here and not in `triples_are_disjoint`.** That predicate is
-    // shared with `EquivalenceChecker`, where the permissive reading is correct:
-    // a decline there only forgoes upgrading a `NotEquivalent` verdict, so it can
-    // never invent an equivalence, and two pinned tests depend on it. One
-    // predicate cannot serve both a checker that may guess and a key that may
-    // not.
+    // **Deliberately here and not in the shared [`apply_triples`] walk.** That
+    // walk is shared with `EquivalenceChecker`, where the permissive reading is
+    // correct: a decline there only forgoes upgrading a `NotEquivalent` verdict,
+    // so it can never invent an equivalence, and two pinned tests depend on it
+    // (`pure_insertions_at_one_position_are_not_treated_as_overlapping` and its
+    // three-member sibling). One walk cannot serve both a checker that may guess
+    // and a key that may not.
     let mut zero_width: Vec<u64> = triples
         .iter()
         .filter(|t| t.deletion.is_empty())
@@ -922,24 +912,21 @@ enum SpliceFailure {
 /// Splice `triples` into `reference` — the bases beginning at interbase
 /// `win_start` — and return the resulting sequence.
 ///
-/// Deliberately **not** [`apply_triples`], which is shared with
-/// `EquivalenceChecker` and whose [`triples_are_disjoint`] guard reports a pure
-/// insertion flush against the 5' end of a deletion as an overlap. That
-/// combination is well defined — the payload lands at the junction, then the
-/// span is removed — and it is a shape cis alleles reach constantly: measured
-/// over one suite run, reading it as an overlap produced **233** false alarms,
-/// nearly all of them `g.[…;261_262insA;262_264A[5]]`-shaped. (Its verdict there
-/// is also input-order dependent, since the sort breaks position ties by input
-/// order.) Changing that predicate is out of scope — two pinned tests depend on
-/// its permissiveness in the other direction — so this walk is the one used for
-/// the comparison.
-///
-/// The walk is `tests/it/common/cis_apply_oracle.rs`'s, the applier every
-/// sibling-crossing test already rests on: 3'→5' so an applied splice never
-/// moves a later one's coordinates, with **longer deletions first** among
-/// members at one position so a span-claiming member is always applied before
-/// the zero-length one flush against it. Coincident insertions are refused
-/// upstream, by [`variant_edit_triples_reason`].
+/// Deliberately **not** [`apply_triples`], though the two now share a walk:
+/// 3'→5' so an applied splice never moves a later one's coordinates, with a
+/// `claimed_from` watermark and **longer deletions first** among members at one
+/// position, so a span-claiming member is always applied before the zero-length
+/// one flush against it — the combination `apply_triples` once read as an
+/// overlap and this walk was written to admit (measured over one suite run,
+/// reading a pure insertion flush against a deletion as an overlap produced
+/// **233** false alarms, nearly all `g.[…;261_262insA;262_264A[5]]`-shaped). The
+/// two are kept apart for what they do with the *bases*: this comparison folds
+/// the RNA alphabet (`same_bases_bytes`, `U`↔`T`) so an `r.` payload can be
+/// spliced into a DNA-served window, and it reports *why* it refused
+/// ([`SpliceFailure`]) rather than a bare `None`. The walk is
+/// `tests/it/common/cis_apply_oracle.rs`'s, the applier every sibling-crossing
+/// test already rests on. Coincident insertions are refused upstream, by
+/// [`variant_edit_triples_reason`].
 fn splice_denoted_sequence(
     reference: &str,
     win_start: u64,
@@ -1331,6 +1318,56 @@ mod tests {
     fn an_unreadable_reference_declines() {
         let variant = parse_hgvs("NC_ABSENT.1:g.3A>G").unwrap();
         assert!(apply_to_reference(&variant, &provider()).is_err());
+    }
+
+    /// A pure insertion flush against the 5' edge of a substitution is well
+    /// defined and must apply, not be read as an overlap.
+    ///
+    /// `g.[10_11insAC;11C>T]` inserts `AC` at the junction between bases 10 and
+    /// 11 and changes base 11 — two edits that write to disjoint places. The
+    /// insertion anchors *at* the substitution's 5' edge, not interior to it, so
+    /// the combination composes uniquely: apply the base-claiming member first,
+    /// then land the insertion at the junction 5' of it. The window starts at
+    /// base 11 (`C`), which becomes `ACT`.
+    ///
+    /// Order-independent, since the sort breaks position ties by deletion width
+    /// rather than input order: both spellings of the allele give one sequence.
+    #[test]
+    fn an_insertion_flush_against_a_substitution_applies() {
+        for descriptor in [
+            "NC_KEY.1:g.[10_11insAC;11C>T]",
+            "NC_KEY.1:g.[11C>T;10_11insAC]",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let applied = apply_to_reference(&variant, &provider())
+                .unwrap_or_else(|e| panic!("`{descriptor}` must apply: {e}"));
+            assert_eq!(applied.start, 10, "0-based interbase start of base 11");
+            assert_eq!(applied.reference, "C");
+            assert_eq!(
+                applied.resulting, "ACT",
+                "`{descriptor}`: the insertion lands 5' of the substituted base"
+            );
+        }
+        // And it keys, rather than declining as an overlap.
+        assert!(canonical_spdi(
+            &parse_hgvs("NC_KEY.1:g.[10_11insAC;11C>T]").unwrap(),
+            &provider()
+        )
+        .is_ok());
+    }
+
+    /// An insertion strictly *interior* to a span still declines: it claims a
+    /// junction another member has removed, so there is no single sequence.
+    ///
+    /// The dividing line is flush (accepted, above) versus interior (declined,
+    /// here): `g.11_12insAC` sits inside the range `g.10_13del` removes.
+    #[test]
+    fn an_insertion_interior_to_a_deletion_declines() {
+        let variant = parse_hgvs("NC_KEY.1:g.[10_13del;11_12insAC]").expect("must parse");
+        assert!(
+            apply_to_reference(&variant, &provider()).is_err(),
+            "an insertion interior to a deletion has no single resulting sequence"
+        );
     }
 
     /// The 40-base fixture served as a transcript, so the `r.` axis is reachable;

@@ -102,7 +102,7 @@ fn the_two_spellings_of_one_repeat_denote_one_sequence() {
 /// …and the triples themselves are identical, not merely equivalent.
 ///
 /// The width of the SPDI deletion is what decides overlap
-/// (`triples_are_disjoint`), so two triples that denote the same bases at
+/// (`apply_triples`' overlap check), so two triples that denote the same bases at
 /// different widths still disagree about whether an allele is well-formed. That
 /// is the failure in `an_anchored_repeat_and_its_range_agree_on_overlap` below,
 /// and this pins the property that removes it.
@@ -167,7 +167,7 @@ fn a_partial_range_still_absorbs_only_its_own_copies() {
 
 /// The overlap verdict now agrees between the two spellings.
 ///
-/// The deletion width decides `triples_are_disjoint`, so before this fix
+/// The deletion width decides `apply_triples`' overlap check, so before this fix
 /// `g.[263A[7];264dup]` was *admitted* — its repeat triple was one base wide and
 /// so missed the duplication at 264 — while `g.[263_265A[7];264dup]`, the same
 /// variant, was declined as overlapping. One variant, two spellings, opposite
