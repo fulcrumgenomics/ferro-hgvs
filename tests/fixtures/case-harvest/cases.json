@@ -261,12 +261,12 @@
     },
     {
       "input": "LRG_199t1:c.3922dup",
-      "expected": "LRG_199t1:c.3922dup",
+      "expected": "LRG_199t1:c.3921dup",
       "citation": {
         "clause": "docs/recommendations/DNA/duplication.md:25-26",
         "quote": "the variant is described as `LRG_199t1:c.3921dup`"
       },
-      "note": "PRE-FIX BEHAVIOUR, NOT PRESERVATION-BY-DESIGN. Both positions carry the same base, so the two spellings denote one transcript sequence and are nonetheless two fixed points, projecting 2,790 bp apart. The ruling `exon-junction-dup-converge-from-the-far-side` is now DECIDED: CONVERGE — c.3922dup must normalize to c.3921dup, because the 3'rule's exon-junction clamp binds from both sides. This row pins where ferro leaves it TODAY; when #1621 lands, `expected` becomes `LRG_199t1:c.3921dup`."
+      "note": "CONVERGENCE, as decided. Both positions carry the same base, so the two spellings denote one transcript sequence; they were nonetheless two fixed points, projecting 2,790 bp apart. The ruling `exon-junction-dup-converge-from-the-far-side` is DECIDED: CONVERGE — the 3'rule's exon-junction clamp binds from both sides, so this far-side spelling is pulled back onto the near-side one. #1621 implemented it, and this row moved from `LRG_199t1:c.3922dup` with it; the sibling row above did not move, which is the point of keeping both."
     },
     {
       "input": "NM_006420.3:c.[242C>A;247_249delinsTT]",

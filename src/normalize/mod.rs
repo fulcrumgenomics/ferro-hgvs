@@ -486,6 +486,146 @@ fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
     )
 }
 
+/// The 5' anchor of a del/dup's equivalence run, when that run continues back
+/// across an exon/exon junction (#1621).
+///
+/// # The rule
+///
+/// `general.md:44` exempts deletions and duplications around exon/exon
+/// junctions from the 3' rule on `c.`/`r.`/`n.` references. The operator ruling
+/// `exon-junction-dup-converge-from-the-far-side` reads that exemption as a
+/// clamp that binds in **both** directions: the canonical position is the most
+/// 3' position that does not cross a junction, *reached from either side*. A
+/// description approaching the junction stops at it — which is what
+/// [`Boundaries`] built from `axis_info.exon` already does — and one already
+/// spelled past it is **pulled back** to the clamp, which is what this function
+/// supplies. `DNA/duplication.md` states the outcome three times (`:26`, `:60`,
+/// `:148`), the last giving the reason: `c.3922dup` translated back to a
+/// genomic position lands "at the wrong nucleotide, in the wrong exon".
+///
+/// # Why an anchor, rather than a step back over the junction
+///
+/// In *spliced* transcript space an exon/exon junction is not a gap — the base
+/// immediately 5' of an exon's first base is the previous exon's last base — so
+/// `LRG_199t1:c.3921` and `c.3922` are one contiguous `T` run and two spellings
+/// of one sequence. Only the exon annotation distinguishes them. The canonical
+/// answer is therefore obtained by finding where that run *begins*, in full
+/// transcript space, and clamping the 3' rule inside the exon holding **that**
+/// base. Both spellings share a run, so both reach the same answer; that is the
+/// "from either side" in the ruling.
+///
+/// Returning the anchor rather than "the previous exon's last base" is what
+/// makes the rule compose when a run spans three or more exons, and what makes
+/// the result a fixed point: re-normalizing the answer finds the same anchor,
+/// inside the same exon, so no second pull-back fires.
+///
+/// # The scope, and the case that sets it
+///
+/// **A description is pulled back only when it is pinned at its exon's first
+/// base with nowhere to shift inside that exon.** Without that condition the
+/// rule inverts into the defect it is supposed to prevent: it would move a
+/// description *across* a junction, 5'-ward, which is exactly what
+/// `general.md:44` forbids.
+///
+/// `NM_001234.1` in `MockProvider::with_test_data` is the case that shows it —
+/// a 25-base `G` run spanning `c.9`-`c.33` across two junctions, with exons at
+/// transcript 1-15 / 16-30 / 31-44. `c.13del` sits mid-run inside exon 2 and
+/// 3'-shifts to exon 2's **last** base, `c.26del` (#1450 pins it). Its run does
+/// reach back over the exon-1/exon-2 junction, so an anchor rule with no
+/// further condition drags it to `c.11del` — one exon 5' of where the 3' rule
+/// put it. The condition below declines it: `c.26` is not exon 2's first base,
+/// so the description is resting on the near side of the *next* junction and
+/// stays there.
+///
+/// `c.3922dup` passes the condition because exon 28's first base is where it
+/// rests and where it started: `c.3923` is not `T`, so the exon gives it no 3'
+/// travel at all, and the only reason it is spelled in exon 28 rather than
+/// exon 27 is the junction it is hanging off. That is what "past the clamp"
+/// means in the ruling.
+///
+/// **Residue, deliberately left.** A run whose portion inside the far exon is
+/// longer than the description can be pinned at — `c.3922`/`c.3923` both `T`,
+/// say — is not reached: the far-side spelling shifts to `c.3923` and the pair
+/// does not converge. The ruling's words arguably cover it; its worked example,
+/// its grounds and every corpus row do not, and widening the rule to reach it
+/// re-opens the #1450 regression above unless some further discriminator is
+/// found. Recorded here rather than guessed at.
+///
+/// # Returns
+///
+/// `Some((start, end))` — 1-based, inclusive, the same convention `start`/`end`
+/// arrive in — when the run's anchor lies strictly 5' of `exon.left`, i.e. when
+/// the input really is spelled past a junction. `None` whenever the existing
+/// exon-confined shuffle already gives the canonical answer, which is every
+/// del/dup whose run does not straddle a junction.
+fn exon_junction_anchor(
+    ref_seq: &[u8],
+    edit: &NaEdit,
+    start: u64,
+    end: u64,
+    exon: &Boundaries,
+) -> Option<(u64, u64)> {
+    if !edit_is_del_or_dup(edit) {
+        return None;
+    }
+    // The transcript's first exon has nothing 5' of it to be pulled back into.
+    if exon.left == 0 {
+        return None;
+    }
+    let start_idx = hgvs_pos_to_index(start) as u64;
+    if start_idx >= ref_seq.len() as u64 || end > ref_seq.len() as u64 || end <= start_idx {
+        return None;
+    }
+
+    // The duplicated bases are read from the reference at the input's own span,
+    // exactly as `normalize_na_edit`'s `Duplication` arm does (#219) — a stated
+    // `dup<base>` that disagrees with the reference must not steer the walk.
+    // A deletion carries no payload, and the 5' walk's predicate for an empty
+    // `alt` is the mirror of the 3' rotation invariant.
+    let alt_seq: Vec<u8> = match edit {
+        NaEdit::Duplication { .. } => ref_seq[start_idx as usize..end as usize].to_vec(),
+        _ => Vec::new(),
+    };
+
+    // The description must have no 3' travel inside its own exon — see "The
+    // scope" above. `shuffle` only ever increases `start`, and `start_idx` is
+    // inside `exon` by construction, so this holds exactly when the description
+    // both starts at the exon's first base and cannot move off it.
+    let confined = shuffle(
+        ref_seq,
+        &alt_seq,
+        start_idx,
+        end,
+        exon,
+        ShuffleDirection::ThreePrime,
+    );
+    if confined.start != exon.left {
+        return None;
+    }
+
+    // The walk is unbounded on the 5' side rather than bounded at `exon.left`,
+    // because the question is where the run *begins*, and a run that begins
+    // inside this exon is answered `None` below. It terminates at the first
+    // mismatch, so its cost is the run's length — a homopolymer or tandem tract,
+    // not the transcript.
+    let unbounded = Boundaries::new(0, ref_seq.len() as u64);
+    let anchor = shuffle(
+        ref_seq,
+        &alt_seq,
+        start_idx,
+        end,
+        &unbounded,
+        ShuffleDirection::FivePrime,
+    );
+
+    // The run begins inside this exon: no junction is crossed, and the
+    // exon-confined 3' shuffle already holds the canonical answer.
+    if anchor.start >= exon.left {
+        return None;
+    }
+    Some((index_to_hgvs_pos(anchor.start as usize), anchor.end))
+}
+
 /// Everything the codon-frame gate needs for one [`Normalizer::normalize_na_edit`]
 /// call: whether the axis has a reading frame at all, and if so where the CDS is.
 ///
@@ -3607,6 +3747,65 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.
         let (normalized, warnings) = self.normalize_core_canonical(variant)?;
+
+        // #1621: the far-side exon-junction clamp, applied ONCE to the finished
+        // description. See [`exon_junction_anchor`] for the rule and its
+        // grounds; what this site decides is *when* it is asked.
+        //
+        // **On the output, not the input.** `normalize_cds` has several
+        // producers of a del/dup spelling and only one of them is the input's
+        // own edit kind: a `delins` whose payload shares an affix with its
+        // reference *reduces* to a pure deletion inside `normalize_na_edit`
+        // (#1185), i.e. after any input-side check has run. Clamping the input
+        // alone left `c.20_22delinsA` emitting `c.21_22del` — a description the
+        // clamp itself would move — which is a rank-1 idempotency regression,
+        // measured as two rows of the `junction-1` stratum in
+        // `spec_conformance_axis`'s 58,552-output census.
+        //
+        // **Here rather than inside `normalize_cds`/`normalize_tx`, because
+        // those are recursive.** They re-enter themselves for the `conversion`
+        // rewrite, special-position resolution and more, so a clamp applied
+        // there fires on *intermediate* spellings as well as the answer. That
+        // was measured too: it moved cis-allele rows whose finished output the
+        // clamp declines, cost one converged family
+        // (`s00-n3p-junction-2-del-del-p1-sep0`) and raised another's arity.
+        // Asking once, at the seam every public normalization passes through,
+        // keeps the clamp a property of the description that is actually
+        // returned.
+        //
+        // Consequently a **cis member** is not clamped individually — only a
+        // whole-variant result is. That is deliberate: `general.md:44` is about
+        // how a description is positioned, and a member's position is settled by
+        // the derivation and its own #1450 junction guard.
+        //
+        // One re-normalization, never a loop: the replacement is the run's 5'
+        // anchor, an anchor lies inside its own exon, and
+        // [`exon_junction_anchor`] declines there — which is also why the
+        // returned description is a fixed point.
+        //
+        // **The first pass's warnings are KEPT, not replaced.** They are about
+        // `variant` — the input — and the second pass cannot re-derive them,
+        // because `pulled` is built from the already-normalized *output*: a
+        // `REFSEQ_MISMATCH` the input earned by stating a base the reference
+        // contradicts is gone by then, since `normalize_na_edit` reads the dup
+        // payload from the reference (#219). Replacing the vector made two
+        // inputs that produce one output disagree about whether ferro had
+        // corrected a stated base — measured on this module's own fixture,
+        // `NM_SYNTH.1:c.17dupG` and `c.16dupG` both emit `c.16dup` while only
+        // the second reported the mismatch. That is a silently dropped
+        // disclosure, not a re-spelling, so the two sets are concatenated.
+        // The second pass runs on an already-canonical description and
+        // contributes nothing in every reachable case measured.
+        let (normalized, warnings) = match self.exon_junction_far_side(&normalized) {
+            Some(pulled) if pulled != *variant => {
+                let (clamped, more) = self.normalize_core_canonical(&pulled)?;
+                let mut merged = warnings;
+                merged.extend(more);
+                (clamped, merged)
+            }
+            _ => (normalized, warnings),
+        };
+
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
         // EINTRONIC (#486): reject an intronic offset on a bare transcript
@@ -5834,6 +6033,85 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
+    /// The far-side exon-junction clamp for a finished description, dispatched
+    /// to the axis that carries it (#1621).
+    ///
+    /// `Some` is the re-spelling [`Self::normalize_core_checked`] re-normalizes;
+    /// `None` leaves the result standing. Only the two transcript axes the
+    /// ruling scopes are reached — `general.md:44` names `c.`, `r.` and `n.`,
+    /// and the `r.` half is deferred with the ruling's own "(and `r.` until
+    /// upstream PR #266 lands)". The genomic axes have no exon junctions to
+    /// clamp at.
+    fn exon_junction_far_side(&self, variant: &HgvsVariant) -> Option<HgvsVariant> {
+        match variant {
+            HV::Cds(cds) => self.exon_junction_far_side_cds(cds).map(HV::Cds),
+            HV::Tx(tx) => self.exon_junction_far_side_tx(tx).map(HV::Tx),
+            _ => None,
+        }
+    }
+
+    /// The far-side exon-junction clamp for a `c.` result — the re-spelling
+    /// [`Self::normalize_cds`] re-enters with, or `None` to leave the result
+    /// standing. See [`exon_junction_anchor`] for the rule and its grounds.
+    ///
+    /// **Refused across an axis change.** A junction coinciding with
+    /// `cds_start`/`cds_end` would let the clamp re-ax the variant (`c.1` into
+    /// `c.-1`, say), and the ruling is silent on that — its case and its
+    /// grounds are entirely CDS-internal, and #350's cross-axis bail exists for
+    /// the same reason. An intronic result is refused for a different reason:
+    /// those are #670's junction-*crossing* continuation, which is the other
+    /// half of `general.md:44` and must not be undone here.
+    fn exon_junction_far_side_cds(&self, cds: &CdsVariant) -> Option<CdsVariant> {
+        if self.config.shuffle_direction != ShuffleDirection::ThreePrime {
+            return None;
+        }
+        let edit = cds.loc_edit.edit.inner()?;
+        if !edit_is_del_or_dup(edit) {
+            return None;
+        }
+        let start_pos = cds.loc_edit.location.start.inner()?;
+        let end_pos = cds.loc_edit.location.end.inner()?;
+        if start_pos.is_intronic() || end_pos.is_intronic() {
+            return None;
+        }
+        let transcript = self
+            .provider
+            .get_transcript(&cds.accession.transcript_accession())
+            .ok()?;
+        let cds_start = transcript.cds_start?;
+        let sequence = transcript.sequence.as_deref()?;
+        let tx_start = self
+            .cds_to_tx_pos(start_pos, cds_start, transcript.cds_end)
+            .ok()?;
+        let tx_end = self
+            .cds_to_tx_pos(end_pos, cds_start, transcript.cds_end)
+            .ok()?;
+        let info = boundary::get_cds_boundaries_with_axis_info(&transcript, tx_start, &self.config)
+            .ok()?;
+        let (anchor_start, anchor_end) =
+            exon_junction_anchor(sequence.as_bytes(), edit, tx_start, tx_end, &info.exon)?;
+        if boundary::axis_region_of(&transcript, anchor_start) != info.axis_region
+            || boundary::axis_region_of(&transcript, anchor_end)
+                != boundary::axis_region_of(&transcript, tx_end)
+        {
+            return None;
+        }
+        let new_start = self
+            .tx_to_cds_pos(anchor_start, cds_start, transcript.cds_end)
+            .ok()?;
+        let new_end = self
+            .tx_to_cds_pos(anchor_end, cds_start, transcript.cds_end)
+            .ok()?;
+        Some(CdsVariant {
+            accession: cds.accession.clone(),
+            gene_symbol: cds.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                cds.loc_edit.edit.clone(),
+            ),
+        })
+    }
+
     /// Normalize a CDS variant
     fn normalize_cds(
         &self,
@@ -7181,6 +7459,71 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Cds(new_variant));
         warnings.append(&mut split_warnings);
         Ok((wrap_allele_if_split(split, uncertain), warnings))
+    }
+
+    /// The far-side exon-junction clamp for an `n.` result.
+    ///
+    /// No axis guard, and that is not an omission: `n.` numbering runs through
+    /// the whole transcript with no CDS↔UTR sub-axis to be re-axed into — the
+    /// same reason `normalize_tx_inner` takes the bare `exon` bound rather than
+    /// intersecting it with an axis bound. `n.` is also a flat transcript offset
+    /// (`c-and-n-positions-are-flat-transcript-offsets`), so the anchor needs no
+    /// mapping back onto the axis.
+    fn exon_junction_far_side_tx(&self, tx: &TxVariant) -> Option<TxVariant> {
+        if self.config.shuffle_direction != ShuffleDirection::ThreePrime {
+            return None;
+        }
+        let edit = tx.loc_edit.edit.inner()?;
+        if !edit_is_del_or_dup(edit) {
+            return None;
+        }
+        let start_pos = tx.loc_edit.location.start.inner()?;
+        let end_pos = tx.loc_edit.location.end.inner()?;
+        // Intronic is #670's junction-crossing continuation; downstream (`n.*N`)
+        // names no transcript offset this clamp could read.
+        //
+        // **`downstream` must be tested explicitly, and nothing downstream of
+        // here would catch it.** `TxPos::is_intronic` reads only `offset`, and
+        // on the `n.` axis the `*` marker is a *spelling* flag on the position
+        // rather than a transcript region — so unlike the `c.` arm, which is
+        // covered by `boundary::axis_region_of`, there is no region check that
+        // could refuse a re-zoning here. Without this clause `n.*21` is read as
+        // transcript offset 21, and `TxPos::new(anchor)` below then rebuilds the
+        // position *without* the flag: measured on this module's fixture,
+        // `NR_SYNTH.1:n.*21del` came back as `NR_SYNTH.1:n.20del`, a different
+        // variant in a zone `numbering.md:52` does not give this axis. Such a
+        // position is unreachable from any string entry point (#1748 refuses it
+        // at parse in every mode) but `TxPos::downstream` is public API, which is
+        // the same reachability the re-parse oracle's own exemption documents.
+        if start_pos.is_intronic()
+            || end_pos.is_intronic()
+            || start_pos.downstream
+            || end_pos.downstream
+        {
+            return None;
+        }
+        let tx_start = u64::try_from(start_pos.base).ok()?;
+        let tx_end = u64::try_from(end_pos.base).ok()?;
+        let transcript = self
+            .provider
+            .get_transcript(&tx.accession.transcript_accession())
+            .ok()?;
+        let sequence = transcript.sequence.as_deref()?;
+        let info = boundary::get_cds_boundaries_with_axis_info(&transcript, tx_start, &self.config)
+            .ok()?;
+        let (anchor_start, anchor_end) =
+            exon_junction_anchor(sequence.as_bytes(), edit, tx_start, tx_end, &info.exon)?;
+        Some(TxVariant {
+            accession: tx.accession.clone(),
+            gene_symbol: tx.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(
+                    TxPos::new(i64::try_from(anchor_start).ok()?),
+                    TxPos::new(i64::try_from(anchor_end).ok()?),
+                ),
+                tx.loc_edit.edit.clone(),
+            ),
+        })
     }
 
     /// Normalize a transcript variant

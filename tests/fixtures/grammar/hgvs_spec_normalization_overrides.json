@@ -628,8 +628,8 @@
       "status": "decided",
       "guard": {
         "tests": [
-          "tests/it/spec_worked_examples.rs::the_exon_junction_pair_does_not_converge_and_that_is_recorded",
-          "tests/it/spec_worked_examples.rs::the_decided_target_is_convergence_on_the_near_side"
+          "tests/it/spec_worked_examples.rs::the_decided_target_is_convergence_on_the_near_side",
+          "tests/it/issue_1621_exon_junction_far_side.rs::a_duplication_converges_on_the_near_side_of_the_junction"
         ]
       },
       "clauses": [

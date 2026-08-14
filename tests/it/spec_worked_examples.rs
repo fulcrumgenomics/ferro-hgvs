@@ -55,21 +55,26 @@
 //!   the spec's own published inputs**, because the reference tract is not a
 //!   whole number of `TA` copies. Recorded, not endorsed.
 //!
-//! # The exon-junction pair must converge, and does not yet
+//! # The exon-junction pair converges
 //!
 //! `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence (both
-//! positions are `T`) but are two fixed points, projecting 2,790 bp apart. The
+//! positions are `T`) and were two fixed points, projecting 2,790 bp apart. The
 //! ruling `exon-junction-dup-converge-from-the-far-side` is **`decided`:
 //! CONVERGE** — `c.3922dup` normalizes to `c.3921dup`, because the 3'rule's
-//! exon-junction clamp binds from **both** sides. Ferro does not do that yet
-//! (#1621), so this file pins each row's own output as **pre-fix behaviour**
-//! and `the_decided_target_is_convergence_on_the_near_side` asserts the decided
-//! answer under `#[ignore]`.
+//! exon-junction clamp binds from **both** sides. #1621 implemented it, so
+//! `the_decided_target_is_convergence_on_the_near_side` now runs unignored and
+//! the `c.3922dup` row's three mode outputs are the spec's own answer.
 //!
-//! That also makes `LRG_199t1:c.3922dup` a **recorded divergence** rather than
-//! a row the spec is silent on: its `spec_expected` was null on the reasoning
-//! that the spec published no answer, and the spec publishes one three times
-//! (`DNA/duplication.md:26`, `:60`, `:148`).
+//! `LRG_199t1:c.3922dup` was a **recorded divergence** rather than a row the
+//! spec is silent on: its `spec_expected` was null on the reasoning that the
+//! spec published no answer, and the spec publishes one three times
+//! (`DNA/duplication.md:26`, `:60`, `:148`). With the clamp binding from the
+//! far side the row conforms, and the diverging set is empty.
+//!
+//! The rest of the ruling's scope — deletions as well as duplications, and the
+//! `n.` axis as well as `c.`, each asserted in **both** directions — is in
+//! `tests/it/issue_1621_exon_junction_far_side.rs`, on a synthetic two-exon
+//! transcript. This slice carries the spec's own row and nothing more.
 //!
 //! # Regenerating the slice
 //!
@@ -237,10 +242,14 @@ fn the_lenient_path_reproduces_the_spec_where_the_spec_is_self_consistent() {
         }
     }
     assert_eq!(
-        compared, 11,
+        compared, 12,
         "the set of spec-conformant rows changed size. It was 10 until #1631 fixed the W3013 \
          repair: `NM_024312.4:r.-6_-3g[6]`'s lenient answer moved onto the spec's published \
-         string and the row stopped being a divergence"
+         string and the row stopped being a divergence. It was 11 until #1621 made the \
+         exon-junction clamp bind from the far side, which moved `LRG_199t1:c.3922dup` onto \
+         `c.3921dup` and retired the last divergence — so this is now every row the spec \
+         answers, and `the_divergence_set_is_exactly_the_one_recorded_conflict` asserts the \
+         complement is empty"
     );
     assert!(
         mismatched.is_empty(),
@@ -341,35 +350,37 @@ fn the_divergence_set_is_exactly_the_one_recorded_conflict() {
         .map(|c| c.input.as_str())
         .collect();
     diverging.sort_unstable();
-    assert_eq!(
-        diverging,
-        ["LRG_199t1:c.3922dup"],
-        "the set of rows diverging from the spec changed. One is recorded: the exon-junction \
-         row that the `exon-junction-dup-converge-from-the-far-side` ruling decided against \
-         ferro's current output (#1621). A second is a defect, not a fixture edit. It held two \
-         until #1631: `NM_024312.4:r.-6_-3g[6]` diverged because the W3013 repair emitted \
-         `r.-6_-3[6]`, which by `RNA/repeated.md:20` is a different variant. That row is now \
-         conformant with `:27` — which does NOT settle the `:22`-vs-`:27` conflict, only what \
-         ferro emits."
+    assert!(
+        diverging.is_empty(),
+        "the set of rows diverging from the spec changed: {diverging:?}. It is empty, and any \
+         member is a defect rather than a fixture edit. It held two until #1631: \
+         `NM_024312.4:r.-6_-3g[6]` diverged because the W3013 repair emitted `r.-6_-3[6]`, which \
+         by `RNA/repeated.md:20` is a different variant — now conformant with `:27`, which does \
+         NOT settle the `:22`-vs-`:27` conflict, only what ferro emits. It held one until #1621: \
+         `LRG_199t1:c.3922dup`, the exon-junction row the \
+         `exon-junction-dup-converge-from-the-far-side` ruling decided against ferro's output, \
+         which now converges on `c.3921dup` from the far side."
     );
 }
 
-/// The two exon-junction rows are two fixed points for one transcript sequence.
+/// The premise the exon-junction ruling rests on: the two positions carry the
+/// same base, so the pair really is two spellings of one transcript sequence.
 ///
-/// **Pre-fix behaviour against a decided target**, not an observation any more.
-/// The `exon-junction-dup-converge-from-the-far-side` ruling is `decided`:
-/// CONVERGE, so the `assert_ne!` below records a defect rather than a choice.
-/// It stays because the premise it also checks — both positions carry the same
-/// base, so the pair really is two spellings of one sequence — is what the
-/// ruling rests on, and because a test that goes green on the day the fix lands
-/// is the signal to move the fixture rows with it.
+/// **What used to be here was an `assert_ne!`** pinning the two rows as two
+/// fixed points — pre-fix behaviour against a decided target. #1621 implemented
+/// the clamp and that assertion was **deleted rather than inverted**, on its own
+/// instructions and the issue's: the converged answer is asserted by
+/// [`the_decided_target_is_convergence_on_the_near_side`], which now runs
+/// unignored, and a second test restating it would only be a second thing to
+/// keep in step.
 ///
-/// The decided answer is asserted by
-/// [`the_decided_target_is_convergence_on_the_near_side`], which is `#[ignore]`d
-/// until #1621. When that lands, **delete this assertion rather than inverting
-/// it** — the ignored guard already says the thing worth saying.
+/// The base check survives the deletion because it is not a claim about ferro at
+/// all. It is the evidence for the ruling — if `c.3921` and `c.3922` did not
+/// carry the same base they would be two variants rather than two spellings, and
+/// convergence would be wrong instead of required. Nothing else in this file
+/// checks it, and the sibling test would still pass if the slice drifted.
 #[test]
-fn the_exon_junction_pair_does_not_converge_and_that_is_recorded() {
+fn the_exon_junction_pair_is_two_spellings_of_one_sequence() {
     let fixture = WindowFixture::from_json_path(&repo_path(WINDOWS_PATH))
         .expect("load the committed spec worked-example reference slice");
     let tx = fixture
@@ -389,18 +400,6 @@ fn the_exon_junction_pair_does_not_converge_and_that_is_recorded() {
         "the premise of this record is that c.3921 and c.3922 are the same base, so the two \
          spellings denote one transcript sequence"
     );
-
-    let provider = fixture.to_provider();
-    let first = run(&provider, "LRG_199t1:c.3921dup", Mode::Lenient);
-    let second = run(&provider, "LRG_199t1:c.3922dup", Mode::Lenient);
-    assert_ne!(
-        first, second,
-        "the exon-junction pair converged — which is the DECIDED target (ruling \
-         `exon-junction-dup-converge-from-the-far-side`), so this failure is good news. Delete \
-         this assertion, un-ignore `the_decided_target_is_convergence_on_the_near_side`, and \
-         move the `LRG_199t1:c.3922dup` rows in `tests/fixtures/spec-worked-examples/cases.json` \
-         and `tests/fixtures/case-harvest/cases.json` to `c.3921dup`. See #1621."
-    );
 }
 
 /// **The decided target**: `LRG_199t1:c.3922dup` normalizes to
@@ -416,11 +415,10 @@ fn the_exon_junction_pair_does_not_converge_and_that_is_recorded() {
 /// `c.3922dup` translated back to a genomic position lands "at the wrong
 /// nucleotide, in the wrong exon".
 ///
-/// **`#[ignore]`d because ferro does not do this yet**, not because the answer
-/// is in doubt. #1617's sibling; the implementation is **#1621**, and this test
-/// is its acceptance criterion.
+/// **Was `#[ignore]`d** while the answer was decided and unimplemented — never
+/// because it was in doubt. #1617's sibling; **#1621** implemented it and this
+/// test was its acceptance criterion, so the attribute came off with the fix.
 #[test]
-#[ignore = "decided target, not yet implemented — see #1621"]
 fn the_decided_target_is_convergence_on_the_near_side() {
     let fixture = WindowFixture::from_json_path(&repo_path(WINDOWS_PATH))
         .expect("load the committed spec worked-example reference slice");

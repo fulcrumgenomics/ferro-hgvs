@@ -90,7 +90,7 @@
 //! fix intact — it is now carried by `outputs_intronic_under_a_genomic_wrapper`,
 //! and it is still a claim about the code rather than about the corpus.
 //!
-//! # RE-BLESSED (1 of 5) — #1599, the amino-acid precondition
+//! # RE-BLESSED (1 of 6) — #1599, the amino-acid precondition
 //!
 //! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus
 //! PR, which touched no normalizer file. **That is no longer the base.** #1599
@@ -129,7 +129,7 @@
 //! #1599, which was the pre-existing baseline and not a regression of its — it is
 //! #1704, three sections down, that finally moves it.
 //!
-//! # RE-BLESSED (2 of 5) — #1536, the cross-axis re-typing carve-out
+//! # RE-BLESSED (2 of 6) — #1536, the cross-axis re-typing carve-out
 //!
 //! This branch adds a third carve-out from the #350 cross-axis bail in
 //! `normalize_cds`, so a `delins`/`inv` whose span straddles a CDS boundary is
@@ -182,7 +182,7 @@
 //! measures **6** at 3', the two extra rows being
 //! `s00-c3{p,m}-cds-end-del-del-p2-sep1`. Every rank-1 counter is unchanged.
 //!
-//! # RE-BLESSED (3 of 5) — #1649, the two-deletion alignment
+//! # RE-BLESSED (3 of 6) — #1649, the two-deletion alignment
 //!
 //! `merge`'s payload splitter could express *insertion, retained reference,
 //! insertion* but not *deletion, retained reference, deletion*, so a payload
@@ -235,7 +235,7 @@
 //! converged. `s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and stays pinned
 //! there — its spanning `delins` still stops where `general.md:34` puts it.
 //!
-//! # RE-BLESSED (4 of 5) — #1627, the alignment-only symbol
+//! # RE-BLESSED (4 of 6) — #1627, the alignment-only symbol
 //!
 //! `background/standards.md:39` footnotes the table's daggered `X` and `-` as
 //! "used in alignment only", and the decided
@@ -294,7 +294,7 @@
 //! which covers the embedded shapes (`delinsACGTX`, `delinsXACGT`,
 //! `delinsACXGT`) the corpus does not generate.
 //!
-//! # RE-BLESSED (5 of 5) — #1716, the codon-frame merge's own span
+//! # RE-BLESSED (5 of 6) — #1716, the codon-frame merge's own span
 //!
 //! `merge_consecutive_edits`' per-member codon-frame predicate asked
 //! `same_codon(prev_a.end, next_start)` — its left anchor's **right** edge —
@@ -345,6 +345,76 @@
 //! `outputs_leaving_the_transcript`, `prohibition_violating_outputs` — as are
 //! `non_idempotent_outputs` (4 / 4), `sequence_changed` (4 / 0), all three
 //! refusal counters and `guard_violations`.
+//!
+//! # RE-BLESSED (6 of 6) — #1621, the exon-junction clamp from the far side
+//!
+//! `general.md:44` exempts deletions and duplications around exon/exon
+//! junctions from the 3' rule on `c.`/`n.`, and ferro applied that exemption in
+//! one direction only: a description approaching a junction stopped at it, one
+//! already spelled past it stayed put. The operator ruling
+//! `exon-junction-dup-converge-from-the-far-side` reads the exemption as a clamp
+//! binding in **both** directions, so a description pinned at its exon's first
+//! base whose equivalence run continues back over the junction is pulled onto
+//! the near side.
+//!
+//! **Three figures move. `converged` is unchanged, no failure counter rises,
+//! and both rank-2 moves are arity FALLS:**
+//!
+//! | figure | was (this branch's base, `96305ded`) | now | direction |
+//! |---|---|---|---|
+//! | 3' `outputs_intronic_under_a_genomic_wrapper` | 389 | **391** | +2 — conformant, not a defect counter |
+//! | 3' `converged` | 11,016 | **11,016** | unchanged |
+//! | 3' `split_two` | 673 | **674** | +1, from `split_three` |
+//! | 3' `split_three` | 164 | **164** | unchanged — one in, one out |
+//! | 3' `split_more` | 29 | **28** | −1, to `split_three` |
+//!
+//! **Every absolute above was restated on the #1835 rebase; every DELTA is the
+//! one first measured.** The table read `371 -> 373`, `9,402` unchanged,
+//! `2,223 -> 2,224`, `226` unchanged and `31 -> 30` when it was written, against
+//! a base predating the partition flip (#1835), which moved 1,614 families into
+//! `converged` (`split_two` −1,550, `split_three` −62, `split_more` −2) — and
+//! #1840 and #1704 moved the intronic counter. So `converged` was **9,402** in
+//! the prose and **11,016** in the constant three hundred lines below, which is
+//! the shape this repository's `CLAUDE.md` names: a derived figure quoted
+//! against a base nobody restates. Quote the deltas, which survived the rebase
+//! unchanged, and re-read the absolutes off [`THREE_PRIME`] rather than from
+//! here.
+//!
+//! **The 5' census does not move at all**, which is a check on the change
+//! rather than a coincidence: the clamp is gated on
+//! `ShuffleDirection::ThreePrime`, because the 3' rule is what `general.md:44`
+//! carves an exception out of and a 5'/VCF shuffle has no such rule to clamp.
+//!
+//! **Exactly four family instances change, all in the `junction-1-del-del`
+//! stratum, and they are named** — the net counters cannot tell an arity rise
+//! from a fall. The full divergence row-id lists were dumped either side (the
+//! `MAX_DIVERGENCES` cap raised locally, then restored) and diffed:
+//!
+//! - **0 families lose convergence, 0 gain it, and 0 become divergent that were
+//!   not** — the divergent *set* is identical either side, 2,480 families.
+//! - `s01-c3p-junction-1-del-del-p1-sep0` 4 -> 3 and `…-sep1` 3 -> 2: in both,
+//!   the output that disappears is `NM_TEST.1:c.21_22del`, the far-side spelling,
+//!   which now converges onto `c.19_20del` — the arity fall IS the ruling.
+//! - `s01-c3m-junction-1-del-del-p1-sep{0,1}` keep their arity and re-spell that
+//!   same output as `NC_SYNTH.1(NM_TEST.1):c.18_20+2A[3]`. Those are the +2 on
+//!   the intronic counter: on the minus strand the pulled-back description rests
+//!   on the junction's near side, where #670's junction-crossing continuation
+//!   carries it into the intron. Both clauses apply and they compose —
+//!   `general.md:44` forbids the exon/EXON shift, the exception 3' rule permits
+//!   the exon/INTRON one — so the row is conformant, not a new violation.
+//!
+//! **Nothing is promoted to `spec_corpus_regressions.rs`**, because nothing
+//! newly fails: every moved figure improves or is conformant. The ruling's own
+//! row is pinned in `spec_worked_examples.rs`
+//! (`the_decided_target_is_convergence_on_the_near_side`, no longer `#[ignore]`d)
+//! and the rest of its scope — deletions, the `n.` axis, and both directions of
+//! the clamp — in `issue_1621_exon_junction_far_side.rs`.
+//!
+//! **Every rank-1 counter is unchanged** — `outputs`, `declined`,
+//! `unparseable_outputs`, `outputs_denoting_no_sequence`,
+//! `outputs_leaving_the_transcript`, `prohibition_violating_outputs` — as are
+//! `non_idempotent_outputs` (4), `sequence_changed` (4), all three refusal
+//! counters and `guard_violations`.
 //!
 //! # CORRECTED — what the transcript-leaving class actually violates
 //!
@@ -676,7 +746,17 @@ pub(crate) const THREE_PRIME: Census = Census {
     // stays at 0, which is the counter that would move if any of the eighteen
     // were being emitted on a bare transcript instead
     // (`bare-transcript-intronic-position`, decided).
-    outputs_intronic_under_a_genomic_wrapper: 389,
+    //
+    // #1621 adds **2** on top of that: the two
+    // `s01-c3m-junction-1-del-del-p1-sep{0,1}` rows whose far-side spelling is
+    // now pulled back onto the junction's near side, where #670's
+    // junction-crossing continuation then carries it into the intron as
+    // `NC_SYNTH.1(NM_TEST.1):c.18_20+2A[3]`. Both clauses apply and they
+    // compose: `general.md:44` forbids the exon/EXON shift, the exception 3'
+    // rule permits the exon/INTRON one. Conformant, and not a defect counter —
+    // see the module docs' sixth RE-BLESSED section. Re-measured on the rebase
+    // onto #1835 rather than composed from the two branches' deltas: 391.
+    outputs_intronic_under_a_genomic_wrapper: 391,
     // Re-blessed DOWN to ZERO. #1627 refused `standards.md:39`'s 24 `X` rows
     // rather than re-emitting them; #1628 refused the residual 8 —
     // `checklist.md:16`'s `+` offset (4) and `checklist.md:45`'s hyphen range
@@ -721,10 +801,24 @@ pub(crate) const THREE_PRIME: Census = Census {
     // and `non_idempotent_outputs` are unmoved at 4, and
     // `outputs_denoting_no_sequence` is unmoved at 10. So nothing converged by
     // losing a member, changing a base or ceasing to be a fixed point.
+    //
+    // # #1621 — on top of that, two families move DOWN one arity each
+    //
+    // `converged` is untouched — `split_more` -1 and `split_three` +1 from
+    // `s01-c3p-junction-1-del-del-p1-sep0` (4 -> 3), then `split_three` -1 and
+    // `split_two` +1 from `…-sep1` (3 -> 2), which is why only two of the four
+    // counters below move off #1835's values. Measured by diffing the full
+    // divergence row-id lists either side (the `MAX_DIVERGENCES` cap raised
+    // locally, then restored), not inferred from the net counters: **no family
+    // lost or gained convergence**. Re-measured on the rebase onto #1835 rather
+    // than composed from the two branches' deltas: on this base the two moves
+    // land in `split_two` +1 and `split_more` -1, leaving `split_three` where
+    // #1835 left it, and the divergent-bucket deltas sum to zero against
+    // `converged`'s zero gain.
     converged: 11_016,
-    split_two: 673,
+    split_two: 674,
     split_three: 164,
-    split_more: 29,
+    split_more: 28,
     underdetermined: 0,
     // -- idempotency --
     //

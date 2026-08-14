@@ -137,14 +137,14 @@
     {
       "input": "LRG_199t1:c.3922dup",
       "spec_expected": "LRG_199t1:c.3921dup",
-      "default_output": "LRG_199t1:c.3922dup",
-      "lenient_output": "LRG_199t1:c.3922dup",
-      "strict_output": "LRG_199t1:c.3922dup",
+      "default_output": "LRG_199t1:c.3921dup",
+      "lenient_output": "LRG_199t1:c.3921dup",
+      "strict_output": "LRG_199t1:c.3921dup",
       "citation": {
         "clause": "docs/recommendations/DNA/duplication.md:60",
         "quote": "the variant (`NC_000023.11:g.32441180dup`) is **not described** as `c.3922dup` since this would shift the position of the variant to the next exon"
       },
-      "note": "`spec_expected` WAS NULL AND IS NOT ANY MORE, and that is the whole change here. c.3921 and c.3922 are both T, so at the transcript level `c.3921dup` and `c.3922dup` denote one sequence — yet ferro emits two fixed points, and they project 2,790 bp apart (`LRG_199:g.903430dup` vs `g.906220dup`, matching the spec's own `g.32459297dup` vs `g.32456507dup`). The field was null on the reasoning that the spec published no answer for this input. It does, three times, independently: `duplication.md:26` names c.3921dup as THE description and says the variant is not described as c.3922dup, `:60` restates that on the GRCh38 coordinates, and `:148` gives the reason — translating c.3922dup back to a genomic position lands at the wrong nucleotide, in the wrong exon. The ruling `exon-junction-dup-converge-from-the-far-side` is now DECIDED: CONVERGE, so this row is a recorded DIVERGENCE — ferro's three outputs below are today's behaviour and none of them is the spec's answer. #1621 closes the gap; when it lands, all three become `LRG_199t1:c.3921dup` and the row stops diverging."
+      "note": "CONVERGENCE, as decided — the row that MOVED when #1621 landed. c.3921 and c.3922 are both T, so at the transcript level `c.3921dup` and `c.3922dup` denote one sequence; ferro nonetheless emitted two fixed points, projecting 2,790 bp apart (`LRG_199:g.903430dup` vs `g.906220dup`, matching the spec's own `g.32459297dup` vs `g.32456507dup`). `spec_expected` was null until the `exon-junction-dup-converge-from-the-far-side` ruling found the spec answering this input three times independently: `duplication.md:26` names c.3921dup as THE description and says the variant is not described as c.3922dup, `:60` restates that on the GRCh38 coordinates, and `:148` gives the reason — translating c.3922dup back to a genomic position lands at the wrong nucleotide, in the wrong exon. The 3'rule's exon-junction clamp now binds from BOTH sides, so all three modes emit the spec's answer and this row is no longer a divergence. The sibling `c.3921dup` row did not move; keeping both is what distinguishes 'the clamp binds from either side' from 'everything drifts 5''."
     }
   ]
 }
