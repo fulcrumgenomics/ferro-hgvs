@@ -295,7 +295,9 @@ fn exact_repeat_insert(seq: &InsertedSequence) -> Option<(String, u64)> {
         _ => None,
     };
     match seq {
-        InsertedSequence::Repeat { base, count } => Some((base.to_char().to_string(), exact(count)?)),
+        InsertedSequence::Repeat { base, count } => {
+            Some((base.to_char().to_string(), exact(count)?))
+        }
         InsertedSequence::SequenceRepeat { sequence, count } => {
             Some((sequence_to_string(sequence), exact(count)?))
         }
