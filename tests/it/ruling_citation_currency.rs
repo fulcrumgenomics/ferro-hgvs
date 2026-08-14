@@ -93,6 +93,20 @@
 //! extractor ([`record_ids_named_in`]) because a rationale cites its siblings by
 //! bare backticked id rather than with the word "ruling".
 //!
+//! # The ledger's citations of its own GUARDS
+//!
+//! Everything above is about record **ids**. A rationale also cites the test
+//! that enforces its ruling — "Pinned by `defect_371_transcript_exit::the_exit_follows_…`"
+//! — and until [`every_ruling_to_guard_citation_resolves`] nothing checked those
+//! at all. Rename the guard and the record goes on naming the old one, reading
+//! as enforced while enforcing nothing.
+//!
+//! That check is `#[ignore]`d because it is **red on two `decided` records** on
+//! the base it landed on, and both are real rather than fixable by editing a
+//! name: each rename inverted the claim, so substituting the new name would
+//! change what the record asserts. Its doc comment carries the census and the
+//! two rows.
+//!
 //! # What is deliberately NOT checked: whether a quoted sentence is really the
 //! # record's
 //!
@@ -267,8 +281,32 @@ struct SourceLine {
 
 /// Every line of every `.rs` file under [`SCAN_ROOTS`], excluding this file.
 fn source_lines() -> Vec<SourceLine> {
+    source_files()
+        .into_iter()
+        .flat_map(|(path, text)| {
+            text.lines()
+                .enumerate()
+                .map(|(index, line)| SourceLine {
+                    path: path.clone(),
+                    number: index + 1,
+                    text: line.to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Every `.rs` file under [`SCAN_ROOTS`] as `(scan-relative path, text)`,
+/// excluding this file.
+///
+/// Split out from [`source_lines`] because [`guard_sites`] needs each file
+/// *whole*: it brace-matches function bodies, and a flattened line list has
+/// lost the file boundaries that makes possible. One walker rather than two, so
+/// "what the scan reads" has a single definition — the same reasoning
+/// `common::rulings` gives for parsing the ledger in one place.
+fn source_files() -> Vec<(String, String)> {
     let root = crate_root();
-    let mut lines = Vec::new();
+    let mut files = Vec::new();
     for scan_root in SCAN_ROOTS {
         let dir = root.join(scan_root);
         assert!(
@@ -276,12 +314,12 @@ fn source_lines() -> Vec<SourceLine> {
             "scan root {} does not exist — the scan would be vacuous",
             dir.display()
         );
-        collect(&dir, scan_root, &mut lines);
+        collect(&dir, scan_root, &mut files);
     }
-    lines
+    files
 }
 
-fn collect(dir: &Path, rel: &str, out: &mut Vec<SourceLine>) {
+fn collect(dir: &Path, rel: &str, out: &mut Vec<(String, String)>) {
     let entries =
         std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
     let mut paths: Vec<PathBuf> = entries
@@ -307,13 +345,7 @@ fn collect(dir: &Path, rel: &str, out: &mut Vec<SourceLine>) {
         }
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        for (index, line) in text.lines().enumerate() {
-            out.push(SourceLine {
-                path: child_rel.clone(),
-                number: index + 1,
-                text: line.to_string(),
-            });
-        }
+        out.push((child_rel, text));
     }
 }
 
@@ -656,5 +688,491 @@ fn no_retired_id_is_also_a_live_record() {
         "a `RETIRED_RECORD_IDS` note names a record the ledger does not have:\n  {}\n\
          Either the successor id is misspelled, or the record it names was itself removed.",
         dangling.join("\n  ")
+    );
+}
+
+// --------------------------------------------------------------------------
+// (d) A record's rationale may not cite a GUARD that does not exist.
+//
+// The three checks above are all about record *ids*. This one is about the
+// other half of a record's prose: the test function it names as the thing that
+// enforces its ruling.
+// --------------------------------------------------------------------------
+
+/// Words a guard name in this repo starts with.
+///
+/// Test names here are sentences — `a_span_outweighs_a_split_that_keeps_reference_bases`,
+/// `the_exit_follows_the_intron_bases_not_the_strand` — while source functions
+/// are verb or noun phrases (`coalesce_coding_frame_separation`,
+/// `insertion_is_duplication`, `count_tandem_repeats`). That difference is what
+/// [`looks_like_a_guard_name`] keys on, and it is the same move
+/// [`looks_like_a_record_id`] makes: recognise a citation by its **shape**, so
+/// the check still fires when the thing it names has been deleted.
+///
+/// A grammar that instead asked "is this token a test that exists" would be
+/// vacuous in precisely the case it is for — delete the test and the token
+/// stops matching, so nothing is reported.
+const GUARD_NAME_OPENERS: &[&str] = &[
+    "a_", "an_", "the_", "two_", "three_", "four_", "five_", "every_", "no_", "non_", "both_",
+    "each_", "one_",
+];
+
+/// Guard names a rationale cites on purpose although the tree no longer has
+/// them, with why.
+///
+/// The sibling of [`RETIRED_RECORD_IDS`], and it exists for the same reason: a
+/// rationale may name a **former** guard because the rename is part of the
+/// argument. Modelled on how `Representation-Change: none` works — declining is
+/// a first-class answer, and what is rejected is *silence*.
+///
+/// It is deliberately EMPTY. Both citations that fail today are stale rather
+/// than deliberate, and listing them here would be using the escape hatch to
+/// silence the finding instead of to declare an intent — see this check's own
+/// doc comment for the two, and note that
+/// [`no_retired_guard_name_is_also_a_live_guard`] stops an entry masking a
+/// guard that does exist.
+const RETIRED_GUARD_NAMES: &[(&str, &str)] = &[];
+
+/// Whether `token` has the shape of a guard name; see [`GUARD_NAME_OPENERS`].
+///
+/// Three conjuncts, each measured against the tree rather than chosen: the
+/// sentence-opener, at least four words, and at least twenty characters. Over
+/// `origin/main` at `d4552167` this selects 1,649 of the 9,652 test functions
+/// and only **11** of the 7,689 source functions that are not also tests — and
+/// none of those eleven is cited `::`-qualified by any record.
+fn looks_like_a_guard_name(token: &str) -> bool {
+    GUARD_NAME_OPENERS
+        .iter()
+        .any(|opener| token.starts_with(opener))
+        && token.len() >= 20
+        && token.matches('_').count() >= 3
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Every guard a **rationale** names, as a bare function name.
+///
+/// Only the `::`-qualified forms are read, which is the deliberate narrowing
+/// that keeps this free of judgement calls. The ledger spells a guard citation
+/// four ways, and all four qualify it:
+///
+/// ```text
+/// it::cis_junction_crossing_shift::the_three_member_spelling_and_...
+/// defect_371_transcript_exit::the_exit_follows_the_intron_bases_not_the_strand
+/// tests/it/corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_...
+/// normalize::tests::the_junction_exit_fold_declines_a_mixed_accession
+/// ```
+///
+/// A **bare** backticked name is left alone. Rationales do use that form, but
+/// so does ordinary prose about the code, and telling the two apart is the
+/// judgement call this file is built to avoid. Reading only the qualified form
+/// costs recall and buys a rule with no arguable cases; the qualified spelling
+/// is also the one a reader can act on, since it names where to look.
+fn guard_names_named_in(rationale: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for (index, chunk) in rationale.split('`').enumerate() {
+        if index % 2 == 0 || !chunk.contains("::") {
+            continue;
+        }
+        if let Some(last) = chunk.rsplit("::").next() {
+            if looks_like_a_guard_name(last) {
+                found.insert(last.to_string());
+            }
+        }
+    }
+    found
+}
+
+/// Where a guard is defined, and the two properties that decide whether it can
+/// enforce anything.
+struct GuardSite {
+    path: String,
+    line: usize,
+    /// `#[ignore]`d, so it does not run in an ordinary CI job.
+    ignored: bool,
+    /// Its body contains at least one assertion.
+    asserts: bool,
+}
+
+/// Whether a function body asserts.
+///
+/// Matches `assert` anywhere — which covers the `assert!`/`assert_eq!` macros
+/// **and** this repo's asserting helpers (`assert_normalizes_preserving_in`,
+/// `assert_seam_oracles`) — plus the diverging macros.
+///
+/// Helper calls are the reason the substring form is used rather than a macro
+/// pattern. A stricter matcher that required a `!` reported
+/// `a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position`
+/// as assertionless while its whole body is one `assert_normalizes_preserving_in`
+/// call — a false positive on the exact shape this check exists to find, which
+/// would have been reported as a defect.
+fn body_asserts(body: &str) -> bool {
+    body.contains("assert")
+        || body.contains("panic!")
+        || body.contains("unreachable!")
+        || body.contains("todo!")
+        || body.contains("unimplemented!")
+}
+
+/// `guard name -> where it is defined`, over [`SCAN_ROOTS`].
+///
+/// Indexed by bare function name because that is how a citation resolves: the
+/// ledger's module qualifier is prose (`it::…`, `tests/it/….rs::…`,
+/// `normalize::tests::…` are three spellings of the same idea), so matching on
+/// it would reject correct citations for how they were punctuated.
+fn guard_sites() -> BTreeMap<String, Vec<GuardSite>> {
+    let mut sites: BTreeMap<String, Vec<GuardSite>> = BTreeMap::new();
+    for (path, text) in source_files() {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut ignored = false;
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("#[ignore") {
+                ignored = true;
+                continue;
+            }
+            let Some(name) = function_name_declared_on(trimmed) else {
+                // Attributes and doc comments sit between `#[ignore]` and the
+                // `fn`, so only a line that is neither resets the flag.
+                if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+                    ignored = false;
+                }
+                continue;
+            };
+            if looks_like_a_guard_name(&name) {
+                sites.entry(name).or_default().push(GuardSite {
+                    path: path.clone(),
+                    line: index + 1,
+                    ignored,
+                    asserts: body_asserts(&body_starting_at(&lines, index)),
+                });
+            }
+            ignored = false;
+        }
+    }
+    sites
+}
+
+/// The function name declared on `line`, if it declares one.
+///
+/// `pub fn` is accepted, so non-test declarations are in scope on purpose and
+/// the remaining visibility and qualifier forms are listed for the same reason:
+/// `src/hgvs/variant.rs`'s `pub(crate) fn non_flanking_genomic_insertion_anchor`
+/// and `src/hgvs/parser/variant.rs`'s `pub(crate) fn non_spec_mosaic_form_error`
+/// both satisfy [`looks_like_a_guard_name`], and omitting their prefix would
+/// leave a citation of either reported as "defined nowhere" while the function
+/// sits in the tree — the most misleading message this check can emit.
+fn function_name_declared_on(line: &str) -> Option<String> {
+    let after_fn = line
+        .strip_prefix("fn ")
+        .or_else(|| line.strip_prefix("pub fn "))
+        .or_else(|| line.strip_prefix("pub(crate) fn "))
+        .or_else(|| line.strip_prefix("pub(super) fn "))
+        .or_else(|| line.strip_prefix("const fn "))
+        .or_else(|| line.strip_prefix("unsafe fn "))
+        .or_else(|| line.strip_prefix("async fn "))
+        .or_else(|| line.strip_prefix("pub async fn "))?;
+    let name: String = after_fn
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The body of the function whose signature starts at `start`, by brace
+/// matching.
+fn body_starting_at(lines: &[&str], start: usize) -> String {
+    let mut depth = 0usize;
+    let mut opened = false;
+    let mut body = String::new();
+    for line in lines.iter().skip(start) {
+        body.push_str(line);
+        body.push('\n');
+        for c in line.chars() {
+            match c {
+                '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        if opened && depth == 0 {
+            break;
+        }
+    }
+    body
+}
+
+/// (d) Every guard a **decided** record names must exist, run, and assert.
+///
+/// # The failure this closes
+///
+/// A `decided` record and the guard that enforces it are connected by nothing
+/// but prose. Rename the guard and the record goes on naming the old one; the
+/// ledger still reads as enforced, and nothing anywhere fails.
+///
+/// `ruling_citation_currency`'s other three checks cannot see it — they judge
+/// record **ids**, and a guard name is not id-shaped. Nor can
+/// `spec_equivalence_classes_converge`, whose reach is the four decided records
+/// carrying an `equivalence_classes` array.
+///
+/// # Why this is `#[ignore]`d, and what un-ignoring it costs
+///
+/// It is **red on `origin/main` at `d4552167`**, on two `decided` records, and
+/// both are real. Landing it armed would land a red suite; exempting them via
+/// [`RETIRED_GUARD_NAMES`] would use the escape hatch to hide the finding.
+/// Neither is fixable mechanically, because **both renames inverted the claim**
+/// — substituting the new name would silently change what the record's sentence
+/// asserts, which is an adjudication and not a citation repair:
+///
+/// | record | cites | the tree now has |
+/// |---|---|---|
+/// | `alignment-only-symbol-in-a-description` | `…_refused_for_dash_and_accepted_for_x` | `…_refused_in_every_mode_for_both_x_and_dash` |
+/// | `derivation-may-not-be-bounded-by-the-inputs-spelling` | `a_dup_flush_against_a_del_is_re_derived_into_the_span` | `a_dup_flush_against_a_del_is_left_alone` |
+///
+/// The first looks like a plain rename — the guard was renamed *when the ruling
+/// was implemented* (#1684), so the record cites the pre-fix name, which
+/// describes the behaviour the ruling **overturned**. The second is
+/// substantive: the record cites that row as reading "AGAINST THE BOUND rather
+/// than for it" because it was re-derived into the span, and the guard standing
+/// in its place asserts it is left alone.
+///
+/// This is the idiom `corpus_prohibited_inputs`'s own
+/// `the_decided_target_is_a_mode_gated_refusal` already uses: `#[ignore]`d,
+/// asserting the decided answer, with an issue as its acceptance criterion.
+/// Here that issue is **#1881** — settling both citations and un-`#[ignore]`ing
+/// this is what closes it.
+///
+/// # Census on `origin/main` at `d4552167`
+///
+/// 28 records, 25 `decided`, 3 `undecided`. **No structured guard field
+/// exists** — `equivalence_classes` is the only structured pointer, on 4
+/// decided records, and it is already enforced end to end (the generator bails
+/// on an unknown class id; `spec_equivalence_classes_converge` asserts and
+/// guards its own vacuity). Guard references are otherwise prose. Of the 14
+/// qualified citations this check reads, 12 resolve; all 12 assert, none is
+/// manifest-gated or skip-on-absent, and **none is `#[ignore]`d**.
+///
+/// That last one is worth stating rather than leaving to be inferred, because
+/// the ledger *does* name an `#[ignore]`d guard and this check does not reach
+/// it: `absolute-prohibition-enforcement-stage` names
+/// `the_decided_target_is_a_mode_gated_refusal` — the #1630/#1627/#1628
+/// deferral — by **bare** backticked name, and [`guard_names_named_in`] reads
+/// only the `::`-qualified form. So the ignored-guard arm below is currently
+/// exercised by no live citation; what keeps it from being dead code is
+/// [`the_guard_scan_reads_the_tree_it_claims_to`], which asserts the attribute
+/// is observable at all.
+///
+/// **Reach, which "14 citations" does not convey.** Of the 25 `decided`
+/// records, **5** carry a `::`-qualified guard citation and are checked here;
+/// 3 more name a guard only by bare backticked name and are skipped by the
+/// narrowing above; and 17 name no guard-shaped token at all. This check
+/// judges the citations that exist — it does not require a record to have one.
+#[test]
+#[ignore = "red on two decided records whose guards were renamed in ways that inverted the claim; \
+            fixing either is an adjudication, not a citation repair — see #1881"]
+fn every_ruling_to_guard_citation_resolves() {
+    let records = rulings::records();
+    let sites = guard_sites();
+    let retired: BTreeMap<&str, &str> = RETIRED_GUARD_NAMES.iter().copied().collect();
+
+    let mut faults: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for record in &records {
+        for guard in guard_names_named_in(&record.rationale) {
+            checked += 1;
+            if retired.contains_key(guard.as_str()) {
+                continue;
+            }
+            let Some(defined) = sites.get(&guard) else {
+                faults.push(format!(
+                    "`{}` ({}) names `{guard}`, which is defined nowhere under {SCAN_ROOTS:?}",
+                    record.id, record.status
+                ));
+                continue;
+            };
+            // A guard that runs but checks nothing passes every other
+            // instrument there is — not pass/fail, and not duration.
+            if !defined.iter().any(|site| site.asserts) {
+                faults.push(format!(
+                    "`{}` ({}) names `{guard}`, which asserts nothing ({})",
+                    record.id,
+                    record.status,
+                    defined
+                        .iter()
+                        .map(|s| format!("{}:{}", s.path, s.line))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                continue;
+            }
+            // `#[ignore]`d everywhere it is defined means it never runs, so the
+            // ruling it is offered as enforcing is not enforced by it.
+            if defined.iter().all(|site| site.ignored) {
+                faults.push(format!(
+                    "`{}` ({}) names `{guard}`, which is `#[ignore]`d ({})",
+                    record.id,
+                    record.status,
+                    defined
+                        .iter()
+                        .map(|s| format!("{}:{}", s.path, s.line))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
+    assert!(
+        faults.is_empty(),
+        "{} guard citation(s) in {LEDGER_RELATIVE_PATH} name a guard that cannot enforce the \
+         record:\n  {}\n\n\
+         A decided record's guard is the only thing standing between its ruling and silent \
+         rot. Fix the citation to name the guard that enforces the ruling now, restore the \
+         guard, or — if the record names a former guard on purpose, because the rename is part \
+         of the argument — declare it in `RETIRED_GUARD_NAMES` with the reason. What is \
+         rejected is silence.",
+        faults.len(),
+        faults.join("\n  ")
+    );
+
+    // Non-vacuity, for the same reason `every_record_to_record_citation_resolves`
+    // carries one: if `guard_names_named_in` stopped recognising citations this
+    // check would pass forever by reading an empty set. Measured at 14 on
+    // `origin/main` @ `d4552167`; the floor is far below that so ordinary prose
+    // edits cannot trip it.
+    assert!(
+        checked >= 6,
+        "only {checked} guard citations were found in {LEDGER_RELATIVE_PATH} — \
+         `guard_names_named_in` is probably broken, and this check would pass by reading nothing"
+    );
+}
+
+/// A retired guard name must not name a guard that still exists.
+///
+/// Without this, [`RETIRED_GUARD_NAMES`] is a way to silence the check above
+/// rather than to declare a rename — the same reasoning as
+/// [`no_retired_id_is_also_a_live_record`]. It runs armed although the list is
+/// empty today, so the first entry added is checked on arrival.
+#[test]
+fn no_retired_guard_name_is_also_a_live_guard() {
+    let sites = guard_sites();
+    let overlapping: Vec<&str> = RETIRED_GUARD_NAMES
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| sites.contains_key(*name))
+        .collect();
+    assert!(
+        overlapping.is_empty(),
+        "these guards are listed as retired but are defined in the tree: {overlapping:?} — \
+         remove them from `RETIRED_GUARD_NAMES`, which is for guards the tree no longer has"
+    );
+}
+
+/// The guard-name grammar recognises a citation by shape, not by resolution.
+///
+/// Both directions are pinned because the risk runs both ways. Too loose and
+/// ordinary source functions named in a rationale are demanded to be tests; too
+/// tight and the check reads an empty set and passes forever — and the second
+/// failure is the one that looks like success.
+#[test]
+fn the_guard_name_grammar_separates_guards_from_source_functions() {
+    // Guard-shaped: sentences, whether or not they exist in the tree. The
+    // second is the deleted citation this check exists to report, so it MUST
+    // match while resolving to nothing.
+    for name in [
+        "the_exit_follows_the_intron_bases_not_the_strand",
+        "a_dup_flush_against_a_del_is_re_derived_into_the_span",
+        "two_insertions_sharing_a_start_merge_into_one_member",
+    ] {
+        assert!(
+            looks_like_a_guard_name(name),
+            "{name} should be read as a guard name"
+        );
+    }
+
+    // Not guard-shaped: source functions the ledger cites `::`-qualified in the
+    // same rationales. Demanding these be asserting tests would make the check
+    // unsatisfiable.
+    for name in [
+        "coalesce_coding_frame_separation",
+        "insertion_is_duplication",
+        "count_tandem_repeats",
+        "hgvs_to_spdi",
+        "reparent_junction_exit",
+    ] {
+        assert!(
+            !looks_like_a_guard_name(name),
+            "{name} is a source function and should not be read as a guard name"
+        );
+    }
+
+    // Extraction reads the qualified form and takes the final segment, and
+    // leaves the bare form alone.
+    let named = guard_names_named_in(
+        "Pinned by `it::cis_junction_crossing_shift::the_three_member_spelling_and_its_one_member_form_are_two_fixed_points` \
+         and by `tests/it/corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only`, \
+         over `g.100_200del::300_400dup`, using `merge::is_tandem_duplication`, \
+         see also `a_bare_unqualified_name_is_deliberately_not_read`.",
+    );
+    assert_eq!(
+        named,
+        [
+            "a_bare_transcript_intronic_position_is_refused_in_strict_only",
+            "the_three_member_spelling_and_its_one_member_form_are_two_fixed_points"
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<BTreeSet<_>>(),
+        "extraction should read the two qualified guard citations and nothing else — \
+         not the ring-junction HGVS string, not the source function, not the bare name"
+    );
+}
+
+/// The assertion detector reads this repo's asserting helpers, not just macros.
+///
+/// Pinned because a stricter matcher reported a guard whose entire body is one
+/// `assert_normalizes_preserving_in` call as assertionless — a false positive
+/// on the very shape the check exists to find.
+#[test]
+fn the_assertion_detector_reads_helper_calls_as_assertions() {
+    assert!(body_asserts("{ assert_eq!(a, b); }"));
+    assert!(body_asserts(
+        "{ assert_normalizes_preserving_in(DUP_RUN, a, b, ShuffleDirection::FivePrime); }"
+    ));
+    assert!(body_asserts("{ panic!(\"no\") }"));
+    assert!(
+        !body_asserts("{ let normalized = normalize(input); eprintln!(\"{normalized}\"); }"),
+        "a body that only computes and prints asserts nothing — the #1858 shape"
+    );
+}
+
+/// The guard scan is not vacuous, and reads `#[ignore]` through the doc
+/// comments that sit between the attribute and the `fn`.
+#[test]
+fn the_guard_scan_reads_the_tree_it_claims_to() {
+    let sites = guard_sites();
+    // Measured at 1,649 distinct guard-shaped names on `origin/main` @
+    // `d4552167`. The floor is an order of magnitude below that, so it cannot
+    // be tripped by ordinary test churn but still fires if the walk breaks.
+    assert!(
+        sites.len() >= 200,
+        "the guard scan found only {} guard-shaped functions under {SCAN_ROOTS:?} — \
+         the walk or the grammar is broken",
+        sites.len()
+    );
+    // Every citation-bearing property this check asserts on must be observable
+    // at least once, or the corresponding arm is dead code that always passes.
+    assert!(
+        sites.values().flatten().any(|site| site.ignored),
+        "no `#[ignore]`d guard was found — the attribute is not being read, so the \
+         ignored-guard arm of the check above can never fire"
+    );
+    assert!(
+        sites.values().flatten().any(|site| site.asserts),
+        "no asserting guard was found — `body_asserts` is not seeing function bodies"
     );
 }
