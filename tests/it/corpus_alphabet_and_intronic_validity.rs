@@ -35,7 +35,21 @@
 //! alphanumeric following matches it, and becomes
 //! `InsertedSequence::Named("X")`, which `Display`s verbatim. This is not
 //! `X`-specific — any lone uppercase letter that is not otherwise consumed
-//! hits the same arm — which one test below pins directly. `-` fails every
+//! hits the same arm — which one test below pins directly.
+//!
+//! **That describes one of the two arms that produce `Named`, and it
+//! understates the reach — corrected 2026-08-11.** `parse_inserted_sequence`
+//! dispatches on the *first* byte, so `X…` takes the arm above, but an
+//! **IUPAC** first byte takes the `is_iupac_base` arm, which walks the whole
+//! run and sets `has_non_iupac` on any uppercase byte that is not an IUPAC
+//! base. So a run that is literal apart from one stray symbol is reclassified
+//! *wholesale*: `g.10delinsACGTX` is `Named("ACGTX")`, not `Literal(ACGT)` plus
+//! a rejected `X`, and the same holds with the stray at the start or in the
+//! middle. No corpus row exercises that shape, so the prohibited-row counts
+//! quoted for `standards.md:39` are lone-`X` counts. Measured and pinned in
+//! `tests/it/issue_1627_named_element_alphabet_reach.rs`.
+//!
+//! `-` fails every
 //! arm (not `[`, `(`, digit/`*`, IUPAC, or uppercase) and is left unconsumed,
 //! which is why `c.10delins-` is rejected: not because `-` is recognized as a
 //! gap symbol and refused, but because it is simply never consumed.
