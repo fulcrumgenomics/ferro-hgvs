@@ -8,8 +8,23 @@
 //!
 //! | Type | Basis | Use Cases |
 //! |------|-------|-----------|
-//! | [`ZeroBasedPos`] | 0-based | Array indexing, SPDI, cdot genomic, BED |
-//! | [`OneBasedPos`] | 1-based | HGVS, VCF, cdot transcript, GFF/GTF, SAM |
+//! | [`ZeroBasedPos`] | 0-based | Array indexing, SPDI, **raw** cdot genomic, BED |
+//! | [`OneBasedPos`] | 1-based | HGVS, VCF, **raw** cdot transcript, GFF/GTF, SAM |
+//!
+//! # Which cdot layer does this module describe?
+//!
+//! Every `cdot_*` helper in this module describes the **raw cdot JSON** as it
+//! arrives on disk — genomic bounds 0-based half-open, transcript bounds
+//! 1-based inclusive. That is *not* the layout ferro holds in memory: on load,
+//! `RawCdotTranscript::from_genome_build` (private, in [`crate::data::cdot`])
+//! converts both axes (#742), so
+//! [`crate::data::cdot::CdotTranscript`] carries genome 1-based `[incl, excl)`
+//! and transcript **0-based** half-open. The table at the top of
+//! [`crate::data::cdot`] describes that *internal* layout, using the same field
+//! names (`tx_start`/`tx_end`) as the raw format.
+//!
+//! Two tables, two layers, same names: always check which one a statement is
+//! about before acting on it.
 //!
 //! # Design Principles
 //!
@@ -503,9 +518,18 @@ pub const fn index_to_hgvs_pos(idx: usize) -> u64 {
     idx as u64 + 1
 }
 
-/// Convert cdot genomic coordinates (0-based half-open) to 1-based closed
+/// Convert **raw cdot JSON** genomic coordinates (0-based half-open) to 1-based closed
 ///
-/// cdot uses 0-based half-open for genomic coordinates.
+/// # Layer
+///
+/// This describes the **raw cdot JSON on disk**, where genomic bounds are
+/// 0-based half-open. It does **not** describe ferro's in-memory
+/// [`crate::data::cdot::CdotTranscript`], whose `exons[i][0..2]` were already
+/// converted on load to genome 1-based `[incl, excl)` (#742) — feeding those
+/// through this helper would convert twice.
+///
+/// Note the *target* here is 1-based **inclusive** on both ends, which differs
+/// from the ingestion path's target of 1-based `[incl, excl)`.
 ///
 /// # Arguments
 ///
@@ -533,15 +557,28 @@ pub const fn cdot_genomic_to_closed(start: u64, end: u64) -> (u64, u64) {
     (start + 1, end)
 }
 
-/// Document that cdot transcript coordinates are already 1-based
+/// Document that **raw cdot JSON** transcript coordinates are already 1-based
 ///
-/// This function exists as documentation - cdot tx_start/tx_end are 1-based,
-/// NOT 0-based like cdot genomic coordinates. This was the source of bug 944a4e9.
+/// # Layer
+///
+/// This is a statement about the **raw cdot JSON on disk**: there, `tx_start` /
+/// `tx_end` are 1-based **inclusive**, unlike the same record's genomic bounds,
+/// which are 0-based half-open. Mixing the two up is the mistake this
+/// no-op helper exists to make visible at the call site.
+///
+/// It is **not** a statement about ferro's in-memory
+/// [`crate::data::cdot::CdotTranscript`]. `RawCdotTranscript::from_genome_build`
+/// (private, in [`crate::data::cdot`])
+/// converts the raw 1-based-inclusive tx bounds to **0-based half-open** on
+/// load (#742), so `CdotTranscript.exons[i][2..4]` are 0-based and must not be
+/// passed here. The basis table at the top of [`crate::data::cdot`] describes
+/// that internal layout — with the same field names — so read the layer, not
+/// just the name.
 ///
 /// # Arguments
 ///
-/// * `tx_start` - 1-based transcript start (NOT 0-based!)
-/// * `tx_end` - 1-based transcript end (NOT 0-based!)
+/// * `tx_start` - raw-cdot 1-based inclusive transcript start (NOT 0-based!)
+/// * `tx_end` - raw-cdot 1-based inclusive transcript end (NOT 0-based!)
 ///
 /// # Returns
 ///

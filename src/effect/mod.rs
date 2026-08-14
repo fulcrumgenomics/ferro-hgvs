@@ -25,6 +25,73 @@
 use crate::backtranslate::{Codon, CodonTable};
 use crate::hgvs::location::AminoAcid;
 
+/// Where an intronic offset falls on the **SO-term consequence** ladder.
+///
+/// # Which question this answers
+///
+/// This is the VEP-style call — "which Sequence Ontology term applies?" — on
+/// the ladder VEP uses: canonical site within 2 bases of the exon, splice
+/// region out to 8, plain intron beyond that. It is the single definition of
+/// that ladder; both [`EffectPredictor::classify_splice_variant`] and the
+/// web service's CDS effect handler derive from it.
+///
+/// # Why it is NOT
+/// [`crate::reference::transcript::SpliceSiteType`]
+///
+/// That type answers a different question — ferro's own fine-grained
+/// splice-distance bins, donor 2/6/20/50 and acceptor 2/12/20/50 — and the two
+/// ladders **disagree by construction**, which is correct rather than a defect:
+///
+/// The offsets are **signed**, as [`SpliceSiteType::from_signed_offset`] reads
+/// them: positive is the donor side, negative the acceptor side. Spelling the
+/// third row `12` rather than `-12` would make it false — `from_signed_offset(12)`
+/// is `DonorRegion`, not `AcceptorExtended`.
+///
+/// | offset | `SpliceSiteType` | `SpliceRegionBin` |
+/// |---|---|---|
+/// | `+6` | `DonorExtended` | `Region` |
+/// | `+10` | `DonorRegion` | `Intron` |
+/// | `-12` | `AcceptorExtended` | `Intron` |
+///
+/// A consumer that needs one must not silently receive the other. The
+/// relationship is pinned at every boundary offset in
+/// `tests/it/splice_ladder_shapes.rs`, so an edit to either ladder that moves
+/// them relative to each other fails there rather than quietly changing what
+/// one of ferro's two surfaces reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpliceRegionBin {
+    /// Within 2 bases of the exon — the canonical donor (GT) / acceptor (AG)
+    /// dinucleotide.
+    Canonical,
+    /// 3 to 8 bases from the exon — `splice_region_variant`.
+    Region,
+    /// More than 8 bases from the exon — `intron_variant`.
+    Intron,
+}
+
+impl SpliceRegionBin {
+    /// Classify a signed intronic offset. The sign selects donor (positive) vs
+    /// acceptor (negative) at the call site; this ladder itself is symmetric,
+    /// so only the magnitude is read.
+    ///
+    /// The magnitude is taken with `unsigned_abs` for the same reason
+    /// [`crate::reference::transcript::SpliceSiteType::from_distance_on_side`]
+    /// does: `c.<base>-?` parses to `offset == Some(i64::MIN)`, whose `abs()`
+    /// panics in debug and wraps to a *negative* value in release — which would
+    /// satisfy `<= 2` and report a HIGH-impact canonical splice site for a
+    /// position whose distance is unknown. It lands in [`Self::Intron`] instead.
+    pub fn from_offset(offset: i64) -> Self {
+        let abs_offset = offset.unsigned_abs();
+        if abs_offset <= 2 {
+            Self::Canonical
+        } else if abs_offset <= 8 {
+            Self::Region
+        } else {
+            Self::Intron
+        }
+    }
+}
+
 /// Sequence Ontology consequence term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Consequence {
@@ -389,6 +456,10 @@ impl EffectPredictor {
 
     /// Classify a splice site variant by distance, or decline.
     ///
+    /// Uses the SO-term ladder ([`SpliceRegionBin`]), not ferro's fine-grained
+    /// [`crate::reference::transcript::SpliceSiteType`] bins — see
+    /// `SpliceRegionBin`'s docs for why the two differ and must stay separate.
+    ///
     /// Returns `None` for an unknown offset (`+?` / `-?`, carried as
     /// `i64::MAX` / `i64::MIN`). This function's whole input is a distance, so
     /// a description that declines to state one leaves it nothing to classify.
@@ -425,21 +496,16 @@ impl EffectPredictor {
         if crate::hgvs::parser::position::is_unknown_offset(offset) {
             return None;
         }
-        // `unsigned_abs` rather than `abs`: total for every `i64`, so the
-        // ladder cannot overflow even on a magnitude that is not a sentinel
-        // (`i64::MIN` is the only such value, and it is reachable here).
-        let abs_offset = offset.unsigned_abs();
-
-        let consequence = if abs_offset <= 2 {
-            if offset > 0 {
-                Consequence::SpliceDonorVariant
-            } else {
-                Consequence::SpliceAcceptorVariant
+        let consequence = match SpliceRegionBin::from_offset(offset) {
+            SpliceRegionBin::Canonical => {
+                if offset > 0 {
+                    Consequence::SpliceDonorVariant
+                } else {
+                    Consequence::SpliceAcceptorVariant
+                }
             }
-        } else if abs_offset <= 8 {
-            Consequence::SpliceRegionVariant
-        } else {
-            Consequence::IntronVariant
+            SpliceRegionBin::Region => Consequence::SpliceRegionVariant,
+            SpliceRegionBin::Intron => Consequence::IntronVariant,
         };
 
         Some(ProteinEffect {

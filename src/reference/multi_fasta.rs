@@ -5,14 +5,26 @@
 //!
 //! # Coordinate Systems
 //!
-//! This module handles coordinate conversions when loading sequences:
+//! This module handles coordinate conversions when loading sequences.
+//!
+//! **Which cdot layer do the `cdot *` rows describe? The internal one.** Every
+//! `cdot *` row below describes
+//! [`crate::data::cdot::CdotTranscript`] as this module actually receives it —
+//! i.e. *after* `RawCdotTranscript::from_genome_build` (private, in
+//! [`crate::data::cdot`]) has converted both axes (#742) —
+//! because that is the value the conversion code beneath reads. It is **not** the
+//! raw cdot JSON on disk, whose genomic bounds are 0-based half-open and whose
+//! transcript bounds are 1-based inclusive; the raw layer is what the `cdot_*`
+//! helpers in [`crate::coords`] describe. The two layers share one set of field
+//! names (`genome_start`, `tx_start`, …), so always check which layer a statement
+//! is about before acting on it.
 //!
 //! | Source | Basis | Target | Notes |
 //! |--------|-------|--------|-------|
 //! | FASTA/FAI index | 0-based | Internal | Half-open `[start, end)` |
-//! | cdot genomic | 0-based | Transcript | `genome_start` is 0-based, converted to 1-based |
-//! | cdot tx | 1-based | Transcript | `tx_start`/`tx_end` used directly (already 1-based) |
-//! | cdot CDS | 0-based | Transcript | `cds_start` converted via `+ 1` to 1-based |
+//! | cdot genomic (internal) | 1-based | Transcript | `[incl, excl)`: `genome_start` used as-is, `genome_end` converted via `- 1` to 1-based inclusive |
+//! | cdot tx (internal) | 0-based | Transcript | Half-open: `tx_start` converted via `+ 1` to 1-based inclusive; the exclusive `tx_end` already equals the 1-based inclusive end |
+//! | cdot CDS (internal) | 0-based | Transcript | Half-open: `cds_start` converted via `+ 1` to 1-based inclusive; the exclusive `cds_end` already equals the 1-based inclusive end |
 //!
 //! **Important**: The `get_sequence()` method uses 0-based half-open coordinates
 //! consistent with FASTA index conventions.

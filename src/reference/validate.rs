@@ -158,12 +158,26 @@ pub fn validate_transcript_record(tx: &Transcript) -> Vec<TranscriptAnomaly> {
     let seq_len = bytes.len() as u64;
 
     // --- Length consistency: served bases vs exon-alignment extent ----------
-    // The exon alignment tiles transcript coordinates [1, max_end]
-    // contiguously (gaps are rejected upstream during ingestion). A served
-    // sequence *shorter* than that extent means the alignment references bases
-    // the sequence lacks — unambiguous corruption. A *longer* sequence is the
-    // normal poly-A / unaligned-3' case and is intentionally NOT flagged here
-    // (see the module docs).
+    // `max_end` is the highest transcript coordinate the exon alignment names,
+    // so a served sequence *shorter* than that extent means the alignment
+    // references bases the sequence lacks — unambiguous corruption. A *longer*
+    // sequence is the normal poly-A / unaligned-3' case and is intentionally
+    // NOT flagged here (see the module docs).
+    //
+    // Deliberately phrased as an extent, NOT as contiguous tiling of
+    // [1, max_end]: the alignment may legitimately carry a transcript-
+    // coordinate gap, and this check is sound either way because it compares
+    // against the maximum rather than against a summed exon length.
+    //
+    // Gaps are NOT rejected upstream, contrary to what this comment used to
+    // claim. `data::cdot`'s `RawCdotTranscript::from_genome_build` silently
+    // drops any exon row with fewer than five fields, which can itself open a
+    // gap, and `MultiFastaProvider` diverts a gapped cdot table to supplemental
+    // CDS data only when a supplemental record exists for that accession —
+    // otherwise the gapped table is served as-is. Real annotation has such
+    // gaps: over cdot-0.2.32.refseq.GRCh38, 58 of 474,818 multi-exon builds
+    // carry one (23–2718 bases; the census is recorded on
+    // `convert::mapper`'s `cdot_tx_basis_cross_checked_against_real_cdot`).
     let exon_extent = tx.exons.iter().map(|e| e.end).max();
     if let Some(extent) = exon_extent {
         if seq_len < extent {
