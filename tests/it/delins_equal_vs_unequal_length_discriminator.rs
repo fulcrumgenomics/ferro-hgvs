@@ -146,6 +146,29 @@
 //! (unequal-length) still both split, and they still split for the reason the
 //! module argues — not because of a merge rule neither of them meets.
 //!
+//! # #1610 CONSIDERED MOVING ROW 2, AND THE AXIS SCOPE IS WHY IT DOES NOT
+//!
+//! `unequal-length-block-a-placed-gap-is-not-a-separation` (decided) keeps a
+//! lone unequal-length net-deletion `delins` whole where the derived split is a
+//! placed gap plus `delins`-rendering members — and row 2 meets every one of its
+//! four *shape* conditions: `AGTG` against `TT` is a net deletion, the two
+//! derived members sit one unchanged base apart, and that base is a payload `T`
+//! landing on a reference `T`.
+//!
+//! It is nevertheless unmoved, because that rule is gated on
+//! `CoincidenceCarveOut::may_disbelieve_a_separation` — i.e. on the same
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` this module
+//! already argues from. Row 2 is `g.`, so `:47` does not reach it and
+//! `general.md:34` governs unqualified, which is precisely this module's
+//! position. The record and this module now agree; they did not always.
+//!
+//! An earlier revision of #1610 shipped the rule axis-blind and **did** move this
+//! row, inverting the negative guard below to match. That was measured to take
+//! `spec_conformance_axis`'s `guard_violations` from 0 to 5 — the rejected
+//! SVD-WG010 shape on the frameless axes — and was reverted along with the guard
+//! when the rule took the gate. So the guard below stands as written. Do not
+//! invert it without answering that rank-1 cost.
+//!
 //! # Gating, and the hermetic companion that covers what this file cannot
 //!
 //! Both rows need real reference bases, so they need `FERRO_MANIFEST`, and PR

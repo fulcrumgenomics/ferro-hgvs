@@ -1024,6 +1024,33 @@ fn test_no_overlap_warning_for_adjacency() {
 /// The discriminating half stays in
 /// `merge::tests::coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon`,
 /// which asserts against the pass directly and at every codon phase.
+///
+/// # RE-PINNED BY #1610 — AND THE TWO AXES NO LONGER AGREE
+///
+/// This pair used to rest on the axes agreeing: `NM_TEST.1` has `cds_start = 1`,
+/// so `c.p` and `n.p` name the same base, and nothing distinguished them. That
+/// is no longer true, and the disagreement is now the point.
+///
+/// The block is `TGCA -> AAC`, four reference bases against three, whose only
+/// interior match is the payload's own `C`.
+/// `merge::split_is_a_placed_gap_coincidence` (#1610) keeps such a block whole
+/// (`DNA/delins.md:46`/`:47`) — but it is gated on
+/// `CoincidenceCarveOut::may_disbelieve_a_separation`, so it runs on the coding
+/// DNA axis only, per
+/// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+///
+/// So `c.` returns the input whole, and `n.` still splits. Read the two
+/// assertions together: the reference, the block and the coordinates are
+/// identical and **the axis is the only thing that varies**, which makes this
+/// pair an end-to-end guard for the carve-out's scope — a property it did not
+/// have before and which no unit test asserts at this level.
+///
+/// The codon conjunct itself is no longer discriminated here on the `c.` side,
+/// because there are no two derived members left to ask about. Its guard is
+/// `merge::tests::coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon`,
+/// which builds its two-member fixture by hand for exactly this reason, and
+/// `a_length_changing_block_the_exception_still_cannot_reach` below, which is an
+/// end-to-end case that still splits on both axes.
 #[test]
 fn coding_length_changing_block_across_codons_is_described_individually() {
     assert_eq!(
@@ -1032,18 +1059,47 @@ fn coding_length_changing_block_across_codons_is_described_individually() {
             "NM_TEST.1:n.2_5delinsAAC"
         ),
         "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "the derivation must reach this block at all, else the coding assertion \
-         below proves nothing",
+        "the `n.` axis is outside `delins.md:47`'s carve-out, so `general.md:34` \
+         governs and the members stay individual",
     );
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
             "NM_TEST.1:c.2_5delinsAAC"
         ),
-        "NM_TEST.1:c.[2_3delinsAA;9del]",
-        "`NM_TEST.1` has `cds_start = 1`, so `c.p` and `n.p` are the same base \
-         and the two axes agree here: the exception `general.md:35` states \
-         cannot reach a four-position span, so nothing distinguishes them",
+        "NM_TEST.1:c.2_5delinsAAC",
+        "#1610: on the coding DNA axis the block is kept whole by the \
+         partitioner, so no member pair reaches the codon exception. Same \
+         reference, same block, same coordinates as the `n.` assertion above — \
+         the axis is the whole of the difference",
+    );
+}
+
+/// A length-changing block that **does** still split across a codon boundary,
+/// end to end.
+///
+/// Added with #1610, which took the discriminating power out of the pair above.
+/// `c.2_4` is `TGC` and the payload `CG` is two bases, so the block is a net
+/// deletion like the one above — but its derived split carries a lone
+/// **substitution**, which is a rank-1 type the split genuinely buys, so
+/// `split_is_a_placed_gap_coincidence` declines and the two members survive to
+/// be asked the codon question. `c.2` is in codon 1 and `c.4` in codon 2, so
+/// `general.md:35`'s second conjunct is unmet and `:34` governs.
+///
+/// Both axes are asserted, on one block and one reference, so the reading frame
+/// is the only thing that varies — the property the pair above used to carry.
+#[test]
+fn a_length_changing_block_the_exception_still_cannot_reach() {
+    assert_eq!(
+        normalize_with_provider(provider_with_simple_transcript(), "NM_TEST.1:n.2_4delinsCG"),
+        "NM_TEST.1:n.[2T>C;4del]",
+        "an axis with no reading frame gets `general.md:34`'s plain rule",
+    );
+    assert_eq!(
+        normalize_with_provider(provider_with_simple_transcript(), "NM_TEST.1:c.2_4delinsCG"),
+        "NM_TEST.1:c.[2T>C;4del]",
+        "`c.2` and `c.4` sit in different codons, so `general.md:35`'s \
+         one-amino-acid conjunct is unmet and the members stay individual",
     );
 }
 
@@ -1053,6 +1109,17 @@ fn coding_length_changing_block_across_codons_is_described_individually() {
 /// exception has to be evaluated *before* the shift: afterwards the two runs
 /// are four bases apart and no one-base rule could rejoin them even where the
 /// codon test allows it.
+///
+/// # UNMOVED BY #1610, AND THAT IS THE MEASUREMENT
+///
+/// An earlier revision of this branch re-pinned this to the whole
+/// `n.2_5delinsAAC`, because `split_is_a_placed_gap_coincidence` was then
+/// axis-blind. It is now gated to the coding DNA axis, so `n.` is out of reach
+/// and this expectation is unchanged from before #1610.
+///
+/// Note what that means and do not soften it: this is the axis **the issue was
+/// filed on**, so #1610's own reproduction is not closed by the shipped rule.
+/// See the module docs of `issue_1610_lone_unequal_length_delins`.
 #[test]
 fn non_coding_length_changing_block_keeps_the_split() {
     let result = normalize_with_provider(

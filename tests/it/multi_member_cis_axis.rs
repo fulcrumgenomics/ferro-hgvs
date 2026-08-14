@@ -783,6 +783,16 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     sequence_changed: 0,
     respellable: 461,
     // #1835: see the section above — six rows started converging, none stopped.
+    //
+    // #1610 predicted 407 -> 406 and re-pinned it, attributing the single lost
+    // row — `NM_021625.4:c.[2481_2484delCCGC;2486T>A]` — to
+    // `canonicalize_from_sequence`'s input-relative weight bound rather than to
+    // the new rule, with the measured prediction that "with the bound disabled
+    // this test passes UNCHANGED at 407 with this exact row set". **#1899
+    // (`2d8b490b`) deleted that bound**, and the prediction is confirmed:
+    // re-measured on this branch rebased onto it, the census reads 407 and that
+    // row converges again. The re-pin is therefore reverted and the row restored
+    // to [`CONVERGED_ROWS`]; #1610 costs this census nothing.
     respelling_converged: 407,
 };
 
@@ -817,6 +827,21 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
 /// instead: a fall is a defect, a rise is good news to be re-blessed and
 /// declared, and an equal-count set change is the swap a count-only census
 /// cannot see at all.
+///
+/// # NO FALL IS BLESSED HERE, AND ONE THAT WAS PROPOSED WAS WITHDRAWN (#1610)
+///
+/// The message above calls a fall a defect, and that framing stands. #1610
+/// proposed blessing one — dropping `NM_021625.4:c.[2481_2484delCCGC;2486T>A]`
+/// — on the ground that the loss was `canonicalize_from_sequence`'s
+/// input-relative weight bound rather than its own rule, and that disabling the
+/// bound restored 407 with the row set unchanged. #1899 then deleted that bound
+/// on `main`, the prediction held, and the proposed fall never materialised, so
+/// the pin is back at 407 with the row restored.
+///
+/// Keep the precedent it sets, which is the useful half: a fall may only be
+/// blessed with its mechanism NAMED AND MEASURED, and a named mechanism that is
+/// someone else's open issue is a reason to wait for that issue rather than to
+/// re-pin around it.
 ///
 /// # What this pin does and does not record
 ///

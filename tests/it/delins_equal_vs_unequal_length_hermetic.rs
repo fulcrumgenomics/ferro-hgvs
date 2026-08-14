@@ -220,6 +220,23 @@ const UNEQUAL_EXPECTED: &str = "NC_TEST.1:g.[264del;266G>C]";
 /// does not reach a `g.` description — and the rename is deliberate, so a reader
 /// grepping the old name from the ruling record lands on this correction rather
 /// than on an instruction to flip.
+///
+/// # #1610 DOES NOT REACH THIS ARM, TWICE OVER
+///
+/// #1610 implements a neighbouring rule in the partitioner — see
+/// `unequal-length-block-a-placed-gap-is-not-a-separation` — so the obvious
+/// inference is that this arm should have moved with it. It does not, for two
+/// independent reasons, and either alone would be enough.
+///
+/// The first is the record's fourth condition: this block's derived split is
+/// `[264del;266G>C]`, whose second member is a lone **substitution**. A
+/// substitution is a rank-1 type the split genuinely buys, so the rule declines
+/// and the members stay individual.
+///
+/// The second is the axis. #1610's rule is gated on
+/// `CoincidenceCarveOut::may_disbelieve_a_separation`, so it does not run on a
+/// `g.` description at all — which is the same scoping this constant's rename
+/// records, reached from the partitioner side.
 const UNEQUAL_SPANNING_FORM: &str = "NC_TEST.1:g.264_266delinsTC";
 
 fn padded_contig() -> String {
