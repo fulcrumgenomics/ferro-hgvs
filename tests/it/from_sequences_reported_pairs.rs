@@ -116,7 +116,8 @@ fn derive(
         &options,
     )
     .unwrap_or_else(|e| panic!("from_sequences({spelling}, pad={pad}): {e}"));
-    (derived.variant, derived.placement_bounded_by_window)
+    let bounded = derived.placement_bounded_by_window();
+    (derived.variant, bounded)
 }
 
 /// **A zero-pad window refuses an insertion resting on its 5' edge**, and says

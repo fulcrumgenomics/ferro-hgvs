@@ -497,6 +497,7 @@ mod rna_coding_consistency;
 mod rna_spl_marker;
 mod ruling_citation_currency;
 mod ruling_guard_field;
+mod sequence_normalize;
 mod service_tools_tests;
 mod spdi_dup_recovery;
 mod spdi_tests;

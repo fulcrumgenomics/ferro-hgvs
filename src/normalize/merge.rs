@@ -1894,7 +1894,12 @@ pub(crate) fn coalesce_protein_adjacent_changes(
 const MAX_CANONICAL_WINDOW: i64 = 4096;
 
 /// Padding either side of the changed interval, giving the 3'-shift room.
-const CANONICAL_PAD: i64 = 128;
+///
+/// `pub(crate)` because it is also the pad every *caller-facing* derivation
+/// starts from — `Normalizer::sequence_normalize`'s `START_PAD` and the
+/// `pad = 128` default on the Python `to_sequences` binding — so the three
+/// cannot be allowed to drift apart.
+pub(crate) const CANONICAL_PAD: i64 = 128;
 
 /// Longest **length-changing** block the canonicalizer will attempt to
 /// partition.
@@ -9553,11 +9558,11 @@ pub(crate) enum BlockDecline {
 pub(crate) struct DerivedBlock {
     /// The rendered members, in ascending order.
     pub(crate) members: Vec<HgvsVariant>,
-    /// Whether any member rests on an edge of the window.
-    ///
-    /// Exactly when a wider window could move the answer, so it is reported to
-    /// the caller rather than absorbed.
-    pub(crate) placement_bounded_by_window: bool,
+    /// Whether a member rests on the window's **5' edge** (`ref_start == 0`).
+    pub(crate) bounded_at_start: bool,
+    /// Whether a member rests on the window's **3' edge**
+    /// (`ref_end == reference.len()`).
+    pub(crate) bounded_at_end: bool,
     /// Whether a **pure insertion** rests on the window's 5' edge.
     ///
     /// HGVS anchors an insertion between two positions (`insertion.md`), so a
@@ -9621,7 +9626,8 @@ pub(crate) fn derive_block_members(
     if lo == hi_ref && lo == hi_alt {
         return Ok(DerivedBlock {
             members: Vec::new(),
-            placement_bounded_by_window: false,
+            bounded_at_start: false,
+            bounded_at_end: false,
             anchors_before_window: false,
         });
     }
@@ -9673,9 +9679,8 @@ pub(crate) fn derive_block_members(
 
     // Read after the three passes above, not before: each can move a piece onto
     // or off the edge, and the answer that matters is about what is emitted.
-    let placement_bounded_by_window = pieces
-        .iter()
-        .any(|piece| piece.ref_start == 0 || piece.ref_end == reference.len());
+    let bounded_at_start = pieces.iter().any(|piece| piece.ref_start == 0);
+    let bounded_at_end = pieces.iter().any(|piece| piece.ref_end == reference.len());
 
     // A piece claiming no reference bases is a pure insertion; at offset 0 its
     // only HGVS anchor lies before the window. See `DerivedBlock`.
@@ -9699,7 +9704,8 @@ pub(crate) fn derive_block_members(
     .ok_or(BlockDecline::WouldNotRender)?;
     Ok(DerivedBlock {
         members,
-        placement_bounded_by_window,
+        bounded_at_start,
+        bounded_at_end,
         anchors_before_window,
     })
 }

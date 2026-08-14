@@ -163,8 +163,23 @@ impl FromSequencesOptions {
 pub struct DerivedDescription {
     /// The description.
     pub variant: HgvsVariant,
+    /// Whether a member rests on the window's **5' edge**.
+    ///
+    /// Ask [`Self::placement_bounded_by_window`] for the plain "could this move
+    /// at all" answer; this and [`Self::bounded_at_end`] say *which* side, which
+    /// is what a caller widening one side at a time needs.
+    pub bounded_at_start: bool,
+    /// Whether a member rests on the window's **3' edge**.
+    ///
+    /// The 3' counterpart of [`Self::bounded_at_start`]; see it.
+    pub bounded_at_end: bool,
+}
+
+impl DerivedDescription {
     /// Whether a member's placement was bounded by the window rather than
-    /// settled by the sequence — i.e. it rests on an edge of the bases supplied.
+    /// settled by the sequence — i.e. it rests on *either* edge of the bases
+    /// supplied. The OR of [`Self::bounded_at_start`] and
+    /// [`Self::bounded_at_end`].
     ///
     /// **This is a "could move" flag, not a "is wrong" flag**, and it is
     /// deliberately conservative in that direction. Distinguishing a placement
@@ -172,12 +187,6 @@ pub struct DerivedDescription {
     /// requires knowing what lies outside the window — the reference — which
     /// this function does not read. So it reports the uncertainty rather than
     /// resolving it.
-    ///
-    /// The stronger reading is measurably false, which is why this wording is
-    /// laboured: over a 4-base `A` run at 12-15, the window `9-15` is flagged
-    /// and is nonetheless the same answer a whole-sequence derivation gives,
-    /// while `9-14` is flagged and is placed one base earlier. Both are pinned
-    /// in `tests/it/from_sequences_window_condition.rs`.
     ///
     /// And note what a flagged answer is *not*: it is never wrong. `g.14del`
     /// and `g.15del` over that run denote the same bases and share a canonical
@@ -190,7 +199,10 @@ pub struct DerivedDescription {
     /// that both contain the whole interval over which the change can be placed
     /// derive the same description, and a window that cuts that interval places
     /// the change at its own edge instead.
-    pub placement_bounded_by_window: bool,
+    #[must_use]
+    pub fn placement_bounded_by_window(&self) -> bool {
+        self.bounded_at_start || self.bounded_at_end
+    }
 }
 
 /// Derive an HGVS description from a reference/alternate sequence pair.
@@ -293,7 +305,8 @@ pub fn from_sequences_detailed(
 
     Ok(DerivedDescription {
         variant,
-        placement_bounded_by_window: block.placement_bounded_by_window,
+        bounded_at_start: block.bounded_at_start,
+        bounded_at_end: block.bounded_at_end,
     })
 }
 
@@ -1038,7 +1051,7 @@ mod tests {
         )
         .expect("derives");
         assert!(
-            !interior.placement_bounded_by_window,
+            !interior.placement_bounded_by_window(),
             "an interior deletion must not flag: {}",
             interior.variant
         );
@@ -1052,10 +1065,82 @@ mod tests {
         )
         .expect("derives");
         assert!(
-            edge.placement_bounded_by_window,
+            edge.placement_bounded_by_window(),
             "a deletion flush with the window end must flag: {}",
             edge.variant
         );
+    }
+
+    /// The combined flag says *that* a member is on an edge; the per-side flags
+    /// say *which*. A deletion in a homopolymer that fills the window rolls, by
+    /// default, to the 3' edge — so `bounded_at_end` alone must fire, and a
+    /// caller widening one side at a time must not be told to widen 5'.
+    #[test]
+    fn a_deletion_at_the_three_prime_edge_flags_only_that_side() {
+        let d = from_sequences_detailed(
+            "NC_TEST.1",
+            5,
+            "AAAA",
+            "AAA",
+            &FromSequencesOptions::default(),
+        )
+        .expect("derives");
+        assert!(d.bounded_at_end, "3' edge must flag: {}", d.variant);
+        assert!(!d.bounded_at_start, "5' edge must not flag: {}", d.variant);
+        assert!(d.placement_bounded_by_window(), "OR must hold");
+    }
+
+    /// The 5' mirror: under 5'-shuffle the same deletion rolls to the window's
+    /// 5' edge instead, so `bounded_at_start` alone fires. This is the side a
+    /// window pinned to base 1 has permanently, and the reason
+    /// `sequence_normalize` reads the two flags apart.
+    #[test]
+    fn a_deletion_at_the_five_prime_edge_flags_only_that_side() {
+        let d = from_sequences_detailed(
+            "NC_TEST.1",
+            5,
+            "AAAA",
+            "AAA",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect("derives");
+        assert!(d.bounded_at_start, "5' edge must flag: {}", d.variant);
+        assert!(!d.bounded_at_end, "3' edge must not flag: {}", d.variant);
+        assert!(d.placement_bounded_by_window(), "OR must hold");
+    }
+
+    /// A change spanning the whole window rests on both edges at once, so both
+    /// per-side flags fire. Neither side can be dismissed as settled, which is
+    /// what makes a two-sided widen the right response.
+    #[test]
+    fn a_change_filling_the_window_flags_both_sides() {
+        let d = from_sequences_detailed(
+            "NC_TEST.1",
+            5,
+            "ACGT",
+            "TGCA",
+            &FromSequencesOptions::default(),
+        )
+        .expect("derives");
+        assert!(d.bounded_at_start, "5' edge must flag: {}", d.variant);
+        assert!(d.bounded_at_end, "3' edge must flag: {}", d.variant);
+    }
+
+    /// An interior change touches neither edge, so both per-side flags — and
+    /// therefore the combined flag — are clear.
+    #[test]
+    fn an_interior_change_flags_neither_side() {
+        let d = from_sequences_detailed(
+            "NC_TEST.1",
+            5,
+            "TAAAAG",
+            "TAAAG",
+            &FromSequencesOptions::default(),
+        )
+        .expect("derives");
+        assert!(!d.bounded_at_start, "5' edge must not flag: {}", d.variant);
+        assert!(!d.bounded_at_end, "3' edge must not flag: {}", d.variant);
+        assert!(!d.placement_bounded_by_window(), "OR must be clear");
     }
 
     /// The same four arguments give the same string. Asserted rather than

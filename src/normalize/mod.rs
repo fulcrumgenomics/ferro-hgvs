@@ -2659,6 +2659,159 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
+    /// Re-derive a description from the bases it denotes, so two spellings of one
+    /// variant reach one description — the "one canonical description per
+    /// variant" round trip, as a single call.
+    ///
+    /// # Errors
+    ///
+    /// Three sources, and the last is this method's own:
+    ///
+    /// - Whatever [`Self::to_sequences`] declines — a multi-molecule or null
+    ///   allele, members on different accessions, members that overlap, an edit
+    ///   SPDI cannot represent, or a span wider than
+    ///   [`crate::spdi::MAX_APPLY_WINDOW`].
+    /// - Whatever
+    ///   [`from_sequences_detailed`](crate::normalize::from_sequences::from_sequences_detailed)
+    ///   declines at the **widest window the loop
+    ///   reached**. A refusal that a wider window would have answered —
+    ///   the pure insertion anchoring 5' of the window is the one that occurs
+    ///   here — is retried rather than propagated, so what surfaces is the
+    ///   refusal that survived every widening this loop could do.
+    /// - A placement still resting on a growable edge at `MAX_PAD`: a repeat
+    ///   tract running past what the derivation can read, where how far the
+    ///   change shifts depends on how much reference is read.
+    ///
+    /// Plus any refusal from [`Self::normalize`] when `normalize` is true.
+    pub fn sequence_normalize(
+        &self,
+        variant: &HgvsVariant,
+        options: &crate::normalize::from_sequences::FromSequencesOptions,
+        normalize: bool,
+    ) -> Result<HgvsVariant, FerroError> {
+        use crate::normalize::from_sequences::from_sequences_detailed;
+
+        /// The pad the loop starts at, which is the pad the normalizer's own
+        /// derivation uses (`merge::CANONICAL_PAD`).
+        ///
+        /// **Not 1.** `dup` typing reads the reference bases immediately 5' of
+        /// an insertion point, so a duplication whose 5' copy lies outside the
+        /// window is derived as an `ins` instead — and that mis-typed `ins`
+        /// rests on *neither* window edge, so both `bounded_*` flags are clear
+        /// and the loop below would return it without ever widening. Starting
+        /// wide enough to type a duplication is what makes `g.7_14dup` and
+        /// `g.14_15ins<the same 8 bases>` converge. See `to_sequences`, whose
+        /// body records the ten `all-dup` corpus classes that measured it.
+        const START_PAD: u64 = crate::normalize::merge::CANONICAL_PAD as u64;
+        /// The widest window the loop will ask for on a side that is still
+        /// moving, before declining.
+        const MAX_PAD: u64 = crate::spdi::MAX_SHIFT_TRACT;
+
+        let mut pad = START_PAD;
+        // The previous iteration's window bounds, 1-based inclusive. Used to
+        // tell a side the provider simply could not widen further from one still
+        // moving: if an edge did not move under a larger pad, widening it again
+        // is futile, and that is a stall as much as reaching the sequence end is.
+        //
+        // It is the fallback for a provider whose length is not knowable, not a
+        // second opinion on one that is: `get_sequence_length` carries a trait
+        // default that always errors (`provider.rs:424`), and
+        // `apply_to_reference_padded` treats that as non-fatal on purpose, so a
+        // provider that serves bases perfectly well may answer neither. This
+        // loop must terminate for such a provider too.
+        let mut prev_bounds: Option<(u64, u64)> = None;
+        // The first refusal seen while a side could still grow. Reported only if
+        // no widening ever settled it, so a genuinely window-independent refusal
+        // still surfaces with its original wording.
+        let mut deferred: Option<FerroError> = None;
+        loop {
+            let pair = self.to_sequences(variant, pad)?;
+
+            // Read before the derivation, not after: the derivation can refuse
+            // *because* the window is too narrow, and the error path needs to
+            // know whether widening is still on the table.
+            let seq_len = self.provider.get_sequence_length(&pair.accession).ok();
+            let window_start = pair.position;
+            let window_end = pair.position + pair.reference.len() as u64 - 1;
+
+            // A side has stalled when widening it can no longer move the answer:
+            // its window edge is the sequence's own terminus, the provider could
+            // not serve the wider span it was asked for (`window_is_final`), OR a
+            // wider pad on the previous pass failed to move that edge. A member
+            // on a stalled side rests on the sequence, not on our window, so it
+            // is final however it is flagged.
+            let five_prime_stalled =
+                window_start == 1 || prev_bounds.is_some_and(|(ps, _)| window_start >= ps);
+            let three_prime_stalled = seq_len.is_some_and(|len| window_end >= len)
+                || !pair.window_is_final
+                || prev_bounds.is_some_and(|(_, pe)| window_end <= pe);
+            let can_still_grow = !five_prime_stalled || !three_prime_stalled;
+
+            let derived = match from_sequences_detailed(
+                &pair.accession,
+                pair.position,
+                &pair.reference,
+                &pair.alternate,
+                options,
+            ) {
+                Ok(derived) => derived,
+                // A refusal is not necessarily final. `from_sequences` declines a
+                // derived insertion whose only HGVS anchor lies 5' of the first
+                // base supplied, and that refusal's own text says to supply more
+                // 5' flank — which is precisely what this loop does. So widen and
+                // ask again while either side can still grow, and keep the first
+                // refusal to report if none of them helped.
+                Err(err) => {
+                    if !can_still_grow || pad >= MAX_PAD {
+                        return Err(deferred.unwrap_or(err));
+                    }
+                    deferred.get_or_insert(err);
+                    prev_bounds = Some((window_start, window_end));
+                    pad = pad.saturating_mul(2).min(MAX_PAD);
+                    continue;
+                }
+            };
+
+            // Only a side that is BOTH bounded and still growable keeps the loop
+            // going. This is the per-side condition: a variant at position 1 has
+            // `five_prime_stalled` from the first fetch, so its 5' edge never
+            // forces a widen — the loop reacts to the 3' side alone.
+            let unsettled_5prime = derived.bounded_at_start && !five_prime_stalled;
+            let unsettled_3prime = derived.bounded_at_end && !three_prime_stalled;
+
+            if !unsettled_5prime && !unsettled_3prime {
+                return if normalize {
+                    self.normalize(&derived.variant)
+                } else {
+                    Ok(derived.variant)
+                };
+            }
+
+            if pad >= MAX_PAD {
+                let side = match (unsettled_5prime, unsettled_3prime) {
+                    (true, true) => "both edges",
+                    (true, false) => "its 5' edge",
+                    (false, true) => "its 3' edge",
+                    (false, false) => {
+                        unreachable!("returned above when neither side is unsettled")
+                    }
+                };
+                return Err(FerroError::UnsupportedVariant {
+                    variant_type: format!(
+                        "{variant}: cannot derive a window-settled description — its \
+                         placement still rests on {side} of a window padded {MAX_PAD} bases \
+                         on each side that has not reached the sequence end, so it sits in a \
+                         repeat tract running past what the derivation reads, and how far it \
+                         shifts depends on how much reference is read"
+                    ),
+                });
+            }
+
+            prev_bounds = Some((window_start, window_end));
+            pad = pad.saturating_mul(2).min(MAX_PAD);
+        }
+    }
+
     /// An encoding-invariant SPDI key for this variant, derived from the bases it
     /// results in rather than from how it was written (#1159).
     ///
