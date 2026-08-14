@@ -5,13 +5,41 @@
 use ferro_hgvs::{parse_hgvs, MultiFastaProvider, Normalizer, ReferenceProvider};
 use std::path::Path;
 
-fn get_provider() -> Option<MultiFastaProvider> {
-    let manifest_path = Path::new("benchmark-output/manifest.json");
-    if manifest_path.exists() {
-        MultiFastaProvider::from_manifest(manifest_path).ok()
-    } else {
-        None
+/// The prepared manifest, by the same convention every other reference-aware
+/// module here uses: `FERRO_MANIFEST` is authoritative when set, with
+/// `benchmark-output/manifest.json` as the well-known fallback.
+///
+/// This module used to consult **only** the relative path, which made it
+/// orphaned in a stronger sense than its siblings: an operator following the
+/// documented local recipe (`export FERRO_MANIFEST=…`) did not arm it either,
+/// so it was dead even for the developer trying to reproduce a nightly result.
+fn manifest_path() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("FERRO_MANIFEST") {
+        let path = std::path::PathBuf::from(path);
+        return path.exists().then_some(path);
     }
+    let fallback = Path::new("benchmark-output/manifest.json");
+    fallback.exists().then(|| fallback.to_path_buf())
+}
+
+/// The provider, or `None` when there is no manifest to build one from.
+///
+/// A manifest that is **present but will not load** panics rather than
+/// returning `None`, which is the other half of the convention `manifest_path`
+/// above adopts — `biocommons_normalize_tests::provider` and
+/// `multi_member_cis_axis::provider` each say so in their own words. It matters
+/// more here than the wording suggests: `None` reaches
+/// `common::manifest::absent`, whose text states that no manifest was found and
+/// tells the reader to prepare one. For a manifest that *is* there and is
+/// broken that is a wrong diagnosis, and under `FERRO_REQUIRE_MANIFEST` it is a
+/// wrong diagnosis on the one job whose whole purpose is to notice that
+/// `ferro prepare` did not leave a usable reference behind.
+fn get_provider() -> Option<MultiFastaProvider> {
+    let path = manifest_path()?;
+    Some(
+        MultiFastaProvider::from_manifest(&path)
+            .unwrap_or_else(|e| panic!("from_manifest({}) failed: {e}", path.display())),
+    )
 }
 
 #[test]
@@ -24,7 +52,7 @@ fn test_nm_001408491_c517dela_should_shift() {
     // Ferro output (before fix): NM_001408491.1:c.517del
 
     let Some(provider) = get_provider() else {
-        eprintln!("Skipping test: benchmark-output not available");
+        crate::common::manifest::absent("real_data_normalization_tests");
         return;
     };
 
@@ -141,7 +169,7 @@ fn test_potential_bug_deletion_shift_nm033517() {
     // Investigate: ferro outputs c.1324del, mutalyzer outputs c.1326del
     // One of these is wrong about 3' shifting
     let Some(provider) = get_provider() else {
-        eprintln!("Skipping test: benchmark-output not available");
+        crate::common::manifest::absent("real_data_normalization_tests");
         return;
     };
 
@@ -190,7 +218,7 @@ fn test_potential_bug_delins_shift() {
     //
     // HGVS spec: delins should NOT be 3' shifted like del/dup
     let Some(provider) = get_provider() else {
-        eprintln!("Skipping test: benchmark-output not available");
+        crate::common::manifest::absent("real_data_normalization_tests");
         return;
     };
 
@@ -247,7 +275,7 @@ fn test_5utr_duplication_shifting() {
     // In 5'UTR, the 3' direction is towards the start codon (+1)
     // So -55 is more 3' than -56
     let Some(provider) = get_provider() else {
-        eprintln!("Skipping test: benchmark-output not available");
+        crate::common::manifest::absent("real_data_normalization_tests");
         return;
     };
 
@@ -298,7 +326,7 @@ fn test_5utr_duplication_shifting() {
 fn test_compare_with_mutalyzer_sequence() {
     // Compare what we have in cdot vs what mutalyzer reports
     let Some(provider) = get_provider() else {
-        eprintln!("Skipping test: benchmark-output not available");
+        crate::common::manifest::absent("real_data_normalization_tests");
         return;
     };
 

@@ -172,7 +172,7 @@ fn project(vp: &VariantProjector<ArcProvider>, input: &str, tx: &str) -> Variant
 #[test]
 fn intronic_start_offset_declines_rna_axis() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1086_cross_axis_projection");
         return;
     };
     let proj = project(&vp, "NM_000552.3:c.3675-45_3692del", "NM_000552.3");
@@ -193,7 +193,7 @@ fn intronic_start_offset_declines_rna_axis() {
 #[test]
 fn intronic_offset_utr_span_declines_rna_axis() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1086_cross_axis_projection");
         return;
     };
     let proj = project(&vp, "NM_004006.2:c.123-65_-50", "NM_004006.2");
@@ -213,7 +213,7 @@ fn intronic_offset_utr_span_declines_rna_axis() {
 #[test]
 fn exonic_edit_still_projects_to_rna_axis() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1086_cross_axis_projection");
         return;
     };
     let proj = project(&vp, "NM_004006.2:c.897T>G", "NM_004006.2");
@@ -244,7 +244,7 @@ fn exonic_edit_still_projects_to_rna_axis() {
 #[test]
 fn rna_input_noncoding_axis_is_an_n_description() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1086_cross_axis_projection");
         return;
     };
     let proj = project(&vp, "LRG_199t1:r.11u>g", "LRG_199t1");
@@ -266,7 +266,7 @@ fn rna_input_noncoding_axis_is_an_n_description() {
 #[test]
 fn noncoding_input_noncoding_axis_unchanged() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1086_cross_axis_projection");
         return;
     };
     let proj = project(&vp, "LRG_199t1:n.11T>G", "LRG_199t1");

@@ -1066,10 +1066,7 @@ fn loads_fixture() {
 fn manifest_or_skip() {
     match manifest_path() {
         Some(p) => println!("hgvs-rs-projection: using manifest {}", p.display()),
-        None => println!(
-            "hgvs-rs-projection: skipping — no manifest at FERRO_MANIFEST \
-             or benchmark-output/manifest.json"
-        ),
+        None => crate::common::manifest::absent("hgvs_rs_projection_tests::manifest_or_skip"),
     }
 }
 
@@ -1080,7 +1077,9 @@ fn manifest_or_skip() {
 #[test]
 fn axis_coding_protein_descriptions() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_coding_protein_descriptions: skipping — no manifest");
+        crate::common::manifest::absent(
+            "hgvs_rs_projection_tests::axis_coding_protein_descriptions",
+        );
         return;
     };
 
@@ -1197,7 +1196,7 @@ fn axis_coding_protein_descriptions() {
 #[test]
 fn axis_protein_description() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_protein_description: skipping — no manifest");
+        crate::common::manifest::absent("hgvs_rs_projection_tests::axis_protein_description");
         return;
     };
 
@@ -1237,7 +1236,7 @@ fn axis_protein_description() {
 #[test]
 fn axis_coding() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_coding: skipping — no manifest");
+        crate::common::manifest::absent("hgvs_rs_projection_tests::axis_coding");
         return;
     };
 
@@ -1304,7 +1303,7 @@ fn axis_coding() {
 #[test]
 fn axis_noncoding() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_noncoding: skipping — no manifest");
+        crate::common::manifest::absent("hgvs_rs_projection_tests::axis_noncoding");
         return;
     };
 

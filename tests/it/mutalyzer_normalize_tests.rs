@@ -141,7 +141,9 @@ fn fixture() -> &'static Fixture {
 #[test]
 fn comparator_provenance_reference_identity_matches_live() {
     let Some(live) = reference_identity() else {
-        eprintln!("comparator_provenance_reference_identity_matches_live: skipping — no manifest");
+        crate::common::manifest::absent(
+            "mutalyzer_normalize_tests::comparator_provenance_reference_identity_matches_live",
+        );
         return;
     };
     let recorded = &fixture()
@@ -1095,10 +1097,7 @@ fn loads_fixture() {
 fn manifest_or_skip() {
     match manifest_path() {
         Some(p) => println!("mutalyzer-normalize: using manifest {}", p.display()),
-        None => println!(
-            "mutalyzer-normalize: skipping — no manifest at FERRO_MANIFEST \
-             or benchmark-output/manifest.json"
-        ),
+        None => crate::common::manifest::absent("mutalyzer_normalize_tests::manifest_or_skip"),
     }
 }
 
@@ -1296,7 +1295,9 @@ fn normalized_axis_covers_both_member_arities() {
 #[test]
 fn issue_506_bare_n_transcript_predicts_protein() {
     let Some(vp) = variant_projector() else {
-        eprintln!("issue_506_bare_n_transcript_predicts_protein: skipping — no manifest");
+        crate::common::manifest::absent(
+            "mutalyzer_normalize_tests::issue_506_bare_n_transcript_predicts_protein",
+        );
         return;
     };
     let v = ferro_hgvs::parse_hgvs("NM_003002.4:n.206_210del").expect("parse n. input");
@@ -1355,7 +1356,9 @@ fn issue_506_bare_n_transcript_predicts_protein() {
 #[test]
 fn issue_506_bare_downstream_position_is_rejected() {
     let Some(vp) = variant_projector() else {
-        eprintln!("issue_506_bare_downstream_position_is_rejected: skipping — no manifest");
+        crate::common::manifest::absent(
+            "mutalyzer_normalize_tests::issue_506_bare_downstream_position_is_rejected",
+        );
         return;
     };
 
@@ -1405,7 +1408,7 @@ fn issue_506_bare_downstream_position_is_rejected() {
 #[test]
 fn axis_normalized() {
     let Some(normalizer) = normalizer() else {
-        eprintln!("axis_normalized: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_normalized");
         return;
     };
 
@@ -1493,7 +1496,9 @@ fn project_genomic_userfacing(
 #[test]
 fn project_genomic_userfacing_routing() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
-        eprintln!("project_genomic_userfacing_routing: skipping — no manifest");
+        crate::common::manifest::absent(
+            "mutalyzer_normalize_tests::project_genomic_userfacing_routing",
+        );
         return;
     };
 
@@ -1550,7 +1555,7 @@ fn project_genomic_userfacing_routing() {
 #[test]
 fn axis_genomic() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
-        eprintln!("axis_genomic: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_genomic");
         return;
     };
 
@@ -1598,7 +1603,7 @@ fn axis_genomic() {
 #[test]
 fn axis_protein_description() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_protein_description: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_protein_description");
         return;
     };
 
@@ -1641,7 +1646,9 @@ fn axis_protein_description() {
 #[test]
 fn axis_coding_protein_descriptions() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_coding_protein_descriptions: skipping — no manifest");
+        crate::common::manifest::absent(
+            "mutalyzer_normalize_tests::axis_coding_protein_descriptions",
+        );
         return;
     };
 
@@ -1708,7 +1715,7 @@ fn axis_coding_protein_descriptions() {
 #[test]
 fn axis_rna_description() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_rna_description: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_rna_description");
         return;
     };
 
@@ -1751,7 +1758,7 @@ fn axis_rna_description() {
 #[test]
 fn axis_noncoding() {
     let Some(vp) = variant_projector() else {
-        eprintln!("axis_noncoding: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_noncoding");
         return;
     };
 
@@ -1831,7 +1838,7 @@ fn axis_noncoding() {
 #[test]
 fn axis_errors() {
     let Some(p) = provider() else {
-        eprintln!("axis_errors: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_errors");
         return;
     };
     // The errors axis asserts STRICT-mode behavior for reference mismatches:
@@ -1911,7 +1918,7 @@ fn axis_errors() {
 #[test]
 fn axis_infos() {
     let Some(normalizer) = normalizer() else {
-        eprintln!("axis_infos: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_infos");
         return;
     };
 
@@ -4528,7 +4535,7 @@ fn renormalize_once(normalizer: &Normalizer<ArcProvider>, s: &str) -> Result<Str
 #[test]
 fn axis_normalized_idempotent() {
     let Some(normalizer) = normalizer() else {
-        eprintln!("axis_normalized_idempotent: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_normalized_idempotent");
         return;
     };
     let mut tested = 0usize;
@@ -4586,7 +4593,7 @@ fn axis_normalized_idempotent() {
 #[test]
 fn axis_genomic_idempotent() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
-        eprintln!("axis_genomic_idempotent: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_genomic_idempotent");
         return;
     };
     let mut tested = 0usize;
@@ -4650,7 +4657,7 @@ fn axis_genomic_idempotent() {
 #[test]
 fn axis_noncoding_idempotent() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
-        eprintln!("axis_noncoding_idempotent: skipping — no manifest");
+        crate::common::manifest::absent("mutalyzer_normalize_tests::axis_noncoding_idempotent");
         return;
     };
     let mut tested = 0usize;

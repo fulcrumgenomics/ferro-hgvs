@@ -204,7 +204,7 @@ fn oracle(vp: &VariantProjector<ArcProvider>) -> Option<Oracle> {
 #[test]
 fn g_allele_predict_rna_is_build_scoped_on_real_reference() {
     let Some(vp) = manifest_projector() else {
-        eprintln!("issue_843: skipping — no manifest");
+        crate::common::manifest::absent("issue_843_allele_rna_build_scoping");
         return;
     };
     let Some(o) = oracle(&vp) else {

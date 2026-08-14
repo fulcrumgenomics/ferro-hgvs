@@ -335,7 +335,7 @@ fn manifest_path() -> Option<PathBuf> {
 /// is not worth two cases.)
 fn check_rcrs(dir: ShuffleDirection, cases: &[(&str, &str)]) {
     let Some(path) = manifest_path() else {
-        eprintln!("issue_1217: skipping — no manifest at FERRO_MANIFEST");
+        crate::common::manifest::absent("issue_1217_mito_terminus_insertion_clamp");
         return;
     };
     let provider = ferro_hgvs::MultiFastaProvider::from_manifest(&path)

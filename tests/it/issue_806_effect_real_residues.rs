@@ -51,7 +51,7 @@ fn real_state(provider: Arc<MultiFastaProvider>) -> AppState {
 #[tokio::test]
 async fn real_missense_resolves_concrete_residues() {
     let Some(path) = manifest_path() else {
-        eprintln!("issue-806: skipping — FERRO_MANIFEST unset");
+        crate::common::manifest::absent("issue_806_effect_real_residues");
         return;
     };
     // FERRO_MANIFEST is an explicit opt-in: once set, a missing manifest or one

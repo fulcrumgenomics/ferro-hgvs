@@ -193,11 +193,9 @@ enum Verdict {
 #[test]
 fn cli_and_library_agree_on_the_genomic_axis_for_bare_transcript_inputs() {
     let Some(vp) = manifest_projector() else {
-        eprintln!(
-            "issue_1713: skipping — no manifest at FERRO_MANIFEST. This is NOT the gate: \
-             the hermetic half runs in CI as \
-             src/cli/project.rs::project_axis_bare_nm_genomic_decline_names_cause_and_remedy"
-        );
+        // NOT the gate: the hermetic half runs in CI as
+        // src/cli/project.rs::project_axis_bare_nm_genomic_decline_names_cause_and_remedy
+        crate::common::manifest::absent("issue_1713_bare_transcript_genomic_decline");
         return;
     };
 
@@ -260,11 +258,9 @@ fn cli_and_library_agree_on_the_genomic_axis_for_bare_transcript_inputs() {
 #[test]
 fn the_bare_transcript_genomic_decline_names_its_cause_and_the_remedy() {
     let Some(vp) = manifest_projector() else {
-        eprintln!(
-            "issue_1713: skipping — no manifest at FERRO_MANIFEST. This is NOT the gate: \
-             the hermetic half runs in CI as \
-             src/cli/project.rs::project_axis_bare_nm_genomic_decline_names_cause_and_remedy"
-        );
+        // NOT the gate: the hermetic half runs in CI as
+        // src/cli/project.rs::project_axis_bare_nm_genomic_decline_names_cause_and_remedy
+        crate::common::manifest::absent("issue_1713_bare_transcript_genomic_decline");
         return;
     };
 

@@ -15,6 +15,11 @@
 //!   bulk parser fixtures (cmrg, paraphase, clinvar 500K + unique). See
 //!   `failure_expectations.rs` for the snapshot shape and contract;
 //!   tracking issue: #174.
+//! - `manifest`: the sibling of `bulk_fixtures` for the other input that can
+//!   go missing without anything going red — a ferro-prepared reference. Every
+//!   reference-aware guard skips green without one, so
+//!   `FERRO_REQUIRE_MANIFEST` promotes that skip to a failure in the one job
+//!   that prepares a manifest.
 //! - `fixture_gen`: the shared on-demand regeneration flow (locking,
 //!   subprocess, atomic rename) that `spec_fixture` and `spec_enumeration`
 //!   both wrap.
@@ -37,6 +42,7 @@ pub mod bulk_fixtures;
 pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;
+pub mod manifest;
 pub mod rulings;
 pub mod spec_enumeration;
 pub mod spec_fixture;

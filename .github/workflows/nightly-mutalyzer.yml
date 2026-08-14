@@ -1,11 +1,16 @@
 name: Nightly reference-aware tests
 
-# Runs the mutalyzer / biocommons / hgvs-rs-projection reference-aware test
-# suites against a real ferro-prepared manifest. PR CI silently skips these
-# tests (see
-# the `::notice::` annotation in `ci.yml`) because provisioning a
-# multi-GB reference manifest would multiply PR CI time. This workflow
-# runs nightly so manifest-dependent regressions surface within 24h.
+# Runs every reference-aware test suite in the repository against a real
+# ferro-prepared manifest — see `REFERENCE_AWARE_SELECTION` below for the list
+# and for why it is enumerated rather than matched by pattern. PR CI silently
+# skips these tests (see the `::notice::` annotation in `ci.yml`) because
+# provisioning a multi-GB reference manifest would multiply PR CI time. This
+# workflow runs nightly so manifest-dependent regressions surface within 24h.
+#
+# `FERRO_REQUIRE_MANIFEST` is set on the test step, so a guard that finds no
+# prepared reference FAILS here instead of skipping green. Without it, the
+# widened selection would be worth very little: a `ferro prepare` that produced
+# nothing would still report a green — and faster — run.
 #
 # Caching: the prepared reference directory is keyed on the Cargo.lock
 # hash (changes when the `prepare` crate's deps shift) + a fixed
@@ -48,24 +53,67 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # The three reference-aware modules this job exists to run, defined ONCE
-      # because two steps need them: the run itself, and the reproduction recipe
-      # the summary step prints when that run fails. A second copy would drift —
-      # and it would drift in the direction that matters least visibly, since a
-      # stale recipe still looks like a working command to whoever pastes it.
+      # Every reference-aware guard in the repository, defined ONCE because two
+      # steps need them: the run itself, and the reproduction recipe the summary
+      # step prints when that run fails. A second copy would drift — and it
+      # would drift in the direction that matters least visibly, since a stale
+      # recipe still looks like a working command to whoever pastes it.
       #
       # This is the same rule `scripts/run_oracle_suite.sh` applies to
       # `test-oracle`'s selection: read it from one place, never copy it.
+      #
+      # This list used to name three modules. The other 45 guards below were
+      # manifest-gated, checked in, and executed by NO automated job — PR CI
+      # provisions no manifest, so they skipped green there, and they were in no
+      # nightly selection, so they skipped green here too. A skip is
+      # indistinguishable from a pass in every signal CI reports; the runtime is
+      # the only tell (0.02-0.08 s skipped against 9-58 s armed).
+      #
+      # That is not a hypothetical. `multi_member_cis_axis::axis_normalized` was
+      # provably red on `main` from at least 2026-08-08 to 2026-08-10 — 13
+      # merged commits, every PR green — because the guard took 0.04 s and
+      # returned. It surfaced four days later as a test-only re-bless of its
+      # census pin, and was then chased as an "inconsistency between worktrees".
+      #
+      # ENUMERATE, DO NOT GLOB. Widening this to a pattern was considered and
+      # rejected: it imports the seven modules `ci.yml`'s `ORACLE_EXCLUDE`
+      # withholds from an armed job, which fail on `main` for reasons no nightly
+      # caused, and it makes the xfail artifact — the only channel a non-gating
+      # job has — unreadable. The reproduce-text below says the same thing.
+      #
+      # ADDING A MANIFEST-GATED GUARD? Add its module here. `FERRO_REQUIRE_MANIFEST`
+      # below cannot catch an omission from this list — it fires when a SELECTED
+      # guard finds no manifest, not when an unselected one is never asked.
       REFERENCE_AWARE_SELECTION: >-
         test(/mutalyzer_normalize_tests::/) |
         test(/biocommons_normalize_tests::/) |
-        test(/hgvs_rs_projection_tests::/)
+        test(/hgvs_rs_projection_tests::/) |
+        test(/delins_equal_vs_unequal_length_discriminator::/) |
+        test(/inversion_sweep::/) |
+        test(/issue_1086_c_axis_genomic_context::/) |
+        test(/issue_1086_cross_axis_projection::/) |
+        test(/issue_1217_mito_terminus_insertion_clamp::/) |
+        test(/issue_1539_split_member_separation::/) |
+        test(/issue_1713_bare_transcript_genomic_decline::/) |
+        test(/issue_498_whole_exon_deletion::/) |
+        test(/issue_806_effect_real_residues::/) |
+        test(/issue_843_allele_rna_build_scoping::/) |
+        test(/issue_944_cds_to_tx_transcript_native::/) |
+        test(/issue_972_cds_start_nf_decline::/) |
+        test(/multi_member_cis_axis::/) |
+        test(/protein_cis_delins_decomposition::/) |
+        test(/real_data_normalization_tests::/) |
+        test(/accession_inventory::tests::corpus_missing_ng_against_real_reference_when_available/) |
+        test(/ng_placement_builder::tests::derive_for_real_reference_when_available/)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # No `lfs: true`: nothing in this repository is LFS-tracked any more,
-          # and `REFERENCE_AWARE_SELECTION` above names three modules, none of
-          # which reads a bulk corpus.
+          # and none of the modules `REFERENCE_AWARE_SELECTION` above names reads
+          # a bulk corpus (re-checked when the selection was widened; the four
+          # release-asset corpora are read only by `clinvar_hgvs_tests`,
+          # `cmrg_exhaustive_tests`, `paraphase_exhaustive_tests` and
+          # `normalize_axis_preserving`, none of which is manifest-gated).
           submodules: true
           persist-credentials: false
 
@@ -167,6 +215,20 @@ jobs:
         continue-on-error: true
         env:
           FERRO_MANIFEST: ${{ github.workspace }}/benchmark-output/manifest.json
+          # A manifest-absence skip is a FAILURE here, never a green pass. Every
+          # guard in the selection above `return`s early when it finds no
+          # prepared reference, so without this a `ferro prepare` that produced
+          # nothing — or a manifest written where the test step cannot see it —
+          # would delete the entire reference-aware surface and report a
+          # *faster* green run. That is the same outcome `FERRO_REQUIRE_BULK_FIXTURES`
+          # exists to prevent in `ci.yml`, and this is deliberately the same
+          # mechanism rather than a second convention:
+          # `src/conformance/manifest_gate.rs`.
+          #
+          # This job is the only one that runs `ferro prepare`, so it is the
+          # only one that may set this. PR CI must not — see the annotation step
+          # in `ci.yml`, which says so at the point someone would be tempted.
+          FERRO_REQUIRE_MANIFEST: "1"
           # This is the only job that provisions a manifest, so it is the only
           # place the idempotency oracle sees the reference-backed corpora at
           # all (PR CI's copy of this gate runs manifest-free — see the
@@ -232,7 +294,7 @@ jobs:
             echo
             echo "These axes only run with a prepared reference (\`FERRO_MANIFEST\`), so they"
             echo "cannot run on a pull request. Reproduce on a box with the reference, with the"
-            echo "same four oracles armed and over the same three modules:"
+            echo "same four oracles armed and over the same modules:"
             echo
             echo '```'
             echo "FERRO_MANIFEST=<ref>/manifest.json \\"
@@ -241,11 +303,17 @@ jobs:
             echo "  cargo nextest run --features dev -E '${REFERENCE_AWARE_SELECTION}'"
             echo '```'
             echo
-            echo "Keep the \`-E\` selection. Dropping it while keeping the flags widens the run"
-            echo "onto the modules \`ci.yml\`'s \`ORACLE_EXCLUDE\` withholds from an armed job,"
-            echo "which fail on \`main\` for reasons no nightly caused — see that variable's"
-            echo "comment, and \`scripts/run_oracle_suite.sh\` for the local runner that applies"
-            echo "the same exclusion."
+            echo "Keep the \`-E\` selection, and keep it ENUMERATED. Dropping it while keeping the"
+            echo "flags — or replacing it with a pattern — widens the run onto the modules"
+            echo "\`ci.yml\`'s \`ORACLE_EXCLUDE\` withholds from an armed job, which fail on"
+            echo "\`main\` for reasons no nightly caused — see that variable's comment, and"
+            echo "\`scripts/run_oracle_suite.sh\` for the local runner that applies the same"
+            echo "exclusion."
+            echo
+            echo "\`FERRO_REQUIRE_MANIFEST=1\` is set in this job so a guard that finds no"
+            echo "prepared reference FAILS rather than skipping green. If you reproduce"
+            echo "without a manifest, leave it unset — otherwise every selected guard fails"
+            echo "for that reason and tells you nothing about the run you are chasing."
             echo
             echo "A moved conformance baseline is re-blessable; a new live divergence is not."
             echo "Read which it is out of the \`${XFAIL_ARTIFACT}\` artifact"
