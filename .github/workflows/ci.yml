@@ -81,6 +81,51 @@ env:
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
+  # The slow census modules, owned by the `censuses` job and excluded from the
+  # `test` / `test-oracle` partitions. Same shape as `SWEEP_FILTER` above and
+  # for the same reason; the difference is what the job does with them.
+  #
+  # WHY THEY MOVED. `--partition hash:K/N` assigns a test by a hash of its NAME,
+  # so it balances shard *counts* and is blind to cost — the property already
+  # recorded on `sweeps`, where all three exhaustive sweeps hashed into one
+  # shard. These four hashed into the two slowest jobs and made the workflow's
+  # critical path a single test. Measured on run 31845625298 (`044f085a`):
+  #
+  #                                             Test (K/6)   Test oracle (K/4)
+  #   issue_1542_direction_symmetry               155.7s (3)         240.3s (1)
+  #   spec_conformance_axis (5 tests)             338.0s              excluded
+  #   normalize_axis_preserving (4 tests)         119.3s (1,3,5)      313.0s (1,3)
+  #
+  # `Test oracle (1/4)` ran 328s against 132-160s for its siblings and finished
+  # 83s after every other job in the workflow, so the run's wall clock was one
+  # unlucky hash draw. A shard's wall can never fall below its slowest single
+  # test, so re-sharding cannot fix it — which is why `test-oracle`'s own
+  # comment below, having chosen N=4 to separate the two bulk corpora, names
+  # exactly this carve-out as the robust alternative. This is that alternative.
+  #
+  # AND WHY THE JOB, NOT THE JOB BOUNDARY, IS THE WIN. `censuses` consumes the
+  # OPTIMIZED archive `test-build-soak` produces, which is where `sweeps`
+  # measured 7.6-8.7x on work of exactly this shape (compute-bound cross
+  # products over `MockProvider`). A carve-out onto the standard debug archive
+  # would move the same 240s to a different runner and buy ~50s.
+  #
+  # THE PARTITION INVARIANT is `SWEEP_FILTER`'s, verbatim: the counts drift as
+  # tests are added, the sum must not. `censuses` selects ON this filter and
+  # passes `--no-tests=fail`, so a rename that made it match nothing reddens
+  # there rather than quietly emptying the job, while `test` and `test-oracle`
+  # negate it and would just widen. `tests/it/census_filter_invariant.rs` closes
+  # the half neither of those catches — a module named here that NEITHER of the
+  # job's two steps selects would be negated everywhere and run nowhere.
+  #
+  # NOTE the overlap with `ORACLE_EXCLUDE` below: `spec_conformance_axis` is in
+  # both, and deliberately. `ORACLE_EXCLUDE` is a statement about which
+  # instrument may be armed, and `oracle_exclude_invariant.rs` demands that
+  # every spec-corpus module appear there; this filter is a statement about
+  # where a module runs. Removing it from either would be wrong for a reason the
+  # other does not cover.
+  CENSUS_FILTER: >-
+    test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
+    + test(spec_conformance_axis)
   # The spec-corpus modules, excluded from `test-oracle` ONLY. They run in full
   # in the plain `test` job; this is not a coverage exemption, it is a statement
   # about which instrument may be armed while another is measuring.
@@ -1193,44 +1238,48 @@ jobs:
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/6 \
-            -E "not test(proptest) and not ($SWEEP_FILTER)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER)"
 
   # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
   # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
   # what the oracle asserts, so re-rolling thousands of random cases here checks
   # nothing the plain run did not already check — it just cost ~80s of every CI
   # run. The deep random coverage lives in the `soak` job below instead.
-  # FOUR shards, and the number is CHOSEN rather than conventional.
+  # FOUR shards. The number was once load-bearing and no longer is — worth
+  # recording, because the reasoning it rested on is the reasoning that produced
+  # `CENSUS_FILTER`.
   #
   # `--partition hash:K/N` assigns each test by a hash of its NAME, so it
   # balances test *counts* and is blind to duration. At N=3 the two bulk
-  # axis-preservation corpora — the two slowest tests in the repository under the
-  # oracles — both hashed into shard 1, every run, deterministically:
+  # axis-preservation corpora — then the two slowest tests in the repository
+  # under the oracles — both hashed into shard 1, every run, deterministically:
   #
   #     Test oracle (1/3)  242s     <- axis_is_preserved_over_the_{cmrg,clinvar_unique}_corpus
   #     Test oracle (2/3)   94s
   #     Test oracle (3/3)   77s
   #
   # 413s of work split 242/94/77 instead of ~138 each, so the job's critical path
-  # was one unlucky draw.
+  # was one unlucky draw. N=4 separated them (cmrg -> 1, clinvar_unique -> 3).
   #
-  # N=4 separates them (cmrg -> 1, clinvar_unique -> 3). That is measured, not
-  # hoped for, and it is re-derivable — N=5 also separates them and N=6 puts them
-  # back together, so the number is not monotone and cannot be reasoned about:
+  # **That fix did not hold, and could not have.** The shard count is chosen
+  # against one snapshot of the test-NAME set, and every added or renamed test
+  # re-rolls the whole assignment. #1840 added `issue_1542_direction_symmetry`,
+  # it hashed onto shard 1 next to the cmrg corpus, and the job went back to
+  # 328s against 132-160s for its siblings — the same failure the shard count
+  # had been picked to avoid, two months later and by a different draw.
   #
-  #     for K in 1 2 3 4; do
-  #       cargo nextest list --features dev --test it --partition "hash:$K/4" \
-  #         -E 'test(axis_is_preserved_over_the_cmrg_corpus) or
-  #             test(axis_is_preserved_over_the_clinvar_unique_corpus)'
-  #     done
+  # So the robust alternative this comment used to name and decline — "giving
+  # `normalize_axis_preserving` a job of its own and negating it here" — was
+  # taken instead. It is `CENSUS_FILTER` and the `censuses` job, and it also
+  # carries `issue_1542_direction_symmetry` and `spec_conformance_axis`. Its
+  # cost was the three-file change this comment warned about (`ci.yml`,
+  # `scripts/run_oracle_suite.sh`, `tests/it/oracle_exclude_invariant.rs`), and
+  # that was the right price: a negation is stable under a re-roll and a shard
+  # count is not.
   #
-  # **This placement is a property of the whole test-NAME set, so adding or
-  # renaming tests re-rolls it.** If this job's shards go lopsided again, re-run
-  # the loop above before assuming anything else changed. The robust alternative
-  # — giving `normalize_axis_preserving` a job of its own and negating it here —
-  # was not taken because this job's `-E` is re-derived by BOTH
-  # `scripts/run_oracle_suite.sh` and `tests/it/oracle_exclude_invariant.rs`, so
-  # a fourth negation term is a three-file change; the shard count is not.
+  # N stays at 4. Nothing now depends on which shard a particular test lands in,
+  # so the number is once again merely conventional; it is left alone because
+  # changing it re-rolls every assignment for no measured gain.
   test-oracle:
     name: Test oracle (${{ matrix.shard }}/4)
     needs: [test-build, spec-fixtures, fixtures]
@@ -1409,7 +1458,7 @@ jobs:
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/4 \
-            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
   #
@@ -1613,6 +1662,91 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "$SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)"
 
+  # `CENSUS_FILTER`'s modules, moved off the `test` / `test-oracle` partitions
+  # and onto the optimized archive. See that filter's own comment for why they
+  # moved; this one is about how the job preserves what they were doing.
+  #
+  # TWO STEPS, because the modules do not agree about the oracles and the
+  # difference is not a detail:
+  #
+  #   * ARMED runs what `test-oracle` ran, with the same three flags and no
+  #     fourth. An armed run strictly subsumes the un-armed one — the oracles
+  #     add assertions at `normalize_core_checked`'s exit and change no
+  #     behaviour — which is the same argument `sweeps` makes, so dropping the
+  #     plain-`test` copy of these two modules loses nothing.
+  #   * UN-ARMED runs `spec_conformance_axis`, which is in `ORACLE_EXCLUDE` and
+  #     must stay that way: it COUNTS the non-idempotent outputs
+  #     `FERRO_ASSERT_IDEMPOTENT` panics on, and a panicking row is filed
+  #     `declined` and never reaches the family's output set — which does not
+  #     redden the census, it FLATTERS it. That module ran only in the plain
+  #     `test` job before, so this step reproduces it exactly.
+  #
+  # `FERRO_ASSERT_SEQUENCE` is set by NEITHER step, which is what makes this a
+  # move rather than a change of instrument. `sweeps` does set it, so these
+  # modules could not simply be appended there.
+  #
+  # No `submodules: true`: none of the three modules names a path under
+  # `assets/` (the spec worked-examples citation gate, which does, stays in
+  # `test`). `spec-fixtures` IS needed —
+  # `normalize_axis_preserving::axis_is_preserved_over_the_spec_fixture` calls
+  # `ensure_spec_fixture`, which regenerates via a nested `cargo run` when the
+  # file is absent, and this job has no crate to build from. `bulk-fixtures` is
+  # needed for the three corpus tests in that same module.
+  #
+  # Verified archive-safe the way `soak` and `sweeps` are: all three modules
+  # live in `tests/it/`, so they are already inside the archive
+  # `test-build-soak` produces, none is gated on the `dev` feature, and none
+  # reads `CARGO_BIN_EXE_ferro`.
+  censuses:
+    name: Slow censuses (optimized)
+    needs: [test-build-soak, spec-fixtures, fixtures]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive-soak
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: spec-fixtures
+          path: tests/fixtures/grammar/
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: bulk-fixtures
+          path: tests/fixtures/
+      - name: Run the censuses that need the oracles armed
+        env:
+          # The three `test-oracle` sets, and only those three. See that job for
+          # what each asserts and why `FERRO_ASSERT_SEQUENCE` is not among them.
+          FERRO_ASSERT_IDEMPOTENT: "1"
+          FERRO_ASSERT_REPARSE: "1"
+          FERRO_ASSERT_IN_BOUNDS: "1"
+          # Absence of a bulk fixture must FAIL here, never skip — the same
+          # reason as in `test`. `normalize_axis_preserving`'s three corpus
+          # tests `return` early on a missing file, so without this a
+          # `bulk-fixtures` artifact that failed to arrive would delete the
+          # ClinVar, CMRG and Paraphase axis coverage and report a *faster*
+          # green run.
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
+        # `--no-tests=fail` for the reason spelled out on `soak` and `sweeps`:
+        # this step names its modules explicitly, so a rename is exactly the
+        # edit that would drop a census from CI silently.
+        run: |
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite --no-tests=fail \
+            -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)"
+      - name: Run the census that may not be measured with an oracle armed
+        # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: this
+        # module builds its corpus in code (`conformance::spec_corpus`) and
+        # reads nothing from disk.
+        run: |
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite --no-tests=fail \
+            -E "test(spec_conformance_axis)"
+
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
   # Aggregator that reports the `Test` status context.
@@ -1630,7 +1764,7 @@ jobs:
   test-required:
     name: Test
     runs-on: ubuntu-latest
-    needs: [test, test-oracle, soak, sweeps]
+    needs: [test, test-oracle, soak, sweeps, censuses]
     # `always()` so a failed or cancelled dependency still reports a conclusion
     # rather than leaving the required context pending forever.
     if: always()
@@ -1641,10 +1775,12 @@ jobs:
           echo "test-oracle     = ${{ needs.test-oracle.result }}"
           echo "soak            = ${{ needs.soak.result }}"
           echo "sweeps          = ${{ needs.sweeps.result }}"
+          echo "censuses        = ${{ needs.censuses.result }}"
           if [ "${{ needs.test.result }}" != "success" ] \
             || [ "${{ needs.test-oracle.result }}" != "success" ] \
             || [ "${{ needs.soak.result }}" != "success" ] \
-            || [ "${{ needs.sweeps.result }}" != "success" ]; then
+            || [ "${{ needs.sweeps.result }}" != "success" ] \
+            || [ "${{ needs.censuses.result }}" != "success" ]; then
             echo "::error::one or more test jobs did not succeed"
             exit 1
           fi

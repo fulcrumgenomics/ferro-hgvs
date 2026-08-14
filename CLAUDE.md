@@ -186,9 +186,10 @@ path now excludes it the same way, from the same source of truth.
 
 **The runner reads the whole `-E` selection and the flag set out of `ci.yml`**,
 so neither can drift into a second copy. "Whole" is load-bearing: `test-oracle`
-negates `test(proptest)` and `SWEEP_FILTER` as well as `ORACLE_EXCLUDE`, and a
-runner that negated only the last of them would run the proptest modules and the
-three exhaustive sweeps while reporting itself as mirroring that job. So the
+negates `test(proptest)`, `SWEEP_FILTER` and `CENSUS_FILTER` as well as
+`ORACLE_EXCLUDE`, and a runner that negated only `ORACLE_EXCLUDE` would run the
+proptest modules, the three exhaustive sweeps and the three slow censuses while
+reporting itself as mirroring that job. So the
 shape of the expression is read too, and only its variable references are
 expanded — rebuilding it here from a hardcoded `not test(proptest) and not (…)`
 would trade today's drift for tomorrow's.
@@ -319,14 +320,16 @@ on `merge::first_out_of_bounds_coordinate`. In brief:
 
 Like the two above it, compiled out in release (`#[cfg(debug_assertions)]`) and
 read once into a `OnceLock`. CI sets **these three** together, in the sharded
-`test-oracle` job and the `sweeps` job (those two and nowhere else — the plain
-`test` and `soak` jobs run without the flags); the nightly sets it too, where it
-is the only place the check runs against true transcript and contig lengths.
+`test-oracle` job, the `sweeps` job, and the **armed step** of the `censuses`
+job (those three and nowhere else — the plain `test` and `soak` jobs run without
+the flags, and `censuses`' second step deliberately runs `spec_conformance_axis`
+un-armed); the nightly sets it too, where it is the only place the check runs
+against true transcript and contig lengths.
 
 **The fourth flag is not set in all of those places, so do not read "all four"
 off this paragraph.** `FERRO_ASSERT_SEQUENCE` runs in `sweeps` and in the
-nightly, and deliberately not in `test-oracle` — the reason, and what currently
-keeps it out, are under
+nightly, and deliberately not in `test-oracle` or in `censuses` — the reason, and
+what currently keeps it out, are under
 [Where it runs, and the one place it deliberately does not](#normalization-denoted-sequence-oracle)
 below and in `ci.yml`'s comment on the `test-oracle` job.
 
@@ -408,11 +411,15 @@ four when on — one provider fetch and two splices per normalization — so it 
 last in `assert_seam_oracles`, after the cheaper and more specific checks have
 had their chance to name the fault more precisely.
 
-**Where it runs, and the one place it deliberately does not.** `sweeps` sets it
+**Where it runs, and the two places it deliberately does not.** `sweeps` sets it
 (gating, measured green over the full corpus) and the nightly sets it
-(non-gating). `test-oracle` does **not**, which makes it the only job where the
-set of four is incomplete. Two rows in that job's selection used to fire, and
-both were real disagreements inside ferro rather than noise:
+(non-gating). `test-oracle` does **not**, which is why the set of four is
+incomplete there. `censuses`' armed step does not either, and for a derived
+reason rather than a second one: that step exists to run what `test-oracle` ran,
+on a faster archive, so it inherits that job's flag set exactly — arming a fourth
+oracle there would make the move a change of instrument. Two rows in
+`test-oracle`'s selection used to fire, and both were real disagreements inside
+ferro rather than noise:
 
 | row | what disagreed | state |
 |---|---|---|

@@ -63,6 +63,7 @@ mod bulk_fixture_tests;
 mod case_harvest;
 mod cdot_coordinate_basis_layers;
 mod cds_utr3_crossing_shift_idempotency;
+mod census_filter_invariant;
 mod cis_adjudication_enumeration;
 mod cis_allele_confluence_proptest;
 mod cis_confluence_adjudication;

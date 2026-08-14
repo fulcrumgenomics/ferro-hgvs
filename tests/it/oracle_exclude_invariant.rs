@@ -353,11 +353,12 @@ fn test_oracle_job_lines() -> Vec<String> {
 /// The complete `-E` expression `test-oracle` hands to nextest, with `ci.yml`'s
 /// two variable references expanded.
 ///
-/// The job negates three things — the proptest modules, `SWEEP_FILTER` and
-/// `ORACLE_EXCLUDE` — and the runner first shipped negating only the last of
-/// them, so a local "as CI runs it" also executed the proptest modules and the
-/// three exhaustive sweeps. Comparing only the exclusion could not see that,
-/// which is why the whole expression is compared here.
+/// The job negates four things — the proptest modules, `SWEEP_FILTER`,
+/// `ORACLE_EXCLUDE` and `CENSUS_FILTER` — and the runner first shipped negating
+/// only the second-to-last of them, so a local "as CI runs it" also executed the
+/// proptest modules and the three exhaustive sweeps. Comparing only the
+/// exclusion could not see that, which is why the whole expression is compared
+/// here.
 fn ci_oracle_selection() -> String {
     let template = test_oracle_job_lines()
         .iter()
@@ -370,7 +371,8 @@ fn ci_oracle_selection() -> String {
 
     let expanded = template
         .replace("$SWEEP_FILTER", ci_filter("SWEEP_FILTER").trim())
-        .replace("$ORACLE_EXCLUDE", ci_filter("ORACLE_EXCLUDE").trim());
+        .replace("$ORACLE_EXCLUDE", ci_filter("ORACLE_EXCLUDE").trim())
+        .replace("$CENSUS_FILTER", ci_filter("CENSUS_FILTER").trim());
     assert!(
         !expanded.contains('$'),
         "test-oracle's -E selection references a variable this test does not expand: {expanded}"
