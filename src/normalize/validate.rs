@@ -561,7 +561,13 @@ fn validate_single_base(stated: &Base, ref_seq: &[u8], pos: u64) -> ValidationRe
     if idx >= ref_seq.len() {
         return ValidationResult::mismatch(
             stated.to_char().to_string(),
-            format!("(position {} out of range)", pos),
+            // No coordinate here, deliberately (#1612). `pos` indexes the slice
+            // this function was handed, which for a windowed caller is not a
+            // coordinate any reader can act on — the same defect the warning's
+            // `position` field carried. That field now renders the span through
+            // `MismatchFrame`, so it already names where this happened and
+            // restating it from the raw index could only contradict it.
+            "(position out of range)".to_string(),
         );
     }
 
@@ -586,14 +592,12 @@ fn validate_sequence(stated: &[Base], ref_seq: &[u8], start: u64, end: u64) -> V
 
     if end_idx > ref_seq.len() {
         let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
-        return ValidationResult::mismatch(stated_str, format!("(position {} out of range)", end));
+        // Coordinate-free for the reason on `validate_single_base` (#1612).
+        return ValidationResult::mismatch(stated_str, "(position out of range)".to_string());
     }
     if start_idx > end_idx {
         let stated_str: String = stated.iter().map(|b| b.to_char()).collect();
-        return ValidationResult::mismatch(
-            stated_str,
-            format!("(inverted range: start {} > end {})", start, end),
-        );
+        return ValidationResult::mismatch(stated_str, "(inverted range)".to_string());
     }
 
     let actual_bytes = &ref_seq[start_idx..end_idx];
@@ -640,10 +644,14 @@ fn validate_stated_length(declared: u64, start: u64, end: u64) -> ValidationResu
     if declared == span {
         ValidationResult::ok()
     } else {
-        ValidationResult::mismatch(
-            format!("length {declared}"),
-            format!("span {span} ({start}_{end})"),
-        )
+        // `span {span}` and no endpoints (#1612). `start`/`end` index the slice
+        // the caller handed in, so on the windowed callers the old
+        // `span 2 (100_101)` restated a window offset in HGVS range notation —
+        // for `g.201_202del5` the very same warning read `at 201-202` beside
+        // `span 2 (100_101)`, contradicting itself. The endpoints are the
+        // warning's `position` field's job and it renders them correctly; the
+        // width is what this check is about.
+        ValidationResult::mismatch(format!("length {declared}"), format!("span {span}"))
     }
 }
 

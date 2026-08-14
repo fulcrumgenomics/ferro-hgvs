@@ -187,23 +187,19 @@ fn the_inserted_sequence_expansion_warning_reaches_the_cli() {
 /// where the description is *accepted* despite contradicting the reference, and
 /// so the one where silence is most costly.
 ///
-/// The rendered position is **not** pinned. On this input the message reads
-/// `at 100-100` for a variant at `g.201`, which looks like a window-relative
-/// offset leaking into a user-facing coordinate. That is recorded as a separate
-/// finding rather than frozen here: pinning it would make a legitimate fix to
-/// the coordinate fail this test for the wrong reason.
+/// The rendered position used to be left unpinned here. On this input the
+/// message read `at 100-100` for a variant at `g.201` — a window-relative
+/// offset leaking into a user-facing coordinate — and freezing it would have
+/// made the eventual repair fail this test for the wrong reason.
 ///
-/// Confirmed and filed as **#1612**. It is built at `src/normalize/mod.rs:8806`
-/// from the *fetched window's* `start`/`end`, which nothing converts back onto
-/// the description's own axis — unlike the cis producer at
-/// `src/normalize/merge.rs:3362`, which re-bases through `region_sequence_delta`
-/// and documents itself as reporting the sequence-axis span. The field is not
-/// diagnostic-only: it is also the `location` of strict mode's
-/// `FerroError::ReferenceMismatch` (`mod.rs:2418`), so a fix has to move both
-/// renderings and stay agreed with the cis producer, whose warnings are built to
-/// be indistinguishable so the `position`-keyed dedupe at `mod.rs:2854` can drop
-/// the duplicate. That is why it is not repaired here, where the scope is the
-/// seam rather than the warning's contents.
+/// That finding was filed as **#1612** and is now **fixed**, so the coordinate
+/// is pinned: the warning is built from the fetched window's `start`/`end`, and
+/// those are converted back through `MismatchFrame` before they are formatted.
+/// `tests/it/issue_1612_refseq_mismatch_coordinate.rs` owns the full guard —
+/// every axis, the strict-mode `FerroError::ReferenceMismatch` `location` (the
+/// same string), and the agreement with the cis producer that the
+/// `position`-keyed dedupe depends on. What is pinned *here* is only that the
+/// repaired coordinate reaches the CLI, which is this file's own subject.
 #[test]
 fn the_reference_mismatch_warning_reaches_the_cli() {
     let (_dir, reference) = fixture();
@@ -212,8 +208,9 @@ fn the_reference_mismatch_warning_reaches_the_cli() {
 
     assert!(ok, "lenient must accept the mismatch; stderr: {stderr}");
     assert!(
-        stderr.contains("warning[REFSEQ_MISMATCH]: reference sequence mismatch at "),
-        "the mismatch must be disclosed under its code; stderr: {stderr}"
+        stderr.contains("warning[REFSEQ_MISMATCH]: reference sequence mismatch at 201-201:"),
+        "the mismatch must be disclosed under its code, at the coordinate the \
+         input names (#1612); stderr: {stderr}"
     );
     assert!(
         stderr.contains(r#"stated "C", actual "A""#),
