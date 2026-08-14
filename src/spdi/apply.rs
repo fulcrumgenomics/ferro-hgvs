@@ -435,7 +435,16 @@ fn trim_common_flanks<'a>(reference: &'a [u8], resulting: &'a [u8]) -> (usize, &
 /// interval that begins at `win_start` — and return the edited sequence.
 ///
 /// Triples are applied from the 3' end (descending position) so that an earlier
-/// splice never shifts the coordinates of a later one. Each triple's stated
+/// splice never shifts the coordinates of a later one, and — among triples that
+/// share a position — **longer deletions first**, so a span-claiming member is
+/// always applied before the zero-length one flush against it. The second
+/// component is not cosmetic: [`triples_are_disjoint`] walks this slice in
+/// reverse and would otherwise report an insertion abutting a `sub`/`del` as an
+/// overlap or not depending on the order the caller's members were written in
+/// (#1831). [`splice_denoted_sequence`] and `conformance::spec_corpus`'s own
+/// applier both sort the same way.
+///
+/// Each triple's stated
 /// deleted bases are validated against the actual reference bases at that span;
 /// if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the reference
 /// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
@@ -451,7 +460,37 @@ pub(crate) fn apply_triples(
     let ref_bytes = reference.as_bytes();
     let mut bytes = ref_bytes.to_vec();
     let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
-    ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
+    // Descending position, and **longer deletions first** among triples at one
+    // position — the same key [`splice_denoted_sequence`] already uses, for the
+    // same reason it states: a span-claiming member must be applied before the
+    // zero-length one flush against it.
+    //
+    // Without the second component the sort is stable on a tie, so two triples
+    // sharing a position keep the order the *author* happened to write their
+    // members in. An insertion at interbase `p` and a `sub`/`del` starting at
+    // `p` share that position, and [`triples_are_disjoint`]'s running-reach walk
+    // then reads them as overlapping or not depending on which came first:
+    // visiting the length-1 member first sets `reach = p + 1`, and the
+    // zero-length insertion at `p` is rejected. So `g.[129_130insT;130G>A]` was
+    // refused while `g.[130G>A;129_130insT]` — the same variant, members
+    // written the other way round — applied cleanly (#1831).
+    //
+    // That contradicted this module's own contract, stated on
+    // `triples_are_disjoint`: an insertion deletes nothing and therefore claims
+    // no base, so the two members do not claim the same base and the resulting
+    // sequence is well defined. It also contradicted #1098, which settled that
+    // member order carries no meaning.
+    //
+    // Two or more *pure* insertions at one interbase tie on both components, so
+    // the stable sort still preserves authored order there and the walk's
+    // `p > p` test still passes — that shape is deliberately unchanged, and
+    // `variant_edit_triples_reason` is what refuses it where it must be refused.
+    ordered.sort_by_key(|t| {
+        (
+            std::cmp::Reverse(t.position),
+            std::cmp::Reverse(t.deletion.len()),
+        )
+    });
     if !triples_are_disjoint(&ordered) {
         return None;
     }
@@ -483,8 +522,16 @@ pub(crate) fn apply_triples(
 
 /// Whether no two of `ordered` claim the same reference base.
 ///
-/// `ordered` must be sorted by descending position, as [`apply_triples`] leaves
-/// it. That descending application order is what lets each stated deletion be
+/// `ordered` must be sorted by descending position **and, among triples sharing
+/// a position, by descending deletion length**, as [`apply_triples`] leaves it.
+/// The second component is load-bearing rather than cosmetic: this predicate
+/// walks the slice in reverse and compares each triple against the furthest 3'
+/// reach seen so far, so a zero-length insertion visited *after* a
+/// reference-consuming member at the same position is reported as an overlap
+/// although it claims no base. Sorting on position alone left that to the
+/// author's member order (#1831).
+///
+/// That descending application order is what lets each stated deletion be
 /// validated against the pristine reference: every already-applied splice sits
 /// strictly 3' of the next one, so the span about to be read is untouched. The
 /// argument holds only while the triples are disjoint — overlapping ones both
@@ -922,17 +969,34 @@ enum SpliceFailure {
 /// Splice `triples` into `reference` — the bases beginning at interbase
 /// `win_start` — and return the resulting sequence.
 ///
-/// Deliberately **not** [`apply_triples`], which is shared with
-/// `EquivalenceChecker` and whose [`triples_are_disjoint`] guard reports a pure
-/// insertion flush against the 5' end of a deletion as an overlap. That
+/// Deliberately **not** [`apply_triples`] — but **no longer for the reason this
+/// comment used to give**, which #1831 falsified and which is kept below only as
+/// the measurement the tie-break was derived from.
+///
+/// **What changed (#1831).** [`apply_triples`] now sorts longer deletions first
+/// among triples sharing a position — this walk's own key — so
+/// [`triples_are_disjoint`] sees correctly-ordered input, no longer reports a
+/// pure insertion flush against the 5' end of a deletion as an overlap, and no
+/// longer decides that shape by the order the author wrote the members in. The
+/// two walks now *agree* there.
+///
+/// **The measurement, kept because it is the argument for the tie-break.** That
 /// combination is well defined — the payload lands at the junction, then the
 /// span is removed — and it is a shape cis alleles reach constantly: measured
 /// over one suite run, reading it as an overlap produced **233** false alarms,
-/// nearly all of them `g.[…;261_262insA;262_264A[5]]`-shaped. (Its verdict there
-/// is also input-order dependent, since the sort breaks position ties by input
-/// order.) Changing that predicate is out of scope — two pinned tests depend on
-/// its permissiveness in the other direction — so this walk is the one used for
-/// the comparison.
+/// nearly all of them `g.[…;261_262insA;262_264A[5]]`-shaped. The 233 is the
+/// size of that class when it was diagnosed and is kept as that.
+///
+/// **Why this walk stays separate anyway**, since the historical reason no
+/// longer carries it: it answers a question [`apply_triples`] cannot, returning
+/// a typed [`SpliceFailure`] that separates an overlap from a stated-bases
+/// mismatch. [`compare_denoted_sequences`] routes those to opposite verdicts —
+/// an overlap is the output's own fault and fires, while a stated base
+/// disagreeing with the reference is unadjudicable and is what a
+/// `REFSEQ_MISMATCH` input looks like — and [`apply_triples`] collapses both
+/// into `None`. Independently, [`triples_are_disjoint`] is depended on *in the
+/// other direction* by pinned tests, so it is not a predicate to retune
+/// casually.
 ///
 /// The walk is `tests/it/common/cis_apply_oracle.rs`'s, the applier every
 /// sibling-crossing test already rests on: 3'→5' so an applied splice never
