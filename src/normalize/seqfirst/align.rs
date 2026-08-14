@@ -105,7 +105,7 @@ impl AlignmentDag {
         let suffix_grid = edit_grid(&ref_rev, &alt_rev);
         let suffix = |i: usize, j: usize| suffix_grid[(n - i) * (m + 1) + (m - j)];
 
-        let total = prefix[n * (m + 1) + m];
+        let total: u16 = prefix[n * (m + 1) + m];
         let width = m + 1;
 
         let mut on_optimal_path = vec![false; (n + 1) * width];
@@ -124,7 +124,7 @@ impl AlignmentDag {
                 let here = prefix[i * width + j];
                 // Diagonal: match or substitution.
                 if i < n && j < m {
-                    let cost = u32::from(ref_block[i] != alt_block[j]);
+                    let cost = u16::from(ref_block[i] != alt_block[j]);
                     let next = (i + 1) * width + (j + 1);
                     if here + cost == prefix[next] && on_optimal_path[next] {
                         out[i * width + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
@@ -150,7 +150,7 @@ impl AlignmentDag {
         Self {
             ref_len: n as u32,
             alt_len: m as u32,
-            total,
+            total: u32::from(total),
             on_optimal_path,
             out,
         }
@@ -354,20 +354,29 @@ impl AlignmentDag {
 }
 
 /// Full Levenshtein distance grid, row-major with `alt.len() + 1` columns.
-fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u32> {
+fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u16> {
     let n = reference.len();
     let m = alt.len();
+    // A cost never exceeds `n + m`, and a cell of `on_optimal_path`'s test sums
+    // a prefix and a suffix cost, so `2 * (n + m)` must fit. The canonical
+    // window caps a block far below this; the assert is what makes the
+    // narrowing safe for a direct `build` caller that is not so capped.
+    debug_assert!(
+        2 * (n + m) <= u16::MAX as usize,
+        "edit_grid narrowed to u16: 2*(n+m) = {} exceeds u16",
+        2 * (n + m)
+    );
     let width = m + 1;
-    let mut d = vec![0u32; (n + 1) * width];
+    let mut d = vec![0u16; (n + 1) * width];
     for (i, x) in d.iter_mut().step_by(width).enumerate() {
-        *x = i as u32;
+        *x = i as u16;
     }
     for (j, x) in d.iter_mut().take(width).enumerate() {
-        *x = j as u32;
+        *x = j as u16;
     }
     for i in 1..=n {
         for j in 1..=m {
-            let cost = u32::from(reference[i - 1] != alt[j - 1]);
+            let cost = u16::from(reference[i - 1] != alt[j - 1]);
             d[i * width + j] = (d[(i - 1) * width + j] + 1)
                 .min(d[i * width + j - 1] + 1)
                 .min(d[(i - 1) * width + j - 1] + cost);
