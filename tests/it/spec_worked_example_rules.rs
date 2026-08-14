@@ -29,7 +29,11 @@
 //!   **real _DMD_ bases under the accession the spec itself cites**. Nearly
 //!   every `LRG_199t1`/`NM_004006.2` worked example lives on this transcript,
 //!   and [`the_slice_carries_the_bases_the_spec_quotes`] re-derives the spec's
-//!   own quoted context from it before any row is trusted.
+//!   own quoted context from it before any row is trusted. The _DMD_ record is
+//!   served under **both** spellings — see [`slice_provider`] for why the
+//!   `NM_004006.2` alias is load-bearing rather than a convenience, and
+//!   [`the_refseq_spelling_of_the_dmd_transcript_resolves_and_answers_identically`]
+//!   for the guard that keeps it honest.
 //! - **[`Fixture::Genomic`]**, **[`Fixture::Coding`]**, **[`Fixture::Protein`]** —
 //!   synthetic contigs, transcripts and protein sequences built from the
 //!   sequence the spec *prints beside the example* (`TGT`+`GC`+`CA`,
@@ -816,6 +820,25 @@ const NEGATIVE: &[Negative] = &[
         why: "the rejected proposal's answer must not be produced",
     },
     Negative {
+        id: "W58",
+        clause: "consultation/SVD-WG010.md:51",
+        quote: "separated by fewer than two nucleotides and described as a \"delins\" variant",
+        input: "NM_004006.2:c.[992_1002del;1004T>C]",
+        forbidden: "NM_004006.2:c.992_1004delinsAC",
+        fixture: Fixture::Slice,
+        why: "the same row on the RefSeq spelling of the same transcript, because \
+              that is the accession the mutalyzer corpus records W58 under \
+              (`tests/fixtures/mutalyzer-normalize/cases.json`; an `LRG_` row \
+              cannot enter the hermetic snapshot, so the corpus had to move off \
+              the spec's accession to reach CI). That corpus row is a `spec_citation`, \
+              the one disposition with no XPASS guard, and the value it pins is \
+              mutalyzer's — i.e. the rejected proposal's own string. So if ferro \
+              ever adopted the forbidden form the corpus row would demote from \
+              `spec_overridden` to `pass` and object to nothing. This row is what \
+              objects, on the accession the corpus actually uses rather than only \
+              on the one the spec prints",
+    },
+    Negative {
         id: "W60",
         clause: "background/glossary.md:10",
         quote: "not the `T` at position 2 or 3",
@@ -1321,14 +1344,48 @@ fn repo_path(relative: &str) -> PathBuf {
 }
 
 /// The committed spec worked-example reference window, loaded once.
+///
+/// The committed fixture stores the _DMD_ transcript under the spec's own
+/// `LRG_199t1`. It is registered a second time under `NM_004006.2`, its RefSeq
+/// spelling — the same sequence, the same CDS, the same exon table — because
+/// the spec itself uses the two interchangeably for this transcript (`W7`,
+/// `W8`, `W9`, `W52` and `W61` all take an `LRG_199t1` input and print an
+/// `NM_004006.2` answer) and because the mutalyzer corpus records W58 under the
+/// RefSeq spelling, an `LRG_` accession being unable to enter its hermetic
+/// snapshot.
+///
+/// **This alias is load-bearing, not a convenience.** Without it the provider
+/// answers `ReferenceNotFound` for `NM_004006.2`, and the normalizer's response
+/// to that is `Ok(input)` — the description back, unchanged — not an `Err`. So
+/// an `NM_004006.2` row would *pass every table in this file vacuously*:
+/// `the_forbidden_description_is_never_what_ferro_emits` never sees the
+/// forbidden string, and `every_answer_is_a_fixed_point` finds the input is
+/// trivially its own answer. Measured, not assumed: with the alias removed,
+/// `NM_004006.2:c.[992_1002del;1004T>C]` normalizes to itself while
+/// `LRG_199t1:c.[992_1002del;1004T>C]` normalizes to
+/// `c.[992_993del;995_997del;999_1004del]`.
 fn slice_provider() -> &'static WindowProvider {
     static SLICE: OnceLock<WindowProvider> = OnceLock::new();
     SLICE.get_or_init(|| {
-        WindowFixture::from_json_path(&repo_path(WINDOWS_PATH))
-            .expect("load the committed spec worked-example reference slice")
-            .to_provider()
+        let mut fixture = WindowFixture::from_json_path(&repo_path(WINDOWS_PATH))
+            .expect("load the committed spec worked-example reference slice");
+        let mut refseq = fixture
+            .transcripts
+            .iter()
+            .find(|tx| tx.id == LRG_DMD)
+            .expect("the committed slice carries LRG_199t1")
+            .clone();
+        refseq.id = REFSEQ_DMD.to_string();
+        fixture.transcripts.push(refseq);
+        fixture.to_provider()
     })
 }
+
+/// The spec's own accession for the _DMD_ transcript the slice carries.
+const LRG_DMD: &str = "LRG_199t1";
+
+/// The RefSeq spelling of that same transcript, aliased by [`slice_provider`].
+const REFSEQ_DMD: &str = "NM_004006.2";
 
 fn transcript(id: &str, sequence: &str, cds: Option<(u64, u64)>) -> Transcript {
     let (cds_start, cds_end) = match cds {
@@ -1742,6 +1799,51 @@ fn the_slice_carries_the_bases_the_spec_quotes() {
     // W64: the exon boundary at c.3921, whose neighbour c.3922 carries the same
     // base — which is why the junction exception exists at all.
     assert_eq!(context(3920, 3922), "ATT", "W64");
+}
+
+/// The RefSeq alias [`slice_provider`] registers is live, and answers the same.
+///
+/// Every `NM_004006.2` row in the tables above rides on that alias, and the
+/// failure mode if it were dropped is **silent**: the normalizer answers an
+/// unresolvable accession with `Ok(input)` rather than an `Err`, so those rows
+/// would go on passing while asserting nothing at all — the shape this file's
+/// own policy calls "a test that can pass vacuously". So the alias is asserted
+/// directly rather than left implied by rows that would not notice its absence.
+///
+/// The second half is what makes the substitution legitimate rather than
+/// convenient: the two spellings must reach the *same* answer, or an
+/// `NM_004006.2` row would be pinning a different transcript's behaviour under
+/// the spec's name.
+#[test]
+fn the_refseq_spelling_of_the_dmd_transcript_resolves_and_answers_identically() {
+    slice_provider()
+        .get_transcript(REFSEQ_DMD)
+        .unwrap_or_else(|e| panic!("the slice must serve {REFSEQ_DMD}: {e}"));
+
+    for (lrg, refseq) in [
+        (
+            "LRG_199t1:c.[992_1002del;1004T>C]",
+            "NM_004006.2:c.[992_1002del;1004T>C]",
+        ),
+        (
+            "LRG_199t1:c.992_1004delinsAC",
+            "NM_004006.2:c.992_1004delinsAC",
+        ),
+    ] {
+        let from_lrg = run(Fixture::Slice, lrg).expect(lrg);
+        let from_refseq = run(Fixture::Slice, refseq).expect(refseq);
+        assert_eq!(
+            from_lrg.replace(LRG_DMD, REFSEQ_DMD),
+            from_refseq,
+            "{lrg} and {refseq} must normalize to the same description"
+        );
+        // And neither may be its own input: an accession the provider cannot
+        // resolve comes back unchanged, which is exactly what this guards.
+        assert_ne!(
+            from_refseq, refseq,
+            "{refseq} normalized to itself — the slice is not resolving it"
+        );
+    }
 }
 
 /// The synthetic fixtures carry the sequence their worked example prints.

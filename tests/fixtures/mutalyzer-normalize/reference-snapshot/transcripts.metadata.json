@@ -167,6 +167,17 @@
         "sha256": "5cd097fdb651d1834291a41e629c601831e49bb3f429fe3070fb29ed799d999a"
       }
     },
+    "NM_004006.2": {
+      "cds_start": 245,
+      "cds_end": 11302,
+      "gene_symbol": "DMD",
+      "protein": "NP_003997.1",
+      "length": 13993,
+      "provenance": {
+        "source": "manifest:transcript-fasta+cdot",
+        "sha256": "6e7e884b83146a72845034b44ddcca196ef9578edecd2856e0f228cfc043dbdc"
+      }
+    },
     "NM_004321.7": {
       "cds_start": 248,
       "cds_end": 5320,
