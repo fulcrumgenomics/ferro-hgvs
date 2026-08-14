@@ -350,6 +350,11 @@ required-features = ["dev"]
 test = true
 
 [[example]]
+name = "measure_flip_corpus_impact"
+required-features = ["dev"]
+test = true
+
+[[example]]
 name = "extract_spec_worked_example_windows"
 required-features = ["dev"]
 # `#[path]`-includes `examples/common/recording.rs`, which carries `#[cfg(test)]`
