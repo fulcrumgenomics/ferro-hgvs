@@ -942,16 +942,17 @@ pub struct IntronPosition {
 //   would take the identical `Option` treatment; it was simply outside an
 //   approved break. Do not read the `bool` argument above as covering it.
 // - `distance_from_donor` / `distance_from_acceptor` ALREADY return `Option<u64>`,
-//   so they have a decline channel and do not use it. Worse than a fabricated
-//   band: the cross-boundary arm computes `intron_length - offset.unsigned_abs()`,
-//   an unchecked `u64` subtraction that underflows for ANY magnitude exceeding
-//   the intron — panicking under `overflow-checks` and wrapping to a colossal
-//   "distance" in release. `unsigned_abs` closed the ladder's overflow in #1767
-//   and left this subtraction untouched, so the hardening pass is incomplete
-//   here rather than deliberately scoped.
+//   so they had a decline channel and did not use it. **Closed by #1916**: the
+//   cross-boundary arm computed `intron_length - offset.unsigned_abs()`, an
+//   unchecked `u64` subtraction that underflowed for ANY magnitude exceeding the
+//   intron — panicking under `overflow-checks` and wrapping to a colossal
+//   "distance" in release. Both now route through `measured_offset` and decline.
+//   `unsigned_abs` closed the ladder's overflow in #1767 and left that
+//   subtraction untouched, so the hardening pass was incomplete there rather
+//   than deliberately scoped.
 //
-// Neither is reachable from a string entry point today; both are reachable by a
-// library caller, because every field of this struct is `pub`.
+// `splice_site_type` is not reachable from a string entry point today; it is
+// reachable by a library caller, because every field of this struct is `pub`.
 impl IntronPosition {
     /// Check if this is a deep intronic position (>50bp from nearest exon)
     pub fn is_deep_intronic(&self) -> bool {
@@ -1009,25 +1010,77 @@ impl IntronPosition {
         }
     }
 
+    /// `offset` read as a measured distance in bases from [`Self::boundary`],
+    /// or `None` where it measures nothing (#1916).
+    ///
+    /// Two regimes decline, and neither is a computation that could be made to
+    /// succeed by clamping — in both, *no* distance follows from the record:
+    ///
+    /// - **An unknown-offset sentinel** (`c.N+?` / `c.N-?`). Per
+    ///   [`is_unknown_offset`] these denote a position unbounded in one
+    ///   direction, "from which no distance can be derived at all". #1767
+    ///   applied that to [`IntronicConsequence::from_cds_pos`] and #1841 to
+    ///   [`IntronicRegion::from_offset`] and
+    ///   [`EffectPredictor::classify_splice_variant`]; the two callers below
+    ///   already returned `Option`, so they needed no API break to say it.
+    /// - **A magnitude exceeding `intron_length`.** The record asserts a
+    ///   position inside an intron of that length sitting further than that
+    ///   from one of its own boundaries. No position in the intron does, so the
+    ///   record is self-inconsistent and neither distance is derivable from it.
+    ///   Offsets are 1-based from their boundary, so a magnitude of exactly
+    ///   `intron_length` is the far-edge base and still answers; `+ 1` is the
+    ///   first base of the flanking exon and declines.
+    ///
+    /// **Postcondition: `result <= intron_length`.** That is what makes the
+    /// cross-boundary subtraction in both callers total, and it is why the
+    /// magnitude test lives here rather than at the one arm that underflowed —
+    /// screening only that arm would leave the two functions disagreeing about
+    /// one position, `distance_from_donor() == None` beside
+    /// `distance_from_acceptor() == Some(300)`.
+    ///
+    /// A position produced by [`Transcript::find_intron_at_genomic`] always
+    /// satisfies both conditions: it maintains `dist_to_5prime + dist_to_3prime
+    /// == intron_length + 1` with both terms at least 1, and never mints a
+    /// sentinel. So this declines only for a record a library caller built by
+    /// hand — which every field of this struct being `pub` permits.
+    ///
+    /// [`is_unknown_offset`]: crate::hgvs::parser::position::is_unknown_offset
+    /// [`IntronicConsequence::from_cds_pos`]: crate::convert::noncoding::IntronicConsequence::from_cds_pos
+    /// [`IntronicRegion::from_offset`]: crate::convert::noncoding::IntronicRegion::from_offset
+    /// [`EffectPredictor::classify_splice_variant`]: crate::effect::EffectPredictor::classify_splice_variant
+    fn measured_offset(&self) -> Option<u64> {
+        if crate::hgvs::parser::position::is_unknown_offset(self.offset) {
+            return None;
+        }
+        let magnitude = self.offset.unsigned_abs();
+        (magnitude <= self.intron_length).then_some(magnitude)
+    }
+
     /// Get distance from splice donor (5' end of intron)
+    ///
+    /// `None` when [`Self::measured_offset`] declines — the offset states no
+    /// distance, so neither does this.
     pub fn distance_from_donor(&self) -> Option<u64> {
+        let measured = self.measured_offset()?;
         match self.boundary {
-            IntronBoundary::FivePrime => Some(self.offset.unsigned_abs()),
-            IntronBoundary::ThreePrime => {
-                // Distance = intron_length - distance_from_3prime
-                Some(self.intron_length - self.offset.unsigned_abs())
-            }
+            IntronBoundary::FivePrime => Some(measured),
+            // Distance = intron_length - distance_from_3prime. Total: the
+            // postcondition of `measured_offset` is `measured <= intron_length`.
+            IntronBoundary::ThreePrime => Some(self.intron_length - measured),
         }
     }
 
     /// Get distance from splice acceptor (3' end of intron)
+    ///
+    /// `None` when [`Self::measured_offset`] declines — the offset states no
+    /// distance, so neither does this.
     pub fn distance_from_acceptor(&self) -> Option<u64> {
+        let measured = self.measured_offset()?;
         match self.boundary {
-            IntronBoundary::ThreePrime => Some(self.offset.unsigned_abs()),
-            IntronBoundary::FivePrime => {
-                // Distance = intron_length - distance_from_5prime
-                Some(self.intron_length - self.offset.unsigned_abs())
-            }
+            IntronBoundary::ThreePrime => Some(measured),
+            // Distance = intron_length - distance_from_5prime. Total for the
+            // same reason as its mirror image above.
+            IntronBoundary::FivePrime => Some(self.intron_length - measured),
         }
     }
 }
