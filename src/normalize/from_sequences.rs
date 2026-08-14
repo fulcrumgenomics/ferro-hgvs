@@ -241,6 +241,12 @@ pub fn from_sequences_detailed(
         msg: format!("position {position} does not fit a signed coordinate"),
     })?;
 
+    // This surface's block partitioner is a **pin**, not `FERRO_PARTITION`'s
+    // reading: `merge::DERIVED_BLOCK_PARTITION_RULE` names it, and
+    // `merge::partition_block_for_derivation` is where it is consulted. So a
+    // change to the rule `Normalizer::normalize` cuts with does not reach here,
+    // which is #1834 — the tripwire that fails when either moves alone is
+    // `merge`'s `the_two_surfaces_cut_with_a_pinned_pair_of_rules`.
     let block = derive_block_members(
         reference,
         alternate,

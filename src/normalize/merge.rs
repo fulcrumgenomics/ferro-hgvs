@@ -2296,11 +2296,21 @@ fn seqfirst_shadow_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
 }
 
-/// Which block partitioner [`canonicalize_from_sequence`] cuts with.
+/// Which block partitioner a surface cuts with.
 ///
-/// Three rules exist and they are not variations on one — see
+/// **Two surfaces select from this vocabulary, and they select differently.**
+/// [`canonicalize_from_sequence`] resolves its rule at runtime, from
+/// [`partition_rule`] and so from `FERRO_PARTITION`;
+/// [`derive_block_members`] — the seam
+/// [`crate::normalize::from_sequences`] enters this module at — is **pinned**
+/// to [`DERIVED_BLOCK_PARTITION_RULE`] and reads no environment at all. That
+/// asymmetry is #1834; this type is where both halves of it are written in one
+/// vocabulary. Do not read the enum as describing only the `normalize` path.
+///
+/// Four rules exist — the four [`PARTITION_RULE_NAMES`] advertises — and they
+/// are not variations on one; see
 /// [`crate::normalize::seqfirst::partition::CanonicalAlignment`] for what
-/// separates the latter two.
+/// separates the last two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PartitionRule {
     /// [`partition_block`]: a single-gap alignment search plus its two narrow
@@ -2355,13 +2365,74 @@ impl PartitionRule {
     /// An exhaustive `match` with no wildcard is the fix. Adding an arm is then
     /// a compile error here, which forces the choice to be made rather than
     /// defaulted. Pinned by `every_arm_declares_whether_it_cuts_canonically`.
-    fn cuts_with_canonical(self) -> bool {
+    ///
+    /// `const` because it is also consulted at **compile** time, by the
+    /// assertion beside [`DERIVED_BLOCK_PARTITION_RULE`].
+    const fn cuts_with_canonical(self) -> bool {
         match self {
             PartitionRule::Live | PartitionRule::Shadow => false,
             PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => true,
         }
     }
 }
+
+/// The [`PartitionRule`] the **derivation** surface cuts blocks with.
+///
+/// A pin, and deliberately not a read of [`partition_rule`].
+/// [`derive_block_members`] — the seam [`crate::normalize::from_sequences`]
+/// enters this module at — has always cut with
+/// [`partition_block_canonical_within`], while [`canonicalize_from_sequence`]
+/// cuts with whatever `FERRO_PARTITION` resolves to. The two surfaces therefore
+/// partition differently **by construction**, which is what #1834 measured: over
+/// the #1157/#1229-#1235/#1419-#1421 corpus, 32 of 79 comparable rows disagree
+/// at 3' and 36 of 79 at 5'.
+///
+/// Naming the rule here does not close that gap — converging the two surfaces
+/// is #1419/#1420/#1421's open product decision and this constant makes none of
+/// it. What it buys is that the choice is **stated**, in the same arm vocabulary
+/// the other surface selects from, so that:
+///
+/// * moving this surface onto the shipped rule is editing one line, reviewable
+///   on its own rather than discovered afterwards; and
+/// * `partition_rule_knob::the_two_surfaces_cut_with_a_pinned_pair_of_rules`
+///   fails when *either* surface's rule moves without the other's being
+///   considered. That is #1834's first consequence made loud: a bake-off under
+///   `FERRO_PARTITION=…` moves `canonicalize_from_sequence` and leaves this
+///   surface exactly where it is, so a comparison quoting a `from_sequences`
+///   figure is comparing a moved surface against a fixed one.
+///
+/// **Why [`PartitionRule::Canonical`] and not
+/// [`PartitionRule::CanonicalCoalesced`].** The two differ only through
+/// [`payload_coalesce_applies`] and [`compensating_gap_coalesce_applies`], both
+/// scoped to the coding DNA axis by the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`; and
+/// `from_sequences` emits `g.` and `m.` descriptions only, refusing every other
+/// accession class (`from_sequences::reference_template`). On this surface the
+/// two arms are the same rule, so the narrower name is the honest one — and it
+/// records that the agreement is a consequence of the axis scope rather than of
+/// the arms being interchangeable.
+///
+/// **This names a rule and nothing else.** The grid budget is a second axis on
+/// which the two surfaces already differ — `from_sequences` takes the caller's
+/// `FromSequencesOptions::max_grid_cells` while [`canonicalize_from_sequence`]
+/// is fixed at [`MAX_SEQFIRST_GRID_CELLS`] — and it is deliberately outside this
+/// pin. See the scope paragraph on
+/// `partition_rule_knob::the_two_surfaces_cut_with_a_pinned_pair_of_rules`.
+///
+/// **Unstable, like the switch it shares a vocabulary with.** `FERRO_PARTITION`
+/// is expected to be removed once the normalization rule is settled; what this
+/// constant states outlives it, but its spelling may not.
+const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::Canonical;
+
+/// The pin above must name an arm that genuinely cuts with
+/// [`partition_block_canonical_within`], because
+/// [`partition_block_for_derivation`] serves that family and nothing else.
+///
+/// A compile error rather than a runtime one, and rather than a `None` mapped
+/// to [`BlockDecline::WouldNotRender`]: reporting "the partition would not
+/// render" for "this surface does not serve that arm" is the misattribution
+/// [`BlockDecline`]'s own doc records having already cost a diagnosis once.
+const _: () = assert!(DERIVED_BLOCK_PARTITION_RULE.cuts_with_canonical());
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
@@ -2701,6 +2772,50 @@ fn partition_block_for_rule(
         SEQFIRST_DECLINED.fetch_add(1, Ordering::Relaxed);
         partition_block(reference, result)
     })
+}
+
+/// Cut a trimmed block for [`derive_block_members`] under `rule`, within a
+/// caller-supplied grid budget.
+///
+/// The derivation-surface sibling of [`partition_block_for_rule`], and it exists
+/// for the **seam** rather than for the dispatch. Both surfaces now select their
+/// partitioner from one [`PartitionRule`] vocabulary — this one's rule comes
+/// from [`DERIVED_BLOCK_PARTITION_RULE`] and the other's from
+/// [`partition_rule`] — so "which rule does `from_sequences` cut with" has an
+/// answer that is written down, greppable, and tied to the arm names a bake-off
+/// selects (#1834). Before this, the question could only be answered by reading
+/// [`derive_block_members`]'s body and noticing which function it called.
+///
+/// Serves the canonical family only. What keeps the other two arms out is the
+/// **compile**-time assertion on the pin — which constrains the constant this
+/// function's sole caller passes, and not this signature, which accepts any
+/// arm. They are not mapped to a value here because there is no honest one:
+/// `None` reaches the caller as [`BlockDecline::WouldNotRender`], and this path
+/// also has no `min_separation` for [`partition_block_sequence_first`] to take —
+/// a sequence pair carries no spelling for one to be relative to, which is the
+/// same reason [`derive_block_members`] takes no weight bound.
+///
+/// The `debug_assert` is therefore a statement of the precondition the constant
+/// already guarantees, not a second gate: it catches a *future* caller passing a
+/// rule from somewhere other than the pin. **Its residual, stated rather than
+/// implied:** it is `debug_assertions`-gated, so in a release build that caller
+/// would be served the canonical partitioner under its own arm's name — the
+/// shape [`partition_rule_from_env`] refuses for an unknown arm and
+/// [`PartitionDeclineCounts`] counts for a declining one. A second call site is
+/// therefore the point at which this function needs a real dispatch, not a
+/// widened `debug_assert`.
+fn partition_block_for_derivation(
+    rule: PartitionRule,
+    reference: &[u8],
+    result: &[u8],
+    max_grid_cells: usize,
+) -> Option<Vec<Piece>> {
+    debug_assert!(
+        rule.cuts_with_canonical(),
+        "{rule:?} does not cut with `partition_block_canonical`, so the \
+         derivation surface cannot serve it"
+    );
+    partition_block_canonical_within(reference, result, max_grid_cells)
 }
 
 /// The unchanged-base separation threshold an axis merges runs below.
@@ -9012,6 +9127,23 @@ pub(crate) struct DerivedBlock {
 ///   boundaries to be an alignment coincidence, and the boundaries here come
 ///   from [`partition_block_canonical`], whose premise is that they are not.
 ///
+/// **Which partitioner, and why it is not the one `normalize` uses.** This
+/// surface is pinned to [`DERIVED_BLOCK_PARTITION_RULE`] and does not read
+/// `FERRO_PARTITION`, so it and [`canonicalize_from_sequence`] cut with
+/// different rules by construction — #1834, which measured that gap rather than
+/// closing it. Selecting through [`partition_block_for_derivation`] is what
+/// states the pin in the arm vocabulary the other surface selects from; the
+/// tripwire that fails when either rule moves on its own is
+/// `partition_rule_knob::the_two_surfaces_cut_with_a_pinned_pair_of_rules`.
+///
+/// Note `max_grid_cells` is a second, independent axis of disagreement between
+/// the two surfaces and is **not** what the pin is about: this path takes the
+/// caller's budget (`FromSequencesOptions::max_grid_cells`) while
+/// `canonicalize_from_sequence` is fixed at [`MAX_SEQFIRST_GRID_CELLS`], so a
+/// caller lowering it makes `from_sequences` decline where `normalize` answers.
+/// That is a documented cost bound rather than a rule choice, and refusing is
+/// its stated policy.
+///
 /// Returns a [`DerivedBlock`], or a typed [`BlockDecline`] saying which of the
 /// two refusals fired.
 pub(crate) fn derive_block_members(
@@ -9049,12 +9181,21 @@ pub(crate) fn derive_block_members(
         return Err(too_large());
     }
 
+    // The rule is this surface's pin, not `partition_rule()`'s reading of
+    // `FERRO_PARTITION` — see `DERIVED_BLOCK_PARTITION_RULE` and this
+    // function's doc.
+    //
     // The budget is threaded through rather than left to the callee's default:
     // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
     // silently overridden there, and the refusal surfaced as a render failure
     // naming ferro rather than the knob the caller had just raised.
-    let mut pieces = partition_block_canonical_within(block_ref, block_alt, max_grid_cells)
-        .ok_or(BlockDecline::WouldNotRender)?;
+    let mut pieces = partition_block_for_derivation(
+        DERIVED_BLOCK_PARTITION_RULE,
+        block_ref,
+        block_alt,
+        max_grid_cells,
+    )
+    .ok_or(BlockDecline::WouldNotRender)?;
     for piece in &mut pieces {
         piece.ref_start += lo;
         piece.ref_end += lo;
@@ -14935,6 +15076,116 @@ mod tests {
             assert_ne!(
                 live, canonical,
                 "if these ever agree, pick another block — this test is vacuous otherwise"
+            );
+        }
+
+        /// The two surfaces cut with a **pinned pair** of rules, and neither
+        /// may move on its own.
+        ///
+        /// `normalize` reaches [`canonicalize_from_sequence`], which cuts with
+        /// whatever [`partition_rule`] resolves to. `from_sequences` reaches
+        /// [`derive_block_members`], which cuts with
+        /// [`DERIVED_BLOCK_PARTITION_RULE`] and never reads `FERRO_PARTITION`
+        /// at all. They are **different rules**, and that difference is the
+        /// subject of #1834 rather than an accident: over the
+        /// #1157/#1229-#1235/#1419-#1421 corpus it leaves 32 of 79 comparable
+        /// rows disagreeing at 3' and 36 of 79 at 5'.
+        ///
+        /// So this pins the **pair** rather than asserting equality. Equality
+        /// is a product decision nobody has made — converging the partitioners
+        /// is #1419/#1420/#1421's open question — and an equality assertion
+        /// would fail today for saying so.
+        ///
+        /// **What a failure means, and it is not the same in both directions.**
+        ///
+        /// * The **left** value moved: the shipped default changed. That does
+        ///   *not* move `from_sequences`, because the right value is a pin — so
+        ///   the thing to decide is whether this surface follows, and the pair
+        ///   is re-pinned either way. This is #1834's first consequence stated
+        ///   as a test: a bake-off under `FERRO_PARTITION=…` moves one surface
+        ///   and leaves the other exactly where it was, so any comparison
+        ///   quoting a `from_sequences` figure is comparing a moved surface
+        ///   against a fixed one.
+        /// * The **right** value moved: `from_sequences` was re-pinned, and
+        ///   what happens to `normalize` needs saying.
+        ///
+        /// Deliberately **not** a row census. Measuring how far apart the two
+        /// surfaces are is #1834's other half; this asks only whether the
+        /// choice was made deliberately.
+        ///
+        /// **Read the scope: this is a claim about the RULE, and not about the
+        /// grid budget.** Two callers can resolve to the same [`PartitionRule`]
+        /// here and still disagree on an answer, because the budget is a second,
+        /// independent axis and the pair below says nothing about it.
+        /// [`partition_block_canonical`] *is*
+        /// [`partition_block_canonical_within`] at [`MAX_SEQFIRST_GRID_CELLS`],
+        /// so the budget is the only thing separating the two entry points:
+        /// [`canonicalize_from_sequence`] is fixed at that constant, while
+        /// `from_sequences` threads `FromSequencesOptions::max_grid_cells`
+        /// through and documents raising it for a long-read haplotype. A caller
+        /// *lowering* it makes `from_sequences` decline (`GridTooLarge`) where
+        /// `normalize` answers.
+        ///
+        /// That is left out on purpose rather than overlooked. The budget is a
+        /// **cost bound** whose stated policy is to refuse rather than answer
+        /// with a weaker rule, not a choice of partitioner; the two defaults are
+        /// already one constant; and only an explicit caller opt-in can split
+        /// them. Asserting on it here would make this pin read as "the two
+        /// surfaces agree", which is a stronger guarantee than it gives.
+        ///
+        /// Fails by design during a deliberate `FERRO_PARTITION=…` run, for the
+        /// reason `the_suite_runs_on_the_live_rule` gives. The environment
+        /// guard is repeated here so that failure names its cause rather than
+        /// reading as a drifted pin.
+        #[test]
+        fn the_two_surfaces_cut_with_a_pinned_pair_of_rules() {
+            assert!(
+                std::env::var_os("FERRO_PARTITION").is_none(),
+                "this pin is the shipped pair's; FERRO_PARTITION must be unset"
+            );
+            assert_eq!(
+                (partition_rule(), DERIVED_BLOCK_PARTITION_RULE),
+                (PartitionRule::Live, PartitionRule::Canonical),
+                "the two surfaces' partition rules moved apart without being \
+                 re-pinned together -- `normalize` cuts with the first and \
+                 `from_sequences` with the second, and #1834 is the record of \
+                 what that costs"
+            );
+        }
+
+        /// The derivation seam really cuts with the rule it names.
+        ///
+        /// `A -> ACA` is the smallest block on which live and canonical
+        /// disagree — the same one
+        /// `live_and_canonical_disagree_so_the_audit_baseline_is_observable`
+        /// uses, and for the same reason: both spellings denote `ACA`, but live
+        /// anchors the inserted `AC` at reference 0 while canonical takes the
+        /// 3'-most optimal step and anchors `CA` at reference 1.
+        ///
+        /// The `assert_ne!` is the anti-vacuity half and is not decoration: a
+        /// [`partition_block_for_derivation`] that quietly forwarded to
+        /// [`partition_block`] would satisfy an equality against whichever
+        /// partitioner it happened to reach, on any block where the two agree.
+        #[test]
+        fn the_derivation_seam_cuts_with_the_rule_it_names() {
+            let derived = partition_block_for_derivation(
+                DERIVED_BLOCK_PARTITION_RULE,
+                b"A",
+                b"ACA",
+                MAX_SEQFIRST_GRID_CELLS,
+            )
+            .expect("grid is far below the bound");
+            assert_eq!(
+                derived,
+                partition_block_canonical(b"A", b"ACA").expect("grid is far below the bound"),
+                "`from_sequences` must cut with the rule \
+                 `DERIVED_BLOCK_PARTITION_RULE` names"
+            );
+            assert_ne!(
+                derived,
+                partition_block(b"A", b"ACA"),
+                "if these ever agree, pick another block -- this test is \
+                 vacuous otherwise"
             );
         }
 
