@@ -3297,6 +3297,55 @@ mod tests {
         assert_eq!(spdi.insertion, "ACGT");
     }
 
+    /// An exact tandem-repeat insertion (`ins{unit}[{n}]`) names its inserted
+    /// bases by a spelled unit and an exact copy count. `hgvs_to_spdi` expands
+    /// the unit `n` times — no provider is needed, since the bases are named in
+    /// the description itself — so the simple path resolves it.
+    #[test]
+    fn an_exact_repeat_insertion_expands_its_unit() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insC[4]").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        // SPDI interbase position 100 sits AFTER 1-based base 100 (#390).
+        assert_eq!(spdi.position, 100);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "CCCC");
+    }
+
+    /// A multi-base unit (`ins{unit}[{n}]` with `unit` longer than one base)
+    /// repeats the whole unit `n` times.
+    #[test]
+    fn an_exact_multibase_repeat_insertion_expands_the_whole_unit() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insCG[3]").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 100);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "CGCGCG");
+    }
+
+    /// An uncertain or range copy count (`ins{unit}[{min}_{max}]`, `[?]`) names
+    /// no single expansion, so it stays undetermined and must decline.
+    #[test]
+    fn an_uncertain_repeat_count_insertion_is_declined() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insC[10_15]").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::MissingReferenceData { .. })),
+            "a range repeat count names no single expansion: {result:?}"
+        );
+    }
+
+    /// The `delins` arm expands an exact repeat insert on the same path. del at
+    /// 10..=12 is `CGT` (read from the reference); `insCG[3]` expands to
+    /// `CGCGCG`.
+    #[test]
+    fn an_exact_repeat_delins_expands_its_unit() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delinsCG[3]").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "CGCGCG");
+    }
+
     #[test]
     fn an_unspelled_identity_fetches_on_the_non_genomic_axes_too() {
         // The arm is shared by g./m./n./r./c., and the r. path additionally
