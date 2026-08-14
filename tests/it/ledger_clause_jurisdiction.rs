@@ -567,6 +567,7 @@ fn record(
         // a record assembled from parts must state every part it carries.
         question: format!("A synthetic record for {id}."),
         equivalence_classes: Vec::new(),
+        guard: rulings::Guard::Declined("a synthetic record, enforced by this file".to_string()),
         rationale: rationale.to_string(),
         applies_to: applies_to.iter().map(|s| s.to_string()).collect(),
         citations: clauses

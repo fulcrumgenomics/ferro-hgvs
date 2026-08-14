@@ -225,6 +225,59 @@ mod overrides {
         /// Equivalence-class ids the ruling bears on, if any.
         #[serde(default)]
         pub equivalence_classes: Vec<String>,
+        /// What enforces the ruling, or the stated reason nothing does.
+        ///
+        /// **`Option<Guard>`, not `Guard`.** The type is what carries this, and
+        /// it carries two separate things.
+        ///
+        /// It makes the field **optional at deserialize**. As a bare `Guard`, a
+        /// record lacking the key failed to deserialize — and this struct is the
+        /// generator's entry to the whole ledger, so the failure was not "one
+        /// record is unanswered" but "the ledger cannot be read".
+        /// `generate_spec_fixture` exited 1, the generated fixture never existed,
+        /// and every test downstream of it failed for a reason mentioning neither
+        /// guards nor the record at fault. Measured on this branch rebased onto
+        /// `origin/main` at `426a944b`, for two records missing one field each:
+        /// **20** failures from this alone, on top of the **28** the ledger
+        /// reader's own panic produced.
+        ///
+        /// And it keeps absence **distinguishable**. As a bare `Guard`, an absent
+        /// key and a written `"guard": {}` would both arrive as
+        /// `Guard { tests: [], none: None }`, and [`validate_guard_shape`] would
+        /// have to give one message for two different mistakes. `None` is
+        /// reachable only by the key being absent.
+        ///
+        /// The `#[serde(default)]` below is **redundant and deliberate**. Serde
+        /// already treats a missing `Option` field as `None`, so removing it
+        /// changes nothing today — verified, not assumed: with the attribute
+        /// deleted the generator still exits 0 on a ledger carrying a guardless
+        /// record. It is kept because the *intent* is "absent is allowed here",
+        /// and a future change of this field's type away from `Option` would
+        /// otherwise silently restore the cascade above. Do not read it as the
+        /// thing that makes absence legal; the `Option` is.
+        ///
+        /// **This is a change of stage, not a relaxation.** A record with no
+        /// guard still cannot merge: it is refused by
+        /// `tests/it/ruling_guard_field.rs::every_record_declares_a_guard`, in
+        /// one targeted failure that names the record and the fix. What the
+        /// generator keeps refusing is a guard that is *present and malformed*,
+        /// because that is a broken record rather than an unanswered question.
+        #[serde(default)]
+        pub guard: Option<Guard>,
+    }
+
+    /// See [`Ruling::guard`]. Exactly one of the two keys may be set;
+    /// `validate_ruling_shape` enforces that, because serde cannot express
+    /// "one of these, not both, not neither" on its own.
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Guard {
+        /// `<path>.rs::<function>` citations of the enforcing tests.
+        #[serde(default)]
+        pub tests: Vec<String>,
+        /// A stated, reasoned declaration that no test enforces this record.
+        #[serde(default)]
+        pub none: Option<String>,
     }
 
     /// `spec_expected` uses the doubly-optional pattern so the override file
@@ -934,7 +987,103 @@ mod decisions {
             ),
             _ => {}
         }
+        validate_guard_shape(owner, ruling.guard.as_ref())?;
         Ok(())
+    }
+
+    /// A `guard`, if the record carries one, must state exactly one of the two
+    /// things it can state, and must state it resolvably.
+    ///
+    /// This is the build-time half of the field, and it exists for the reason
+    /// the unknown-equivalence-class check does: a pointer nothing validates is
+    /// prose with punctuation. What is checked here is the shape and the
+    /// **file**; whether the named function exists, runs and asserts needs the
+    /// whole tree walked and is `tests/it/ruling_guard_field.rs`'s job.
+    ///
+    /// **`None` — no `guard` key at all — is passed through here deliberately**,
+    /// and it is the one case this function declines to judge. Refusing it would
+    /// put the generator back in the position the `#[serde(default)]` on
+    /// [`overrides::Ruling::guard`] exists to get it out of: the generator is a
+    /// *build step*, so a refusal from it is not one failure but every failure
+    /// downstream of the artifact it did not write. The presence rule is
+    /// enforced instead by a test that can name the record and print the fix,
+    /// and that test is not optional, so nothing is weakened by declining here.
+    ///
+    /// Note the asymmetry that makes this safe: a record that says nothing is
+    /// still *readable*, so the fixture built from it is correct as far as it
+    /// goes. A record whose `guard` contradicts itself is not, which is why
+    /// `Some(..)` is still judged in full.
+    fn validate_guard_shape(owner: &str, guard: Option<&overrides::Guard>) -> anyhow::Result<()> {
+        let Some(guard) = guard else {
+            return Ok(());
+        };
+        match (guard.tests.is_empty(), guard.none.as_deref()) {
+            (false, Some(_)) => anyhow::bail!(
+                "{owner}: `guard` sets both `tests` and `none` — it has both named an enforcing \
+                 test and declared that nothing enforces it"
+            ),
+            (true, None) => anyhow::bail!(
+                "{owner}: `guard` states nothing. Set `tests` to the tests that fail when this \
+                 ruling stops holding, or `none` to the reason nothing enforces it. An empty \
+                 `guard` is the silence the field exists to reject"
+            ),
+            (true, Some(reason)) if reason.trim().is_empty() => anyhow::bail!(
+                "{owner}: `guard.none` is blank; declining is a first-class answer only when it \
+                 says why"
+            ),
+            (true, Some(_)) => Ok(()),
+            (false, None) => {
+                for citation in &guard.tests {
+                    let (path, _) = split_guard_citation(citation).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{owner}: guard citation {citation:?} is not of the form \
+                             `<path>.rs::<function>` — a citation that does not resolve \
+                             mechanically is the prose this field replaces"
+                        )
+                    })?;
+                    if !crate_relative(path).is_file() {
+                        anyhow::bail!(
+                            "{owner}: guard citation {citation:?} names {path:?}, which is not a \
+                             file in this tree (typo, or the guard moved)"
+                        );
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Splits `<path>.rs::<function>`; `None` for anything outside that grammar.
+    ///
+    /// Deliberately duplicated from `tests/it/common/rulings.rs` rather than
+    /// shared: this binary and the integration-test crate do not link to each
+    /// other, and the two copies are held together by
+    /// `the_generator_and_the_ledger_reader_agree_on_the_citation_grammar`
+    /// there, which is a check rather than a hope.
+    fn split_guard_citation(token: &str) -> Option<(&str, &str)> {
+        let (path, function) = token.split_once("::")?;
+        if !path.ends_with(".rs") || path.starts_with('/') || path.contains("..") {
+            return None;
+        }
+        if function.is_empty() || function.contains("::") {
+            return None;
+        }
+        if !function.starts_with(|c: char| c.is_ascii_lowercase()) {
+            return None;
+        }
+        if !function
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            return None;
+        }
+        Some((path, function))
+    }
+
+    /// A repo-relative path resolved against the crate root, so the generator
+    /// answers the same way whatever directory it is invoked from.
+    fn crate_relative(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
     }
 
     /// Split a `path:line` or `path:start-end` clause into its parts.
@@ -1195,6 +1344,19 @@ mod decisions {
                 rationale: "because".to_string(),
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
+                guard: Some(guard_citing(&[
+                    "examples/generate_spec_fixture.rs::a_guard",
+                ])),
+            }
+        }
+
+        /// A `guard` naming the given citations. The default fixture cites a
+        /// file that really exists, so `validate_guard_shape`'s file check is
+        /// exercised positively rather than skipped.
+        fn guard_citing(tests: &[&str]) -> overrides::Guard {
+            overrides::Guard {
+                tests: tests.iter().map(|t| t.to_string()).collect(),
+                none: None,
             }
         }
 
@@ -1251,6 +1413,147 @@ mod decisions {
                 &ruling(Decided, &["a.md:1"], Some("a.md:1"), &["z.md:9"])
             )
             .is_err());
+        }
+
+        /// The build refuses a `guard` that is present and says nothing usable.
+        ///
+        /// The positive control is first, so a `should`-fail below cannot pass
+        /// because the fixture is broken for an unrelated reason.
+        #[test]
+        fn a_ruling_must_state_what_enforces_it() {
+            use overrides::RulingStatus::Decided;
+            let base = || ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+
+            assert!(
+                validate_ruling_shape("r", &base()).is_ok(),
+                "positive control"
+            );
+
+            // Silence — the state the field exists to abolish. Written out as an
+            // empty object, so it is the AUTHOR's blank rather than an absent
+            // key; the absent key is `an_absent_guard_is_left_to_the_ledger_test`.
+            let mut silent = base();
+            silent.guard = Some(overrides::Guard {
+                tests: Vec::new(),
+                none: None,
+            });
+            assert!(validate_ruling_shape("r", &silent).is_err());
+
+            // Declining IS an answer, and needs no test to exist.
+            let mut declined = base();
+            declined.guard = Some(overrides::Guard {
+                tests: Vec::new(),
+                none: Some("process record; it mandates no output".to_string()),
+            });
+            assert!(validate_ruling_shape("r", &declined).is_ok());
+
+            // …but only when it says why.
+            let mut blank = base();
+            blank.guard = Some(overrides::Guard {
+                tests: Vec::new(),
+                none: Some("  ".to_string()),
+            });
+            assert!(validate_ruling_shape("r", &blank).is_err());
+
+            // Both at once is a contradiction, not a belt-and-braces.
+            let mut both = base();
+            both.guard = Some(overrides::Guard {
+                tests: vec!["examples/generate_spec_fixture.rs::a_guard".to_string()],
+                none: Some("and also nothing".to_string()),
+            });
+            assert!(validate_ruling_shape("r", &both).is_err());
+        }
+
+        /// An **absent** `guard` deserializes and passes the generator, and is
+        /// left to `tests/it/ruling_guard_field.rs::every_record_declares_a_guard`.
+        ///
+        /// Both halves matter and neither implies the other. The deserialize
+        /// half is what stops a missing field taking the whole ledger — and
+        /// therefore the generated fixture, and everything downstream of it —
+        /// with it; the validate half is what stops the generator re-imposing
+        /// the same refusal one function later, which would restore the cascade
+        /// while looking like a shape check.
+        ///
+        /// Read alongside [`a_ruling_must_state_what_enforces_it`]: absence is
+        /// passed through, a written-out blank is still refused. If those two
+        /// ever agree, the distinction the `Option` exists for has been lost.
+        #[test]
+        fn an_absent_guard_is_left_to_the_ledger_test() {
+            use overrides::RulingStatus::Decided;
+
+            // Deserializes: a record with no `guard` key at all.
+            let json = serde_json::json!({
+                "id": "a-record",
+                "status": "decided",
+                "question": "does an absent guard deserialize?",
+                "rationale": "it must, or one unanswered record breaks the build",
+                "governing": "a.md:1",
+                "clauses": [{ "clause": "a.md:1", "quote": "q" }],
+            });
+            let parsed: overrides::Ruling =
+                serde_json::from_value(json).expect("a record with no `guard` must deserialize");
+            assert!(
+                parsed.guard.is_none(),
+                "an absent key must arrive as `None`, distinguishable from a written `{{}}`"
+            );
+
+            // …and passes validation, which is where the generator stops caring.
+            let mut absent = ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+            absent.guard = None;
+            assert!(
+                validate_ruling_shape("r", &absent).is_ok(),
+                "the generator must not refuse an absent guard — refusing it here is what \
+                 turned one unanswered record into a fixture-wide cascade"
+            );
+        }
+
+        /// A guard citation must be resolvable, and must name a file that is
+        /// really there — the same class of check as "names unknown equivalence
+        /// class", which is the only other structured pointer a record carries.
+        #[test]
+        fn a_guard_citation_must_name_a_file_in_this_tree() {
+            use overrides::RulingStatus::Decided;
+            let with = |tests: &[&str]| {
+                let mut r = ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+                r.guard = Some(guard_citing(tests));
+                r
+            };
+
+            assert!(validate_ruling_shape(
+                "r",
+                &with(&["examples/generate_spec_fixture.rs::a_guard"])
+            )
+            .is_ok());
+
+            // Outside the grammar: a module path names no file, and a bare path
+            // names no proposition.
+            assert!(validate_ruling_shape("r", &with(&["merge::a_guard"])).is_err());
+            assert!(
+                validate_ruling_shape("r", &with(&["examples/generate_spec_fixture.rs"])).is_err()
+            );
+            // Well-formed and pointing at nothing.
+            assert!(validate_ruling_shape("r", &with(&["tests/it/no_such_file.rs::a"])).is_err());
+        }
+
+        /// The grammar itself, since the generator keeps its own copy of it.
+        #[test]
+        fn the_guard_citation_grammar_admits_a_path_and_nothing_else() {
+            assert_eq!(
+                split_guard_citation("tests/it/foo.rs::a_guard_name"),
+                Some(("tests/it/foo.rs", "a_guard_name"))
+            );
+            for rejected in [
+                "merge::a_guard_name",
+                "tests/it/foo.rs",
+                "a_guard_name",
+                "tests/it/foo.rs::mod::a_guard",
+                "tests/it/foo.rs::AGuard",
+                "tests/it/foo.rs::",
+                "/abs/foo.rs::a_guard",
+                "tests/../../foo.rs::a_guard",
+            ] {
+                assert_eq!(split_guard_citation(rejected), None, "{rejected}");
+            }
         }
 
         #[test]

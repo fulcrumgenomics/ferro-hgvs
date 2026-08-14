@@ -1,14 +1,16 @@
 //! Reads the adjudication ledger — the `rulings` section of
 //! `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`.
 //!
-//! Three integration tests need the same file for different reasons:
+//! Four integration tests need the same file for different reasons:
 //! `ruling_citation_currency.rs` wants `id -> status` so it can judge prose that
 //! makes a status claim, `clause_ruling_index.rs` wants the citations so it
-//! can invert the ledger into a clause-to-record index, and
+//! can invert the ledger into a clause-to-record index,
 //! `ledger_clause_jurisdiction.rs` wants the citations, their quotes and
 //! `applies_to` so it can compare what a record rules on against the molecule
-//! directories it cites. Parsing it three times would give three definitions of
-//! "a record", so all three read it from here.
+//! directories it cites, and `ruling_guard_field.rs` wants the `guard` field so
+//! it can resolve each record's declared enforcement against the tree. Parsing
+//! it four times would give four definitions of "a record", so all four read it
+//! from here.
 //!
 //! Nothing in this module names a record id, deliberately: it is scanned by
 //! `ruling_citation_currency.rs` along with every other `.rs` file in the tree.
@@ -72,6 +74,129 @@ pub struct Citation {
     pub role: Role,
 }
 
+/// What enforces a record's ruling — or the record's stated reason that nothing
+/// does.
+///
+/// Modelled on the `Representation-Change:` trailer, where declining is a
+/// first-class answer and what is rejected is *silence*. A record may name the
+/// tests that fail when its ruling stops holding, or it may say in words that no
+/// test enforces it and why. What it may not do is leave the question open: an
+/// absent field is indistinguishable from an unconsidered one, and reads as
+/// enforcement that is not there.
+///
+/// The precedent is [`Record::equivalence_classes`], the ledger's only other
+/// structured pointer at pinned evidence. This is the same move for the much
+/// larger population of records whose evidence is an ordinary test.
+///
+/// # Silence is REPRESENTED here, and rejected one layer out
+///
+/// [`Guard::Absent`] exists so that a record which never mentions `guard` still
+/// *parses*. That is not a softening of the rule — the rule is enforced by
+/// [`ruling_guard_field::every_record_declares_a_guard`], which names the
+/// offending records and the fix. It is a change of *stage*, and the stage is
+/// the whole point.
+///
+/// Refusing at parse made silence fatal to every consumer of the ledger rather
+/// than to the check that cares. Measured on this branch, rebased onto
+/// `origin/main` at `426a944b`, with the two records `main` had added carrying
+/// no `guard`: **50** tests failed — 28 on this reader's own panic, 20 because
+/// `generate_spec_fixture` could not deserialize the ledger at all (so the
+/// generated fixture never existed and everything downstream of it died too),
+/// and 2 in the generator's own precondition suite. **Five** of the fifty were
+/// about guards. Seven open PRs write ledger records at any given time, so every
+/// one of them met that wall on rebase, and what it told them was that the spec
+/// fixture was broken.
+///
+/// The variant is deliberately a **third state** rather than a reuse of an
+/// existing one. Mapping absence onto `Tests(vec![])` or `Declined(String::new())`
+/// would make it indistinguishable from a record whose author deliberately wrote
+/// an empty list or a blank reason — and those two are separately rejected, with
+/// separate messages, precisely because they are different mistakes. No JSON a
+/// record can carry produces `Absent`: it is reachable only by the key not being
+/// there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Guard {
+    /// `<path>.rs::<function>` citations of the tests that enforce the ruling.
+    /// Never empty; see [`split_guard_citation`] for the grammar.
+    Tests(Vec<String>),
+    /// A stated, reasoned declaration that no test enforces this record.
+    ///
+    /// Carries the reason rather than a bare flag, for the reason
+    /// `RETIRED_RECORD_IDS`'s second field is prose: "nothing enforces this"
+    /// is only a usable answer when it says *why*, and the whys differ —
+    /// an undecided record has no ruling to enforce, while a decided one may
+    /// rule on how a departure is classified rather than on any output.
+    Declined(String),
+    /// The record carries no `guard` key at all — the silence the field exists
+    /// to abolish.
+    ///
+    /// Constructed only from a missing or `null` key, never from anything an
+    /// author could write, so it cannot be confused with a deliberate blank.
+    /// Every reader below treats it as "names no test and declines nothing",
+    /// which is the honest reading; the state is *reported* by
+    /// [`ruling_guard_field::every_record_declares_a_guard`] rather than
+    /// tolerated.
+    Absent,
+}
+
+impl Guard {
+    /// The cited tests, or an empty slice for a declared exemption or silence.
+    pub fn tests(&self) -> &[String] {
+        match self {
+            Guard::Tests(tests) => tests,
+            Guard::Declined(_) | Guard::Absent => &[],
+        }
+    }
+
+    /// The stated reason, for a declared exemption only.
+    ///
+    /// [`Guard::Absent`] answers `None` — it states no reason, which is what is
+    /// wrong with it. Use [`Guard::is_absent`] to ask about silence; asking this
+    /// would conflate "declined nothing" with "declined without saying why".
+    pub fn declined_reason(&self) -> Option<&str> {
+        match self {
+            Guard::Tests(_) | Guard::Absent => None,
+            Guard::Declined(reason) => Some(reason),
+        }
+    }
+
+    /// Whether the record said nothing at all about what enforces it.
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Guard::Absent)
+    }
+}
+
+/// Splits a guard citation into the file it names and the function within it.
+///
+/// The grammar is deliberately narrow — a repo-relative path ending in `.rs`,
+/// then `::`, then a single snake_case identifier — so that a citation is
+/// resolvable *mechanically* rather than by judgement. That is the whole
+/// difference between this field and the prose it replaces: a bare
+/// `tests/….rs` path names a file, not a proposition, and a module-qualified
+/// `foo::bar` does not say which of several `foo.rs` it means.
+///
+/// Returns `None` for anything outside the grammar; callers report that as a
+/// malformed citation rather than silently skipping it.
+pub fn split_guard_citation(token: &str) -> Option<(&str, &str)> {
+    let (path, function) = token.split_once("::")?;
+    if !path.ends_with(".rs") || path.starts_with('/') || path.contains("..") {
+        return None;
+    }
+    if function.is_empty() || function.contains("::") {
+        return None;
+    }
+    if !function.starts_with(|c: char| c.is_ascii_lowercase()) {
+        return None;
+    }
+    if !function
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return None;
+    }
+    Some((path, function))
+}
+
 /// One adjudication record.
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -113,6 +238,9 @@ pub struct Record {
     /// fails if the ruling stops holding — and a published rendering of a record
     /// that omitted it would drop the only link from the prose to the guard.
     pub equivalence_classes: Vec<String>,
+    /// What enforces this record's ruling, or its stated reason that nothing
+    /// does. Required — see [`Guard`].
+    pub guard: Guard,
     /// Every clause the record names, in the ledger's own order, each tagged
     /// with the role the record's verdict fields give it.
     pub citations: Vec<Citation>,
@@ -223,6 +351,93 @@ fn string_array(record: &serde_json::Value, field: &str, id: &str) -> Vec<String
                     .to_string()
             })
             .collect(),
+    }
+}
+
+/// The `guard` field of one record.
+///
+/// **Absence parses, as [`Guard::Absent`], and is refused one layer out** by
+/// `ruling_guard_field::every_record_declares_a_guard`. Everything below that is
+/// *malformed* rather than *absent* still panics here, and the split is
+/// deliberate: absence is what a record in flight legitimately looks like before
+/// its author has answered the question, so it must reach a check that can name
+/// the fix; a `guard` that is present and self-contradictory is a broken record
+/// and there is nothing useful to do with it but refuse.
+///
+/// The states this has to keep apart are "enforced by these tests", "enforced by
+/// nothing, for this stated reason", and "said nothing". The third reads from
+/// the outside exactly like the first, which is why it needs a name of its own
+/// rather than being folded into an empty list.
+///
+/// Exactly one of `tests` / `none` may be set, for the same reason
+/// `governing` and `deviates_from` may not name the same clause: a record
+/// carrying both has said two incompatible things, and any reader that tested
+/// one key first would resolve the contradiction silently in its favour.
+fn guard_from(record: &serde_json::Value, id: &str) -> Guard {
+    let value = match record.get("guard") {
+        None | Some(serde_json::Value::Null) => return Guard::Absent,
+        Some(value) => value,
+    };
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("record {id} has a non-object `guard`: {value}"));
+    for key in object.keys() {
+        assert!(
+            key == "tests" || key == "none",
+            "record {id} has an unknown `guard` key {key:?}; only `tests` and `none` parse"
+        );
+    }
+
+    let tests = object.get("tests");
+    let none = object.get("none");
+    match (tests, none) {
+        (Some(_), Some(_)) => panic!(
+            "record {id} sets both `guard.tests` and `guard.none` — it has both named an \
+             enforcing test and declared that nothing enforces it"
+        ),
+        (None, None) => {
+            panic!("record {id} has an empty `guard` object; set exactly one of `tests` or `none`")
+        }
+        (Some(tests), None) => {
+            let entries = tests
+                .as_array()
+                .unwrap_or_else(|| panic!("record {id} has a non-array `guard.tests`: {tests}"));
+            assert!(
+                !entries.is_empty(),
+                "record {id} has an empty `guard.tests`; an empty list claims enforcement and \
+                 supplies none — declare `guard.none` with a reason instead"
+            );
+            let citations: Vec<String> = entries
+                .iter()
+                .map(|entry| {
+                    let token = entry.as_str().unwrap_or_else(|| {
+                        panic!("record {id} has a non-string `guard.tests` entry: {entry}")
+                    });
+                    assert!(
+                        split_guard_citation(token).is_some(),
+                        "record {id} cites {token:?} as a guard, which is not of the form \
+                         `<path>.rs::<function>` — a citation that does not resolve \
+                         mechanically is the prose this field replaces"
+                    );
+                    token.to_string()
+                })
+                .collect();
+            Guard::Tests(citations)
+        }
+        (None, Some(none)) => {
+            let reason = none
+                .as_str()
+                .unwrap_or_else(|| panic!("record {id} has a non-string `guard.none`: {none}"));
+            // A blank reason is the absent case wearing a string: it satisfies
+            // the key and states nothing, which is precisely the silence the
+            // field exists to reject.
+            assert!(
+                !reason.trim().is_empty(),
+                "record {id} declines a guard with a blank reason; `guard.none` is a first-class \
+                 answer only when it says why"
+            );
+            Guard::Declined(reason.to_string())
+        }
     }
 }
 
@@ -341,6 +556,8 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
 
             let equivalence_classes: Vec<String> = string_array(record, "equivalence_classes", &id);
 
+            let guard = guard_from(record, &id);
+
             Record {
                 id,
                 status,
@@ -348,6 +565,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 rationale,
                 applies_to,
                 equivalence_classes,
+                guard,
                 citations,
                 governing: governing.map(str::to_string),
             }
@@ -400,6 +618,7 @@ fn one_valid_record() -> serde_json::Value {
             "question": "Does a well-formed record parse?",
             "rationale": "A test record, with prose that cites no other record.",
             "governing": "docs/a.md:1",
+            "guard": { "tests": ["tests/it/a_file.rs::a_guard"] },
             "clauses": [{ "clause": "docs/a.md:1", "quote": "a quoted clause" }],
         }],
     })
@@ -585,4 +804,177 @@ fn a_null_verdict_field_reads_as_absent() {
     document["rulings"][0]["deviates_from"] = serde_json::Value::Null;
     let records = records_from_value(&document, "<test>");
     assert_eq!(records[0].citations[0].role, Role::Cited);
+}
+
+// --------------------------------------------------------------------------
+// `guard`.
+//
+// The field's whole purpose is that ONE of its states is unrepresentable, so
+// the mutations below are the specification. Each one used to be expressible
+// — as an absent field, an empty list, a blank string — and each reads from
+// the outside like a record whose ruling something enforces.
+// --------------------------------------------------------------------------
+
+/// A record with no `guard` **parses**, as [`Guard::Absent`].
+///
+/// It is refused by `ruling_guard_field::every_record_declares_a_guard`, not
+/// here. Rejecting it at parse took the whole ledger down with it — 50 tests on
+/// the measurement recorded on [`Guard`] — for a fault in one record, so the
+/// reader's job is to *represent* the silence faithfully and let the check that
+/// is about guards be the one that fails.
+#[test]
+fn a_record_with_no_guard_parses_as_absent() {
+    let mut document = one_valid_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record is an object")
+        .remove("guard");
+    let records = records_from_value(&document, "<test>");
+    assert_eq!(records[0].guard, Guard::Absent);
+    assert!(records[0].guard.is_absent());
+}
+
+/// An explicit `null` guard is the same silence spelled differently, and reads
+/// the same way.
+#[test]
+fn a_null_guard_parses_as_absent() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] = serde_json::Value::Null;
+    let records = records_from_value(&document, "<test>");
+    assert_eq!(records[0].guard, Guard::Absent);
+}
+
+/// Silence is a state of its own, distinct from every blank an author could
+/// deliberately write.
+///
+/// This is the property the whole staging change rests on. If absence collapsed
+/// onto an empty `tests` list or a blank `none`, the check one layer out could
+/// not tell "unconsidered" from "considered and mis-stated" — and those need
+/// different messages, because they are different mistakes.
+///
+/// The two deliberate blanks are refused at parse and stay refused; that half is
+/// pinned by [`an_empty_guard_test_list_is_rejected`] and
+/// [`a_blank_exemption_reason_is_rejected`]. What is asserted here is the half
+/// those cannot state: that the value absence *does* produce is equal to neither
+/// of them, so no reader can conflate the three.
+#[test]
+fn absence_is_a_state_of_its_own() {
+    let mut document = one_valid_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record is an object")
+        .remove("guard");
+    let absent = records_from_value(&document, "<test>")[0].guard.clone();
+
+    assert_eq!(absent, Guard::Absent);
+    assert_ne!(
+        absent,
+        Guard::Tests(Vec::new()),
+        "silence must not read as an empty citation list"
+    );
+    assert_ne!(
+        absent,
+        Guard::Declined(String::new()),
+        "silence must not read as an exemption with a blank reason"
+    );
+    // And it answers the accessors the way the checks below read them: it names
+    // no test, and it declines nothing.
+    assert!(absent.tests().is_empty());
+    assert_eq!(absent.declined_reason(), None);
+}
+
+/// A declared exemption parses, and carries its reason.
+#[test]
+fn a_declared_exemption_parses() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] =
+        serde_json::json!({ "none": "process record; it mandates no output" });
+    let records = records_from_value(&document, "<test>");
+    assert_eq!(
+        records[0].guard,
+        Guard::Declined("process record; it mandates no output".to_string())
+    );
+    assert!(records[0].guard.tests().is_empty());
+}
+
+/// A blank reason is the absent case wearing a string: it satisfies the key and
+/// states nothing.
+#[test]
+#[should_panic(expected = "blank reason")]
+fn a_blank_exemption_reason_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] = serde_json::json!({ "none": "   " });
+    records_from_value(&document, "<test>");
+}
+
+/// An empty `tests` array claims enforcement and supplies none — the same
+/// silence, one level in.
+#[test]
+#[should_panic(expected = "empty `guard.tests`")]
+fn an_empty_guard_test_list_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] = serde_json::json!({ "tests": [] });
+    records_from_value(&document, "<test>");
+}
+
+/// Setting both keys is a contradiction, and must not be resolved silently in
+/// favour of whichever is tested first.
+#[test]
+#[should_panic(expected = "both `guard.tests` and `guard.none`")]
+fn a_guard_that_both_cites_and_declines_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] =
+        serde_json::json!({ "tests": ["tests/it/a.rs::b"], "none": "and also nothing" });
+    records_from_value(&document, "<test>");
+}
+
+/// An unknown key is rejected rather than ignored, so a typo (`test`, `tests_`)
+/// cannot read as a record that declared nothing.
+#[test]
+#[should_panic(expected = "unknown `guard` key")]
+fn an_unknown_guard_key_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] = serde_json::json!({ "test": ["tests/it/a.rs::b"] });
+    records_from_value(&document, "<test>");
+}
+
+/// A citation outside the grammar is rejected at parse, not skipped by the
+/// resolver — a skipped citation is a guard nobody checks.
+#[test]
+#[should_panic(expected = "which is not of the form")]
+fn a_guard_citation_outside_the_grammar_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["guard"] = serde_json::json!({ "tests": ["tests/it/a_file.rs"] });
+    records_from_value(&document, "<test>");
+}
+
+/// The grammar, both ways. Too loose and a bare module path (`merge::foo`)
+/// passes while naming no file; too tight and a real `src/` unit test stops
+/// being citable.
+#[test]
+fn the_guard_citation_grammar_admits_a_path_and_nothing_else() {
+    assert_eq!(
+        split_guard_citation("tests/it/foo.rs::a_guard_name"),
+        Some(("tests/it/foo.rs", "a_guard_name"))
+    );
+    assert_eq!(
+        split_guard_citation("src/normalize/merge.rs::a_unit_test_2"),
+        Some(("src/normalize/merge.rs", "a_unit_test_2"))
+    );
+    for rejected in [
+        "merge::a_guard_name",           // a module path names no file
+        "tests/it/foo.rs",               // a file names no proposition
+        "a_guard_name",                  // a bare function name
+        "tests/it/foo.rs::mod::a_guard", // more than one `::`
+        "tests/it/foo.rs::AGuard",       // not a function name
+        "tests/it/foo.rs::",             // nothing after the separator
+        "/abs/foo.rs::a_guard",          // not repo-relative
+        "tests/../../foo.rs::a_guard",   // escapes the tree
+    ] {
+        assert_eq!(
+            split_guard_citation(rejected),
+            None,
+            "{rejected} must not parse as a guard citation"
+        );
+    }
 }
