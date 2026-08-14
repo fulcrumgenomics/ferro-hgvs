@@ -444,61 +444,6 @@ mod tests {
     }
 
     #[test]
-    fn test_intronic_consequence_from_cds_pos() {
-        // Splice donor +1
-        let pos = CdsPos::with_offset(100, 1);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceDonorVariant));
-
-        // Splice donor +5
-        let pos = CdsPos::with_offset(100, 5);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceDonorRegionVariant)
-        );
-
-        // Splice acceptor -2
-        let pos = CdsPos::with_offset(100, -2);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceAcceptorVariant)
-        );
-
-        // Splice acceptor region -10
-        let pos = CdsPos::with_offset(100, -10);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceAcceptorRegionVariant)
-        );
-
-        // Splice region +15
-        let pos = CdsPos::with_offset(100, 15);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceRegionVariant));
-
-        // Near splice site +30
-        let pos = CdsPos::with_offset(100, 30);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::NearSpliceSiteVariant)
-        );
-
-        // Deep intronic +100
-        let pos = CdsPos::with_offset(100, 100);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::IntronVariant));
-
-        // Non-intronic position
-        let pos = CdsPos::new(100);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, None);
-    }
-
-    #[test]
     fn test_intronic_consequence_so_terms() {
         assert_eq!(
             IntronicConsequence::SpliceDonorVariant.so_term(),
@@ -540,34 +485,6 @@ mod tests {
         assert!(IntronicConsequence::SpliceDonorVariant.may_affect_splicing());
         assert!(IntronicConsequence::SpliceRegionVariant.may_affect_splicing());
         assert!(!IntronicConsequence::IntronVariant.may_affect_splicing());
-    }
-
-    #[test]
-    fn test_intronic_region_from_offset() {
-        assert_eq!(
-            IntronicRegion::from_offset(1),
-            Some(IntronicRegion::CanonicalSpliceSite)
-        );
-        assert_eq!(
-            IntronicRegion::from_offset(-2),
-            Some(IntronicRegion::CanonicalSpliceSite)
-        );
-        assert_eq!(
-            IntronicRegion::from_offset(10),
-            Some(IntronicRegion::ExtendedSpliceRegion)
-        );
-        assert_eq!(
-            IntronicRegion::from_offset(-15),
-            Some(IntronicRegion::ExtendedSpliceRegion)
-        );
-        assert_eq!(
-            IntronicRegion::from_offset(35),
-            Some(IntronicRegion::NearSpliceSite)
-        );
-        assert_eq!(
-            IntronicRegion::from_offset(100),
-            Some(IntronicRegion::DeepIntronic)
-        );
     }
 
     /// The #1841 break: the sentinels are out of the enum's domain, and the
@@ -614,96 +531,6 @@ mod tests {
         assert!(!is_clinically_significant_splice_position(&CdsPos::new(
             100
         )));
-    }
-
-    #[test]
-    fn test_validate_tx_pos_with_large_offset() {
-        let tx = make_test_transcript();
-
-        // Large offset should fail
-        let pos = TxPos::with_offset(50, 100001);
-        assert!(validate_tx_pos(&pos, &tx).is_err());
-
-        // Reasonable offset should pass
-        let pos = TxPos::with_offset(50, 1000);
-        assert!(validate_tx_pos(&pos, &tx).is_ok());
-
-        // Negative offset should work too
-        let pos = TxPos::with_offset(50, -1000);
-        assert!(validate_tx_pos(&pos, &tx).is_ok());
-    }
-
-    #[test]
-    fn test_intronic_consequence_from_tx_pos() {
-        // Splice donor +1
-        let pos = TxPos::with_offset(50, 1);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceDonorVariant));
-
-        // Splice donor +2
-        let pos = TxPos::with_offset(50, 2);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceDonorVariant));
-
-        // Splice donor region +5
-        let pos = TxPos::with_offset(50, 5);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceDonorRegionVariant)
-        );
-
-        // Splice region +15
-        let pos = TxPos::with_offset(50, 15);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceRegionVariant));
-
-        // Near splice site +35
-        let pos = TxPos::with_offset(50, 35);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::NearSpliceSiteVariant)
-        );
-
-        // Deep intronic +100
-        let pos = TxPos::with_offset(50, 100);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::IntronVariant));
-
-        // Splice acceptor -1
-        let pos = TxPos::with_offset(50, -1);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceAcceptorVariant)
-        );
-
-        // Splice acceptor region -10
-        let pos = TxPos::with_offset(50, -10);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceAcceptorRegionVariant)
-        );
-
-        // Splice region -15
-        let pos = TxPos::with_offset(50, -15);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceRegionVariant));
-
-        // Near splice site -35
-        let pos = TxPos::with_offset(50, -35);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::NearSpliceSiteVariant)
-        );
-
-        // Non-intronic
-        let pos = TxPos::new(50);
-        let consequence = IntronicConsequence::from_tx_pos(&pos);
-        assert!(consequence.is_none());
     }
 
     #[test]
@@ -893,51 +720,249 @@ mod tests {
         assert_eq!(intron_num, None);
     }
 
+    /// The offset sanity limit is `offset.unsigned_abs() > 100_000`, so
+    /// 100_000 is legal on both the positive and negative side. The negative
+    /// side is the routine acceptor-side case, and it needs its own
+    /// assertion: the existing positive-only pins leave the magnitude check
+    /// free to be dropped without failing the suite, since a large negative
+    /// offset would then sail through unchecked.
+    ///
+    /// The uncertain-offset sentinels `-?` / `+?` (`i64::MIN` / `i64::MAX`,
+    /// declared in `src/hgvs/parser/position.rs`) are NOT pinned here or in
+    /// `splice_ladder_boundaries`.
+    ///
+    /// This paragraph previously recorded that as an OPEN production gap —
+    /// that `i64::MIN.abs()` overflows, so `validate_tx_pos`,
+    /// `IntronicConsequence::from_{cds,tx}_pos` and
+    /// `IntronicRegion::from_offset` all panicked in debug on `-?` and filed
+    /// `+?` as deep-intronic, none of them calling `has_unknown_offset`
+    /// (issue #1087). That is no longer true: `validate_tx_pos` and both
+    /// `IntronicConsequence` constructors decline the sentinels via
+    /// `pos.has_unknown_offset()`, `IntronicRegion::from_offset` declines via
+    /// `is_unknown_offset` and returns `None`, and every magnitude check uses
+    /// `unsigned_abs()`. The class is pinned by
+    /// `unknown_offset_sentinels_are_declined_not_classified` below.
     #[test]
-    fn test_intronic_consequence_acceptor_extended_boundary() {
-        // Test boundary at -12 (acceptor extended)
-        let pos = CdsPos::with_offset(100, -12);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceAcceptorRegionVariant)
+    fn validate_tx_pos_offset_limit_boundary() {
+        let tx = make_test_transcript();
+
+        // Carried over from the deleted `test_validate_tx_pos_with_large_offset`
+        // (a routine offset on each side of zero, well inside the limit), so no
+        // assertion from that test is lost.
+        assert!(
+            validate_tx_pos(&TxPos::with_offset(50, 1000), &tx).is_ok(),
+            "offset 1000 is well within the limit"
+        );
+        assert!(
+            validate_tx_pos(&TxPos::with_offset(50, -1000), &tx).is_ok(),
+            "offset -1000 is well within the limit"
         );
 
-        // Test -13 (splice region)
-        let pos = CdsPos::with_offset(100, -13);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceRegionVariant));
+        let at_limit = TxPos::with_offset(50, 100_000);
+        assert!(
+            validate_tx_pos(&at_limit, &tx).is_ok(),
+            "offset 100_000 is at the limit"
+        );
+
+        let past_limit = TxPos::with_offset(50, 100_001);
+        assert!(
+            validate_tx_pos(&past_limit, &tx).is_err(),
+            "offset 100_001 is past it"
+        );
+
+        let at_negative_limit = TxPos::with_offset(50, -100_000);
+        assert!(
+            validate_tx_pos(&at_negative_limit, &tx).is_ok(),
+            "offset -100_000 is at the limit"
+        );
+
+        let past_negative_limit = TxPos::with_offset(50, -100_001);
+        assert!(
+            validate_tx_pos(&past_negative_limit, &tx).is_err(),
+            "offset -100_001 is past it"
+        );
     }
 
+    /// Every rung of all three splice ladders, at its exact boundary and
+    /// boundary+1, on both the donor (positive offset) and acceptor
+    /// (negative offset) side.
+    ///
+    /// `IntronicConsequence::from_cds_pos`'s donor chain (`abs_offset <= 2`
+    /// / `<= 6` / `<= 20` / `<= 50`) and its acceptor chain (`<= 2` / `<= 12`
+    /// / `<= 20` / `<= 50`), together with `::from_tx_pos`'s byte-identical
+    /// donor and acceptor chains, are copies of one donor/acceptor ladder:
+    /// donor breaks at 2 / 6 / 20 / 50, acceptor at 2 / 12 / 20 / 50 — the
+    /// donor and acceptor thresholds differ (6 vs 12), so they are not
+    /// mirror images of each other. `IntronicRegion::from_offset`'s
+    /// `abs_offset <= 2` / `<= 20` / `<= 50` chain is a third, shorter
+    /// ladder that is symmetric in the offset's sign (2 / 20 / 50 on both
+    /// sides) and has no 6 or 12 break.
+    /// A hand-unrolled `#[test]` per rung would be the fourth near-verbatim
+    /// copy of this shape in this file; this table drives all three
+    /// functions from one set of rows instead.
     #[test]
-    fn test_intronic_consequence_donor_extended_boundary() {
-        // Test +6 (donor extended)
-        let pos = CdsPos::with_offset(100, 6);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(
-            consequence,
-            Some(IntronicConsequence::SpliceDonorRegionVariant)
-        );
+    fn splice_ladder_boundaries() {
+        use IntronicConsequence::{
+            IntronVariant, NearSpliceSiteVariant, SpliceAcceptorRegionVariant,
+            SpliceAcceptorVariant, SpliceDonorRegionVariant, SpliceDonorVariant,
+            SpliceRegionVariant,
+        };
+        use IntronicRegion::{
+            CanonicalSpliceSite, DeepIntronic, ExtendedSpliceRegion, NearSpliceSite,
+        };
 
-        // Test +7 (splice region)
-        let pos = CdsPos::with_offset(100, 7);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::SpliceRegionVariant));
+        // (offset, expected IntronicConsequence, expected IntronicRegion)
+        let rows: &[(i64, IntronicConsequence, IntronicRegion)] = &[
+            // Donor side (offset > 0): consequence ladder breaks at 2/6/20/50.
+            (1, SpliceDonorVariant, CanonicalSpliceSite),
+            (2, SpliceDonorVariant, CanonicalSpliceSite),
+            (3, SpliceDonorRegionVariant, ExtendedSpliceRegion),
+            (6, SpliceDonorRegionVariant, ExtendedSpliceRegion),
+            (7, SpliceRegionVariant, ExtendedSpliceRegion),
+            (20, SpliceRegionVariant, ExtendedSpliceRegion),
+            (21, NearSpliceSiteVariant, NearSpliceSite),
+            (50, NearSpliceSiteVariant, NearSpliceSite),
+            (51, IntronVariant, DeepIntronic),
+            // Acceptor side (offset < 0): consequence ladder breaks at 2/12/20/50.
+            (-1, SpliceAcceptorVariant, CanonicalSpliceSite),
+            (-2, SpliceAcceptorVariant, CanonicalSpliceSite),
+            (-3, SpliceAcceptorRegionVariant, ExtendedSpliceRegion),
+            (-12, SpliceAcceptorRegionVariant, ExtendedSpliceRegion),
+            (-13, SpliceRegionVariant, ExtendedSpliceRegion),
+            (-20, SpliceRegionVariant, ExtendedSpliceRegion),
+            (-21, NearSpliceSiteVariant, NearSpliceSite),
+            (-50, NearSpliceSiteVariant, NearSpliceSite),
+            (-51, IntronVariant, DeepIntronic),
+        ];
+
+        for &(offset, expected_consequence, expected_region) in rows {
+            let cds_pos = CdsPos::with_offset(100, offset);
+            assert_eq!(
+                IntronicConsequence::from_cds_pos(&cds_pos),
+                Some(expected_consequence),
+                "from_cds_pos at offset {offset}"
+            );
+
+            let tx_pos = TxPos::with_offset(50, offset);
+            assert_eq!(
+                IntronicConsequence::from_tx_pos(&tx_pos),
+                Some(expected_consequence),
+                "from_tx_pos at offset {offset}"
+            );
+
+            // #1841 made `from_offset` total by returning `Option`: the unknown-offset
+            // sentinels are outside the enum's domain. Every row here is an ordinary
+            // offset, so each still classifies.
+            assert_eq!(
+                IntronicRegion::from_offset(offset),
+                Some(expected_region),
+                "from_offset at offset {offset}"
+            );
+        }
     }
 
+    /// `from_cds_pos` and `from_tx_pos` return `None` for a non-intronic
+    /// position (no offset); `splice_ladder_boundaries` never exercises this
+    /// branch, since every row there carries an offset.
+    ///
+    /// `offset: Some(0)` is the second, distinct shape reaching that guard —
+    /// both `c.100+0` and `n.50+0` parse — and what it pins is the guard
+    /// itself, not the ladder behind it. `is_intronic` is
+    /// `offset.is_some() && offset != Some(0)` (defined in
+    /// `src/hgvs/location.rs`, once for `CdsPos` and once for `TxPos`), so a
+    /// zero offset is not intronic
+    /// and both functions decline at `!pos.is_intronic()` before any rung
+    /// runs; deleting the `!= Some(0)` clause turns these two rows into
+    /// `SpliceAcceptorVariant`.
+    ///
+    /// It deliberately does NOT pin the donor/acceptor split (`offset > 0`)
+    /// against an `>= 0` mutant: a zero offset never reaches that branch, so
+    /// `> 0` and `>= 0` are observationally identical and no input can
+    /// distinguish them.
     #[test]
-    fn test_intronic_consequence_near_boundary() {
-        // Test +50 (near splice)
-        let pos = CdsPos::with_offset(100, 50);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
+    fn intronic_consequence_declines_a_non_intronic_position() {
         assert_eq!(
-            consequence,
-            Some(IntronicConsequence::NearSpliceSiteVariant)
+            IntronicConsequence::from_cds_pos(&CdsPos::new(100)),
+            None,
+            "a CdsPos with no offset is not intronic"
         );
+        assert_eq!(
+            IntronicConsequence::from_tx_pos(&TxPos::new(50)),
+            None,
+            "a TxPos with no offset is not intronic"
+        );
+        assert_eq!(
+            IntronicConsequence::from_cds_pos(&CdsPos::with_offset(100, 0)),
+            None,
+            "a CdsPos with an explicit zero offset is not intronic"
+        );
+        assert_eq!(
+            IntronicConsequence::from_tx_pos(&TxPos::with_offset(50, 0)),
+            None,
+            "a TxPos with an explicit zero offset is not intronic"
+        );
+    }
 
-        // Test +51 (deep intronic)
-        let pos = CdsPos::with_offset(100, 51);
-        let consequence = IntronicConsequence::from_cds_pos(&pos);
-        assert_eq!(consequence, Some(IntronicConsequence::IntronVariant));
+    /// The uncertain-offset sentinels `-?` / `+?` (`OFFSET_UNKNOWN_NEGATIVE` /
+    /// `OFFSET_UNKNOWN_POSITIVE` = `i64::MIN` / `i64::MAX`) are out of the
+    /// domain of every intronic classifier on this axis, and each must say so
+    /// rather than measure them.
+    ///
+    /// Two failure modes are pinned at once, both of which this code has
+    /// carried historically:
+    ///
+    /// 1. **Panic.** `i64::MIN.abs()` overflows, so any of these reached with
+    ///    a plain `.abs()` panics in debug on `-?`. Reaching the assertion at
+    ///    all proves the magnitude checks use `unsigned_abs()`.
+    /// 2. **Silent misclassification.** `+?` is `i64::MAX`, which compares
+    ///    greater than every ladder rung, so an unguarded classifier files it
+    ///    as ordinary deep-intronic — a measured distance where there is no
+    ///    distance to measure.
+    ///
+    /// `IntronicRegion::from_offset` is the #1841 half (it declines via
+    /// `is_unknown_offset` and returns `None`); the other three decline via
+    /// `pos.has_unknown_offset()` (#1767).
+    #[test]
+    fn unknown_offset_sentinels_are_declined_not_classified() {
+        use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+
+        let tx = make_test_transcript();
+
+        for (label, offset) in [
+            ("-?", OFFSET_UNKNOWN_NEGATIVE),
+            ("+?", OFFSET_UNKNOWN_POSITIVE),
+        ] {
+            // Checks the MESSAGE, not just `is_err()`: both sentinels exceed
+            // the `unsigned_abs() > 100_000` limit on their own, so an
+            // `is_err()`-only assertion stays green with the
+            // `has_unknown_offset()` decline deleted — it would merely have
+            // been reclassified as a distance that is too large.
+            let err = validate_tx_pos(&TxPos::with_offset(50, offset), &tx)
+                .expect_err("must be declined, not measured");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("denotes no transcript coordinate"),
+                "validate_tx_pos must decline the {label} sentinel AS A SENTINEL; got: {msg}"
+            );
+            assert!(
+                !msg.contains("unreasonably large"),
+                "validate_tx_pos must not refuse {label} as a mere magnitude; got: {msg}"
+            );
+            assert_eq!(
+                IntronicConsequence::from_cds_pos(&CdsPos::with_offset(100, offset)),
+                None,
+                "from_cds_pos must decline the {label} sentinel, not classify it"
+            );
+            assert_eq!(
+                IntronicConsequence::from_tx_pos(&TxPos::with_offset(50, offset)),
+                None,
+                "from_tx_pos must decline the {label} sentinel, not classify it"
+            );
+            assert_eq!(
+                IntronicRegion::from_offset(offset),
+                None,
+                "from_offset must decline the {label} sentinel, not classify it"
+            );
+        }
     }
 }

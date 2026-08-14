@@ -227,7 +227,14 @@ impl<'a> CoordinateMapper<'a> {
         Self::translate_codon(codon)
     }
 
-    /// Translate a codon to an amino acid
+    /// Translate a codon to an amino acid.
+    ///
+    /// Total: every one of the 22 match arms (21 named plus the `_`
+    /// fall-through) returns `Some`, so this never returns `None` despite
+    /// the `Option` signature. The `_` arm is what makes it total: it
+    /// coerces *every* unrecognised codon — including `N`-containing ones
+    /// from real reference sequences — to `Some(Xaa)`, indistinguishable
+    /// from a genuine unknown residue.
     fn translate_codon(codon: &str) -> Option<AminoAcid> {
         match codon.to_uppercase().as_str() {
             "TTT" | "TTC" => Some(AminoAcid::Phe),
@@ -625,7 +632,10 @@ mod tests {
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
-            // 5' UTR (5bp) + CDS (30bp) + 3' UTR (5bp) = 40bp
+            // 5'UTR (5bp) + CDS (30bp) + 3'UTR (3bp) = 38bp.
+            // NOTE: cds_start = 6 is the `T` of the visible `ATG` (whose `A` is at
+            // 0-based 4), so the first codon is seq[5..8] == "TGC" and p.1 is Cys,
+            // not Met. Use `make_codon_sweep_transcript` for amino-acid assertions.
             sequence: Some("AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string()),
             cds_start: Some(6),
             cds_end: Some(35),
@@ -643,10 +653,234 @@ mod tests {
         }
     }
 
+    /// One codon per `translate_codon` match arm, 21 codons, all 21 amino acids
+    /// distinct. Three properties are load-bearing — do not "tidy" them:
+    ///
+    /// 1. All 21 amino acids differ, so a mutated `codon_start` reads a codon
+    ///    that translates differently rather than coinciding.
+    /// 2. The 5'UTR's first codon is `CCC` (Pro), never `ATG`. In
+    ///    `get_amino_acid_at`'s `codon_start` arithmetic
+    ///    (`cds_start as usize - 1 + (position as usize - 1) * 3`), a
+    ///    `+ -> *` mutant degenerates `codon_start` to 0 at p.1 and reads
+    ///    seq[0..3]; a Met-translating 5'UTR would let it survive.
+    /// 3. The 3'UTR translates (`GGG` -> Gly). In `get_amino_acid_at`'s
+    ///    past-CDS guard (`codon_end > cds_end as usize || codon_end >
+    ///    seq.len()`), a `|| -> &&` mutant stops it firing at p.22 and reads
+    ///    seq[68..71]; Gly there is what distinguishes it from the `Xaa` the
+    ///    original returns.
+    ///
+    /// Layout: 5'UTR 5bp (cds_start = 6), CDS 63bp (cds_end = 68), 3'UTR 6bp,
+    /// total 74bp.
+    fn make_codon_sweep_transcript() -> Transcript {
+        Transcript {
+            id: "NM_CODONS.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            sequence: Some(
+                "CCCCC".to_string()
+                    + "ATGTTTCTGATTGTGTCACCCACAGCCTAT"
+                    + "CATCAAAATAAAGATGAATGTTGGCGCGGA"
+                    + "TAA"
+                    + "GGGTTT",
+            ),
+            cds_start: Some(6),
+            cds_end: Some(68),
+            exons: vec![Exon::new(1, 1, 74)],
+            ..Default::default()
+        }
+    }
+
+    /// A deliberately malformed transcript whose `cds_end` exceeds its sequence
+    /// length. This is the ONLY way to reach `get_amino_acid_at`'s second guard
+    /// clause: under `||`, `codon_end > seq.len()` is unreachable whenever
+    /// `codon_end > cds_end` has already fired.
+    ///
+    /// Sequence is 12bp, cds_start = 1, cds_end = 100.
+    ///
+    /// Do not reuse this fixture with `validate_cds_pos`: its
+    /// `transcript.sequence_length() - cds_end` is unchecked `u64`
+    /// subtraction, and `12 - 100` here underflows and panics in debug.
+    fn make_cds_end_past_sequence_transcript() -> Transcript {
+        Transcript {
+            id: "NM_SHORTSEQ.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            sequence: Some("ATGTTTCTGATT".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(100),
+            exons: vec![Exon::new(1, 1, 12)],
+            ..Default::default()
+        }
+    }
+
+    /// Pins the amino acid at every codon of a 21-arm sweep.
+    ///
+    /// `test_cds_to_protein` asserts only `.number`, leaving the amino acid
+    /// itself unchecked: `get_amino_acid_at` returning `None` is invisible
+    /// there because `cds_to_protein` swallows it with `.unwrap_or(Xaa)`,
+    /// and every `translate_codon` arm falls through to `_ => Some(Xaa)`
+    /// when deleted, so a mutated arm and a correct one are indistinguishable
+    /// by number alone. This test checks `.aa` directly so both are caught.
+    #[test]
+    fn cds_to_protein_pins_every_codon_arm() {
+        let tx = make_codon_sweep_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let expected = [
+            AminoAcid::Met,
+            AminoAcid::Phe,
+            AminoAcid::Leu,
+            AminoAcid::Ile,
+            AminoAcid::Val,
+            AminoAcid::Ser,
+            AminoAcid::Pro,
+            AminoAcid::Thr,
+            AminoAcid::Ala,
+            AminoAcid::Tyr,
+            AminoAcid::His,
+            AminoAcid::Gln,
+            AminoAcid::Asn,
+            AminoAcid::Lys,
+            AminoAcid::Asp,
+            AminoAcid::Glu,
+            AminoAcid::Cys,
+            AminoAcid::Trp,
+            AminoAcid::Arg,
+            AminoAcid::Gly,
+            AminoAcid::Ter,
+        ];
+
+        for (index, aa) in expected.iter().enumerate() {
+            let protein_number = (index + 1) as u64;
+            let cds_base = (index as i64) * 3 + 1;
+            let got = mapper.cds_to_protein(&CdsPos::new(cds_base)).unwrap();
+            assert_eq!(got.number, protein_number, "p.{} number", protein_number);
+            assert_eq!(
+                got.aa, *aa,
+                "p.{} amino acid (c.{})",
+                protein_number, cds_base
+            );
+        }
+    }
+
+    /// p.21 is the last codon (`codon_end == cds_end`, 68) and must translate;
+    /// p.22 runs past the CDS and must yield `Xaa`.
+    ///
+    /// The p.22 case is what kills a `|| -> &&` mutant of `get_amino_acid_at`'s
+    /// guard (the `codon_end > cds_end as usize || codon_end > seq.len()`
+    /// early return in `get_amino_acid_at`): with `&&` the guard does
+    /// not fire, the function reads the 3'UTR's `GGG`, and `cds_to_protein`
+    /// returns Gly instead of Xaa.
+    ///
+    /// The two indirect assertions above observe the guard only through
+    /// `cds_to_protein`'s `.unwrap_or(AminoAcid::Xaa)`, which — exactly as
+    /// `get_amino_acid_at_guards_a_cds_end_past_the_sequence`'s doc comment
+    /// diagnoses for its own case — collapses five distinct causes of
+    /// `None` into one `Xaa` value: a missing `cds_start`, a missing
+    /// `cds_end`, a missing cached `sequence`, `codon_end > cds_end` (the
+    /// primary guard clause), and `codon_end > seq.len()` (the secondary
+    /// one). `translate_codon` is not a sixth cause — it is total (every
+    /// match arm, including `_`, yields `Some`, coercing any unrecognised
+    /// codon to `Xaa` rather than `None`), so it can never contribute a
+    /// `None` here. That test unmasks the *secondary*,
+    /// malformed-transcript-only guard clause (`codon_end > seq.len()`) by
+    /// calling `get_amino_acid_at` directly; this test exercises the
+    /// *primary* clause (`codon_end > cds_end as usize`), the one that fires
+    /// on a well-formed transcript, so it gets the same direct treatment
+    /// here.
+    #[test]
+    fn cds_to_protein_stops_at_the_cds_end() {
+        let tx = make_codon_sweep_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        assert_eq!(
+            mapper.cds_to_protein(&CdsPos::new(61)).unwrap().aa,
+            AminoAcid::Ter,
+            "c.61 is the last codon and must still translate"
+        );
+        assert_eq!(
+            mapper.cds_to_protein(&CdsPos::new(64)).unwrap().aa,
+            AminoAcid::Xaa,
+            "c.64 is past cds_end and must not read into the 3'UTR"
+        );
+
+        // Direct, unmasked: `get_amino_acid_at` itself must draw the p.21/p.22
+        // line at `codon_end > cds_end`, not just leave `cds_to_protein` to
+        // paper over it with `Xaa`.
+        assert_eq!(
+            mapper.get_amino_acid_at(21),
+            Some(AminoAcid::Ter),
+            "get_amino_acid_at(21) must translate unmasked, codon_end 68 == cds_end 68"
+        );
+        assert_eq!(
+            mapper.get_amino_acid_at(22),
+            None,
+            "get_amino_acid_at(22) must return None unmasked, codon_end 71 > cds_end 68"
+        );
+    }
+
+    /// Exercises `get_amino_acid_at`'s SECOND guard clause
+    /// (`codon_end > seq.len()`), which is unreachable on a well-formed
+    /// transcript because the first clause fires first.
+    ///
+    /// cds_end = 100 but the sequence is 12bp, so:
+    ///   p.1 codon_end = 3  (< 12)  -> translates
+    ///   p.4 codon_end = 12 (== 12) -> translates, the boundary
+    ///   p.5 codon_end = 15 (> 12)  -> Xaa
+    ///
+    /// The assertions below observe the guard only through `cds_to_protein`,
+    /// which coerces every `None` from `get_amino_acid_at` — regardless of
+    /// which of at least five distinct causes produced it — into `Xaa` via
+    /// `cds_to_protein`'s `.unwrap_or(AminoAcid::Xaa)` fallback. That masks
+    /// the guard: the assertion cannot fail for the *right* reason. The
+    /// direct call below observes `get_amino_acid_at` unmasked, alongside
+    /// the existing indirect ones.
+    #[test]
+    fn get_amino_acid_at_guards_a_cds_end_past_the_sequence() {
+        let tx = make_cds_end_past_sequence_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        assert_eq!(
+            mapper.cds_to_protein(&CdsPos::new(1)).unwrap().aa,
+            AminoAcid::Met,
+            "codon_end 3 is well inside a 12bp sequence"
+        );
+        assert_eq!(
+            mapper.cds_to_protein(&CdsPos::new(10)).unwrap().aa,
+            AminoAcid::Ile,
+            "codon_end 12 == seq.len() is the last readable codon"
+        );
+        assert_eq!(
+            mapper.cds_to_protein(&CdsPos::new(13)).unwrap().aa,
+            AminoAcid::Xaa,
+            "codon_end 15 > seq.len() must not read out of bounds"
+        );
+
+        // Direct, unmasked: `get_amino_acid_at` itself must return `None`
+        // past the end (p.5, codon_end 15 > seq.len() 12), not just leave
+        // `cds_to_protein` to paper over it with `Xaa`.
+        assert_eq!(
+            mapper.get_amino_acid_at(5),
+            None,
+            "get_amino_acid_at(5) must return None unmasked, codon_end 15 > seq.len() 12"
+        );
+    }
+
     #[test]
     fn test_cds_to_tx_normal() {
         let tx = make_test_transcript();
         let mapper = CoordinateMapper::new(&tx);
+
+        // Pins `make_test_transcript`'s length (5'UTR 5bp + CDS 30bp + 3'UTR
+        // 3bp = 38bp) against the hardcoded `38` literal below — that catches
+        // the sequence literal changing size, not the comment drifting from
+        // it (both copies once said `= 40bp` while the sequence stayed 38bp,
+        // and this assertion would not have caught that). The fixture is
+        // duplicated with the same data but different code in
+        // `tests/it/convert_tests.rs` (a `Transcript { .. }` literal here vs.
+        // `Transcript::new(..)` there). It is also not sequence-specific:
+        // `sequence_length()` falls back to summing exon lengths when
+        // `sequence` is `None`, and this fixture's `Exon::new(1, 1, 38)`
+        // sums to 38 too, so dropping the sequence would still pass.
+        assert_eq!(tx.sequence_length(), 38, "make_test_transcript is 38bp");
 
         // c.1 should be tx position 6
         let result = mapper.cds_to_tx(&CdsPos::new(1)).unwrap();
@@ -848,6 +1082,11 @@ mod tests {
         assert_eq!(
             CoordinateMapper::translate_codon("GGG"),
             Some(AminoAcid::Gly)
+        );
+        // An unrecognised codon falls through to the `_ => Some(Xaa)` arm.
+        assert_eq!(
+            CoordinateMapper::translate_codon("NNN"),
+            Some(AminoAcid::Xaa)
         );
     }
 
@@ -1176,6 +1415,102 @@ mod tests {
         assert_eq!(mapper.tx_to_cds(&tx_pos).unwrap().base, 10);
         // Direct n->c: tx 10 -> c.10 (bug produced c.7).
         assert_eq!(mapper.tx_to_cds(&TxPos::new(10)).unwrap().base, 10);
+    }
+
+    /// `chromosome()` had no assertion anywhere, so `-> None`, `-> Some("")`
+    /// and `-> Some("xyzzy")` all survived.
+    #[test]
+    fn chromosome_reports_the_transcript_contig() {
+        let tx = make_genomic_transcript_plus();
+        let mapper = CoordinateMapper::new(&tx);
+        assert_eq!(mapper.chromosome(), Some("chr1"));
+    }
+
+    /// `get_intron_position` has one production caller (in `src/vcf/to_hgvs.rs`)
+    /// and no test reached it, so the whole-function `-> None` survived.
+    ///
+    /// Exon 1 ends at genomic 1009 (tx 10); genomic 1012 is 3 bases into
+    /// intron 1.
+    #[test]
+    fn get_intron_position_reports_an_intronic_offset() {
+        let tx = make_genomic_transcript_plus();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let intron = mapper
+            .get_intron_position(1012)
+            .expect("genomic 1012 lies in intron 1");
+        assert_eq!(intron.intron_number, 1, "genomic 1012 lies in intron 1");
+        assert_eq!(intron.offset, 3, "3 bases past the exon 1 boundary");
+        assert_eq!(intron.tx_boundary_pos, 10, "exon 1 ends at tx 10");
+
+        // An exonic position is not intronic.
+        assert!(mapper.get_intron_position(1005).is_none());
+    }
+
+    /// `fold_non_intronic_utr_offset` folds only 3'UTR and negative-base
+    /// (5'UTR) positions. `base == 0` is neither of those — it is
+    /// `CDS_BASE_UNKNOWN` (in `src/hgvs/location.rs`), the `c.?`
+    /// unknown-position sentinel, not an arithmetic edge of the UTR check.
+    /// It must still decline to fold, and doing so also happens to pin
+    /// `pos.base < 0` against a `<= 0` mutant, since 0 is where the two
+    /// diverge. Base 0 is the interesting input precisely because the two
+    /// functions disagree about it: this gate classifies 5'UTR as
+    /// `pos.base < 0`, while `cds_to_tx` (above) uses `pos.base < 1`,
+    /// so base 0 is 5'UTR to `cds_to_tx` but not to this gate — that
+    /// divergence is the whole reason this test exists.
+    #[test]
+    fn fold_offset_declines_unknown_position() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let pos = CdsPos::unknown(Some(5));
+
+        // The decline happens at the `in_utr` gate, three lines before
+        // `cds_to_tx` is even called: `pos.utr3 || pos.base < 0` is
+        // `false || (0 < 0)` = `false` for base 0 (`CDS_BASE_UNKNOWN`), so
+        // `fold_non_intronic_utr_offset` returns `None` right there and the
+        // `c.?` sentinel never reaches the conversion at all.
+        // (`cds_to_tx`'s own handling of this sentinel — it coerces rather
+        // than declines — is pinned separately by
+        // `cds_to_tx_coerces_the_unknown_sentinel` below.)
+        assert!(mapper.fold_non_intronic_utr_offset(&pos).is_none());
+    }
+
+    /// `cds_to_tx` does not honour the `c.?` sentinel the way
+    /// `merge::simple_cds_pos` (in `src/normalize/merge.rs`) and
+    /// `VariantProjector::project_to_genomic` (in `src/project/projector.rs`)
+    /// do — both decline it explicitly. Here it silently coerces
+    /// `CdsPos::unknown(Some(5))` (base `CDS_BASE_UNKNOWN` = 0) into
+    /// `TxPos { base: 6, offset: Some(5) }`, bit-identical to what `c.1+5`
+    /// produces (`cds_start` is 6 on `make_test_transcript`).
+    ///
+    /// The quirk is not contained by those declining callers:
+    /// `spdi::convert::resolve_cds_to_tx` (in `src/spdi/convert.rs`) guards
+    /// only `is_intronic()`, which is `false` for `c.?` (offset is `None`),
+    /// so the sentinel passes straight through and is emitted as a concrete
+    /// SPDI position for what is, by definition, an unknown coordinate.
+    /// This pins today's behaviour, not a requirement — if `cds_to_tx`
+    /// later grows an `is_unknown()` guard and declines this input, update
+    /// this assertion to match; do not revert the guard to keep it green.
+    #[test]
+    fn cds_to_tx_coerces_the_unknown_sentinel() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let pos = CdsPos::unknown(Some(5));
+
+        let result = mapper
+            .cds_to_tx(&pos)
+            .expect("cds_to_tx coerces the c.? sentinel rather than declining it");
+        assert_eq!(
+            result,
+            TxPos {
+                base: 6,
+                offset: Some(5),
+                downstream: false,
+            },
+            "cds_to_tx coerces the c.? sentinel rather than declining it (today's observed behaviour, not a requirement)"
+        );
     }
 }
 
