@@ -1401,3 +1401,133 @@ fn ruling_records_are_intact() {
         }
     }
 }
+
+/// This suite **cannot** measure a `FERRO_PARTITION` arm change, and the zero it
+/// would report is structural rather than a result.
+///
+/// # The measurement that prompted this
+///
+/// Generating the fixture under each of the four arms produces a **byte-identical
+/// file** — md5 `d198a442005af419d0921b9214a44c54` on `live`, `shadow`,
+/// `canonical` and `canonical-coalesced` alike, with `generated_utc` pinned to
+/// the literal `fixture-byte-stable` so the comparison is real. Every assertion
+/// in this module is therefore constant across the arms, and "the flip breaks no
+/// spec test" is true by construction here. It is not evidence.
+///
+/// # Why, mechanically
+///
+/// `FERRO_PARTITION` selects a partitioner consulted from
+/// `canonicalize_from_sequence`, which re-derives a partition **from reference
+/// bases**. `generate_spec_fixture` normalizes with `MockProvider::new()` — an
+/// empty provider, registering no transcript and no contig — so no row can fetch
+/// a block and the partitioner is never reached, on any arm. The merges this
+/// corpus *does* show (`c.[79G>T;80C>T]` → `c.79_80delinsTT`) come from
+/// coordinate- and payload-level rules that need no reference, and those are the
+/// same on every arm.
+///
+/// **This is not the member-geometry blindness of #1456, and reading it as that
+/// sends you after the wrong property.** The geometry is present: of the 934
+/// rows, 52 carry a multi-member cis allele and 15 of those have members eight
+/// or fewer nucleotides apart, well inside `COALESCE_MAX_SEPARATION`. The corpus
+/// is not too sparse to exercise the switch; it is unable to reach it.
+///
+/// # What closing it would take
+///
+/// A reference-backed run of the same corpus — the 50 `needs-reference` rows are
+/// exactly the ones the harvester already marks as unevaluable without one — so
+/// the work is to drive this fixture through the prepared manifest the way
+/// `spec_conformance_axis` does, not to enrich the corpus. Two things then have
+/// to be settled that do not arise today: the fixture is an artifact keyed to one
+/// normalization, so a per-arm run needs a per-arm output path (see the stale
+/// `ensure_spec_fixture` trap below), and the `spec_expected` column is the
+/// spec's form, which does not move with the arm — so a per-arm run measures
+/// ferro against the spec four times, not the arms against each other.
+///
+/// # The stale-fixture trap this also guards
+///
+/// `ensure_spec_fixture` regenerates only when the file is **absent**. Switching
+/// `FERRO_PARTITION` and re-running therefore re-reads whatever the previous arm
+/// left on disk: the run is vacuous and the only tell is the per-test time
+/// collapsing (57.7 s → 0.015 s, measured). Delete the fixture when switching
+/// arms.
+#[test]
+fn the_spec_fixture_is_blind_to_the_partition_switch() {
+    use ferro_hgvs::reference::ReferenceProvider;
+    use std::collections::BTreeSet;
+
+    crate::common::spec_fixture::ensure_spec_fixture();
+    let text = std::fs::read_to_string(fixture_path()).expect("read fixture");
+    let fx: Fixture = serde_json::from_str(&text).expect("parse fixture");
+
+    // Half one: the generator normalizes with the empty provider. A source scan,
+    // and so a floor rather than a proof — but it is the link between the fact
+    // asserted below (this provider serves nothing) and the claim being made
+    // (this fixture cannot reach the switch), and without it the two halves
+    // could drift apart in silence.
+    let generator_source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/generate_spec_fixture.rs"),
+    )
+    .expect("read examples/generate_spec_fixture.rs");
+    assert!(
+        generator_source.contains("MockProvider::new()"),
+        "generate_spec_fixture no longer normalizes with an empty MockProvider. \
+         If it now holds reference bases, this suite may have become able to see \
+         a FERRO_PARTITION arm change — re-measure the four arms before deleting \
+         this guard, and do not simply re-point it."
+    );
+
+    // Half two: that provider serves no bases for any accession this corpus
+    // names. The denominator is asserted, so "0 of 0 accessions are servable"
+    // cannot pass as a result.
+    let provider = MockProvider::new();
+    let accessions: BTreeSet<&str> = fx
+        .rows
+        .iter()
+        .filter_map(|row| row.input.split_once(':').map(|(accession, _)| accession))
+        .filter(|accession| !accession.is_empty())
+        .collect();
+    assert!(
+        accessions.len() >= 20,
+        "expected the corpus to name at least 20 distinct accessions; found {}",
+        accessions.len()
+    );
+    let servable: Vec<&str> = accessions
+        .iter()
+        .copied()
+        .filter(|accession| provider.get_sequence(accession, 1, 1).is_ok())
+        .collect();
+    assert!(
+        servable.is_empty(),
+        "the measurement provider now serves bases for {servable:?}, so rows on \
+         those accessions may reach `canonicalize_from_sequence` and this suite \
+         may no longer be blind to FERRO_PARTITION. Re-measure the four arms \
+         (generate the fixture under each and compare) before relying on either \
+         answer."
+    );
+
+    // The geometry is present — say so, so the zero above is not misread as the
+    // corpus being too sparse to exercise a partitioner.
+    let multi_member = fx
+        .rows
+        .iter()
+        .filter(|row| {
+            row.input
+                .split_once('[')
+                .and_then(|(_, rest)| rest.split_once(']'))
+                .is_some_and(|(members, _)| members.contains(';'))
+        })
+        .count();
+    // The floor is a floor, not the measurement — but it has to be strong
+    // enough to fail when the premise stops holding. `>= 1` would be satisfied
+    // by a corpus of one such row, which is exactly the sparsity this test
+    // asserts is *not* the reason for the zero, so it would pass while the
+    // claim above became false.
+    assert!(
+        multi_member >= 20,
+        "expected the corpus to keep its multi-member cis geometry (52 of the \
+         934 rows carried one when this was written); found {multi_member}. \
+         Below this floor the corpus really may be too sparse to exercise a \
+         partitioner, and the blindness argued for above is no longer the \
+         reason the arms agree — re-measure before touching either."
+    );
+}

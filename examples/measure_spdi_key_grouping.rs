@@ -574,6 +574,13 @@ fn render(measured: &[Measured], examples: usize) -> String {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Refuse a `FERRO_PARTITION` naming no arm before any work, so a
+    // misspelling cannot be served by the shipped rule under a candidate's
+    // name. See `tests/it/partition_switch_wiring.rs`.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
     let text = match std::fs::read_to_string(&cli.divergences) {
         Ok(text) => text,
         Err(e) => {

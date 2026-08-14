@@ -35,6 +35,18 @@ exclude = [
 # declared below alongside the six that already were.
 autoexamples = false
 
+# `autobins` and `autobenches` are off for a second, narrower reason: the
+# `FERRO_PARTITION` wiring test derives its denominator from the target tables
+# in this file, and that denominator is only complete while cargo cannot
+# register a target this file does not name. With auto-discovery on, dropping
+# `src/bin/foo.rs` or `benches/foo.rs` into the tree produces a runnable entry
+# point that the test cannot see — the exact "targets somebody remembered to
+# add" hole the test was rewritten to close. Both directories are already
+# fully declared below, so this is a no-op today; it is here to keep the
+# invariant true tomorrow. See `tests/it/partition_switch_wiring.rs`.
+autobins = false
+autobenches = false
+
 [lib]
 name = "ferro_hgvs"
 # cdylib is required for Python bindings (built via maturin)

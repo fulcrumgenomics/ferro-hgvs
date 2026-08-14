@@ -156,6 +156,20 @@ fn main() {
         }
     };
 
+    // Refuse a `FERRO_PARTITION` naming no arm before any work, so a
+    // misspelling cannot be served by the shipped rule under a candidate's
+    // name. After `parse_args` so `--help` still answers under a stale value.
+    // See `tests/it/partition_switch_wiring.rs`.
+    //
+    // This arm dump reads the three partitioners directly rather than through
+    // the switch, so the value changes nothing here — which is precisely why it
+    // must still be refused: a run that ignores a misspelling teaches the
+    // operator that the spelling was fine.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        std::process::exit(1);
+    }
+
     // One terse line per panicking block instead of the default hook's payload
     // and backtrace: a dump over a large corpus is a table, and a hook that
     // writes paragraphs to stderr for every bad row buries the rows that matter.

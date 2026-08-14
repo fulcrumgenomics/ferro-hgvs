@@ -2528,10 +2528,19 @@ fn partition_rule_outcome() -> &'static Result<PartitionRule, String> {
 /// [`PartitionRule::Live`] for a refused value. That is the shipped rule under
 /// no name at all rather than under a candidate's, and it is strictly safer than
 /// the abort it replaces — but it is only *reported* if somebody asks. Every
-/// binary in this repository asks, and
-/// `it::partition_switch_wiring::every_binary_target_reports_a_refused_partition_switch`
+/// binary **and every example** in this repository asks, and
+/// `it::partition_switch_wiring::every_binary_and_example_target_reports_a_refused_partition_switch`
 /// fails if a new one does not; a third-party embedder running a bake-off through
 /// a release library should too.
+///
+/// The examples were not always in that list, and the gap was measured rather
+/// than reasoned about: `examples/dump_confluence_divergences.rs`, run from a
+/// release build with `FERRO_PARTITION=canonicl`, printed a census byte-identical
+/// to the `live` one on empty stderr at exit 0. Note what that says about *this*
+/// accessor — the refusal was retained here the whole time, correctly. Retaining
+/// a refusal nobody asks for is indistinguishable from discarding it, which is
+/// why the completeness of the asking is now derived from `Cargo.toml`'s own
+/// target tables rather than from a list somebody maintains.
 pub fn partition_switch_startup_error() -> Option<String> {
     partition_rule_outcome().as_ref().err().cloned()
 }
