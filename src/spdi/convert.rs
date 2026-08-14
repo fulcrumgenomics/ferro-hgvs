@@ -42,7 +42,11 @@
 //! [`hgvs_to_spdi_simple`] accepts coordinate systems whose positions are
 //! resolvable without provider data:
 //!
-//! - `g.` (genomic) — direct.
+//! - `g.` (genomic) — direct, for a position that names a coordinate. A
+//!   `+`/`-` offset (#1628) or a `pter`/`qter`/`cen` (#1643) is refused
+//!   wherever it is written, a complex `(a_b)` boundary included, and an end
+//!   boundary that names no single coordinate — `(a_b)` or `?` — is refused
+//!   rather than collapsed onto the start (#1795).
 //! - `m.` (mito) — the mito accession is genomic; same path as `g.`.
 //!   Wraparound ranges (`start > end`) on circular references are rejected
 //!   per issue #399 — SPDI has no native wraparound representation.
@@ -75,7 +79,7 @@ use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{InsertedSequence, NaEdit, RepeatCount, Sequence};
-use crate::hgvs::interval::Interval;
+use crate::hgvs::interval::{Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::parser::accession::parse_accession;
 use crate::hgvs::variant::{
@@ -224,6 +228,78 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.end.inner().map(|p| p.base)
 }
 
+/// Every [`GenomePos`] a boundary actually **writes down**, whether or not any
+/// one of them is a coordinate the conversion could use.
+///
+/// [`UncertainBoundary::inner`] answers a deliberately narrower question — "is
+/// this one position I can resolve?" — and so returns `None` for a `Range`,
+/// hiding *both* its endpoints. That is the right answer for a caller asking
+/// for a coordinate and the wrong one for a caller asking what the description
+/// says, and [`reject_unresolvable_genomic_position`] is the second kind: a
+/// prohibited offset is prohibited wherever it is written, so
+/// `g.10_(20+1_30)delACGT` carried one straight past the guard and converted
+/// as though it read `g.10delACGT` (#1795).
+fn stated_positions(boundary: &UncertainBoundary<GenomePos>) -> [Option<&GenomePos>; 2] {
+    match boundary {
+        UncertainBoundary::Single(mu) => [mu.inner(), None],
+        UncertainBoundary::Range { start, end } => [start.inner(), end.inner()],
+    }
+}
+
+/// Resolve a genomic interval's **end** coordinate, declining when the boundary
+/// names no single position.
+///
+/// The call sites previously wrote `get_end_pos(..).unwrap_or(start_pos)`,
+/// which is the same silent drop [`reject_unresolvable_genomic_position`] was
+/// written to stop, one field over: an end that resolves to nothing — a
+/// `(a_b)` range, or a bare `?` — was replaced by the start, so the interval
+/// collapsed to a point and the boundary vanished from the answer. That is what
+/// made `g.10_(20+1_30)delACGT`, `g.10_(20_30)delACGT` and `g.10delACGT` one
+/// triple; the offset is a symptom of the dropped boundary, and closing only
+/// the guard hole would have left the last two of those three still colliding.
+///
+/// Declining is not a new contract. The **start** side has always declined
+/// (`get_start_pos(..).ok_or_else(..)`), and the VCF sibling
+/// (`vcf::from_hgvs`) declines on both endpoints with no fallback at all — the
+/// fallback here was the asymmetry, not the refusal. An SPDI position is an
+/// exact interbase coordinate, so there is nothing an uncertain region or an
+/// unknown position could be rendered as.
+///
+/// Note this is about a boundary that names *no* position, never about one the
+/// author flagged as approximate: `(13)` is `Mu::Uncertain`, `inner()` returns
+/// 13, and it resolves here exactly as a bare `13` does.
+///
+/// **Genomic axes only.** The `c.`/`n.`/`r.` paths carried the same fallback at
+/// five further sites and collapsed the same way — measured, and deferred to
+/// #1804 rather than swept in here, because those axes decide the *neighbouring*
+/// question differently: a `+`/`-` offset inside a `Range` is *legitimate*
+/// there (`c.(4185+1_4186-1)_(4357+1_4358-1)del`), so
+/// [`reject_unresolvable_genomic_position`] cannot simply be pointed at them.
+///
+/// #1804 has since been closed by #1823, whose
+/// [`resolve_transcript_end_boundary`] is this function's transcript-axis
+/// counterpart. The two stay separate for a typing reason rather than a policy
+/// one — this resolves a [`GenomePos`] to the `u64` its call sites need, while
+/// that one hands the axis' own position type back for a further conversion —
+/// and they agree on the verdict: both refuse with
+/// [`ConversionError::InvalidPosition`]. See that function's doc for why it
+/// takes that verdict from its own axis rather than inheriting it from here.
+fn resolve_genomic_end_pos(
+    interval: &Interval<GenomePos>,
+    coord: &str,
+) -> Result<u64, ConversionError> {
+    get_end_pos(interval).ok_or_else(|| ConversionError::InvalidPosition {
+        description: format!(
+            "{coord}. end boundary `{}` names no single coordinate: an SPDI position is an \
+             exact interbase coordinate, and an uncertain range or unknown (`?`) boundary \
+             supplies none. Collapsing it onto the start position would make distinct \
+             descriptions share one triple. Give the end a definite position, or keep the \
+             description in HGVS",
+            interval.end
+        ),
+    })
+}
+
 /// Refuse a genomic interval whose start or end holds something SPDI cannot be
 /// given a coordinate for: a `+`/`-` offset (#1628) or a `pter`/`qter`/`cen`
 /// special position (#1643).
@@ -260,6 +336,14 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 /// description carrying its own bases needs no fetch and no position check, and
 /// so converted.
 ///
+/// **Both endpoints of a complex `(a_b)` boundary are walked, not just the
+/// boundary as a whole** (#1795). The guard originally read each side through
+/// [`UncertainBoundary::inner`], which reports `None` for a `Range`, so a
+/// prohibited offset or special position written *inside* the parentheses was
+/// never inspected: `g.10_(20+1_30)delACGT` and `g.10_(20_qter)delACGT` both
+/// converted. See [`stated_positions`], which is the walk this uses and is
+/// deliberately a different question from `inner()`.
+///
 /// Refusing is also what the other axes already do with the offsets that *are*
 /// legitimate there — see [`resolve_cds_to_tx`], [`resolve_tx_pos`] and
 /// [`require_simple_tx_pos`], each of which declines an intronic `c.`/`n.`/`r.`
@@ -270,8 +354,9 @@ fn reject_unresolvable_genomic_position(
     interval: &Interval<GenomePos>,
     coord: &str,
 ) -> Result<(), ConversionError> {
-    for endpoint in [interval.start.inner(), interval.end.inner()]
+    for endpoint in [&interval.start, &interval.end]
         .into_iter()
+        .flat_map(stated_positions)
         .flatten()
     {
         if endpoint.offset.is_some() {
@@ -307,7 +392,7 @@ fn reject_unresolvable_genomic_position(
 ///
 /// | HGVS coord | Supported here | Notes |
 /// |------------|----------------|-------|
-/// | `g.` (genomic) | yes | direct 1→0-based conversion; a `+`/`-` offset is refused |
+/// | `g.` (genomic) | yes | direct 1→0-based conversion; a `+`/`-` offset (#1628) or a `pter`/`qter`/`cen` (#1643) is refused wherever it is written, inside a complex `(a_b)` boundary included, and an end boundary naming no single coordinate — `(a_b)` or `?` — is refused rather than collapsed onto the start (#1795) |
 /// | `m.` (mito) | yes | mito accession is genomic; same as `g.`; wraparound rejected |
 /// | `o.` (circular) | yes | same path as `g.`/`m.`; wraparound rejected |
 /// | `n.` (non-coding tx) | exonic, positive base | SPDI sits on the transcript accession |
@@ -325,12 +410,18 @@ fn reject_unresolvable_genomic_position(
 /// (#1643) is refused outright by both entry points with
 /// [`ConversionError::InvalidPosition`]: neither has anything on a genomic
 /// accession to resolve it against, and dropping either made distinct
-/// descriptions share one triple. On the **transcript** axes, a `c.`/`n.`/`r.`
-/// interval whose **end** names no single coordinate — a range boundary
-/// `(20_30)` or an unknown `?` — is refused with the same variant (#1804); see
+/// descriptions share one triple. That holds **wherever the position is
+/// written**, including inside a complex `(a_b)` boundary (#1795).
+///
+/// A `g.`/`m.`/`o.` **end** boundary that names no single coordinate — a
+/// `(a_b)` range or a bare `?` — is likewise refused with
+/// [`ConversionError::InvalidPosition`] rather than collapsed onto the start
+/// position, which is what the start side has always done. An uncertain but
+/// numeric position (`(13)`) names a coordinate and still converts. On the
+/// **transcript** axes, a `c.`/`n.`/`r.` interval whose **end** names no single
+/// coordinate is refused with the same variant (#1804); see
 /// [`resolve_transcript_end_boundary`] for why those axes need their own
-/// resolver rather than the genomic guard. The genomic axes still substitute
-/// the start in that case, which is #1795's scope and not fixed here.
+/// resolver rather than the genomic guard.
 ///
 /// # Arguments
 ///
@@ -406,9 +497,12 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// [`ConversionError::MissingReferenceData`]. An offset or a `pter`/`qter`/`cen`
 /// special position on a `g.`/`m.`/`o.` position is refused with
 /// [`ConversionError::InvalidPosition`] — see
-/// [`reject_unresolvable_genomic_position`]. A `c.`/`n.`/`r.` interval whose
-/// **end** names no single coordinate — a range boundary `(20_30)` or an
-/// unknown `?` — is refused with the same variant (#1804); see
+/// [`reject_unresolvable_genomic_position`], which reads inside a complex
+/// `(a_b)` boundary as well as a simple one. A genomic end boundary that names
+/// no single coordinate is refused by [`resolve_genomic_end_pos`] rather than
+/// collapsed onto the start. A `c.`/`n.`/`r.` interval whose **end** names no
+/// single coordinate — a range boundary `(20_30)` or an unknown `?` — is
+/// refused with the same variant (#1804); see
 /// [`resolve_transcript_end_boundary`].
 ///
 /// An **unspelled identity** (`g.100=`, `g.100_102=`) therefore needs a
@@ -499,7 +593,7 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "g")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -541,7 +635,7 @@ fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "m")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -648,7 +742,7 @@ fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "g")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -692,7 +786,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "m")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -733,7 +827,7 @@ fn circular_to_spdi_simple(variant: &CircularVariant) -> Result<SpdiVariant, Con
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "o")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -777,7 +871,7 @@ fn circular_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             description: "cannot convert variant with unknown start position".to_string(),
         }
     })?;
-    let end_pos = get_end_pos(&variant.loc_edit.location).unwrap_or(start_pos);
+    let end_pos = resolve_genomic_end_pos(&variant.loc_edit.location, "o")?;
     emit_spdi_for_edit(
         variant.accession.to_string(),
         start_pos,
@@ -5905,6 +5999,298 @@ mod tests {
         assert!(
             err.to_string().contains("genomic projection"),
             "the intronic decline lost its own reason: {err}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Complex `(a_b)` boundaries (#1795)
+    // ------------------------------------------------------------------
+
+    /// A provider carrying all three genomic axes, so the provider-backed arm
+    /// of each test below runs against a populated provider rather than an
+    /// empty one.
+    ///
+    /// **No test here currently reaches a fetch, and the negative control is
+    /// the proof**: every one of its rows is asserted to convert identically
+    /// through [`hgvs_to_spdi_simple`], which holds no provider at all. That is
+    /// because each row spells its own bases (`delACGT`) or its own reference
+    /// base (`10C>G`), and [`emit_spdi_for_edit`] consults the provider only
+    /// for the *unspelled* arms — a bare `del`/`dup`/`inv`. So the provider is
+    /// inert for these rows by construction; it is here so that adding a row
+    /// without explicit bases does not also require building a fixture, not
+    /// because anything below depends on a fetch succeeding.
+    fn three_axis_provider() -> MockProvider {
+        let mut provider = MockProvider::new();
+        for accession in ["NC_000001.11", "NC_012920.1", "NC_001416.1"] {
+            provider.add_genomic_sequence(accession, "ACGTACGTACGTACGTACGTACGTACGT".to_string());
+        }
+        provider
+    }
+
+    /// The #1628 guard reads each boundary through `UncertainBoundary::inner`,
+    /// which answers `None` for a `Range` — so a prohibited offset written
+    /// inside a complex `(a_b)` boundary was invisible to it and converted.
+    ///
+    /// This is the same prohibition the simple-position control
+    /// (`a_genomic_offset_is_refused_rather_than_dropped`) pins, on the same
+    /// three axes and the same two entry points, differing only in that the
+    /// offset is written inside a range rather than as the whole boundary.
+    /// `checklist.md:16` does not care which of the two it is, and neither
+    /// should the guard.
+    ///
+    /// Both endpoints of the range are exercised — `(20+1_30)` and
+    /// `(20_30+1)` — because reading only the near one is the obvious
+    /// half-fix, and it passes every assertion that names the first.
+    /// A range on the *start* is included too: it was already refused, but for
+    /// the wrong reason ("unknown start position"), which diagnoses the
+    /// uncertainty and never mentions the prohibited offset that is also there.
+    #[test]
+    fn a_genomic_offset_inside_a_complex_boundary_is_refused_rather_than_dropped() {
+        let provider = three_axis_provider();
+        for (descriptor, coord) in [
+            ("NC_000001.11:g.10_(20+1_30)delACGT", "g"),
+            ("NC_000001.11:g.10_(20-1_30)delACGT", "g"),
+            ("NC_000001.11:g.10_(20_30+1)delACGT", "g"),
+            ("NC_000001.11:g.10_(20+1_30)insTT", "g"),
+            ("NC_000001.11:g.(10+1_11)_20delACGT", "g"),
+            ("NC_012920.1:m.10_(20+1_30)delACGT", "m"),
+            ("NC_001416.1:o.10_(20+1_30)delACGT", "o"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let err = match converted {
+                    Err(err) => err,
+                    Ok(spdi) => panic!(
+                        "`{descriptor}` converted {path} to `{spdi}`; the offset inside the \
+                         complex boundary was dropped"
+                    ),
+                };
+                assert!(
+                    matches!(err, ConversionError::InvalidPosition { .. }),
+                    "`{descriptor}` {path} must be refused as InvalidPosition, got {err:?}"
+                );
+                let message = err.to_string();
+                assert!(
+                    message.contains("carries a +/- offset"),
+                    "`{descriptor}` {path} was refused for some other reason: {message}"
+                );
+                assert!(
+                    message.contains(&format!("{coord}. position")),
+                    "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+                );
+            }
+        }
+    }
+
+    /// The #1643 half of the same guard is blind in exactly the same way: a
+    /// `pter`/`qter`/`cen` written inside a complex boundary was never
+    /// inspected. Pinned separately from the offset because the two are
+    /// different clauses reached through one walk, and a fix that repairs the
+    /// walk for one necessarily repairs it for the other — which is only
+    /// evidence if both are asserted.
+    #[test]
+    fn a_genomic_special_position_inside_a_complex_boundary_is_refused() {
+        let provider = three_axis_provider();
+        for (descriptor, coord) in [
+            ("NC_000001.11:g.10_(20_qter)delACGT", "g"),
+            ("NC_000001.11:g.10_(cen_30)delACGT", "g"),
+            ("NC_012920.1:m.10_(20_qter)delACGT", "m"),
+            ("NC_001416.1:o.10_(20_qter)delACGT", "o"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let err = match converted {
+                    Err(err) => err,
+                    Ok(spdi) => panic!(
+                        "`{descriptor}` converted {path} to `{spdi}`; the special position \
+                         inside the complex boundary was flattened"
+                    ),
+                };
+                assert!(
+                    matches!(err, ConversionError::InvalidPosition { .. }),
+                    "`{descriptor}` {path} must be refused as InvalidPosition, got {err:?}"
+                );
+                let message = err.to_string();
+                assert!(
+                    message.contains("names no numeric coordinate"),
+                    "`{descriptor}` {path} was refused for some other reason: {message}"
+                );
+                assert!(
+                    message.contains(&format!("{coord}. position")),
+                    "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+                );
+            }
+        }
+    }
+
+    /// The enabling half, and the one with no offset anywhere in it:
+    /// `get_end_pos(..).unwrap_or(start_pos)` silently collapsed an
+    /// unresolvable **end** onto the start, so `g.10_(20_30)delACGT` and
+    /// `g.10_?delACGT` both answered as though they had been written
+    /// `g.10delACGT`.
+    ///
+    /// The start side has always refused (`ok_or_else`), and so does the VCF
+    /// sibling on both endpoints — the fallback was the asymmetry, not the
+    /// refusal. SPDI positions are exact; an uncertain or unknown boundary has
+    /// no exact coordinate to offer, so declining is the same answer the guard
+    /// above gives for the same reason.
+    ///
+    /// Both unresolvable shapes are covered — a `Range` boundary and a
+    /// `Single(Unknown)` `?` — because `inner()` answers `None` for both and a
+    /// fix keyed on `is_range()` would leave `?` collapsing. Edits that consume
+    /// the span and edits that do not (`ins`, `dup`) are both included, since
+    /// they read the interval through different arms of `emit_spdi_for_edit`.
+    #[test]
+    fn an_unresolvable_genomic_end_boundary_is_refused_rather_than_collapsed() {
+        let provider = three_axis_provider();
+        for (descriptor, coord) in [
+            ("NC_000001.11:g.10_(20_30)delACGT", "g"),
+            ("NC_000001.11:g.10_?delACGT", "g"),
+            ("NC_000001.11:g.10_(20_30)insTT", "g"),
+            ("NC_000001.11:g.10_(20_30)dupACGT", "g"),
+            ("NC_012920.1:m.10_(20_30)delACGT", "m"),
+            ("NC_012920.1:m.10_?delACGT", "m"),
+            ("NC_001416.1:o.10_(20_30)delACGT", "o"),
+            ("NC_001416.1:o.10_?delACGT", "o"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let err = match converted {
+                    Err(err) => err,
+                    Ok(spdi) => panic!(
+                        "`{descriptor}` converted {path} to `{spdi}`; the end boundary was \
+                         collapsed onto the start position"
+                    ),
+                };
+                assert!(
+                    matches!(err, ConversionError::InvalidPosition { .. }),
+                    "`{descriptor}` {path} must be refused as InvalidPosition, got {err:?}"
+                );
+                let message = err.to_string();
+                assert!(
+                    message.contains("names no single coordinate"),
+                    "`{descriptor}` {path} was refused for some other reason: {message}"
+                );
+                assert!(
+                    message.contains(&format!("{coord}. end boundary")),
+                    "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+                );
+            }
+        }
+    }
+
+    /// The discriminating half: an end boundary that *does* name a coordinate
+    /// must keep converting, and refusing every parenthesised boundary is the
+    /// obvious over-generalisation that would pass all three tests above.
+    ///
+    /// `(13)` is `Mu::Uncertain` — the author is unsure the position is exactly
+    /// 13, but 13 is the coordinate they wrote and `inner()` returns it. That
+    /// is a different thing from `(12_14)`, which names a *region* and no
+    /// single position, and the two must not be conflated because they share a
+    /// pair of parentheses.
+    #[test]
+    fn a_resolvable_genomic_end_boundary_still_converts() {
+        let provider = three_axis_provider();
+        for (descriptor, expected) in [
+            ("NC_000001.11:g.10_13delACGT", "NC_000001.11:9:ACGT:"),
+            ("NC_000001.11:g.10_(13)delACGT", "NC_000001.11:9:ACGT:"),
+            ("NC_000001.11:g.(10)_(13)delACGT", "NC_000001.11:9:ACGT:"),
+            ("NC_000001.11:g.10C>G", "NC_000001.11:9:C:G"),
+            ("NC_012920.1:m.10_13delACGT", "NC_012920.1:9:ACGT:"),
+            ("NC_001416.1:o.10_13delACGT", "NC_001416.1:9:ACGT:"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let spdi = converted
+                    .unwrap_or_else(|err| panic!("`{descriptor}` {path} must convert: {err}"));
+                assert_eq!(
+                    spdi.to_string(),
+                    expected,
+                    "`{descriptor}` {path} moved to a different triple"
+                );
+            }
+        }
+    }
+
+    /// The confluence failure #1628 and #1729 were filed to stop, back on this
+    /// shape: five descriptions that `parse` and `Display` keep distinct all
+    /// converted to `NC_000001.11:9:ACGT:`. Measured on `origin/main` at
+    /// `cc8407bc` before the fix.
+    ///
+    /// Written as the invariant — no two of them may share a triple — rather
+    /// than as five pinned errors, so it keeps meaning something if a future
+    /// change makes any of these resolvable. As with
+    /// `special_positions_do_not_collapse_onto_one_another`, the denominator is
+    /// asserted, because with the fix in place four of the five are refused and
+    /// the collision check has nothing left to compare: `0 of 0` must not read
+    /// as a pass.
+    #[test]
+    fn complex_boundaries_do_not_collapse_onto_the_offset_free_spelling() {
+        /// Only the fully-determined spelling converts once the fix is in.
+        const CONVERTIBLE_TODAY: usize = 1;
+
+        let provider = three_axis_provider();
+        let descriptors = [
+            "NC_000001.11:g.10_(20+1_30)delACGT",
+            "NC_000001.11:g.10_(20+5_30)delACGT",
+            "NC_000001.11:g.10_(20-1_30)delACGT",
+            "NC_000001.11:g.10_(20_30)delACGT",
+            "NC_000001.11:g.10delACGT",
+        ];
+
+        // The premise: these are five distinct descriptions, not five
+        // spellings the parser has already unified. If this ever fails, the
+        // collapse is happening upstream of the conversion and the rest of
+        // this test is measuring the wrong component.
+        let mut displayed: Vec<String> = descriptors
+            .iter()
+            .map(|d| parse_hgvs(d).expect("fixture must parse").to_string())
+            .collect();
+        displayed.sort();
+        displayed.dedup();
+        assert_eq!(
+            displayed.len(),
+            descriptors.len(),
+            "the descriptions do not survive parse/Display distinctly: {displayed:?}"
+        );
+
+        let mut seen: Vec<(&str, String)> = Vec::new();
+        for descriptor in descriptors {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            if let Ok(spdi) = hgvs_to_spdi(&variant, &provider) {
+                let triple = spdi.to_string();
+                if let Some((other, _)) = seen.iter().find(|(_, t)| *t == triple) {
+                    panic!(
+                        "`{descriptor}` and `{other}` are different descriptions but share \
+                         the triple `{triple}`"
+                    );
+                }
+                seen.push((descriptor, triple));
+            }
+        }
+
+        assert_eq!(
+            seen.len(),
+            CONVERTIBLE_TODAY,
+            "{} of {} descriptors converted, expected {CONVERTIBLE_TODAY}: {seen:?}. \
+             If this grew, a complex boundary is convertible again and the collision check \
+             above has just become live — read what it now compares before re-pinning this \
+             number. If it shrank, `g.10delACGT` stopped converting and the loop is \
+             comparing nothing at all",
+            seen.len(),
+            descriptors.len()
         );
     }
 }
