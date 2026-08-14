@@ -45,10 +45,17 @@ use crate::hgvs::HgvsVariant;
 /// `parse_hgvs_with_config(_, ErrorConfig::strict())` refuses it by name.
 ///
 /// Note the scope of that claim: it is the ladder that runs at the *parse*
-/// stage. Strict mode also refuses at **normalize** — a bare-transcript
-/// intronic position (`W4007`) is one, and no parse-stage entry rejects it in
-/// any mode — so switching to [`parse_hgvs_with_config`] buys the parse-stage
-/// half only.
+/// stage. Strict mode also refuses at **normalize**, so switching to
+/// [`parse_hgvs_with_config`] buys the parse-stage half only.
+///
+/// A bare-transcript intronic position (`W4007`) used to be the example here,
+/// on the ground that "no parse-stage entry rejects it in any mode". That
+/// stopped being true with #1630, which put `checklist.md:20`'s strict-mode
+/// refusal at parse per
+/// `rulings[absolute-prohibition-enforcement-stage]` — so it is now an example
+/// of the *opposite*: a shape this entry accepts and the strict mode-aware
+/// entry refuses. It still has a normalize-stage rung too, for callers that
+/// arrive through this door.
 ///
 /// Call [`parse_hgvs_with_config`] when the mode matters — validating untrusted
 /// input, or matching what the CLI does with the same string. `ferro normalize`,
@@ -181,6 +188,10 @@ pub fn parse_hgvs_with_config(
     // `g.-100` are NOT here: neither matches any production, so the grammar
     // refuses both in every mode before this point.
     let genomic_offset_action = config.action_for(ErrorType::GenomicPositionOffset);
+    // Same, for the bare-transcript intronic rule (#1630). `checklist.md:20` is
+    // a CONDITIONAL clause, so unlike the four above this one has no
+    // unconditional arm at all: strict refuses, lenient and silent accept.
+    let bare_intron_action = config.action_for(ErrorType::IntronicOnBareTranscript);
 
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
@@ -254,6 +265,21 @@ pub fn parse_hgvs_with_config(
         &mut warnings,
     )?;
 
+    // Apply the bare-transcript intronic conformance rule on the parsed AST
+    // (#1630). Same seam as the four above, and the last of the three stage
+    // defects `rulings[absolute-prohibition-enforcement-stage]`'s census names:
+    // this clause was enforced with the right mode split at the wrong stage, so
+    // a caller that parsed strictly and never normalized was told a bare
+    // `NM_…:c.20+2del` conforms. The record's ground is general — "whether the
+    // INPUT conforms is answered before the input is accepted, not part-way
+    // through normalizing it."
+    apply_bare_transcript_intron_rule(
+        &variant,
+        bare_intron_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
     // Return result with warnings
     Ok(ParseResultWithWarnings::new(
         variant,
@@ -261,6 +287,77 @@ pub fn parse_hgvs_with_config(
         preprocess_result.original,
         preprocess_result.preprocessed,
     ))
+}
+
+/// Enforce `docs/recommendations/checklist.md:20` on a parsed variant (#1630).
+///
+/// An `NM_`/`NR_` (or LRG) transcript reference "can only be used to describe
+/// variants in introns … when a genomic reference sequence is given on which
+/// the coding DNA reference sequence is annotated" — because a transcript
+/// reference *is* the spliced sequence and contains no introns for an offset to
+/// name. The full clause reading, its scope, and why there is no repair arm are
+/// on [`crate::hgvs::bare_transcript_introns`].
+///
+/// # This is the CONDITIONAL clause, so there is no unconditional arm
+///
+/// The four rules above this one each pair a mode-gated *input* check with an
+/// unconditional *output* refusal, because their shapes denote no sequence and
+/// so rule 1 of the README ruleset bites in every mode. This one does not, and
+/// must not: `rulings[bare-transcript-intronic-position]` decided that lenient
+/// **accepts** the bare form and that "an input that already names one is still
+/// left as authored". A bare intronic description denotes a perfectly good
+/// sequence; what it lacks is the reference the clause conditions on. So the
+/// only arm is the mode-gated one, and lenient's output is conformant.
+///
+/// # The normalize rung is kept
+///
+/// `Normalizer::normalize_core_checked` still refuses this in strict mode, with
+/// the `EINTRONIC` tag the Mutalyzer conformance map keys off. That rung
+/// answers for a caller who reaches the normalizer by another door — the
+/// config-less `parse_hgvs` (#1632), or a lenient parse followed by a strict
+/// `Normalizer`. Neither rung subsumes the other; both derive their scope from
+/// [`crate::hgvs::bare_transcript_introns::bare_transcript_intronic_axis`], so
+/// they cannot come to read the clause differently.
+///
+/// There is no repair arm, so this returns `Result<(), _>` like
+/// [`apply_genomic_offset_rule`] rather than a rewritten variant: naming a
+/// genomic parent needs an accession and an exon table the parser does not
+/// hold, and the ruling says to leave an authored intronic offset as authored.
+fn apply_bare_transcript_intron_rule(
+    variant: &HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<(), FerroError> {
+    let Some(found) = crate::hgvs::bare_transcript_introns::bare_transcript_intron(variant) else {
+        return Ok(());
+    };
+
+    match action {
+        ResolvedAction::Accept | ResolvedAction::SilentCorrect => Ok(()),
+        ResolvedAction::WarnCorrect => {
+            warnings.push(CorrectionWarning::new(
+                ErrorType::IntronicOnBareTranscript,
+                found.refusal(),
+                None,
+                source.to_string(),
+                // No correction is derivable and none is wanted — the ruling
+                // leaves an authored intronic offset as authored — so the
+                // "corrected" text is the input itself.
+                source.to_string(),
+            ));
+            Ok(())
+        }
+        ResolvedAction::Reject => Err(FerroError::Parse {
+            pos: 0,
+            msg: format!(
+                "[{}] {}",
+                ErrorType::IntronicOnBareTranscript.code(),
+                found.refusal()
+            ),
+            diagnostic: None,
+        }),
+    }
 }
 
 /// Enforce `background/numbering.md:52` on a parsed `n.-N` description (#1748).

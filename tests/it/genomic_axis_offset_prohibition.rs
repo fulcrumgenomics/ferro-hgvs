@@ -274,6 +274,7 @@ fn the_bare_parse_entry_is_neither_mode_and_still_accepts() {
 /// unrelated reason, and this change does not move them.
 #[test]
 fn legitimate_neighbours_are_untouched() {
+    // The genomic family itself, where this rule lives. Untouched in every mode.
     for input in [
         // Plain genomic positions.
         "NC_000023.10:g.100A>G",
@@ -282,10 +283,6 @@ fn legitimate_neighbours_are_untouched() {
         // A gene symbol containing a hyphen, beside a genomic position — the
         // shape a text-keyed gate would refuse.
         "NC_012920.1(MT-ND1):m.3460G>A",
-        // The transcript axes. `numbering.md:53` grants these explicitly.
-        "NM_000088.3:c.100+5A>G",
-        "NM_000088.3:c.101-3del",
-        "NR_003051.3:n.100+5A>G",
     ] {
         for (mode, config) in [
             ("strict", ErrorConfig::strict()),
@@ -296,5 +293,60 @@ fn legitimate_neighbours_are_untouched() {
                 .unwrap_or_else(|e| panic!("`{input}` must still parse in {mode}; got {e}"));
             assert_eq!(parsed.result.to_string(), *input, "in {mode}");
         }
+    }
+
+    // The transcript axes, where `numbering.md:53` grants an intronic offset by
+    // name. This rule must not reach them — but a *different* clause does, and
+    // separating the two is what this half now controls.
+    //
+    // These three are all offsets on a BARE transcript reference, which
+    // `checklist.md:20` conditions and which #1630 refuses at parse in strict
+    // mode (`W4007`). That is not this rule's business and must not be mistaken
+    // for it: a `W4009` here would mean the genomic-offset gate had leaked onto
+    // the transcript axes, which is precisely the regression this test exists to
+    // catch. So the check is per mode — lenient and silent must still parse the
+    // description unchanged, and strict may refuse it only as `W4007`.
+    for input in [
+        "NM_000088.3:c.100+5A>G",
+        "NM_000088.3:c.101-3del",
+        "NR_003051.3:n.100+5A>G",
+    ] {
+        for (mode, config) in [
+            ("lenient", ErrorConfig::lenient()),
+            ("silent", ErrorConfig::silent()),
+        ] {
+            let parsed = parse_hgvs_with_config(input, config)
+                .unwrap_or_else(|e| panic!("`{input}` must still parse in {mode}; got {e}"));
+            assert_eq!(parsed.result.to_string(), *input, "in {mode}");
+        }
+
+        if let Err(e) = parse_hgvs_with_config(input, ErrorConfig::strict()) {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("W4009"),
+                "`{input}` is on a TRANSCRIPT axis, where numbering.md:53 grants an intronic \
+                 offset. A W4009 refusal here means the genomic-offset gate has leaked across \
+                 axes; got: {msg}"
+            );
+            assert!(
+                msg.contains("W4007"),
+                "the only clause that may refuse a bare-transcript intronic offset is \
+                 checklist.md:20 (#1630); got: {msg}"
+            );
+        }
+    }
+
+    // And the wrapper form is accepted in every mode, which is what keeps the
+    // paragraph above a statement about the BARE reference rather than about
+    // intronic offsets as such.
+    for (mode, config) in [
+        ("strict", ErrorConfig::strict()),
+        ("lenient", ErrorConfig::lenient()),
+        ("silent", ErrorConfig::silent()),
+    ] {
+        let input = "NC_000017.11(NM_000088.3):c.100+5A>G";
+        let parsed = parse_hgvs_with_config(input, config)
+            .unwrap_or_else(|e| panic!("`{input}` must parse in {mode}; got {e}"));
+        assert_eq!(parsed.result.to_string(), input, "in {mode}");
     }
 }

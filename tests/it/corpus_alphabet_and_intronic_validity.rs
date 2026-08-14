@@ -446,35 +446,59 @@ fn the_genomic_wrapped_allele_form_is_the_positive_control() {
     );
 }
 
-/// **Question.** Does any `ErrorMode` (strict/lenient/silent) already reject
-/// the bare-accession intronic allele **at parse time**, making this a
-/// hygiene-mode gap in the parser rather than an absent check there?
+/// **Question.** Does any `ErrorMode` (strict/lenient/silent) reject the
+/// bare-accession intronic allele **at parse time**?
 ///
-/// **No — all three modes parse it identically.** The full `ErrorType` catalog
-/// (`src/error_handling/types.rs`) has no variant for "intronic offset without
-/// a genomic wrapper" (the nearest relative, `DeprecatedIvsNotation`, covers
-/// only the retracted `IVS` spelling). This pins that the parser has no check
-/// to turn on.
+/// **Strict does, and only strict (#1630). This was a PINNED FINDING and is now
+/// an adjudicated-correct guard.** It used to assert that all three modes parsed
+/// it identically, on the ground that the `ErrorType` catalog had no variant for
+/// "intronic offset without a genomic wrapper" and so the parser had no check to
+/// turn on. `ErrorType::IntronicOnBareTranscript` / `W4007` is now that variant,
+/// applied at the parse seam by `apply_bare_transcript_intron_rule`.
 ///
-/// **The scope is the parser, and only the parser.** Strict-mode *normalize*
-/// does refuse the same input, with `IntronicOnBareTranscript` / `W4007`; that
-/// is pinned by
-/// `corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only`
-/// and recorded in the `bare-transcript-intronic-position` ruling. The test is
-/// named for the stage so the two cannot be read as contradicting each other.
+/// **The mode split is the ruling's, and it is unchanged.**
+/// `rulings[absolute-prohibition-enforcement-stage]` puts an input-conformance
+/// check at parse, gated by mode: strict validates input conformance and so
+/// fails there; lenient does not validate it and accepts; silent is lenient
+/// without messages. `rulings[bare-transcript-intronic-position]` decided the
+/// split itself — `checklist.md:20` is conditional in form — and #1630 moved
+/// only the *stage* of the strict arm.
+///
+/// **The allele form is the point of this test**, and it is not redundant with
+/// the single-member guard: a hygiene check that runs once per description
+/// rather than once per member stops firing exactly here. Its positive control
+/// is [`the_genomic_wrapped_allele_form_is_the_positive_control`] directly
+/// above, which must stay accepted.
+///
+/// Strict-mode *normalize* still refuses the same input too, with the same
+/// `W4007` finding carrying the `EINTRONIC` tag — pinned by
+/// `corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only`.
+/// The two rungs answer for different callers; see
+/// `crate::hgvs::bare_transcript_introns`.
 #[test]
-fn no_error_mode_rejects_the_bare_intronic_allele_at_parse_time() {
+fn only_strict_mode_rejects_the_bare_intronic_allele_at_parse_time() {
+    let input = "NM_TEST.1:c.[20+2del;24del]";
+
+    let refusal = parse_hgvs_with_config(input, ErrorConfig::strict())
+        .expect_err(
+            "ADJUDICATED CORRECT, REGRESSED: strict validates input conformance, so \
+             checklist.md:20 is refused at PARSE",
+        )
+        .to_string();
+    assert!(
+        refusal.contains("W4007"),
+        "the strict parse refusal must name checklist.md:20's finding; got: {refusal}"
+    );
+
     for (mode_name, config) in [
-        ("strict", ErrorConfig::strict()),
         ("lenient", ErrorConfig::lenient()),
         ("silent", ErrorConfig::silent()),
     ] {
-        let result = parse_hgvs_with_config("NM_TEST.1:c.[20+2del;24del]", config);
+        let result = parse_hgvs_with_config(input, config);
         assert!(
             result.is_ok(),
-            "PINNED FINDING — {mode_name} mode accepts the bare-accession intronic allele \
-             exactly as the other two do; no hygiene mode implements checklist.md:20's \
-             wrapper requirement, got: {result:?}",
+            "{mode_name} mode does not validate input conformance, so it must accept \
+             the bare-accession intronic allele; got: {result:?}",
         );
     }
 }
