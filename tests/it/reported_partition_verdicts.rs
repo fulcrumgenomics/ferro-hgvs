@@ -112,34 +112,51 @@
 //!   payload correspond column for column and no alignment is ever chosen. Their
 //!   one unchanged interior column is simply unchanged — not a "part of the
 //!   inserted sequence" that had to be *found* to align.
-//! * **#1421 is [`Authority::SpecSelfConflicting`], for the same reason #1419
-//!   is.** An earlier revision labelled it `SpecExplicit`, on the grounds that
-//!   `delins.md:44-47` "is conditioned on the span losing length". It is not.
-//!   `:47` states its condition as *"parts of the inserted sequence `align` with
-//!   the reference sequence"* and says nothing whatever about length; the
-//!   `c.850_901` example happens to be a net deletion, and that incidental
-//!   arithmetic was mistaken for the rule.
+//! * **#1421 is [`Authority::SpecExplicit`] on `delins.md:17`**, so its wanted
+//!   split is a target rather than a record. The full argument, with both
+//!   records quoted, is on [`the_spec_authority_census_holds`]; in one sentence,
+//!   `:17` (*"two variants separated by one or more nucleotides should be
+//!   described individually and **not** as a `delins`"*, `general.md:34` word
+//!   for word) applies on its own terms, and the passage that used to oppose it
+//!   reaches these rows on neither of its two scopes.
 //!
-//!   Length does bear on it, but the other way round. Every #1421 row replaces
-//!   **5** reference bases with an **11**-base payload (net +6), so there is no
+//!   **This label has now been wrong in both directions, so read what changed.**
+//!   An early revision said `SpecExplicit` on the grounds that `delins.md:44-47`
+//!   "is conditioned on the span losing length" — which is not what `:47` says,
+//!   and that revision was corrected to `SpecSelfConflicting`. The present
+//!   label is *not* a return to it: nothing here claims `:47` is conditioned on
+//!   length. It claims that `:47` is scoped — to the coding axis, and away from
+//!   net insertions — by two **decided** ledger records, and that a scoped-out
+//!   clause states no competing answer for `:17` to conflict with. The
+//!   arithmetic is now a scope trigger with a record behind it rather than an
+//!   inference from a worked example.
+//!
+//!   The geometry itself is unchanged and still worth stating, because it is
+//!   what the direction scope keys on. Every #1421 row replaces **5** reference
+//!   bases with an **11**-base payload (net **+6**), so there is no
 //!   column-for-column correspondence to read off, and the wanted split exists
 //!   *only* because the two-base unchanged interior reappears in the payload —
 //!   `AC` at 30-31 for n1, `TG` at 33-34 for n2, `CA` at 35-36 for n3 — with zero
-//!   end-column identity on either side of any of them. Recovering that split
-//!   requires choosing an alignment, which is precisely the shape `:44-47` says
-//!   to describe as one delins, against `:17` which says to split. The spec
-//!   therefore answers both ways, the policy falls through to Mutalyzer, and
-//!   Mutalyzer picks the merged delins — so it does not pick the issue's form
-//!   either. #1421's wanted forms are recorded, not asserted as targets.
+//!   end-column identity on either side of any of them.
+//!
+//!   **No output moves under this label.** All six rows print what they printed
+//!   before; three of them (the `/span` rows) now print it as a declared
+//!   deviation from a rule-2 preference clause rather than as a neutral record.
 //! * **#1419 is [`Authority::SpecSelfConflicting`], so its wanted form is
 //!   recorded and not asserted as the target.** The issue rests on
 //!   `general.md:56` (prioritisation: substitution over deletion) and
-//!   `delins.md:17`. But `delins.md:44-47` addresses this exact shape — a payload
+//!   `delins.md:17`. `delins.md:44-47` addresses this exact shape — a payload
 //!   whose bases align with the reference, giving "an alternative description
 //!   like `c.[850_869del;874_881del;887_897del;901_902insG]`" — and says outright
-//!   that **the delins format is recommended**. #1419's own `[19_30del;33T>G]` is
-//!   a del-plus-sub arising from precisely that alignment coincidence, so the
-//!   spec points both ways and the policy falls through to Mutalyzer.
+//!   that **the delins format is recommended**; #1419's own `[19_30del;33T>G]` is
+//!   a del-plus-sub arising from precisely that alignment coincidence.
+//!
+//!   **Do not finish that sentence with "so the spec points both ways".** These
+//!   are `g.` rows, and the axis scope puts every `g.` row outside `:47` just as
+//!   it does #1421's — see [`Authority::SpecSelfConflicting`]. What keeps the
+//!   label is narrower: #1419's six `wanted` strings are `:46-47`'s answer
+//!   rather than `:17`'s, so moving them is an adjudication rather than a
+//!   relabel, and the Mutalyzer tie-break is never reached.
 //!
 //! # What Mutalyzer answers, measured rather than assumed
 //!
@@ -158,10 +175,16 @@
 //! Two things follow, and they point in opposite directions. Mutalyzer is
 //! **confluent** on every one of these shapes, which is the property #1430 asks
 //! ferro to adopt. And Mutalyzer's chosen representative is the **merged** one in
-//! all three, which is what `delins.md:17` forbids for #1420 — so there the spec
-//! wins outright and Mutalyzer is not consulted, exactly as the policy orders it.
-//! For #1419 and #1421, where the spec conflicts with itself, Mutalyzer is the
-//! tie-break the policy names, and it does **not** pick either issue's form.
+//! all three, which is what `delins.md:17` says not to write for #1420 **and,
+//! since the relabel, for #1421** — so on twelve of the eighteen rows the spec
+//! answers outright and Mutalyzer is not consulted, exactly as the policy orders
+//! it. Only #1419's six now reach the tie-break at all, and there the wanted
+//! form is the decided chain's rather than the issue's, so the tie-break is not
+//! reached in practice either.
+//!
+//! The #1421 row of that table is kept rather than deleted: it records what the
+//! tie-break *would* have said on a shape that no longer reaches it, which is
+//! the evidence a future widening of `:47`'s scope would have to argue against.
 //!
 //! Mutalyzer's merge is also not a rule one could adopt even if the policy
 //! allowed it. Two substitutions two nucleotides apart on that accession merge
@@ -328,12 +351,24 @@ enum Authority {
     /// The spec answers this shape *both* ways, so the policy falls through to
     /// Mutalyzer.
     ///
-    /// **The two families under this authority differ, so do not read one rule
-    /// off it.** For #1421 the wanted form is recorded as what the issue asked
-    /// for and is not asserted as the target — Mutalyzer converges that shape on
-    /// the merged delins, so it does not pick the issue's form. For #1419 the
-    /// wanted form is the decided chain's answer rather than the issue's, and
-    /// the tie-break is never reached.
+    /// **Only #1419's six rows carry this today, and they carry it on ONE
+    /// ground, not two.** #1421's six carried it until the two decided records
+    /// named in [`the_spec_authority_census_holds`] scoped `delins.md:47` off
+    /// their axis and off their direction, leaving nothing to conflict with
+    /// `:17`. What keeps #1419 here is that its `wanted` form is the decided
+    /// chain's answer — `:46-47`'s — rather than the issue's, so the Mutalyzer
+    /// tie-break is never reached there either.
+    ///
+    /// **Do not read the direction scope as that ground.** #1419's rows are net
+    /// *deletions*, so the direction scope indeed does not reach them — but they
+    /// are `g.` rows like every other row in this module, and the AXIS scope
+    /// reaches them exactly as it reaches #1421's:
+    /// `delins-recommendation-reach-when-the-input-arrives-split` records that
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` "already puts
+    /// every `g.` row outside `:47` entirely". So `:47` states no competing
+    /// answer for these rows either. Relabelling them would have to move six
+    /// `wanted` strings off `:46-47`'s answer, which is an **adjudication** and
+    /// not something a relabel may do.
     SpecSelfConflicting,
 }
 
@@ -672,13 +707,15 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "The form #1421 names canonical: the substitution at 29 and \
+        authority: Authority::SpecExplicit,
+        argument: "delins.md:17 governs, unopposed: the substitution at 29 and \
                    the delins at 32-33 are separated by two unchanged \
-                   nucleotides, and delins.md:17 says variants separated by one \
-                   or more nucleotides are described individually and not as a \
-                   delins. Recorded, not targeted: delins.md:44-47 answers the \
-                   other way on this shape (see the sibling span row).",
+                   nucleotides, and `two variants separated by one or more \
+                   nucleotides should be described individually and **not** as a \
+                   \"delins\"` (general.md:34 states the same sentence). \
+                   delins.md:44-47 no longer answers the other way on this row: \
+                   its only prescriptive limb is :47, and :47 reaches neither \
+                   this axis nor this direction (see the sibling span row).",
     },
     Row {
         label: "1421-n1/span",
@@ -695,23 +732,19 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "Wanted `[29C>A;32_33delinsACATACTG]`. This span merges \
-                   across the unchanged 30-31, which delins.md:17 forbids. The \
-                   delins.md:18 exception (two variants separated by ONE \
+        authority: Authority::SpecExplicit,
+        argument: "Wanted `[29C>A;32_33delinsACATACTG]` per delins.md:17. This \
+                   span merges across the unchanged 30-31, which :17 says not to \
+                   do. The delins.md:18 exception (two variants separated by ONE \
                    nucleotide together affecting one amino acid) does not \
                    reach it: the separation is two nucleotides, and a `g.` \
                    description has no amino acid. See \
                    `the_1421_spans_separate_by_two_nucleotides_not_one`. \
-                   delins.md:44-47 DOES reach it, though, which is why this row \
-                   is SpecSelfConflicting: 5 reference bases (CACGT) become an \
-                   11-base payload, so there is no column-for-column reading and \
-                   the split is recoverable only because the unchanged 30-31 \
-                   `AC` reappears in the payload — with neither end column \
-                   matching. That is the alignment `:47` says to write as one \
-                   delins. The spec answers both ways, so the policy falls \
-                   through to Mutalyzer, which merges and so does not pick this \
-                   wanted form either.",
+                   delins.md:44-47 does not reach it either, on two independent \
+                   decided grounds — see the module docs. This row was \
+                   SpecSelfConflicting on the reading that :44-47 DOES reach it; \
+                   that reading is withdrawn, so :17 stands unopposed and the \
+                   wanted split is a target rather than a record.",
     },
     Row {
         label: "1421-n2/split",
@@ -728,10 +761,11 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "The form #1421 names canonical for row 2; unchanged \
-                   interior 33-34. Recorded, not targeted — delins.md:44-47 \
-                   answers the other way (see the sibling span row).",
+        authority: Authority::SpecExplicit,
+        argument: "delins.md:17 governs, unopposed; unchanged interior 33-34, so \
+                   the two members are separated by two nucleotides. \
+                   delins.md:44-47 does not answer the other way here (see the \
+                   sibling span row).",
     },
     Row {
         label: "1421-n2/span",
@@ -741,12 +775,14 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[32G>T;34_35insGAAT;35_36insG;36_37insC]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "Wanted `[32G>T;35_36delinsGAATCGAC]` per delins.md:17, but \
-                   delins.md:44-47 answers the other way: ref 32-36 (GTGCA) \
-                   becomes an 11-base payload, and the split survives only \
-                   because the unchanged 33-34 `TG` reappears in it, neither end \
-                   column matching. SpecSelfConflicting for that reason.",
+        authority: Authority::SpecExplicit,
+        argument: "Wanted `[32G>T;35_36delinsGAATCGAC]` per delins.md:17, \
+                   unopposed. Ref 32-36 (GTGCA, 5 nt) becomes an 11-base \
+                   payload, so this is the payload-coincidence shape :44-47 \
+                   constructs — but :47 is the only limb of that passage with \
+                   force, and it reaches neither the `g.` axis nor a net \
+                   insertion. Was SpecSelfConflicting on the reading that it \
+                   did.",
     },
     Row {
         label: "1421-n3/split",
@@ -758,10 +794,11 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[34G>T;37delinsCC;38_39insTTACG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "The form #1421 names canonical for row 3; unchanged \
-                   interior 35-36. Recorded, not targeted — delins.md:44-47 \
-                   answers the other way (see the sibling span row).",
+        authority: Authority::SpecExplicit,
+        argument: "delins.md:17 governs, unopposed; unchanged interior 35-36, so \
+                   the two members are separated by two nucleotides. \
+                   delins.md:44-47 does not answer the other way here (see the \
+                   sibling span row).",
     },
     Row {
         label: "1421-n3/span",
@@ -771,12 +808,14 @@ const REPORTED_ROWS: &[Row] = &[
         five_prime: "TEMPLATE:g.[34G>T;37delinsCC;38_39insTTACG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
-        authority: Authority::SpecSelfConflicting,
-        argument: "Wanted `[34G>T;37_38delinsCCTTTACG]` per delins.md:17, but \
-                   delins.md:44-47 answers the other way: ref 34-38 (GCAAT) \
-                   becomes an 11-base payload, and the split survives only \
-                   because the unchanged 35-36 `CA` reappears in it, neither end \
-                   column matching. SpecSelfConflicting for that reason.",
+        authority: Authority::SpecExplicit,
+        argument: "Wanted `[34G>T;37_38delinsCCTTTACG]` per delins.md:17, \
+                   unopposed. Ref 34-38 (GCAAT, 5 nt) becomes an 11-base \
+                   payload, so this is the payload-coincidence shape :44-47 \
+                   constructs — but :47 is the only limb of that passage with \
+                   force, and it reaches neither the `g.` axis nor a net \
+                   insertion. Was SpecSelfConflicting on the reading that it \
+                   did.",
     },
 ];
 
@@ -1187,15 +1226,40 @@ fn every_canonical_row_already_prints_its_wanted_form() {
 ///
 /// Pinned because the authority is what decides whether a row's `wanted` is a
 /// *target* or merely a *record*, and that is the single most consequential
-/// judgement in this file. Three pairs (#1420's) rest on a spec line nothing
-/// contradicts; six (#1419's and #1421's) rest on a spec that answers both
-/// ways — but the two self-conflicting families no longer sit the same way
-/// under the policy, so stating them together is what made this sentence wrong.
+/// judgement in this file. Six pairs (#1420's three and #1421's three) rest on a
+/// spec line nothing contradicts; three (#1419's) keep
+/// [`Authority::SpecSelfConflicting`] on the narrower ground set out below.
 ///
-/// **#1421's three pairs** still carry the issue's split form as `wanted`,
-/// recorded rather than targeted: the policy falls through to Mutalyzer, and the
-/// measurement in this module's docs has Mutalyzer converging that shape on the
-/// **merged** delins, so it does not pick the issue's form.
+/// **#1421's three pairs carry the issue's split form as `wanted`, and it is now
+/// a target rather than a record.** The clause is `DNA/delins.md:17` — *"two
+/// variants separated by one or more nucleotides should be described
+/// individually and **not** as a `delins`"*, which `general.md:34` states word
+/// for word — and every one of the six rows satisfies its antecedent, the two
+/// members being separated by two unchanged nucleotides
+/// ([`the_1421_spans_separate_by_two_nucleotides_not_one`]). What used to oppose
+/// `:17` here was `delins.md:44-47`, and two **decided** ledger records put it
+/// out of reach on independent grounds, either alone sufficient:
+///
+/// * `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — *"`delins.md:47`'s
+///   carve-out is scoped to the CODING DNA AXIS: `c.`, and nothing else. On the
+///   other DNA axes - `g.`, `m.`, `o.`, `n.` - `general.md:34` governs and the
+///   members are described individually."* Every row in this module is `g.`.
+/// * `delins-merge-vs-individual-gap-two-or-more` — *"This ruling reaches the
+///   NET-DELETION case … and it does NOT reach net insertions, where the split
+///   form remains canonical."* (Quoted flat: the record carries no emphasis on
+///   that clause.) All three #1421 pairs replace a 5 nt span with an 11-base
+///   payload, so each is a net insertion of +6.
+///
+/// `:44`, `:45` and `:46` cannot carry the opposition on their own: `:44`/`:45`
+/// are the worked `c.` example and its gloss, and `:46` is a `NOTE` that
+/// *constructs* the split and prints it. The single word `recommended` on `:47`
+/// is the whole prescriptive content of the passage, and it is the clause both
+/// records scope.
+///
+/// Mutalyzer is therefore never consulted for these rows. The module docs'
+/// measurement — that Mutalyzer converges this shape on the **merged** delins —
+/// is retained as a record of what the tie-break *would* have said, not as what
+/// decides them.
 ///
 /// **#1419's three pairs no longer carry the issue's form at all.** The decided
 /// chain — `adjudication-precedence-order` withdrawing `general.md:56`, then
@@ -1226,31 +1290,44 @@ fn the_spec_authority_census_holds() {
         .count();
     assert_eq!(
         (explicit, conflicting),
-        (6, 12),
-        "the authority split moved. Six rows (#1420's) rest on delins.md:16/17 \
-         with nothing in the spec against them — they are length-neutral, so \
-         reference and payload correspond column for column and delins.md:44-47 \
-         never engages. Twelve (#1419's six and #1421's six) replace a span with \
-         a payload of a different length, so their wanted split is recoverable \
-         only by choosing an alignment, which is what :44-47 says to write as one \
-         delins while :17 says to split. Moving a row between the two is a \
-         decision about what a fix is allowed to target, so it belongs in a PR \
-         description."
+        (12, 6),
+        "the authority split moved. Twelve rows rest on a spec line with nothing \
+         against them: #1420's six on delins.md:16/17, being length-neutral so \
+         that reference and payload correspond column for column and \
+         delins.md:44-47 never engages; and #1421's six on delins.md:17 \
+         (`general.md:34` word for word), because the only limb of :44-47 \
+         carrying force is :47 and two decided records put :47 out of reach of \
+         those rows — the `g.` axis by \
+         `delins-payload-coincidence-carve-out-is-coding-dna-scoped`, and the \
+         net-insertion direction by `delins-merge-vs-individual-gap-two-or-more`. \
+         Six (#1419's) remain self-conflicting, and on ONE ground: their wanted \
+         form IS :46-47's answer rather than :17's, so re-deriving it is an \
+         adjudication and not a relabel. NOT on the direction scope — they are \
+         net DELETIONS so that scope does not reach them, but they are `g.` rows \
+         and the AXIS scope puts them outside :47 exactly as it does #1421's. \
+         Moving a row between the two is a decision about what a fix is allowed \
+         to target, so it belongs in a PR description."
     );
 
-    // Every self-conflicting row belongs to #1419 or #1421, and no other row
-    // does. Stated as a set rather than left to the counts above, which two
-    // compensating edits could satisfy while relabelling the wrong rows.
+    // Every self-conflicting row belongs to #1419, and no other row does. Stated
+    // as a set rather than left to the counts above, which two compensating
+    // edits could satisfy while relabelling the wrong rows. #1421 was in this
+    // set until its rows were relabelled; naming only #1419 here is what makes a
+    // silent regression of that relabel fail rather than pass.
     let conflicting_labels: Vec<&str> = REPORTED_ROWS
         .iter()
         .filter(|row| row.authority == Authority::SpecSelfConflicting)
         .map(|row| row.label)
         .collect();
     assert!(
-        conflicting_labels
-            .iter()
-            .all(|l| l.starts_with("1419-") || l.starts_with("1421-")),
-        "only #1419's and #1421's rows have a spec that answers both ways; got \
+        !conflicting_labels.is_empty(),
+        "the self-conflicting set is empty, so the assertion below would pass \
+         vacuously. If #1419's rows have been relabelled too, delete this test's \
+         set half rather than leaving a guard that checks nothing."
+    );
+    assert!(
+        conflicting_labels.iter().all(|l| l.starts_with("1419-")),
+        "only #1419's rows still carry the self-conflicting label; got \
          {conflicting_labels:?}"
     );
 }
