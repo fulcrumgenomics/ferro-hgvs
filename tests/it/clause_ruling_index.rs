@@ -111,7 +111,7 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 32 records, 29 decided / 3 undecided
+//! 33 records, 30 decided / 3 undecided
 //! 114 clause lines, of which 39 are named by more than one record
 //!
 //! == every clause line ==
@@ -185,11 +185,13 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/consultation/open-issues.md:78  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/alleles.md:5  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
@@ -243,6 +245,7 @@
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
@@ -253,6 +256,7 @@
 //! docs/recommendations/DNA/delins.md:46  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
@@ -260,6 +264,7 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:79
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:80
@@ -380,6 +385,7 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
@@ -476,11 +482,13 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/consultation/open-issues.md:78
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/alleles.md:5
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
@@ -496,6 +504,7 @@
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
@@ -504,6 +513,7 @@
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
@@ -511,6 +521,7 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:81
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
@@ -566,6 +577,7 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
+//!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:34
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
@@ -920,7 +932,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (32, 29, 3),
+        (33, 30, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
