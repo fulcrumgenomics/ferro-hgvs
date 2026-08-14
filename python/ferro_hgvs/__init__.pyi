@@ -2472,13 +2472,19 @@ class CoordinateMapper:
             offset: Optional intronic offset
             downstream: Whether this is a downstream position (n.*100 notation for
                 positions past the end of the transcript). Defaults to False.
+                A downstream position is REFUSED: it names a nucleotide beyond
+                the transcript's last base, which the n. axis cannot number and
+                which has no CDS position (HGVS background/numbering.md:52, :54).
+                It previously returned a position derived from `tx_position`
+                alone, i.e. a different nucleotide, with no error.
 
         Returns:
             Tuple of (cds_position, offset, is_utr3)
 
         Raises:
             ReferenceDataError: If the transcript is not found.
-            ProjectionError: If it has no CDS (both subclass ValueError).
+            ProjectionError: If it has no CDS, or if `downstream` is True
+                (both subclass ValueError).
         """
         ...
 

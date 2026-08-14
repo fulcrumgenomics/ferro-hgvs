@@ -74,7 +74,7 @@ pub fn parse_genome_pos(input: &str) -> IResult<&str, GenomePos> {
     }
 }
 
-/// Parse an intronic offset (+5, -10, etc.)
+/// Sentinel value for unknown positive offset (`+?` in HGVS notation)
 ///
 /// # Sentinel Values for Unknown Offsets
 ///
@@ -89,6 +89,9 @@ pub fn parse_genome_pos(input: &str) -> IResult<&str, GenomePos> {
 /// 2. Using the type's extreme values avoids the need for an Option wrapper
 /// 3. Callers can check for unknown offsets by comparing against these constants
 ///
+/// This pair is the crate's single definition of the two values;
+/// `location::GENOME_OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}` re-exports it.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -96,9 +99,10 @@ pub fn parse_genome_pos(input: &str) -> IResult<&str, GenomePos> {
 ///     // Handle unknown positive offset (+?)
 /// }
 /// ```
-/// Sentinel value for unknown positive offset (`+?` in HGVS notation)
 pub const OFFSET_UNKNOWN_POSITIVE: i64 = i64::MAX;
 /// Sentinel value for unknown negative offset (`-?` in HGVS notation)
+///
+/// See [`OFFSET_UNKNOWN_POSITIVE`] for why these values were chosen.
 pub const OFFSET_UNKNOWN_NEGATIVE: i64 = i64::MIN;
 
 /// Whether a raw offset is one of the unknown-offset sentinels rather than a
@@ -122,6 +126,10 @@ pub fn is_unknown_offset(offset: i64) -> bool {
     offset == OFFSET_UNKNOWN_POSITIVE || offset == OFFSET_UNKNOWN_NEGATIVE
 }
 
+/// Parse an intronic offset (+5, -10, etc.)
+///
+/// Returns [`OFFSET_UNKNOWN_POSITIVE`] / [`OFFSET_UNKNOWN_NEGATIVE`] for the
+/// uncertain forms `+?` / `-?`.
 #[inline]
 fn parse_offset(input: &str) -> IResult<&str, i64> {
     let (input, sign) = alt((char('+'), char('-'))).parse(input)?;

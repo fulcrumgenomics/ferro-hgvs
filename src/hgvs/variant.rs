@@ -1163,24 +1163,21 @@ fn self_cancelling_descriptor(
 
 /// Return `Some(offset)` if `raw` is a concrete intronic offset, or
 /// `None` if it is one of the parser's "unknown offset" sentinels
-/// (`+?` → `i64::MAX`, `-?` → `i64::MIN`; see
-/// `parser::position::OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}` and
-/// `location::GENOME_OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`). The
+/// (`+?` / `-?`; see
+/// `parser::position::OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`). The
 /// self-cancelling detector skips any endpoint with an unknown offset
 /// because overlap is undecidable.
+///
+/// This used to test four names: the parser's pair *and*
+/// `location::GENOME_OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`, which were a
+/// separate declaration of the same two values. Those are now aliases of the
+/// constants below, so the extra two arms tested the same values twice —
+/// every axis stores the one pair the parser produces.
 fn certain_offset(raw: Option<i64>) -> Option<i64> {
-    use crate::hgvs::location::{GENOME_OFFSET_UNKNOWN_NEGATIVE, GENOME_OFFSET_UNKNOWN_POSITIVE};
     use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
     match raw {
         None => Some(0),
-        Some(v)
-            if v == OFFSET_UNKNOWN_POSITIVE
-                || v == OFFSET_UNKNOWN_NEGATIVE
-                || v == GENOME_OFFSET_UNKNOWN_POSITIVE
-                || v == GENOME_OFFSET_UNKNOWN_NEGATIVE =>
-        {
-            None
-        }
+        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE) => None,
         Some(v) => Some(v),
     }
 }
@@ -1281,6 +1278,10 @@ pub(crate) fn cis_member_order_key(
     // `SelfCancellingPoint` derives `Ord` over `(region, base, offset)` in that
     // field order, which is exactly the comparison this key wants, so the points
     // go in whole rather than flattened into six scalars.
+    // Unrelated to the unknown-OFFSET sentinels (`OFFSET_UNKNOWN_{POSITIVE,NEGATIVE}`,
+    // re-exported as `GENOME_OFFSET_UNKNOWN_*`): this is a sorts-last key for a point
+    // that has no position, not a `+?`/`-?` marker. It happens to reuse `i64::MAX`
+    // because that is what "sorts last" spells.
     let sentinel = SelfCancellingPoint::new(true, i64::MAX, i64::MAX);
     let (start, end) = cis_member_range(v).unwrap_or((sentinel, sentinel));
     (accession, start, end, junction_rank(v), descriptor)

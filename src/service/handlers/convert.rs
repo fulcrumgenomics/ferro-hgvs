@@ -4,6 +4,7 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use std::time::Instant;
 
 use crate::data::cdot::CdsPosition;
+use crate::service::handlers::tx_position::resolve_tx_start;
 use crate::service::{
     server::AppState,
     types::{
@@ -399,48 +400,7 @@ fn perform_conversion(
                 }
             };
 
-            let tx_pos = v
-                .loc_edit
-                .location
-                .start
-                .inner()
-                .map(|p| p.base as u64)
-                .unwrap_or(1);
-
-            match target {
-                CoordinateSystem::C => {
-                    // n. -> c. conversion
-                    if let Some(cds_pos) = cdot_tx.tx_to_cds(tx_pos) {
-                        let converted = match cds_pos {
-                            CdsPosition::Cds(pos) => format!("{}:c.{}", accession, pos),
-                            CdsPosition::FivePrimeUtr(offset) => {
-                                format!("{}:c.-{}", accession, offset)
-                            }
-                            CdsPosition::ThreePrimeUtr(offset) => {
-                                format!("{}:c.*{}", accession, offset)
-                            }
-                        };
-                        (Some(converted), None, None)
-                    } else {
-                        (None, None, Some("Transcript has no CDS".to_string()))
-                    }
-                }
-                CoordinateSystem::G => {
-                    // n. -> g. conversion
-                    if let Some(genomic_pos) = cdot_tx.tx_to_genome(tx_pos) {
-                        let chrom = &cdot_tx.contig;
-                        let converted = format!("{}:g.{}", chrom, genomic_pos);
-                        (Some(converted), None, None)
-                    } else {
-                        (None, None, Some("Position not in exons".to_string()))
-                    }
-                }
-                _ => (
-                    None,
-                    None,
-                    Some(format!("Conversion from n. to {} is not supported", target)),
-                ),
-            }
+            convert_tx_position(cdot_tx, &v.loc_edit.location, accession, target)
         }
         _ => (
             None,
@@ -449,6 +409,70 @@ fn perform_conversion(
                 "Conversion from {} to {} is not supported",
                 source, target
             )),
+        ),
+    }
+}
+
+/// Convert an `n.` position to the requested target system.
+///
+/// Split out of [`perform_conversion`]'s `Tx` arm so the conversion can be
+/// exercised against a hand-built [`CdotTranscript`] without standing up an
+/// `AppState`: the arm's only use of the service state is the transcript
+/// lookup, which stays with the caller.
+///
+/// The start position is resolved through [`resolve_tx_start`], which refuses
+/// `n.*N`. Reading `base` alone — as this arm did — made `n.5` and `n.*5`
+/// resolve to the same coordinate, so the handler reported a `c.` or `g.`
+/// position for a different nucleotide with no diagnostic.
+///
+/// [`CdotTranscript`]: crate::data::cdot::CdotTranscript
+fn convert_tx_position(
+    cdot_tx: &crate::data::cdot::CdotTranscript,
+    location: &crate::hgvs::interval::TxInterval,
+    accession: &str,
+    target: &CoordinateSystem,
+) -> (
+    Option<String>,
+    Option<Vec<ConversionResult>>,
+    Option<String>,
+) {
+    let tx_pos = match resolve_tx_start(location) {
+        Ok(pos) => pos,
+        Err(msg) => return (None, None, Some(msg)),
+    };
+
+    match target {
+        CoordinateSystem::C => {
+            // n. -> c. conversion
+            if let Some(cds_pos) = cdot_tx.tx_to_cds(tx_pos) {
+                let converted = match cds_pos {
+                    CdsPosition::Cds(pos) => format!("{}:c.{}", accession, pos),
+                    CdsPosition::FivePrimeUtr(offset) => {
+                        format!("{}:c.-{}", accession, offset)
+                    }
+                    CdsPosition::ThreePrimeUtr(offset) => {
+                        format!("{}:c.*{}", accession, offset)
+                    }
+                };
+                (Some(converted), None, None)
+            } else {
+                (None, None, Some("Transcript has no CDS".to_string()))
+            }
+        }
+        CoordinateSystem::G => {
+            // n. -> g. conversion
+            if let Some(genomic_pos) = cdot_tx.tx_to_genome(tx_pos) {
+                let chrom = &cdot_tx.contig;
+                let converted = format!("{}:g.{}", chrom, genomic_pos);
+                (Some(converted), None, None)
+            } else {
+                (None, None, Some("Position not in exons".to_string()))
+            }
+        }
+        _ => (
+            None,
+            None,
+            Some(format!("Conversion from n. to {} is not supported", target)),
         ),
     }
 }
@@ -476,6 +500,71 @@ fn extract_chromosome_from_accession(accession: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::cdot::CdotTranscript;
+    use crate::hgvs::interval::TxInterval;
+    use crate::hgvs::location::TxPos;
+    use crate::reference::Strand;
+
+    /// One 9-base exon at genome 1000..1009, CDS spanning the whole of it, so
+    /// every `n.` base in range converts on both target axes and a divergence
+    /// cannot be an artifact of one of them declining.
+    fn single_exon_transcript() -> CdotTranscript {
+        CdotTranscript {
+            cds_start_incomplete: false,
+            gene_name: Some("TESTGENE".to_string()),
+            contig: "chr1".to_string(),
+            strand: Strand::Plus,
+            exons: vec![[1000, 1009, 0, 9]],
+            cds_start: Some(0),
+            cds_end: Some(9),
+            gene_id: None,
+            protein: Some("NP_TEST.1".to_string()),
+            exon_cigars: Vec::new(),
+        }
+    }
+
+    /// The drop route, at the handler seam: `n.5` and `n.*5` are different
+    /// nucleotides, so the conversion must not answer the same string for both.
+    ///
+    /// Before the fix this arm read `base` alone, so both sides converted as
+    /// in-transcript position 5 — a *collapse* — on both target axes. Asserted
+    /// as a divergence rather than against a pinned message so it cannot be
+    /// satisfied by a wording change.
+    #[test]
+    fn n_to_c_and_n_to_g_do_not_answer_a_downstream_position_as_its_twin() {
+        let tx = single_exon_transcript();
+
+        for target in [CoordinateSystem::C, CoordinateSystem::G] {
+            let convert = |pos: TxPos| {
+                let (converted, _all, error) =
+                    convert_tx_position(&tx, &TxInterval::point(pos), "NM_TEST.1", &target);
+                (converted, error)
+            };
+            let (plain, plain_err) = convert(TxPos::new(5));
+            let (downstream, downstream_err) = convert(TxPos::downstream(5));
+
+            assert!(
+                plain.is_some() && plain_err.is_none(),
+                "control: a plain in-transcript n.5 must still convert to {target}, \
+                 got {plain:?} / {plain_err:?}"
+            );
+            assert_ne!(
+                plain, downstream,
+                "n.5 and n.*5 are different nucleotides and must not convert to \
+                 the same {target} answer"
+            );
+            assert!(
+                downstream.is_none(),
+                "n.*5 names a nucleotide past the transcript's last base and has \
+                 no {target} position; the handler answered {downstream:?} instead \
+                 of refusing"
+            );
+            assert!(
+                downstream_err.is_some_and(|m| m.contains("n.*")),
+                "the decline must name the notation it refused"
+            );
+        }
+    }
 
     #[test]
     fn test_detect_coordinate_system() {

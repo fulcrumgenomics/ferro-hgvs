@@ -133,6 +133,14 @@ impl<'a> CoordinateMapper<'a> {
             cds_start as i64 + pos.base - 1
         };
 
+        // `downstream: false` is a decision, not a default. `CdsPos.utr3`
+        // (`c.*N`) is the 3'UTR of a *coding* transcript, which lies **inside**
+        // the transcript — `c.*1` is the base after the stop codon, still
+        // transcribed — whereas `TxPos.downstream` (`n.*N`) marks a nucleotide
+        // past the transcript's last base. The two `*` markers are not the same
+        // marker, so carrying `utr3` across into `downstream` would be wrong;
+        // the arms above have already resolved `c.*N` to its plain `n.` base.
+        // Pinned by `cds_to_tx_keeps_a_coding_three_prime_utr_position_in_transcript`.
         Ok(TxPos {
             base: tx_base,
             offset: pos.offset,
@@ -146,7 +154,41 @@ impl<'a> CoordinateMapper<'a> {
     /// no exon walk, no CIGAR adjustment. The one input on which the round trip
     /// does not close is `c.0` — it converts to `cds_start` and comes back as
     /// `c.1`, because HGVS has no `c.0` for it to come back as.
+    ///
+    /// # Refuses `n.*N`
+    ///
+    /// [`TxPos::downstream`] marks the `n.*N` notation, which names a nucleotide
+    /// **past the transcript's last base**. There is no CDS position to convert
+    /// it to, so this refuses rather than answering:
+    ///
+    /// - `background/numbering.md:52` gives the whole of `n.` numbering as
+    ///   "`n.1`, `n.2`, `n.3`, ..., etc., from the first to the last nucleotide
+    ///   of the reference sequence" — no `*` zone exists on this axis;
+    /// - `:54` states that "it is **not** allowed to describe variants in
+    ///   nucleotides beyond the boundaries of a transcript reference sequence,
+    ///   using that transcript reference sequence".
+    ///
+    /// Before this refusal existed the flag was simply unread: classification
+    /// compared `base` against the CDS bounds, so `n.*5` on a transcript with a
+    /// 5-base 5'UTR was answered as `c.-1` — a different nucleotide, on the
+    /// wrong side of the CDS, with no diagnostic. That was already known and
+    /// worked around one layer up, where `project_*_direct` rejects `*N` inputs
+    /// "because `tx_to_cds` ... never reads this flag"; the check now lives with
+    /// the contract it belongs to, and that caller's earlier, better-worded
+    /// refusal still runs first.
     pub fn tx_to_cds(&self, pos: &TxPos) -> Result<CdsPos, FerroError> {
+        if pos.downstream {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "n.*{} lies beyond the transcript's last base and has no CDS position: \
+                     the n. axis numbers only n.1..n.<length> (background/numbering.md:52) \
+                     and a variant outside a transcript's boundaries may not be described \
+                     against that transcript (background/numbering.md:54)",
+                    pos.base
+                ),
+            });
+        }
+
         let cds_start = self
             .transcript
             .cds_start

@@ -7098,6 +7098,11 @@ impl PyCoordinateMapper {
     ///     downstream: Whether this is a downstream position (n.*100 notation for
     ///         positions past the end of the transcript). Defaults to False.
     ///         Currently refused when True — the conversion does not honour it.
+    ///         It names a nucleotide beyond the transcript's last base, which
+    ///         the n. axis cannot number and which has no CDS position (HGVS
+    ///         background/numbering.md:52, :54). It previously returned a
+    ///         position derived from `tx_position` alone, i.e. a different
+    ///         nucleotide, with no error.
     ///
     /// Returns:
     ///     Tuple of (cds_position, offset, is_utr3), where cds_position is
