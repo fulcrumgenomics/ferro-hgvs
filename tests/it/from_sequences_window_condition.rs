@@ -92,7 +92,7 @@ fn derive(lo: u64, reference: &str, alternate: &str) -> (String, bool) {
     .unwrap_or_else(|e| panic!("from_sequences at {lo} over {reference} -> {alternate}: {e}"));
     (
         derived.variant.to_string(),
-        derived.placement_bounded_by_window,
+        derived.placement_bounded_by_window(),
     )
 }
 
