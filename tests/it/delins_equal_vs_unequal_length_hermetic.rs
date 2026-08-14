@@ -73,13 +73,17 @@
 //! reach this arm either: at equal length the interior column is retained by
 //! denotation, not by the payload/reference coincidence that ruling is scoped to.
 //!
-//! **Unequal (3 -> 2): ferro VIOLATES a decided ruling.** There is no
+//! **Unequal (3 -> 2): ferro's split is CONFORMANT, and the clause that would
+//! have condemned it does not reach a `g.` description.** There is no
 //! column-for-column reading, so nothing in the input forces the `T` at 265 to
 //! be retained. It survives into ferro's output *only* because the payload
 //! happens to open with a `T` that an aligner can pair it with. That coincidence
 //! is the construction `delins.md:46` builds — "parts of the inserted sequence
 //! *align* with the reference sequence, giving an alternative description" — and
 //! `delins.md:47` answers it: **"The `delins` format is recommended"**.
+//!
+//! But `:47` is scoped off this axis. See the withdrawal section below before
+//! reading the record quotations that follow as an indictment of this arm.
 //!
 //! The governing record is the ruling `delins-merge-vs-individual-gap-two-or-more`
 //! in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, status
@@ -110,14 +114,33 @@
 //! *title*. The scope paragraph is the operative text; anyone acting on this row
 //! should say which reading they are using.
 //!
-//! # Assert-then-flip
+//! # The assert-then-flip is WITHDRAWN — the unequal arm was never going to merge
 //!
-//! The unequal arm's expectation is ferro's **current, wrong** answer. When the
-//! ruling is implemented it becomes [`UNEQUAL_RULING_CONFORMANT`] — the input
-//! string unchanged, i.e. the spanning `delins`. It is asserted rather than
-//! `#[ignore]`d so that the day the behaviour moves, this file has to be read.
-//! The flip is an output-moving change and owes the release a
-//! `Representation-Change:` trailer.
+//! This section used to say the unequal arm's expectation was ferro's "current,
+//! **wrong**" answer, and that when `delins-merge-vs-individual-gap-two-or-more`
+//! was implemented the row would become the spanning
+//! `NC_TEST.1:g.264_266delinsTC`. **That instruction is wrong and must not be
+//! followed.** It was written before the axis scope was decided.
+//!
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes
+//! `DNA/delins.md:47` — the clause that recommends the spanning form over a
+//! payload-coincidence split — to the **coding DNA axis**. Both arms here are
+//! `NC_TEST.1:g.`, a genomic reference. So `:47` does not reach them, and
+//! `general.md:34` governs unqualified: two variants separated by an unchanged
+//! nucleotide are described individually. The unequal arm's split is therefore
+//! **conformant**, and it always was; what was wrong was the note, not the
+//! output.
+//!
+//! Note the direction scope points the same way about *which* record applies but
+//! not about the outcome: this row is a net deletion (3 nt span, 2 nt payload),
+//! so `delins-merge-vs-individual-gap-two-or-more` would reach it by direction —
+//! the AXIS scope is what excludes it, and the axis scope is the later and
+//! narrower of the two. Read them in that order.
+//!
+//! The sibling file `delins_equal_vs_unequal_length_discriminator.rs` withdrew
+//! the identical instruction for its own `g.` row under #1835, on this reasoning.
+//! The withdrawal was applied to one of the two siblings and not the other; this
+//! is the other.
 //!
 //! # Both arms are also checked against the bases they denote
 //!
@@ -131,11 +154,11 @@
 //! as the pinned string would satisfy it. Both arms pass, so both of today's
 //! answers are genuine re-spellings.
 //!
-//! It matters most on the unequal arm precisely *because* that expectation is
-//! assert-then-flip. A pin whose purpose is to record an answer we mean to
-//! change should at least be able to say that today's wrong answer is wrong
-//! about the **partition** and not about the bases — which is the difference
-//! between a representation change and a defect.
+//! It matters most on the unequal arm, where the two candidate descriptions
+//! differ in **partition** rather than in the bases they denote. Asserting the
+//! denotation separately is what lets this file say that the split and the
+//! spanning form are two spellings of one variant, so the choice between them is
+//! a representation question and never a correctness one.
 //!
 //! Fully hermetic: a `JsonProvider` (the type the sibling hermetic tests still
 //! name by its `MockProvider` alias), no `FERRO_MANIFEST`, no fixtures, no
@@ -179,20 +202,25 @@ const EQUAL_INPUT: &str = "NC_TEST.1:g.264_266delinsCTC";
 const EQUAL_EXPECTED: &str = "NC_TEST.1:g.[264A>C;266G>C]";
 
 /// UNEQUAL arm — the same span, the same reference bases, one fewer payload
-/// base. The decided ruling on `delins.md:47` governs, and ferro does not obey.
+/// base. `delins.md:47` would recommend the spanning form, but
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes that clause
+/// to the coding DNA axis and this is `g.`, so `general.md:34` governs and the
+/// members stay individual.
 const UNEQUAL_INPUT: &str = "NC_TEST.1:g.264_266delinsTC";
 
-/// Measured on this base. **Assert-then-flip**: this is the wrong answer, pinned
-/// deliberately. See [`UNEQUAL_RULING_CONFORMANT`].
+/// Measured on this base, and **conformant** — see the withdrawal section in the
+/// module docs. This is not an assert-then-flip; there is no flip owed.
 const UNEQUAL_EXPECTED: &str = "NC_TEST.1:g.[264del;266G>C]";
 
-/// The right answer for the unequal arm once
-/// `delins-merge-vs-individual-gap-two-or-more` is implemented: the spanning
-/// `delins`, i.e. the input unchanged.
+/// The spanning form, named only so the guard below can assert ferro does **not**
+/// emit it on this axis.
 ///
-/// Named rather than left in prose so the flip is a two-line edit and so this
-/// string is greppable from the ruling record.
-const UNEQUAL_RULING_CONFORMANT: &str = "NC_TEST.1:g.264_266delinsTC";
+/// It was previously called `UNEQUAL_RULING_CONFORMANT` and documented as the
+/// answer a future implementation should reach. That was wrong — `delins.md:47`
+/// does not reach a `g.` description — and the rename is deliberate, so a reader
+/// grepping the old name from the ruling record lands on this correction rather
+/// than on an instruction to flip.
+const UNEQUAL_SPANNING_FORM: &str = "NC_TEST.1:g.264_266delinsTC";
 
 fn padded_contig() -> String {
     let pad = "ACGT".repeat(PAD_OFFSET / 4);
@@ -248,10 +276,9 @@ fn denotes(description: &str) -> String {
 /// #1592 and #1600 are live instances where a well-formed, in-bounds,
 /// idempotent, re-parseable output denotes different bases.
 ///
-/// It matters most on the unequal arm precisely *because* that expectation is
-/// assert-then-flip. A pin whose purpose is to record an answer we mean to
-/// change should at least be able to say that today's wrong answer is wrong
-/// about the partition and not about the bases.
+/// It matters most on the unequal arm, where the two candidate descriptions
+/// differ in partition rather than in the bases they denote, so the choice
+/// between them is a representation question and never a correctness one.
 fn assert_normalizes_preserving(input: &str, expected: &str, whichever: &str) {
     let actual = normalize(input);
     assert_eq!(actual, expected, "{whichever}");
@@ -392,25 +419,27 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts_hermetically() {
         ),
     );
 
-    // UNEQUAL — WRONG, pinned deliberately. See "Assert-then-flip" above.
+    // UNEQUAL — conformant on this axis. See the withdrawal section above.
     assert_normalizes_preserving(
         UNEQUAL_INPUT,
         UNEQUAL_EXPECTED,
         &format!(
-            "unequal-length {UNEQUAL_INPUT} is currently split on a payload/reference \
-             coincidence at 265, which is the alignment-driven split `delins.md:46` constructs \
-             and `delins.md:47` advises against. The decided ruling \
-             `delins-merge-vs-individual-gap-two-or-more` says the spanning form wins, i.e. \
-             {UNEQUAL_RULING_CONFORMANT}. If this assertion just failed with that string, the \
-             defect is FIXED — flip the expectation and declare the representation change"
+            "unequal-length {UNEQUAL_INPUT} is split on a payload/reference coincidence at 265, \
+             which is the alignment-driven split `delins.md:46` constructs and `delins.md:47` \
+             advises against — but `:47` is scoped to the coding DNA axis by \
+             `delins-payload-coincidence-carve-out-is-coding-dna-scoped` and this is `g.`, so \
+             `general.md:34` governs and this split is CONFORMANT. If this assertion just \
+             failed with {UNEQUAL_SPANNING_FORM}, that is a REGRESSION, not a fix: something \
+             has applied the coding-axis carve-out off its axis. Do not flip the expectation"
         ),
     );
 
-    // Guard the flip against being confused with a different move: state
-    // explicitly that today's output is not yet the conformant one.
+    // The split and the spanning form are distinct strings, so the assertion
+    // above is testing something. Kept as a guard against the two constants
+    // being edited into agreement, which would make this file vacuous.
     assert_ne!(
-        UNEQUAL_EXPECTED, UNEQUAL_RULING_CONFORMANT,
-        "the pinned output equals the ruling-conformant form — the assert-then-flip note above \
-         is stale and this test now pins correct behaviour"
+        UNEQUAL_EXPECTED, UNEQUAL_SPANNING_FORM,
+        "the pinned output equals the spanning form, so this file no longer distinguishes the \
+         two descriptions it exists to keep apart"
     );
 }
