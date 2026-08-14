@@ -877,34 +877,63 @@ fn body_asserts(body: &str) -> bool {
 fn guard_sites() -> BTreeMap<String, Vec<GuardSite>> {
     let mut sites: BTreeMap<String, Vec<GuardSite>> = BTreeMap::new();
     for (path, text) in source_files() {
-        let lines: Vec<&str> = text.lines().collect();
-        let mut ignored = false;
-        for (index, line) in lines.iter().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("#[ignore") {
-                ignored = true;
-                continue;
-            }
-            let Some(name) = function_name_declared_on(trimmed) else {
-                // Attributes and doc comments sit between `#[ignore]` and the
-                // `fn`, so only a line that is neither resets the flag.
-                if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
-                    ignored = false;
-                }
-                continue;
-            };
-            if looks_like_a_guard_name(&name) {
-                sites.entry(name).or_default().push(GuardSite {
-                    path: path.clone(),
-                    line: index + 1,
-                    ignored,
-                    asserts: body_asserts(&body_starting_at(&lines, index)),
-                });
-            }
-            ignored = false;
+        for (name, site) in guard_sites_in(&path, &text) {
+            sites.entry(name).or_default().push(site);
         }
     }
     sites
+}
+
+/// The guard sites declared in one file's `text`, as `(name, site)`.
+///
+/// Split out of [`guard_sites`] so the attribute reading can be exercised
+/// against a **literal fixture** — the move
+/// [`the_assertion_detector_reads_helper_calls_as_assertions`] already makes for
+/// [`body_asserts`], and the one `ruling_guard_field.rs`'s
+/// `the_scanner_reads_test_and_ignore_attributes` makes for its own scanner.
+///
+/// Before #1907 the `#[ignore]` arm was exercised instead by asserting that the
+/// **live tree** held at least one `#[ignore]`d guard. That conflated two
+/// propositions: that this scanner can read the attribute, which is a property
+/// of the code here, and that the repository currently contains an ignored
+/// guard, which is a property of the tree and changes as work lands. Only the
+/// first is what [`the_guard_scan_reads_the_tree_it_claims_to`] is named for,
+/// and testing the second made closing the last open question a test failure —
+/// `origin/main` carried exactly one such guard,
+/// `spec_worked_examples::the_decided_target_is_convergence_on_the_near_side`,
+/// and un-`#[ignore]`ing it is the whole purpose of #1621/#1845.
+fn guard_sites_in(path: &str, text: &str) -> Vec<(String, GuardSite)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut found = Vec::new();
+    let mut ignored = false;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#[ignore") {
+            ignored = true;
+            continue;
+        }
+        let Some(name) = function_name_declared_on(trimmed) else {
+            // Attributes and doc comments sit between `#[ignore]` and the
+            // `fn`, so only a line that is neither resets the flag.
+            if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+                ignored = false;
+            }
+            continue;
+        };
+        if looks_like_a_guard_name(&name) {
+            found.push((
+                name,
+                GuardSite {
+                    path: path.to_string(),
+                    line: index + 1,
+                    ignored,
+                    asserts: body_asserts(&body_starting_at(&lines, index)),
+                },
+            ));
+        }
+        ignored = false;
+    }
+    found
 }
 
 /// The function name declared on `line`, if it declares one.
@@ -1016,8 +1045,10 @@ fn body_starting_at(lines: &[&str], start: usize) -> String {
 /// deferral — by **bare** backticked name, and [`guard_names_named_in`] reads
 /// only the `::`-qualified form. So the ignored-guard arm below is currently
 /// exercised by no live citation; what keeps it from being dead code is
-/// [`the_guard_scan_reads_the_tree_it_claims_to`], which asserts the attribute
-/// is observable at all.
+/// [`the_ignore_attribute_is_read_through_the_lines_between_it_and_the_fn`],
+/// which pins both directions of the attribute reading against a literal
+/// fixture. That check used to be a tree scan asserting the repository held an
+/// `#[ignore]`d guard, which made removing the last one a failure — #1907.
 ///
 /// **Reach, which "14 citations" does not convey.** Of the 25 `decided`
 /// records, **5** carry a `::`-qualified guard citation and are checked here;
@@ -1203,29 +1234,177 @@ fn the_assertion_detector_reads_helper_calls_as_assertions() {
     );
 }
 
-/// The guard scan is not vacuous, and reads `#[ignore]` through the doc
-/// comments that sit between the attribute and the `fn`.
+/// The guard scan reaches the tree it claims to: every root it names, and a
+/// realistic number of guard-shaped functions out of them.
+///
+/// # What this asserts on, and what it deliberately no longer does (#1907)
+///
+/// **Reach, not contents.** This is a check on the walk — that it visits both
+/// roots and comes back with a plausible population. It used to also assert
+/// that the tree held at least one `#[ignore]`d guard, as anti-vacuity for the
+/// ignored-guard arm of [`every_ruling_to_guard_citation_resolves`]. That
+/// assertion was pointed at the wrong proposition: it read a property of the
+/// *tree*, which changes as work lands, in order to check a property of the
+/// *scanner*, which does not. `origin/main` carried exactly one such guard —
+/// `spec_worked_examples::the_decided_target_is_convergence_on_the_near_side`,
+/// #1621's acceptance criterion — so legitimately closing that question, which
+/// is an outcome this project actively wants, failed a file the change never
+/// touched.
+///
+/// The scanner property it was standing in for is now checked directly, against
+/// a literal fixture, by
+/// [`the_ignore_attribute_is_read_through_the_lines_between_it_and_the_fn`].
+/// That is strictly stronger: it pins both directions of the attribute reading
+/// rather than merely observing that one site somewhere set the flag, and it
+/// keeps working when the tree has no ignored guards left.
+///
+/// `asserts` is still read off the tree, and that is not the same hazard: a
+/// tree in which **no** guard asserts is not an outcome anyone can legitimately
+/// reach, so the floor cannot be crossed by work landing. It checks the wiring
+/// — that [`body_asserts`] is being handed real function bodies — rather than
+/// the contents.
 #[test]
 fn the_guard_scan_reads_the_tree_it_claims_to() {
+    // Every root the scan names must actually yield files. `source_files`
+    // already fails on a root that does not exist; a root that exists, is
+    // walked, and contributes nothing is the same vacuity one step later, and
+    // it is what a broken extension filter or a mis-joined relative path looks
+    // like.
+    let files = source_files();
+    for scan_root in SCAN_ROOTS {
+        let prefix = format!("{scan_root}/");
+        let from_root = files
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .count();
+        assert!(
+            from_root > 0,
+            "the walk read no `.rs` file under {prefix} — the scan does not reach the tree \
+             it claims to, so every guard defined there is invisible to it"
+        );
+    }
+
     let sites = guard_sites();
-    // Measured at 1,649 distinct guard-shaped names on `origin/main` @
-    // `d4552167`. The floor is an order of magnitude below that, so it cannot
-    // be tripped by ordinary test churn but still fires if the walk breaks.
+    // Measured at 1,731 distinct guard-shaped names on `origin/main` @
+    // `bbc76b8d` (1,649 @ `d4552167`). The floor is an order of magnitude below
+    // that, so it cannot be tripped by ordinary test churn but still fires if
+    // the walk breaks.
     assert!(
         sites.len() >= 200,
         "the guard scan found only {} guard-shaped functions under {SCAN_ROOTS:?} — \
          the walk or the grammar is broken",
         sites.len()
     );
-    // Every citation-bearing property this check asserts on must be observable
-    // at least once, or the corresponding arm is dead code that always passes.
-    assert!(
-        sites.values().flatten().any(|site| site.ignored),
-        "no `#[ignore]`d guard was found — the attribute is not being read, so the \
-         ignored-guard arm of the check above can never fire"
-    );
     assert!(
         sites.values().flatten().any(|site| site.asserts),
         "no asserting guard was found — `body_asserts` is not seeing function bodies"
+    );
+}
+
+/// The `#[ignore]` attribute is read, and read **through** the doc comments and
+/// attributes that sit between it and the `fn`.
+///
+/// Both directions are pinned, because the risk runs both ways and only one of
+/// them is visible from the outside. A reader that never sets `ignored` makes
+/// the ignored-guard arm of [`every_ruling_to_guard_citation_resolves`] dead
+/// code that can never fire — the failure that looks like success. A reader
+/// that never *clears* it reports every guard following an ignored one as
+/// ignored, which would fail that check on guards that run perfectly well.
+///
+/// The fixture is a literal rather than the live tree, which is the whole point
+/// of #1907: what is under test here is this file's parser, and pointing the
+/// question at whatever the repository happens to contain made a legitimate
+/// change to the tree — un-`#[ignore]`ing the last deferred guard — into a
+/// failure of this file.
+///
+/// The deferred case is the one that motivates "through the lines between":
+/// each of the three kinds of line that can sit between the attribute and the
+/// `fn` — a doc comment, a further attribute, a blank — is present in the
+/// fixture, because each is skipped by its own clause of the reset condition
+/// and a reader that dropped any one of them would report a dormant guard as
+/// running.
+#[test]
+fn the_ignore_attribute_is_read_through_the_lines_between_it_and_the_fn() {
+    // A fixture, not a file: `SELF_PATH` excludes this module from the scan, so
+    // nothing declared inside this string is a guard site anywhere.
+    //
+    // None of the four names contains the substring `assert`, and that is not
+    // stylistic. `body_starting_at` begins at the *signature* line — it has to,
+    // since that is where the opening brace is — so the name is part of the
+    // string `body_asserts` searches, and a guard called `…_asserts_…` reads as
+    // asserting whatever its body does. Naming one of these
+    // `the_guard_that_only_prints_asserts_nothing_at_all` made the assertionless
+    // case pass for that reason and nothing else. Kept out of the fixture rather
+    // than worked around, so the last two assertions below are about the bodies.
+    const FIXTURE: &str = r##"
+#[test]
+fn the_running_guard_is_not_ignored_and_checks_its_output() {
+    assert_eq!(normalize("c.3921dup"), "c.3921dup");
+}
+
+#[ignore = "decided target, not yet implemented — see #1621"]
+/// A deferral, with its acceptance criterion.
+
+#[test]
+fn the_deferred_guard_sits_behind_a_doc_comment_and_an_attribute() {
+    assert_eq!(normalize("c.3922dup"), "c.3921dup");
+}
+
+fn the_guard_after_the_ignored_one_must_not_inherit_the_flag() {
+    assert!(true);
+}
+
+fn the_guard_that_only_computes_and_prints_a_string() {
+    let normalized = normalize("c.3922dup");
+    eprintln!("{normalized}");
+}
+"##;
+
+    let sites: BTreeMap<String, GuardSite> = guard_sites_in("tests/it/fixture.rs", FIXTURE)
+        .into_iter()
+        .collect();
+    let names: BTreeSet<&str> = sites.keys().map(String::as_str).collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "the_deferred_guard_sits_behind_a_doc_comment_and_an_attribute",
+            "the_guard_after_the_ignored_one_must_not_inherit_the_flag",
+            "the_guard_that_only_computes_and_prints_a_string",
+            "the_running_guard_is_not_ignored_and_checks_its_output",
+        ]),
+        "the four guard-shaped declarations in the fixture must all be found"
+    );
+
+    let deferred = &sites["the_deferred_guard_sits_behind_a_doc_comment_and_an_attribute"];
+    assert!(
+        deferred.ignored,
+        "an `#[ignore]` separated from its `fn` by a doc comment and a `#[test]` must still \
+         be read, or a dormant guard reads as running"
+    );
+    assert!(deferred.asserts, "its body asserts");
+    assert_eq!(
+        (deferred.path.as_str(), deferred.line),
+        ("tests/it/fixture.rs", 11),
+        "a site reports where it was declared"
+    );
+
+    for running in [
+        "the_running_guard_is_not_ignored_and_checks_its_output",
+        "the_guard_after_the_ignored_one_must_not_inherit_the_flag",
+        "the_guard_that_only_computes_and_prints_a_string",
+    ] {
+        assert!(
+            !sites[running].ignored,
+            "{running} carries no `#[ignore]` — a reader that never clears the flag would \
+             report every guard after an ignored one as dormant"
+        );
+    }
+
+    // The other property a site carries, on the same fixture, so the two are
+    // read off one parse rather than from two different shapes.
+    assert!(sites["the_running_guard_is_not_ignored_and_checks_its_output"].asserts);
+    assert!(
+        !sites["the_guard_that_only_computes_and_prints_a_string"].asserts,
+        "a body that only computes and prints asserts nothing — the #1858 shape"
     );
 }
