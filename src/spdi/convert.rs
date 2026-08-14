@@ -86,6 +86,7 @@ use crate::hgvs::variant::{
     Accession, CdsVariant, CircularVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant,
     RnaVariant, TxVariant,
 };
+use crate::normalize::rules::InsCoordKind;
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::Transcript;
 use crate::sequence::reverse_complement;
@@ -241,19 +242,115 @@ fn position_range_insert(seq: &InsertedSequence) -> Option<(u64, u64, bool)> {
     }
 }
 
+/// Translate one insert-payload coordinate from the axis it is **written** on
+/// onto the transcript axis the SPDI is emitted on.
+///
+/// A payload position is spelled in the description's own coordinate system —
+/// `c.156_157ins180_188` names `c.180` through `c.188`, not transcript 180
+/// through 188 — while the accession this function's caller fetches against is
+/// the flat transcript. So on a CDS-relative axis the payload needs exactly the
+/// `cds_start + N - 1` shift [`resolve_cds_to_tx`] already applies to the
+/// *location*, and it is routed through the same [`CoordinateMapper::cds_to_tx`]
+/// so the two cannot drift apart (the property #390-follow-up / #944 established
+/// for `r.*N` and `c.*N`, and #1619's flat frame preserved).
+///
+/// Only plain positive positions arrive here: the `u64` `PositionRange` shape
+/// cannot carry a `-N`, `*N` or intronic offset — the parser lands those in
+/// `CdsPositionRange`, which this path does not accept.
+fn resolve_payload_position(
+    accession: &str,
+    transcript: &Transcript,
+    pos: u64,
+    coord: &str,
+) -> Result<u64, ConversionError> {
+    let base = i64::try_from(pos).map_err(|_| ConversionError::InvalidPosition {
+        description: format!(
+            "{coord}. insert payload position {pos} on {accession} exceeds the addressable range"
+        ),
+    })?;
+    let mapper = CoordinateMapper::new(transcript);
+    let tx = mapper.cds_to_tx(&CdsPos::new(base)).map_err(|e| {
+        ConversionError::MissingReferenceData {
+            description: format!(
+                "could not resolve {coord}. insert payload position {pos} on {accession} \
+                 to a transcript position: {e}"
+            ),
+        }
+    })?;
+    let one_based = ensure_positive_tx(tx.base, coord, pos)?;
+    if one_based > transcript.sequence_length() {
+        return Err(ConversionError::InvalidPosition {
+            description: format!(
+                "{coord}. insert payload position {pos} on {accession} resolves to transcript \
+                 base {one_based}, past the transcript 3' end (length {})",
+                transcript.sequence_length()
+            ),
+        });
+    }
+    Ok(one_based)
+}
+
+/// Translate an insert payload's `(start, end)` span onto the transcript axis,
+/// per the axis the enclosing description is written on.
+///
+/// `Direct` (`g.`/`m.`/`o.`/`n.`) passes the positions through unchanged — a
+/// genomic coordinate and a non-coding transcript coordinate are already offsets
+/// on the accession being fetched. `Cds` shifts through the transcript's CDS
+/// start. `Rna` follows the associated DNA numbering — CDS-relative on a coding
+/// transcript, transcript-relative on a non-coding one — which is the same split
+/// [`resolve_rna_pos`] makes for the *location*, so a payload and a location on
+/// one description are read in one frame.
+fn resolve_payload_span<P>(
+    accession: &str,
+    start: u64,
+    end: u64,
+    kind: InsCoordKind,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    let coord = match kind {
+        InsCoordKind::Direct => return Ok((start, end)),
+        InsCoordKind::Cds => "c",
+        InsCoordKind::Rna => "r",
+    };
+    let transcript =
+        provider
+            .get_transcript(accession)
+            .map_err(|e| ConversionError::MissingReferenceData {
+                description: format!(
+                    "could not load transcript {accession} to resolve the {coord}. insert \
+                     payload {start}_{end}: {e}"
+                ),
+            })?;
+    // `r.` on a non-coding transcript has no CDS to be relative to, so its
+    // positions are already transcript offsets. Mirrors `resolve_rna_pos`.
+    if kind == InsCoordKind::Rna && transcript.cds_start.is_none() {
+        return Ok((start, end));
+    }
+    Ok((
+        resolve_payload_position(accession, &transcript, start, coord)?,
+        resolve_payload_position(accession, &transcript, end, coord)?,
+    ))
+}
+
 /// Resolve a same-reference position-range insert (`ins50_57`, `ins50_57inv`)
 /// to its literal bases by reading them from the reference, mirroring how the
 /// omitted bases of `del`/`dup`/`delins` are fetched.
 ///
-/// `start`/`end` are 1-based inclusive coordinates on `accession`; `invert`
-/// reverse-complements the slice (for the `…inv` form). Returns `Ok(None)` when
-/// `seq` is not a position-range insert, so the caller can fall back to literal
-/// handling. Returns an error when the shape is a range but no provider is
-/// available to read it, or the provider cannot serve the span.
+/// `start`/`end` are 1-based inclusive coordinates **in the enclosing
+/// description's own coordinate system**, translated onto the fetch axis by
+/// [`resolve_payload_span`] before the read; `invert` reverse-complements the
+/// slice (for the `…inv` form). Returns `Ok(None)` when `seq` is not a
+/// position-range insert, so the caller can fall back to literal handling.
+/// Returns an error when the shape is a range but no provider is available to
+/// read it, or the provider cannot serve the span.
 fn resolve_position_range_insert<P>(
     seq: &InsertedSequence,
     accession: &str,
     alphabet: AlphabetMode,
+    kind: InsCoordKind,
     provider: Option<&P>,
 ) -> Result<Option<String>, ConversionError>
 where
@@ -268,7 +365,8 @@ where
              a provider is required to read them"
         ),
     })?;
-    let bases = fetch_reference_bases(provider, accession, start, end)?;
+    let (fetch_start, fetch_end) = resolve_payload_span(accession, start, end, kind, provider)?;
+    let bases = fetch_reference_bases(provider, accession, fetch_start, fetch_end)?;
     let bases = if invert {
         reverse_complement(&bases)
     } else {
@@ -659,6 +757,7 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         None::<&dyn ReferenceProvider>,
     )
 }
@@ -701,6 +800,7 @@ fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         None::<&dyn ReferenceProvider>,
     )
 }
@@ -761,6 +861,7 @@ fn tx_to_spdi_simple(variant: &TxVariant) -> Result<SpdiVariant, ConversionError
         end_tx,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         None::<&dyn ReferenceProvider>,
     )
 }
@@ -781,6 +882,7 @@ fn rna_to_spdi_simple(variant: &RnaVariant) -> Result<SpdiVariant, ConversionErr
         end_pos,
         edit,
         AlphabetMode::Rna,
+        InsCoordKind::Rna,
         None::<&dyn ReferenceProvider>,
     )
 }
@@ -808,6 +910,7 @@ fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         Some(provider),
     )
 }
@@ -852,6 +955,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         Some(provider),
     )
 }
@@ -893,6 +997,7 @@ fn circular_to_spdi_simple(variant: &CircularVariant) -> Result<SpdiVariant, Con
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         None::<&dyn ReferenceProvider>,
     )
 }
@@ -937,6 +1042,7 @@ fn circular_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_pos,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         Some(provider),
     )
 }
@@ -966,6 +1072,7 @@ fn cds_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_tx,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Cds,
         Some(provider),
     )
 }
@@ -995,6 +1102,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_tx,
         edit,
         AlphabetMode::Dna,
+        InsCoordKind::Direct,
         Some(provider),
     )
 }
@@ -1024,6 +1132,7 @@ fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
         end_tx,
         edit,
         AlphabetMode::Rna,
+        InsCoordKind::Rna,
         Some(provider),
     )
 }
@@ -1621,6 +1730,7 @@ fn emit_spdi_for_edit<P>(
     end_one_based: u64,
     edit: &NaEdit,
     alphabet: AlphabetMode,
+    ins_coords: InsCoordKind,
     provider: Option<&P>,
 ) -> Result<SpdiVariant, ConversionError>
 where
@@ -1655,21 +1765,22 @@ where
             // SPDI cannot dereference), and shapes that *are* determinable but
             // are not expanded here yet (an exact `Repeat` such as `insA[10]`).
             // Both currently decline; only the first is a hard limit.
-            let ins_str =
-                match resolve_position_range_insert(inserted, &sequence, alphabet, provider)? {
-                    Some(resolved) => resolved,
-                    None => {
-                        let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
-                            ConversionError::MissingReferenceData {
-                                description: "insertion sequence is neither a literal sequence \
+            let ins_str = match resolve_position_range_insert(
+                inserted, &sequence, alphabet, ins_coords, provider,
+            )? {
+                Some(resolved) => resolved,
+                None => {
+                    let literal = inserted_sequence_to_string(inserted).ok_or_else(|| {
+                        ConversionError::MissingReferenceData {
+                            description: "insertion sequence is neither a literal sequence \
                                               nor a same-reference position range; this shape is \
                                               not yet encodable as SPDI"
-                                    .to_string(),
-                            }
-                        })?;
-                        apply_alphabet(&literal, alphabet)
-                    }
-                };
+                                .to_string(),
+                        }
+                    })?;
+                    apply_alphabet(&literal, alphabet)
+                }
+            };
             // SPDI is 0-based interbase: position N is the boundary
             // AFTER 1-based base N (equivalently between 1-based bases
             // N and N+1). For HGVS `g.{start}_{start+1}ins{seq}` the
@@ -1747,22 +1858,22 @@ where
             // `Repeat` such as `insA[10]`). Both decline as `UnsupportedEditType`
             // for now — matching the sibling arms — but only the first is a hard
             // limit.
-            let ins_str =
-                match resolve_position_range_insert(ins_seq, &sequence, alphabet, provider)? {
-                    Some(resolved) => resolved,
-                    None => {
-                        let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
-                            ConversionError::UnsupportedEditType {
-                                description:
-                                    "delins inserted sequence is neither a literal sequence \
+            let ins_str = match resolve_position_range_insert(
+                ins_seq, &sequence, alphabet, ins_coords, provider,
+            )? {
+                Some(resolved) => resolved,
+                None => {
+                    let literal = inserted_sequence_to_string(ins_seq).ok_or_else(|| {
+                        ConversionError::UnsupportedEditType {
+                            description: "delins inserted sequence is neither a literal sequence \
                                      nor a same-reference position range; this shape is not yet \
                                      encodable as SPDI"
-                                        .to_string(),
-                            }
-                        })?;
-                        apply_alphabet(&literal, alphabet)
-                    }
-                };
+                                .to_string(),
+                        }
+                    })?;
+                    apply_alphabet(&literal, alphabet)
+                }
+            };
             let del_str = match deleted {
                 Some(seq) => sequence_to_string(seq),
                 None => match provider {
@@ -4868,6 +4979,72 @@ mod tests {
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.position, 6);
         assert_eq!(spdi.insertion, "ATG");
+    }
+
+    // ----- position-range insert payloads are read on the DESCRIPTION'S axis --
+    //
+    // A payload span is spelled in the enclosing description's own coordinate
+    // system, so on `c.` (and on a coding `r.`) it needs the same
+    // `cds_start + N - 1` shift the *location* gets — and on `n.` it needs no
+    // shift at all. Reading it unshifted is a silent wrong-bases answer that no
+    // genomic test can see, because on `g.` the two frames coincide.
+    //
+    // `make_test_provider`'s `NM_TEST.1` has `cds_start = 6`, and tx 3..=5 reads
+    // `AAA` while tx 8..=10 (== `c.3_5`) reads `CCC`. Every assertion below is
+    // chosen so the shifted and unshifted answers differ.
+
+    #[test]
+    fn a_cds_axis_range_insert_reads_its_payload_on_the_cds_axis() {
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.1_2ins3_5").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        // c.1_2 -> tx 6_7 -> SPDI interbase 6 (boundary AFTER 1-based 6; #390).
+        assert_eq!(spdi.position, 6);
+        assert_eq!(
+            spdi.insertion, "CCC",
+            "c.3_5 is tx 8..=10; reading tx 3..=5 unshifted would give AAA"
+        );
+    }
+
+    #[test]
+    fn a_cds_axis_range_delins_reads_its_payload_on_the_cds_axis() {
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.1_3delins3_5").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        // c.1_3 -> tx 6_8 -> SPDI 5; the deleted bases are tx 6..=8 == TGC.
+        assert_eq!(spdi.position, 5);
+        assert_eq!(spdi.deletion, "TGC");
+        assert_eq!(
+            spdi.insertion, "CCC",
+            "the delins arm resolves its payload on the same axis as the ins arm"
+        );
+    }
+
+    #[test]
+    fn a_coding_rna_axis_range_insert_reads_its_payload_cds_relative() {
+        let provider = make_test_provider();
+        // On a coding transcript `r.N` denotes the same base as `c.N`, which
+        // `resolve_rna_pos` already honours for the location. The payload must
+        // agree, or one description is read in two frames.
+        let hgvs = parse_hgvs("NM_TEST.1:r.1_2ins3_5").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 6);
+        assert_eq!(spdi.insertion, "CCC");
+    }
+
+    #[test]
+    fn a_noncoding_axis_range_insert_reads_its_payload_unshifted() {
+        let provider = make_test_provider();
+        // The negative control: `n.` positions ARE transcript offsets, so the
+        // same payload spelling must read different bases from the `c.` case
+        // above. Without this the fix could be a blanket shift and still pass.
+        let hgvs = parse_hgvs("NM_TEST.1:n.1_2ins3_5").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 1);
+        assert_eq!(
+            spdi.insertion, "AAA",
+            "n.3_5 is tx 3..=5; shifting it by cds_start would give CCC"
+        );
     }
 
     #[test]
