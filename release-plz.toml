@@ -52,9 +52,9 @@ Reviewer checklist:
       rest, and CI's `Changelog grouping audit` fails until it has been run.
       Re-run it after any push that regenerates this section — it is idempotent.
 
-A commit under `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` that
-moved output without declaring it means the trailer is missing. Fix that before
-releasing, not after.
+A commit under `src/normalize/`, `src/hgvs/`, `src/spdi/`, `src/project/`,
+`src/reference/` or `src/error_handling/` that moved output without declaring it
+means the trailer is missing. Fix that before releasing, not after.
 
 ---
 

@@ -9,10 +9,11 @@ changelog section from a `Representation-Change:` trailer on the squash commit, 
 release PR body carries a reviewer checklist for it (#1433).
 
 That machinery works. Nothing was feeding it: across the v0.13.0 cycle, 87 commits
-landed and **zero** carried the trailer, while 46 touched the directories below. The
-section rendered empty, and an empty section looks identical whether it is empty because
-nothing moved or because nobody declared anything — so it went unnoticed for ~90 commits
-and the disclosure had to be reconstructed by hand before release (#1522).
+landed and **zero** carried the trailer, while 46 touched the four directories watched at
+the time (51 touch the six watched now). The section rendered empty, and an empty section
+looks identical whether it is empty because nothing moved or because nobody declared
+anything — so it went unnoticed for ~90 commits and the disclosure had to be reconstructed
+by hand before release (#1522).
 
 This closes that loop: a change under a watched directory must *say* whether it moves
 output. Saying "no" is a first-class answer — `Representation-Change: none` — because the
@@ -38,12 +39,44 @@ from pathlib import Path
 
 #: Directories whose output a change can move. A variant's canonical form is decided in
 #: `normalize`; `hgvs` owns how it is spelled back out; `spdi` and `project` re-express it
-#: on another axis, and a consumer keys on those renderings too.
+#: on another axis, and a consumer keys on those renderings too. `reference` decides which
+#: bases any of that resolves against, and `error_handling` decides the accept/reject
+#: boundary — an input that starts producing a string, or stops, is as visible to a
+#: consumer as one whose string changes.
+#:
+#: **The last two were added on measurement, not on reasoning** (#1853, #1522). The one
+#: cycle in which movement was measured without relying on anyone declaring it is v0.13.0:
+#: 87 commits landed carrying **zero** trailers (`git rev-list v0.12.0..v0.13.0` counts 88,
+#: the extra being release-plz's own release commit), and the **Representation changes** section
+#: was reconstructed by hand by normalizing 5,761,302 expressions through both releases and
+#: diffing row by row. Its 326,404 newly-normalizing rows attribute to exactly two PRs —
+#: #1490, which touches `src/reference/` and nothing else, and #1501, which touches
+#: `src/error_handling/` and nothing else. Neither was watched. Merged history since the
+#: gate landed agrees: the only real out-of-gate disclosures are #1594 and #1661
+#: (`src/error_handling/`, the second a previously-*accepted* string, so a genuine
+#: migration) and #1724 (`src/reference/`).
+#:
+#: **Two directories are deliberately absent, and both get re-proposed.** `src/conformance/`
+#: is measurement and adjudication code that by construction cannot move ferro's output, so
+#: gating it would demand a declaration about something the directory cannot do — both of
+#: its real disclosures (#1623, #1839) open `0 rows move in this PR`. `src/data/` was
+#: proposed alongside the two above and declined on **zero marginal catch in both measured
+#: populations**: its one real disclosure (#1737) also touches `src/reference/`, so the
+#: entry above already gates it; both its merged gate-era commits (#1786, #1770) declined;
+#: and it was touched by 0 of the commits in the v0.13.0 blind cycle. The single fact
+#: that would earn it a place is a real, non-declining disclosure touching `src/data/` and
+#: **not** `src/reference/` — one PR, no argument needed.
+#:
+#: Widening this tuple adds no required *context* — `Representation change declared` already
+#: runs on every PR — so nothing is stranded on "Expected — waiting for status to be
+#: reported"; only the verdict changes.
 WATCHED_PREFIXES: tuple[str, ...] = (
     "src/normalize/",
     "src/hgvs/",
     "src/spdi/",
     "src/project/",
+    "src/reference/",
+    "src/error_handling/",
 )
 
 #: The trailer git-cliff groups on. Matched at the start of a line, case-insensitively,

@@ -752,10 +752,19 @@ Because the fixture is no longer in git, per-PR `parse-error → preserved` stat
 
 ### Declaring a representation change: a REQUIRED check, not a convention
 
-A PR touching `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` must carry a
-`Representation-Change:` trailer **in its PR description**, or the `Representation change
-declared` check fails. That context is in `main`'s ruleset, so a missing trailer **blocks the
-merge**.
+A PR touching `src/normalize/`, `src/hgvs/`, `src/spdi/`, `src/project/`, `src/reference/`
+or `src/error_handling/` must carry a `Representation-Change:` trailer **in its PR
+description**, or the `Representation change declared` check fails. That context is in
+`main`'s ruleset, so a missing trailer **blocks the merge**.
+
+The last two were added by #1853 on measurement rather than on reasoning, and the reasons
+they are the *only* two added are on `WATCHED_PREFIXES` in
+`scripts/check_representation_change.py` — read that docstring before proposing a seventh.
+In short: the v0.13.0 cycle is the one place output movement was measured without relying
+on anyone declaring it, and its 326,404 newly-normalizing rows attribute to one PR touching
+only `src/reference/` and one touching only `src/error_handling/`. `src/conformance/` stays
+out because it cannot move ferro's output, and `src/data/` stays out because every measured
+disclosure that touches it also touches `src/reference/`.
 
 ```
 Representation-Change: 577 rows move, 360 merge / 205 split / 12 respell.

@@ -80,35 +80,159 @@ def test_a_watched_file_among_unwatched_ones_still_requires_a_declaration() -> N
     assert not ok
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "src/normalize/merge.rs",
-        "src/hgvs/variant.rs",
-        "src/spdi/mod.rs",
-        "src/project/projector.rs",
-    ],
+#: One representative path per watched directory. Kept as data because the two tests below
+#: read it from opposite sides — every entry must be gated, and the tuple must contain
+#: nothing this list does not name — which together pin the watched set exactly, through
+#: `check()` rather than by restating the constant.
+_A_FILE_IN_EVERY_WATCHED_DIRECTORY = (
+    "src/normalize/merge.rs",
+    "src/hgvs/variant.rs",
+    "src/spdi/mod.rs",
+    "src/project/projector.rs",
+    # Added by #1853's backtest. `src/reference/` decides which bases a description
+    # resolves against and `src/error_handling/` decides the accept/reject boundary; both
+    # have moved consumer-visible output while the gate stayed silent -- see
+    # `test_the_widened_prefixes_are_the_ones_the_backtest_measured`.
+    "src/reference/multi_fasta.rs",
+    "src/error_handling/mod.rs",
 )
+
+#: Directories that changed output-adjacent code and are deliberately NOT watched. Each
+#: carries its reason, because "not watched" is a decision that gets re-proposed.
+_A_FILE_IN_EVERY_DELIBERATELY_UNWATCHED_DIRECTORY = (
+    # Measurement and adjudication code. It cannot move ferro's output, so requiring a
+    # declaration would demand a statement about something the directory cannot do -- both
+    # of its real disclosures (#1623 merged, #1839 open) declare "0 rows move in this PR".
+    "src/conformance/spec_corpus.rs",
+    # Declined on evidence in #1853's backtest: zero marginal catch in both populations.
+    # Its one real disclosure (#1737) also touches `src/reference/`, so the widening above
+    # already gates it; both its merged gate-era commits (#1786, #1770) declined.
+    "src/data/cdot.rs",
+    # Zero real disclosures in either population.
+    "src/convert/mapper.rs",
+)
+
+
+@pytest.mark.parametrize("path", _A_FILE_IN_EVERY_WATCHED_DIRECTORY)
 def test_every_watched_prefix_triggers(path: str) -> None:
     assert watched_files([path]) == [path]
     ok, _ = check([path], "no trailer")
     assert not ok, f"{path} must require a declaration"
 
 
+@pytest.mark.parametrize("path", _A_FILE_IN_EVERY_DELIBERATELY_UNWATCHED_DIRECTORY)
+def test_a_deliberately_unwatched_directory_needs_no_declaration(path: str) -> None:
+    """The exclusions are decisions, so pin them the same way the inclusions are pinned.
+
+    Without this, widening the tuple by one more directory is a silent change: nothing
+    fails, and the next reader cannot tell an excluded directory from an overlooked one.
+    """
+    assert watched_files([path]) == []
+    ok, _ = check([path], "no trailer")
+    assert ok, f"{path} must not require a declaration"
+
+
+def test_the_widened_prefixes_are_the_ones_the_backtest_measured() -> None:
+    """`src/reference/` and `src/error_handling/` are gated; `src/data/` is not (#1853).
+
+    The three were proposed together and the backtest supports two of them. Both additions
+    are carried by the v0.13.0 cycle, the one place movement was measured without relying
+    on anyone declaring it: its 326,404 newly-normalizing rows attribute to #1490
+    (`src/reference/` and nothing else) and #1501 (`src/error_handling/` and nothing else),
+    and the cycle shipped with zero trailers. `src/data/` was touched by **0** commits in
+    that cycle and has zero marginal catch in either population measured since.
+
+    Asserted through `check()` on synthetic file lists, so it survives any rewrite of how
+    the tuple is spelled -- and paired with the coverage assertion below, which is what
+    makes it a pin rather than three examples: a seventh directory cannot be added in
+    silence.
+    """
+    for path in ("src/reference/multi_fasta.rs", "src/error_handling/mod.rs"):
+        ok, message = check([path], "Fixes a thing.\n\nCloses #1.")
+        assert not ok, f"{path} must require a declaration"
+        assert path in message, "the failure must name the file that demanded the trailer"
+        ok, _ = check([path], "Representation-Change: none")
+        assert ok, "declining must still pass on a newly watched directory"
+
+    ok, _ = check(["src/data/cdot.rs"], "no trailer")
+    assert ok, (
+        "src/data/ was proposed in #1853 and declined on measurement; adding it needs a "
+        "real, non-declining disclosure that touches src/data/ and NOT src/reference/, "
+        "which did not exist in either measured population"
+    )
+
+    # Coverage, not a count. A count is defeated by two compensating edits -- add a
+    # seventh prefix, and add a seventh representative under a directory that is already
+    # covered -- which leaves the lengths equal, every representative gated by
+    # `test_every_watched_prefix_triggers`, and the new directory with no representative
+    # at all. That is the same weakness `test_watched_prefixes_match_the_release_config`
+    # rejects in its own docstring, so do not reintroduce it here: the map from
+    # representatives to prefixes is a bijection only if no two representatives share a
+    # prefix, and nothing asserts that.
+    unrepresented = [
+        prefix
+        for prefix in WATCHED_PREFIXES
+        if not any(path.startswith(prefix) for path in _A_FILE_IN_EVERY_WATCHED_DIRECTORY)
+    ]
+    assert not unrepresented, (
+        f"{sorted(unrepresented)} is watched but has no representative path in "
+        "_A_FILE_IN_EVERY_WATCHED_DIRECTORY; every entry needs one so the gate is pinned "
+        "by behaviour rather than by restating the constant"
+    )
+
+
 def test_watched_prefixes_match_the_release_config() -> None:
     """`release-plz.toml`'s reviewer checklist names the directories this must watch.
 
-    Pinned as a set comparison rather than a count: two compensating edits could keep the
-    count while swapping a directory out, which is exactly the drift that would make this
-    check pass on the changes it exists to catch.
+    A real set comparison, in **both** directions. This test's docstring used to claim it
+    was one while the assertion only ran checker -> config, which left the dangerous
+    direction open: a prefix silently dropped from `WATCHED_PREFIXES` still satisfied
+    "every watched directory is named in the config", and a dropped prefix is exactly the
+    drift that makes this check pass on the changes it exists to catch. A count would not
+    close it either, since two compensating edits keep the count while swapping a
+    directory out.
+
+    The config side is read as every backticked ``src/<dir>/`` token in the file, so the
+    comparison keeps working when the prose is re-wrapped -- which it was here, the list
+    having grown past one line.
     """
     config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    for prefix in WATCHED_PREFIXES:
-        directory = prefix.rstrip("/")
-        assert f"`{directory}/`" in config, (
-            f"{directory} is watched by the check but not named in release-plz.toml's "
-            "checklist; the two must describe the same scope"
-        )
+    documented = {f"{directory}/" for directory in re.findall(r"`(src/[a-z_]+)/`", config)}
+    assert documented == set(WATCHED_PREFIXES), (
+        f"release-plz.toml names {sorted(documented)} but the check watches "
+        f"{sorted(WATCHED_PREFIXES)}; the two must describe the same scope. A directory in "
+        "the config and not the tuple is a gate that does not exist; one in the tuple and "
+        "not the config is a scope the release reviewer is never told to look for."
+    )
+
+
+@pytest.mark.parametrize("document", ["CONTRIBUTING.md", "CLAUDE.md", ".github/workflows/ci.yml"])
+def test_the_prose_restatements_name_every_watched_directory(document: str) -> None:
+    """The list is restated in prose in three more places; none of them was pinned.
+
+    `release-plz.toml` is pinned above, but the same six directories are also written out
+    in `CONTRIBUTING.md` (contributor guidance), `CLAUDE.md` (agent guidance) and the
+    `representation-change` job's comment in `ci.yml` -- which says of itself that it
+    "must be kept in step with" the constant, an obligation nothing enforced. One rule
+    written in several places and then drifting apart is this repository's named recurring
+    failure mode, and the sibling `test_contributing_documents_the_same_decline_vocabulary`
+    already pins the decline vocabulary for exactly that reason.
+
+    **Containment, not set equality**, and the asymmetry is deliberate. All three documents
+    legitimately name directories that are *not* watched -- `src/conformance/` and
+    `src/data/`, whose exclusion is itself a decision worth stating -- so equality would
+    fail on correct prose. The direction that matters is the other one: a directory added
+    to `WATCHED_PREFIXES` and not to the docs is a required check that fails a contributor
+    who was never told the scope had grown.
+    """
+    text = (Path(__file__).resolve().parents[2] / document).read_text(encoding="utf-8")
+    undocumented = [prefix for prefix in WATCHED_PREFIXES if f"`{prefix.rstrip('/')}/`" not in text]
+    assert not undocumented, (
+        f"{document} does not name {sorted(undocumented)}, which "
+        f"scripts/check_representation_change.py watches; the check watches "
+        f"{sorted(WATCHED_PREFIXES)}. A watched directory missing from the prose is a "
+        "required check nobody was told about."
+    )
 
 
 # ---------------------------------------------------------------------------

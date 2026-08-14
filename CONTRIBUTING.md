@@ -123,8 +123,8 @@ dash may introduce a reason:
 test(conformance): gate the harvested unguarded cases on every PR
 
 Representation-Change: none. Test-only plus two new `src/conformance/`
-  modules; nothing under `src/normalize/`, `src/hgvs/`, `src/spdi/` or
-  `src/project/` is touched, and no existing expectation was re-blessed.
+  modules; nothing under a watched directory is touched, and no existing
+  expectation was re-blessed.
 ```
 
 A comma is *not* a terminator, because it usually introduces a qualification
@@ -142,9 +142,20 @@ Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
 A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
 costs the reader nothing while leaving the judgement on the record. CI enforces
-the distinction: a change touching `src/normalize/`, `src/hgvs/`, `src/spdi/` or
-`src/project/` with no trailer at all fails the `Representation change declared`
-check, because an absent trailer is indistinguishable from an unconsidered one.
+the distinction: a change touching `src/normalize/`, `src/hgvs/`, `src/spdi/`,
+`src/project/`, `src/reference/` or `src/error_handling/` with no trailer at all
+fails the `Representation change declared` check, because an absent trailer is
+indistinguishable from an unconsidered one.
+
+The last two joined that list on measurement (#1853). `src/reference/` decides
+which bases a description resolves against and `src/error_handling/` decides the
+accept/reject boundary, and both have moved consumer-visible output while the
+gate stayed silent — between them they account for every newly-normalizing row
+in the v0.13.0 cycle, whose disclosure had to be reconstructed by hand. Two
+neighbours are deliberately **not** watched: `src/conformance/`, which is
+measurement and adjudication code that cannot move ferro's output, and
+`src/data/`, whose every measured disclosure also touches `src/reference/` and is
+therefore already covered.
 
 **Indent continuation lines**, as above. Git only folds a multi-line trailer
 value into the trailer when the continuations are whitespace-prefixed: measured
