@@ -343,6 +343,157 @@ fn neither_cost_model_bounds_the_other() {
     assert_eq!(paired.unchanged(), &[0, 1]);
 }
 
+/// **The four rows another decided record calls SPEC-CONFORMANT are all
+/// position-wise readings, and not one of them is minimal.**
+///
+/// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` justifies four
+/// moved rows on the ground that "the four are EQUAL-LENGTH blocks, where the
+/// column correspondence is unique and so the changed-column set is a fact
+/// rather than a choice", and then applies `DNA/delins.md:15`/`:16`/`:17` to the
+/// changed columns that ground yields. The record *this* module pins falsifies
+/// it: equal length does not make the correspondence unique, and on these four
+/// it does not even make position-wise minimal.
+///
+/// Two `decided` records resting on contradictory premises is the thing no guard
+/// was watching, so this is that guard. It asserts the arithmetic rather than the
+/// disposition — which of the two forms ferro should emit is an adjudication and
+/// is not settled here.
+///
+/// | row's block | position-wise | minimal | unchanged |
+/// |---|---:|---:|---|
+/// | `TTTTTTTAAT -> ATTTTTTTAA` | cost 3 | **cost 2**, 1 alignment | `{0..=8}` |
+/// | `CAG -> AGA` | cost 3 | **cost 2**, 1 alignment | `{1, 2}` |
+/// | `AATA -> TAAT` | cost 3 | **cost 2**, 1 alignment | `{0, 1, 2}` |
+/// | `GTAAAA -> TAAAAG` | cost 3 | **cost 2**, 1 alignment | `{1..=5}` |
+///
+/// All four are one shape: one base inserted at one end of the block and a
+/// **different** base deleted at the other, everything between matching. That is
+/// why every row is **model-independent** — with no substitution in the optimal
+/// alignment there is no substitution to price, so the open question
+/// [`the_two_cost_models_disagree_on_1420_v4`] records cannot arise here.
+///
+/// Not a *rotation*, which would re-insert the base it removed: only the
+/// `GTAAAA -> TAAAAG` row below is one. An earlier revision of this comment
+/// called all of them rotations, which is false for the four that matter and
+/// true only for the row that is not one of them.
+///
+/// The fourth block is not one of the four. The record files it among "the
+/// fifteen ... unequal-length blocks", and it is equal length 6/6 — pinned here
+/// so that miscount cannot be re-derived as a fact.
+#[test]
+fn the_weight_bound_records_four_rows_are_position_wise_readings() {
+    /// One block, and the two readings of it that the two records disagree
+    /// about. Named fields rather than a tuple because `unchanged` and
+    /// `position_wise` are the same type and transposing them would invert
+    /// exactly the claim this test exists to make.
+    struct Row {
+        reference: &'static [u8],
+        alternate: &'static [u8],
+        /// Matched in **every** minimal alignment — the ruling's notion.
+        unchanged: &'static [u32],
+        /// Matched by pairing column *i* against column *i*.
+        position_wise: &'static [u32],
+    }
+
+    let rows = [
+        // `cis_junction_crossing_shift::the_five_prime_junction_barrier_does_not_over_clamp`
+        // — `TEMPLATE:g.3_12`, from `TRACT`.
+        Row {
+            reference: b"TTTTTTTAAT",
+            alternate: b"ATTTTTTTAA",
+            unchanged: &[0, 1, 2, 3, 4, 5, 6, 7, 8],
+            position_wise: &[1, 2, 3, 4, 5, 6, 8],
+        },
+        // `issue_1284_transcript_axis_collision::a_noncoding_del_dup_collision_is_repaired`
+        // and `normalize_reparse_invariant::a_del_beside_a_dup_re_spells_instead_of_colliding`
+        // — one block reached from two unrelated inputs, and the record's own
+        // headline case above.
+        Row {
+            reference: b"CAG",
+            alternate: b"AGA",
+            unchanged: &[1, 2],
+            position_wise: &[],
+        },
+        // `cis_confluence_adjudication::two_adjacent_members_that_both_consume_reference_are_one_delins`
+        // — `NM_TEST.1:c.10_13`, from `CORE`. Note this row's position-wise
+        // changed columns are {0, 2, 3}: TWO groups separated by one matching
+        // base, not one run. So the position-wise reading does not yield the
+        // spanning `c.10_13delinsTAAT` either — it yields
+        // `c.[10A>T;12_13delinsAT]`. This row is therefore not the clean
+        // position-wise-against-minimal contrast the other three are.
+        Row {
+            reference: b"AATA",
+            alternate: b"TAAT",
+            unchanged: &[0, 1, 2],
+            position_wise: &[1],
+        },
+        // Filed by the record among the UNEQUAL-length fifteen, and equal 6/6.
+        Row {
+            reference: b"GTAAAA",
+            alternate: b"TAAAAG",
+            unchanged: &[1, 2, 3, 4, 5],
+            position_wise: &[2, 3, 4],
+        },
+    ];
+
+    for Row {
+        reference,
+        alternate,
+        unchanged,
+        position_wise,
+    } in rows
+    {
+        assert_eq!(
+            reference.len(),
+            alternate.len(),
+            "{} -> {}: the record's premise is about EQUAL-length blocks",
+            String::from_utf8_lossy(reference),
+            String::from_utf8_lossy(alternate),
+        );
+
+        for model in CostModel::ALL {
+            // Cost 2 with equal lengths and no substitution: one insertion and
+            // one deletion, so the answer cannot depend on the substitution
+            // price.
+            assert_block(reference, alternate, model, 2, 1, unchanged);
+        }
+
+        assert_eq!(
+            position_wise_matches(reference, alternate),
+            position_wise,
+            "{} -> {}: position-wise matches",
+            String::from_utf8_lossy(reference),
+            String::from_utf8_lossy(alternate),
+        );
+
+        // The whole point: the position-wise reading is NOT one of the minimal
+        // alignments, so the changed-column set the record derived from it is a
+        // choice and not a fact. Position-wise costs one substitution per
+        // mismatched column; minimal costs 2.
+        let position_wise_cost = (reference.len() - position_wise.len()) as u32;
+        assert!(
+            position_wise_cost > 2,
+            "{} -> {}: position-wise costs {position_wise_cost}, which must \
+             exceed the minimal cost of 2 for this row to witness anything",
+            String::from_utf8_lossy(reference),
+            String::from_utf8_lossy(alternate),
+        );
+
+        // And it disagrees about which bases survive, in the direction that
+        // matters: the minimal reading finds MORE unchanged bases, so the
+        // record's derivation describes more change than the sequence requires.
+        let minimal: std::collections::BTreeSet<u32> = unchanged.iter().copied().collect();
+        let positional: std::collections::BTreeSet<u32> = position_wise.iter().copied().collect();
+        assert!(
+            positional.is_subset(&minimal) && positional != minimal,
+            "{} -> {}: the position-wise matches must be a strict subset of the \
+             unchanged set",
+            String::from_utf8_lossy(reference),
+            String::from_utf8_lossy(alternate),
+        );
+    }
+}
+
 /// Exceeding the cap is an error, never a truncated answer.
 ///
 /// A silently truncated enumeration would make the intersection **too
@@ -388,6 +539,9 @@ fn every_pinned_case_fits_well_inside_the_default_cap() {
         (b"ATTG", b"CATT"),
         (b"ATGC", b"GCTG"),
         (b"AAAA", b"TTTT"),
+        (b"TTTTTTTAAT", b"ATTTTTTTAA"),
+        (b"AATA", b"TAAT"),
+        (b"GTAAAA", b"TAAAAG"),
     ]
     .into_iter()
     .flat_map(|(r, a)| CostModel::ALL.map(move |m| (r, a, m)))
