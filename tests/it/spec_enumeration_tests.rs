@@ -568,12 +568,35 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // entered `DIVERGENCE_BUDGET`'s `ProjectionSplitsSingleMember`, verified by a
     // row-id diff of the enumeration regenerated under both arms rather than by
     // the counts agreeing — see that constant for the list and the licensing.
-    (Status::ProjectionPinned, 1158),
+    //
+    // 1158 -> 1154 (#1870), with the matching -6 and +10 immediately below. All
+    // ten moved rows are drawn from the four `NM_004006.1:c.…` inputs across the
+    // five projection axes — a pool of twenty, of which the other ten were
+    // already reporting the error and so did not move — and `NM_004006.1` is a
+    // transcript version whose CDS the
+    // committed reference slice does not resolve. Under the decided
+    // `rulings[c-description-against-an-unresolvable-cds-is-refused]` a `c.`
+    // description against such a record is refused, so the axes that used to
+    // render one now report the same `has no CDS start` conversion error the
+    // other axes of the same rows were ALREADY reporting before this change —
+    // which is why the three deltas sum to zero and `DIVERGENCE_BUDGET` is
+    // untouched. Read all three as one move. The -4 is disjoint from #1835's
+    // -9 above — measured on the rebase by regenerating the enumeration, not
+    // composed from the two branches' deltas.
+    //
+    // Worth knowing, and recorded in the ruling record too: `refseq.md:145`
+    // publishes `NM_004006.1:c.5697del` as its own worked minus-strand
+    // example, so a spec example is in the moving set. That is a statement
+    // about the reference this corpus is built on, not about the description —
+    // and `project` refused those rows already.
+    (Status::ProjectionPinned, 1154),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
-    (Status::ProjectionUnavailablePinned, 485),
-    (Status::ProjectionErrorPinned, 210),
+    // #1870: 485 -> 479. See `ProjectionPinned` above — same ten-row move.
+    (Status::ProjectionUnavailablePinned, 479),
+    // #1870: 210 -> 220, the +10 receiving the two deltas above.
+    (Status::ProjectionErrorPinned, 220),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
     // `LRG_199:g.954966C>T`, `LRG_199:g.981731G>A` and `LRG_476:g.4950_39800=`,
     // one per mode — and **no row entered**, which is what says this is the LRG
