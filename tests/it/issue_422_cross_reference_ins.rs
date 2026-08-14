@@ -68,9 +68,26 @@ fn same_accession_bare_cross_reference_expands_to_literal() {
         !out.contains("[NC_"),
         "cross-reference bracket must be flattened to a literal; got {out}",
     );
-    assert!(
-        out.contains("delins"),
-        "expanded form should still have the `delins` keyword; got {out}",
+    // #1835: this used to assert `out.contains("delins")` as a proxy for "the
+    // payload was expanded to literal bases". The partition default flip re-derives
+    // the block from the resulting sequence and reaches
+    // `g.[10_11del;16_17dup]` — the payload IS fully expanded and the bracket IS
+    // gone, but no member happens to be spelled `delins`, so the proxy fails while
+    // the property it stood for holds.
+    //
+    // Replaced with the whole description rather than a weaker keyword test. The
+    // 6 nt span `g.10_15` (`CGTACG`) is replaced by `g.20_25` (`TACGTA`): dropping
+    // the leading `CG` leaves `TACG`, and the trailing `TA` is supplied by an
+    // insertion at junction 15|16 which 3'-shifts onto the reference's own `TA` at
+    // `g.16_17` — so `DNA/duplication.md:18` requires it be LABELLED `dup`, and it
+    // is. Equal-length in, equal-length out; `general.md:34` describes the two
+    // members individually and `delins.md:47` is coding-axis-scoped
+    // (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`), so nothing
+    // merges them.
+    assert_eq!(
+        out, "NC_000022.10:g.[10_11del;16_17dup]",
+        "the cross-reference must expand to literal bases and then normalize from \
+         the resulting sequence; got {out}",
     );
 }
 
@@ -271,13 +288,28 @@ fn rna_cross_reference_coding_expands_cds_relative() {
         "transcript-relative AAA must not appear in output; got {out}",
     );
     // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref), then
-    // (#1235) splits the result at the unchanged base at 13, since changes
-    // separated by unchanged nucleotides are described individually
-    // (`delins.md:17`). The span still ends at 14, which is what confirms
+    // splits the result at an unchanged interior base, since changes separated by
+    // unchanged nucleotides are described individually (`delins.md:17`,
+    // `general.md:34`). The span still ends at 14, which is what confirms
     // CDS-relative expansion succeeded — transcript-relative "AAA" would reach
     // 15.
+    //
+    // #1835: was `NC_000022.10:g.[10_12del;14C>T]`; the partition default flip
+    // moves it to `g.[10_11delinsA;13_14del]` — the same span, cut at a different
+    // unchanged base, because the partition is now the minimal alignment
+    // re-derived from the resulting sequence rather than the one
+    // `partition_block` reached. Licensed by `canonical-form-choice-when-both-legal`:
+    // both cuts are two members separated by an unchanged base, so `general.md:34`
+    // is satisfied either way and no clause selects between them; the derivation
+    // does.
+    //
+    // WHAT THIS ROW ACTUALLY PROVES IS UNCHANGED, and it is the reason to keep it
+    // pinned exactly: the assertion is evidence that `r.1_3` resolved
+    // CDS-relative. That rides on the SPAN ending at 14 rather than 15, which
+    // both spellings do, and on "AAA" being absent, which the assertion above
+    // checks separately. The cut point was never the evidence.
     assert_eq!(
-        out, "NC_000022.10:g.[10_12del;14C>T]",
+        out, "NC_000022.10:g.[10_11delinsA;13_14del]",
         "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
     );
 }
@@ -421,38 +453,58 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
     // literal `A` followed by the reverse complement `AACCCC`, and the
     // flattening leaves no bracket behind.
     //
-    // Stays ONE spanning delins. A 6 nt span replaced by a 7 nt payload leaves
-    // `g.12` matching, but that is a lone coincidental base inside a net
-    // insertion, and `delins.md:44-47` prefers the spanning `delins` when the
-    // payload merely "aligns" — the corpus agrees, failing the same way when this
-    // split is allowed. A #1235 revision had re-blessed this to two members on
-    // the strength of that one match; that was the coincidental-alignment trap.
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835) — AND THE KNOWN
+    // NON-CONFLUENCE BELOW IS CLOSED BY THE SAME MOVE
+    //
+    // This block used to pin the spanning `g.10_15delinsAAACCCC`, on the reading
+    // that the lone match at `g.12` was a coincidental alignment and that
+    // `delins.md:44-47` prefers the span when the payload merely "aligns". Two
+    // decided rulings have since scoped `:47` out of this row, in two independent
+    // ways — either alone would settle it:
+    //
+    // (1) THE AXIS. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    // scopes `:47` to the coding DNA axis. This is `NC_000022.10:g.`, so `:47`
+    // does not reach it and `general.md:34` governs unqualified: members
+    // separated by an unchanged nucleotide are described individually.
+    //
+    // (2) THE DIRECTION. `delins-merge-vs-individual-gap-two-or-more` is scoped to
+    // the NET-DELETION case and "does **not** reach net insertions, where the
+    // split form stays canonical". A 6 nt span replaced by a 7 nt payload is a net
+    // insertion, so even on a coding axis this row would not merge.
+    //
+    // So the "coincidental-alignment trap" the old comment warned about is a trap
+    // only where `:47` reaches, and it reaches neither this axis nor this
+    // direction. The #1235 revision that re-blessed this to two members reached
+    // the right answer; what it lacked was the scope argument, which the ledger
+    // now supplies.
     assert_eq!(
-        out, "NC_000022.10:g.10_15delinsAAACCCC",
-        "literal `A` then the reverse complement `AACCCC`; the match at 12 is coincidence",
+        out, "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
+        "literal `A` then the reverse complement `AACCCC`, described individually \
+         across the unchanged base at g.12: `delins.md:47` is coding-axis-scoped \
+         and does not reach a net insertion",
     );
 
-    // The collapsed form is a fixed point.
+    // THE NON-CONFLUENCE THIS TEST PINNED IS GONE. Both spellings now reach the
+    // two-member form, so the two assertions below assert convergence where they
+    // used to assert two stable strings for one variant.
+    //
+    // What the old comment said could not be done from here has been done
+    // elsewhere: it recorded that the two-member input tripped the
+    // `input_separator_positions` veto and was returned verbatim, that overriding
+    // that veto would merge `g.[306dup;308C>A]` into `g.307_308delinsCGA` and
+    // break #999, and that "the collapse cannot tell the two apart". The
+    // canonical partitioner does not need to tell them apart, because it does not
+    // start from either input's members — it re-derives the partition from the
+    // resulting sequence, so both spellings present the same pieces and the veto
+    // has nothing to arbitrate. #999 is unaffected and stays green; see the
+    // ruling `separation-is-a-property-of-the-spelling-not-of-the-variant`, which
+    // is the general form of this.
     assert_eq!(
         normalize("NC_000022.10:g.10_15delinsAAACCCC", inv_payload_provider()).expect("normalize"),
-        "NC_000022.10:g.10_15delinsAAACCCC",
-        "the spanning delins must be a normalization fixed point",
+        "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
+        "the spanning spelling now converges on the split rather than being a \
+         second fixed point",
     );
-
-    // KNOWN LIMITATION, pinned deliberately so it is visible rather than merely
-    // absent: the hand-written two-member spelling of this same variant does
-    // *not* converge on the spanning delins. Two stable strings, one variant.
-    //
-    // It cannot be closed from here. The two-member input trips the
-    // `input_separator_positions` veto (`general.md:34` — do not merge across a
-    // base the input left unchanged), which returns it verbatim. Letting a
-    // coincidence-driven collapse override that veto does close this case, but it
-    // also merges `g.[306dup;308C>A]` into `g.307_308delinsCGA`, breaking #999 —
-    // and the collapse cannot tell the two apart, because both are two-member
-    // inputs whose derived pieces collapse to one. The veto is what protects
-    // #999, so it stays and this case stays split.
-    //
-    // Change this assertion only alongside a fix that keeps #999 green.
     assert_eq!(
         normalize(
             "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
@@ -460,7 +512,7 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
         )
         .expect("normalize"),
         "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
-        "the two-member spelling is left alone by the separator veto (known non-confluence)",
+        "and the split spelling is the fixed point both now reach",
     );
 }
 

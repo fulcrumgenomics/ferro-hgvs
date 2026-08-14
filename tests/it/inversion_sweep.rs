@@ -174,7 +174,12 @@ const REGENERATE: &str = "cargo run --features dev --example extract_inversion_s
 /// **1,434 before the post-hoc inversion run scan and 1,490 after it** (#1575):
 /// 56 rows whose authored `inv` used to be shredded into an allele are now
 /// returned exactly as authored.
-const CENSUS_UNCHANGED: usize = 1_490;
+///
+/// **1,491 once `canonical-coalesced` became the default arm.** Exactly one
+/// further row — `NM_004006.2:c.759_766inv` — joins them, moving out of
+/// [`CENSUS_REPARTITIONED`]; see that constant for why the flip reaches it and
+/// `live` does not. It is the *only* row of the 2,075 this change moves.
+const CENSUS_UNCHANGED: usize = 1_491;
 /// Rows that stayed a lone `inv` at a different span — narrowed to the minimal
 /// block whose replacement is still the reverse complement, or 3'-shifted.
 ///
@@ -192,7 +197,24 @@ const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// authored `inv` whose block admits a smaller partition is re-derived into one;
 /// the run scan puts 62 of those back together, which is what #1575 asked for.
 ///
-/// **All 93 that remain are #1230's case**, which `general.md:56` ranks above
+/// **92 once `canonical-coalesced` became the default arm.** One row leaves:
+/// `NM_004006.2:c.759_766inv`, which under `live` renders as the four lone
+/// substitutions `c.[759G>T;761T>G;764C>A;766A>C]` and under the default arm is
+/// returned as the authored `inv`.
+///
+/// **The `#1230` claim below is NOT re-verified for the flip arm, and must not
+/// be read as if it were.** It was measured piece-by-piece on `live`, where the
+/// two arms derive their partitions differently — which is the whole mechanism
+/// of the flip — so "every piece is a one-base substitution" is a statement
+/// about `live`'s pieces, not about the 92 the default arm now leaves here.
+/// Re-deriving it needs piece-level instrumentation this corpus does not carry;
+/// `dump_partitions` reads a corpus path, not one description. What DOES hold
+/// unconditionally on both arms is the sequence oracle
+/// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] and the
+/// shape invariant [`no_authored_inversion_leaves_the_inversion_family`], both
+/// of which pass — so no row here has been retyped or moved off its bases.
+///
+/// **On `live`, all 93 were #1230's case**, which `general.md:56` ranks above
 /// inversion and which `rulings[inversion-vs-two-delins-76-83]` records as
 /// "untouched and still splits": every *piece* of the competing partition is a
 /// one-base substitution. Measured, not assumed — every changed column in all 93
@@ -209,7 +231,7 @@ const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// What still has to hold is that the members denote the same bases, which
 /// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] checks
 /// against the committed sequence.
-const CENSUS_REPARTITIONED: usize = 93;
+const CENSUS_REPARTITIONED: usize = 92;
 /// Rows whose authored `c.` span crosses an exon junction. Pinned because it is
 /// the geometry #1478 records as unreachable in the generated corpora — if it
 /// ever reads 0, this corpus has stopped covering the thing it was built for.

@@ -2314,7 +2314,11 @@ fn seqfirst_shadow_enabled() -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PartitionRule {
     /// [`partition_block`]: a single-gap alignment search plus its two narrow
-    /// escapes. The shipped rule, and the default.
+    /// escapes. The rule shipped up to and including v0.14.0, and the default
+    /// until the flip to [`Self::CanonicalCoalesced`] — see
+    /// [`DEFAULT_PARTITION_RULE`]. Still selectable, by name, as
+    /// `FERRO_PARTITION=live`, which is how the pre-flip output stays
+    /// reproducible.
     Live,
     /// [`partition_block_sequence_first`]: cut at the steps common to every
     /// minimal alignment (`mutalyzer-algebra`'s `local_supremal`).
@@ -2331,6 +2335,9 @@ enum PartitionRule {
     /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. On
     /// `g.`/`m.`/`o.`/`n.`/`r.` this arm is therefore identical to
     /// [`Self::Canonical`]. See [`payload_coalesce_applies`].
+    ///
+    /// **This is the default** — see [`DEFAULT_PARTITION_RULE`] for why, and
+    /// [`Self::Live`] for how to get the previous one back.
     CanonicalCoalesced,
 }
 
@@ -2341,6 +2348,35 @@ enum PartitionRule {
 /// text and the tests cannot drift apart — an arm added to [`PartitionRule`]
 /// without a name here is an arm the diagnostic would not offer.
 const PARTITION_RULE_NAMES: [&str; 4] = ["live", "shadow", "canonical", "canonical-coalesced"];
+
+/// The rule an unset (or empty) `FERRO_PARTITION` selects — the shipped default.
+///
+/// Named rather than spelled inline at the two places that need it
+/// ([`partition_rule_from_env`]'s unset arm and [`partition_rule_from_outcome`]'s
+/// fall-safe) so those two cannot drift apart. They must agree: the fall-safe is
+/// what a *release* build serves for a value naming no arm, and if it served
+/// something other than the default then a misspelled bake-off would silently
+/// select a third behaviour — which is the failure
+/// [`partition_rule_from_env`]'s refusal exists to remove, reached through the
+/// one door that function does not guard.
+///
+/// # Why this is not `Live`
+///
+/// It was, up to and including v0.14.0. The flip to
+/// [`PartitionRule::CanonicalCoalesced`] is an operator ruling, not a code
+/// preference, and it rests on rulings already in
+/// `hgvs_spec_normalization_overrides.json` rather than on this constant:
+/// `canonical-form-choice-when-both-legal` and
+/// `derivation-may-not-be-bounded-by-the-inputs-spelling` require the
+/// description to be derived from the **resulting sequence** rather than
+/// preserved from the input's spelling, and `partition_block` cannot do that —
+/// it cuts with a single-gap alignment search plus two narrow escapes, so four
+/// spellings of one variant can be four fixed points.
+///
+/// [`PartitionRule::Live`] is unchanged and still selectable by name, which is
+/// what makes the flip measurable after it ships: `FERRO_PARTITION=live`
+/// reproduces the pre-flip output exactly.
+const DEFAULT_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoalesced;
 
 impl PartitionRule {
     /// Whether this arm cuts blocks with [`partition_block_canonical`], and so
@@ -2474,7 +2510,8 @@ const _: () = assert!(DERIVED_BLOCK_PARTITION_RULE.cuts_with_canonical());
 /// be exercised once per process.
 fn partition_rule_from_env(value: Option<&str>) -> Result<PartitionRule, String> {
     match value {
-        None | Some("") | Some("live") => Ok(PartitionRule::Live),
+        None | Some("") => Ok(DEFAULT_PARTITION_RULE),
+        Some("live") => Ok(PartitionRule::Live),
         Some("shadow") => Ok(PartitionRule::Shadow),
         Some("canonical") => Ok(PartitionRule::Canonical),
         Some("canonical-coalesced") => Ok(PartitionRule::CanonicalCoalesced),
@@ -2550,11 +2587,19 @@ const PARTITION_SWITCH_MAY_ABORT: bool = cfg!(debug_assertions);
 /// [`partition_rule`] caches its read in a `OnceLock` and consults a real
 /// process environment, so one test binary can never exercise two outcomes.
 ///
-/// Falling safe to [`PartitionRule::Live`] is not the silent fallback
+/// Falling safe to [`DEFAULT_PARTITION_RULE`] is not the silent fallback
 /// [`partition_rule_from_env`] refuses — the refusal is not discarded, it is
 /// retained by [`partition_switch_startup_error`] for a caller with somewhere to
 /// return it. What would be silent is dropping it on the floor, and the two are
 /// only the same if nobody asks.
+///
+/// **It falls safe to the DEFAULT, not to [`PartitionRule::Live`]**, and the
+/// distinction only came into existence with the flip — the two were the same
+/// value until then. A release build that served `Live` here would answer a
+/// misspelled `FERRO_PARTITION` with a rule *no* unmodified process uses, so the
+/// mistake would change output rather than merely fail to change it. Falling
+/// back to the default makes a refused value behave exactly like an unset one,
+/// which is the only fallback that cannot be mistaken for a measurement.
 fn partition_rule_from_outcome(
     outcome: &Result<PartitionRule, String>,
     may_abort: bool,
@@ -2562,7 +2607,7 @@ fn partition_rule_from_outcome(
     match outcome {
         Ok(rule) => *rule,
         Err(message) if may_abort => panic!("{message}"),
-        Err(_) => PartitionRule::Live,
+        Err(_) => DEFAULT_PARTITION_RULE,
     }
 }
 
@@ -2640,7 +2685,7 @@ pub fn partition_switch_startup_error() -> Option<String> {
 /// `.ok()`-ed.
 ///
 /// A **release** build cannot reach that panic. It falls safe to
-/// [`PartitionRule::Live`] and keeps the refusal for
+/// [`DEFAULT_PARTITION_RULE`] and keeps the refusal for
 /// [`partition_switch_startup_error`] to deliver.
 fn partition_rule() -> PartitionRule {
     partition_rule_from_outcome(partition_rule_outcome(), PARTITION_SWITCH_MAY_ABORT)
@@ -2756,8 +2801,8 @@ fn partition_block_for_rule(
     PARTITION_BLOCKS_CUT.fetch_add(1, Ordering::Relaxed);
 
     let attempt = match rule {
-        // The shipped rule, and the only configuration that ships. It has no
-        // decline path, so it is not counted.
+        // The pre-flip rule, now reached only by `FERRO_PARTITION=live`. It has
+        // no decline path, so it is not counted.
         PartitionRule::Live => return partition_block(reference, result),
         PartitionRule::Shadow => partition_block_sequence_first(reference, result, min_separation),
         // `CanonicalCoalesced` is identical to `Canonical` here on purpose: the
@@ -15145,11 +15190,15 @@ mod tests {
             );
             assert_eq!(
                 (partition_rule(), DERIVED_BLOCK_PARTITION_RULE),
-                (PartitionRule::Live, PartitionRule::Canonical),
+                (PartitionRule::CanonicalCoalesced, PartitionRule::Canonical),
                 "the two surfaces' partition rules moved apart without being \
                  re-pinned together -- `normalize` cuts with the first and \
                  `from_sequences` with the second, and #1834 is the record of \
-                 what that costs"
+                 what that costs. LEFT MOVED Live -> CanonicalCoalesced with \
+                 #1835, which made canonical-coalesced the shipped default; the \
+                 right value is unchanged, so the two surfaces are now one step \
+                 closer and #1834's gap is correspondingly smaller. Re-measure \
+                 that gap rather than carrying its 32/79 and 36/79 figures over"
             );
         }
 
@@ -15189,21 +15238,44 @@ mod tests {
             );
         }
 
-        /// Only *absence* means `live` — an unset or empty variable.
+        /// Absence selects the **default**, and `live` is now a name like any
+        /// other.
         ///
         /// This is the property the default path depends on: leaving the knob
-        /// alone, which is every production and CI path, must reach the shipped
-        /// rule. Distinguished from a typo deliberately, because the two used to
-        /// share an answer; see the sibling test below.
+        /// alone, which is every production and CI path, must reach
+        /// [`DEFAULT_PARTITION_RULE`]. Distinguished from a typo deliberately,
+        /// because the two used to share an answer; see the sibling test below.
+        ///
+        /// **The three inputs used to share one expectation and no longer do**,
+        /// which is the whole content of the default flip at this seam. They are
+        /// asserted apart rather than merged into one loop over a single
+        /// expected value, so that a future change moving one of them cannot be
+        /// absorbed by re-pointing a shared constant: `live` naming the
+        /// pre-flip rule is what keeps the flip reproducible, and unset naming
+        /// the new one is what makes it the default. A test that could not tell
+        /// those two apart would pass under a build that had quietly re-merged
+        /// them.
         #[test]
-        fn an_absent_value_selects_the_live_rule() {
-            for value in [None, Some(""), Some("live")] {
+        fn an_absent_value_selects_the_default_rule() {
+            for value in [None, Some("")] {
                 assert_eq!(
                     partition_rule_from_env(value),
-                    Ok(PartitionRule::Live),
-                    "{value:?}"
+                    Ok(DEFAULT_PARTITION_RULE),
+                    "{value:?} must select the default"
                 );
             }
+            assert_eq!(
+                partition_rule_from_env(Some("live")),
+                Ok(PartitionRule::Live),
+                "`live` still names the pre-flip rule explicitly"
+            );
+            assert_ne!(
+                DEFAULT_PARTITION_RULE,
+                PartitionRule::Live,
+                "the default and `live` are distinct arms since the flip — if they are the same \
+                 again, the two assertions above stop distinguishing anything and this test is \
+                 vacuous"
+            );
         }
 
         /// **Every** arm name this build has still resolves, and to its own rule.
@@ -15937,8 +16009,11 @@ mod tests {
             assert!(refused.is_err(), "`preserve` is not an arm on this build");
             assert_eq!(
                 partition_rule_from_outcome(&refused, false),
-                PartitionRule::Live,
-                "a release build must fall safe to the shipped rule, not abort"
+                DEFAULT_PARTITION_RULE,
+                "a release build must fall safe to the DEFAULT rule, not abort — and not to \
+                 `live` either, which since the flip is an arm no unset process selects, so \
+                 serving it here would make a misspelling change the output rather than merely \
+                 fail to change it"
             );
             // …and a value that *is* an arm is still served, in either build.
             let accepted = partition_rule_from_env(Some("canonical"));
@@ -15969,7 +16044,7 @@ mod tests {
         #[test]
         fn the_refusal_survives_the_read_so_an_entry_point_can_report_it() {
             // The process this suite runs in has the variable unset — pinned by
-            // `the_suite_runs_on_the_live_rule` — so the accessor is `None`
+            // `the_suite_runs_on_the_default_rule` — so the accessor is `None`
             // here, and that is the production reading it must give.
             assert_eq!(
                 partition_switch_startup_error(),
@@ -15984,8 +16059,8 @@ mod tests {
             assert!(message.contains("live"));
         }
 
-        /// This suite's expectations are the live rule's, and the cached read
-        /// agrees with the pure mapping above.
+        /// This suite's expectations are the **default** rule's, and the cached
+        /// read agrees with the pure mapping above.
         ///
         /// Every other test in this file asserts a *shipped* representation, and
         /// switching the rule moves dozens of them at once (measured: 36 under
@@ -15993,13 +16068,23 @@ mod tests {
         /// It therefore **fails by design** during a deliberate
         /// `FERRO_PARTITION=…` bake-off run — that failure is the message
         /// "you are not measuring the shipped rule", not a defect.
+        ///
+        /// **This is also the flip's own positive control**, and the sharpest one
+        /// available: it reads the arm identity out of the process rather than
+        /// inferring it from an output string, so it cannot be satisfied by a
+        /// second arm that happens to agree on the probe. Before the flip it
+        /// read `Live`; it failed with `left: CanonicalCoalesced, right: Live`,
+        /// which is what established that the default had moved and *where to*.
+        /// Asserting [`DEFAULT_PARTITION_RULE`] rather than the arm by name is
+        /// deliberate — the pin then tracks the constant that defines the
+        /// default instead of becoming a second, drifting copy of it.
         #[test]
-        fn the_suite_runs_on_the_live_rule() {
+        fn the_suite_runs_on_the_default_rule() {
             assert!(
                 std::env::var_os("FERRO_PARTITION").is_none(),
-                "this suite's expectations are the live rule's; FERRO_PARTITION must be unset"
+                "this suite's expectations are the default rule's; FERRO_PARTITION must be unset"
             );
-            assert_eq!(partition_rule(), PartitionRule::Live);
+            assert_eq!(partition_rule(), DEFAULT_PARTITION_RULE);
         }
 
         /// The canonical arm produces pieces that denote the block, so the arm is

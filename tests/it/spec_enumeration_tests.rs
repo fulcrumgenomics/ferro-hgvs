@@ -421,7 +421,46 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     //   shipping path: the pass is gated on `PartitionRule::CanonicalCoalesced`
     //   while the shipped rule is `Live`. That is a separate change which #1649
     //   neither makes nor blocks, and it is deliberately not made here.
-    (Status::ProjectionSplitsSingleMember, 12),
+    // # 12 -> 21 (#1835, the partition default flip)
+    //
+    // NINE rows enter, and `PASSING_CENSUS`'s `ProjectionPinned` falls by exactly
+    // nine (1167 -> 1158), so the pair still moves in equal and opposite steps
+    // and no row left the enumeration. **That was measured rather than inferred**:
+    // the enumeration was regenerated under `FERRO_PARTITION=live` and diffed
+    // against the default arm's by row id — same 2 172 rows on both sides, no id
+    // present in one and absent from the other, and exactly nine status changes,
+    // every one of them `projection-pinned -> projection-splits-single-member`.
+    // That is the check the paragraph above asks for, applied.
+    //
+    // The nine are **four inputs across their axes**, not nine independent rows:
+    //
+    // ```text
+    // LRG_199t1:c.992_1004delinsAC                    project-{c,g,n,r}   (4)
+    // NM_004006.2:r.2623_2803delins2804_2949          project-{c,n,r}     (3)
+    // LRG_199t1:c.850_901delinsTTCCTCGATGCCTG         project-g           (1)
+    // LRG_199t1:c.9002_9009delinsTTT                  project-g           (1)
+    // ```
+    //
+    // **The direction is the licensed one.** The warning above forbids going
+    // BELOW 9, on the ground that a row leaving this status has been merged where
+    // `DNA/delins.md:17` wanted it split. This is the other way: nine rows that
+    // were merged are now described individually.
+    //
+    // The two `project-g` rows are the axis scope arriving.
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) puts
+    // `DNA/delins.md:47` off the genomic axis, so `general.md:34` governs there
+    // unopposed. Note `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` is
+    // `delins.md:44-47`'s OWN worked example: its `g.` projection splits here
+    // while its `c.` form merges, which is the axis scope doing exactly what it
+    // says and is worth reading as the clearest single demonstration of it.
+    //
+    // The `LRG_199t1:c.992_1004delinsAC` family reaches
+    // `c.[992_993del;995_997del;999_1004del]` — three PURE deletions, so
+    // `delins-recommendation-reach-when-the-input-arrives-split` (decided) keeps
+    // `:47` away from it on every axis: nothing was inserted, so `:46`'s
+    // re-alignment mechanism cannot have occurred. That record cites this very
+    // derivation by name.
+    (Status::ProjectionSplitsSingleMember, 21),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -525,7 +564,11 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // `NC_000023.11(NM_004006.2):c.1704+1del` / `:n.1948+1del` (and the `dup`
     // pair). Those are the same accession repair, on the axes that were already
     // rendering.
-    (Status::ProjectionPinned, 1167),
+    // #1835: 1167 -> 1158. The nine rows that left are exactly the nine that
+    // entered `DIVERGENCE_BUDGET`'s `ProjectionSplitsSingleMember`, verified by a
+    // row-id diff of the enumeration regenerated under both arms rather than by
+    // the counts agreeing — see that constant for the list and the licensing.
+    (Status::ProjectionPinned, 1158),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.

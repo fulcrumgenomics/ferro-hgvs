@@ -46,12 +46,45 @@ fn separated_deletions_do_not_merge_into_a_different_deletion() {
 fn separated_deletions_with_a_downstream_substitution_stay_well_formed() {
     // The three-member variant of the same input. It used to expose the
     // corruption *visibly*, as the overlapping `g.[12_14del;13T>A]`; with the
-    // shift clamped, the deletion lands where it belongs and the substitution
-    // is untouched.
+    // shift clamped, the deletion lands where it belongs.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
+    //
+    // Was `TEMPLATE:g.[7_9del;13T>A]`; now `TEMPLATE:g.[7del;10del;13del]`.
+    //
+    // **THE SUBSTITUTION IS NOT DROPPED, WHICH IS THE FIRST THING TO CHECK AND
+    // THE THING THIS FILE EXISTS FOR.** All three descriptions denote one
+    // sequence, verified by applying each to `TEMPLATE` through SPDI independently
+    // of the normalizer: input, the old pin and the new answer all give the
+    // 17-mer `TAATATTAAAATATATT`. `assert_normalizes_preserving` re-checks that
+    // equality on every run, so #1254's silent-corruption class stays covered.
+    //
+    // WHY THE `T>A` DISAPPEARS. It is absorbed, not lost. The old reading spends
+    // four operations — a three-base deletion plus a substitution — while
+    // choosing the deletion positions differently makes the substituted column
+    // fall out of the alignment entirely, for three operations and no
+    // substitution. `partition_block_canonical` searches for the minimal
+    // alignment and finds the cheaper one; `partition_block` did not, because it
+    // took the input's own separator positions as given.
+    // `derivation-may-not-be-bounded-by-the-inputs-spelling` (decided) is the
+    // record that removes that bound, and `canonical-form-choice-when-both-legal`
+    // is what says the derived form governs.
+    //
+    // WHY IT STAYS THREE MEMBERS. The members are separated by unchanged bases, so
+    // `general.md:34` describes them individually; `DNA/delins.md:47` would
+    // recommend a span instead, but this is a `g.` row and
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes
+    // `:47` to the coding DNA axis.
+    //
+    // Note the member count goes UP (2 -> 3) while the edit distance goes DOWN
+    // (4 -> 3). Those are different quantities and only the second is what
+    // "minimal alignment" means; `background/basics.md:38` does not list
+    // minimality among the spec's design values at all, so neither figure is a
+    // conformance argument on its own.
     assert_normalizes_preserving(
         TEMPLATE,
         "TEMPLATE:g.[3_4del;9del;13T>A]",
-        "TEMPLATE:g.[7_9del;13T>A]",
+        "TEMPLATE:g.[7del;10del;13del]",
     );
 }
 

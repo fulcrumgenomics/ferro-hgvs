@@ -322,12 +322,50 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// has already been argued both ways. The adjudication is
 /// [`the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`]
 /// below, which is the row to read before re-blessing this one.
+///
+/// # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), AND IT NO LONGER BOUNDS
+/// THE BARRIER
+///
+/// The paragraph directly above said to read the adjudication row before
+/// re-blessing this one. That row's gap is now **closed**: under the
+/// `canonical-coalesced` default the three-member spelling is re-derived rather
+/// than handed back, so this input reaches `TEMPLATE:g.[3_4insACT;15del]` — one
+/// insertion and the distant deletion — and there is no `dup` in the output at
+/// all.
+///
+/// **So this row has taken exactly the fate its own sibling took**, and the
+/// warning is worth repeating rather than re-learning. The doc on
+/// [`a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence`]
+/// records that when *that* row's pair merged it stopped bounding anything —
+/// "the output contains no duplication at all, so the property in its old name is
+/// not exercised here" — and moved the coverage here, to the row with a third
+/// member blocking the merge. The third member no longer blocks it, so the same
+/// thing has now happened to this row.
+///
+/// **THE OVER-CLAMP GUARD IS THEREFORE UNCOVERED BY THIS FILE.** The "fails both
+/// ways" paragraph above is stale as a claim about the *current* default:
+/// deleting `.filter(|_| a.junction.is_none())` from the 5' branch of
+/// `clamp_sibling_crossing_shifts` cannot change an output that contains no
+/// `dup`. That is a real coverage loss, not a re-pin, and it is recorded here
+/// rather than papered over — the guard is still reachable under
+/// `FERRO_PARTITION=live`, which is why the arm remains selectable by name, but
+/// no test in this file exercises it on the default arm. Re-establishing it needs
+/// a shape whose members survive the derivation; this core no longer supplies
+/// one.
+///
+/// Licensed by the same two records as its sibling:
+/// `contiguous-insertion-split-by-a-blocked-derivation` (the locus carries one
+/// variant, so `general.md:34` never reached it) and
+/// `duplication-must-ranks-the-label-not-the-partition` (decided 2026-08-13,
+/// which names this test by its full path and classes the move as a gap closing).
 #[test]
 fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
     assert_normalizes_preserving_in(
         DUP_RUN,
         "TEMPLATE:g.[4_5insC;5_6dup;15del]",
-        "TEMPLATE:g.[4_5insC;4_5dup;15del]",
+        // #1835: was `TEMPLATE:g.[4_5insC;4_5dup;15del]` — see above, and note
+        // the name of this test now describes what it USED to assert.
+        "TEMPLATE:g.[3_4insACT;15del]",
         ShuffleDirection::FivePrime,
     );
 }
@@ -394,21 +432,54 @@ fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_pri
 /// spelling) selects, and which ferro already emits for the equal-denoting
 /// one-member spelling.
 ///
-/// # Recorded as a gap, not asserted
+/// # THE GAP IS CLOSED (#1835) — this row now asserts the convergence it used
+/// to record as absent
 ///
-/// Ferro does **not** do this today, so this row pins both fixed points and the
-/// fact that they are one variant. It is deliberately not written as
-/// `assert_eq!(three_member_output, one_member_output)`: that would be a red
-/// test, and closing it is a normalizer change with a representation-change
-/// declaration attached, not a test edit. What this row makes impossible is
-/// quietly re-blessing either string as *the* canonical one — see the ruling
-/// record `contiguous-insertion-split-by-a-blocked-derivation`.
+/// The section above is kept verbatim because it is the *argument*, and the
+/// argument is unchanged; what changed is that ferro now does what it concludes.
+/// Until the partition default flip this row read "Ferro does **not** do this
+/// today", pinned both fixed points, and said in terms that closing it "is a
+/// normalizer change with a representation-change declaration attached, not a
+/// test edit". This change is that normalizer change, and it carries that
+/// declaration.
+///
+/// Under the `canonical-coalesced` default the three-member spelling is derived
+/// rather than handed back, so it lands on the one-member form in each
+/// direction and the two stable strings become one:
+///
+/// ```text
+/// 5'  g.[4_5insC;5_6dup;15del] -> g.[3_4insACT;15del]   (was g.[4_5insC;4_5dup;15del])
+/// 3'  g.[4_5insC;5_6dup;15del] -> g.[4_5insCTA;15del]   (was g.[4_5insC;9_10dup;15del])
+/// ```
+///
+/// **The `assert_ne!` that guarded the divergence is now an `assert_eq!`**, which
+/// is the shape the old comment asked for by name — "It is deliberately not
+/// written as `assert_eq!(three_member_output, one_member_output)`: that would be
+/// a red test". It is no longer red.
+///
+/// `duplication-must-ranks-the-label-not-the-partition` (decided, operator
+/// ruling 2026-08-13) names this test by its full path and classes the move as
+/// "a gap closing, not a regression", reading `DNA/duplication.md:18` the same
+/// way the section above does: the variant is the 3 nt insertion, and neither
+/// `ACT` nor `CTA` is a copy of the reference bases it abuts, so the MUST never
+/// fires. `contiguous-insertion-split-by-a-blocked-derivation` supplies the
+/// other half — `general.md:34` is stated over *two variants* and this locus
+/// carries one, so nothing required the split in the first place.
+///
+/// **What is lost, stated rather than left to be discovered.** The row no longer
+/// witnesses a #1235-shaped double fixed point inside this module's fixture,
+/// because there is no longer one here. The two cross-direction rows of the
+/// table are still asserted and still meaningful; the two `THREE_MEMBER` rows now
+/// assert convergence instead of stability-in-divergence. Idempotency of every
+/// pinned output is still asserted, so a non-idempotent regression on the merged
+/// form still fails this row.
 ///
 /// A sweep document dated 2026-08-08 reached the opposite verdict, deriving
 /// `g.[4_5insC;4_5dup;15del]` as correct from the observation that the two
 /// members are separation 1 rather than separation 0. The arithmetic is right
 /// and the conclusion does not follow: it evaluates `general.md:34` on the
 /// spelling, which is the very thing the sibling record says cannot be done.
+/// That verdict is now refuted by behaviour as well as by argument.
 #[test]
 fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
     const THREE_MEMBER: &str = "TEMPLATE:g.[4_5insC;5_6dup;15del]";
@@ -448,7 +519,8 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
     for (input, expected, direction) in [
         (
             THREE_MEMBER,
-            "TEMPLATE:g.[4_5insC;4_5dup;15del]",
+            // #1835: was `TEMPLATE:g.[4_5insC;4_5dup;15del]` — the gap closing.
+            ONE_MEMBER_FIVE_PRIME,
             ShuffleDirection::FivePrime,
         ),
         (
@@ -463,7 +535,8 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
         ),
         (
             THREE_MEMBER,
-            "TEMPLATE:g.[4_5insC;9_10dup;15del]",
+            // #1835: was `TEMPLATE:g.[4_5insC;9_10dup;15del]` — the gap closing.
+            ONE_MEMBER_THREE_PRIME,
             ShuffleDirection::ThreePrime,
         ),
         (
@@ -491,17 +564,26 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
         );
     }
 
-    // And they are two, not one. Stated as its own assertion so the divergence
-    // is what fails if a fix lands, rather than four string pins failing for
-    // four reasons.
+    // And they are ONE, not two (#1835). This was an `assert_ne!` recording the
+    // gap; it is the `assert_eq!` the old comment named as the shape a closure
+    // would take. Stated as its own assertion, as before, so a re-opening of the
+    // gap fails on the convergence rather than on four string pins at once.
+    //
+    // `ONE_MEMBER_FIVE_PRIME` is the comparand in BOTH directions deliberately,
+    // unchanged from when this was an `assert_ne!`: under 3' that spelling rolls
+    // onto `ONE_MEMBER_THREE_PRIME`, which the table above asserts, so the
+    // comparison is against each direction's own one-member answer either way.
     for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
         let from_three = normalize_in(DUP_RUN, THREE_MEMBER, direction);
         let from_one = normalize_in(DUP_RUN, ONE_MEMBER_FIVE_PRIME, direction);
-        assert_ne!(
+        assert_eq!(
             from_three, from_one,
-            "{direction:?}: the two spellings converged — this gap is closed, so \
-             re-bless the four pins above and say which form moved \
-             (`contiguous-insertion-split-by-a-blocked-derivation`)",
+            "{direction:?}: the three-member spelling and its one-member form have \
+             diverged again. #1835 closed this gap by deriving the partition from \
+             the resulting sequence; a change that re-opens it is a representation \
+             change and must say which clause it is now reading \
+             (`contiguous-insertion-split-by-a-blocked-derivation`, \
+             `duplication-must-ranks-the-label-not-the-partition`)",
         );
     }
 

@@ -152,10 +152,41 @@ fn issue_1231_dup_del_reduces_to_substitutions() {
 /// reported two of them. The tie-break between `[35_37del;39T>A]` and
 /// `[35C>T;37_39del]` (equally minimal, equally stable) is an implementer's
 /// choice: the partition is taken 5'-most, then each member is 3'-shifted.
+///
+/// # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835) — THE TIE-BREAK MOVED, THE
+/// DEFECT DID NOT
+///
+/// The canonical representative is now the *other* member of the tie the
+/// paragraph above already names: `TEMPLATE:g.[35C>T;37_39del]` rather than
+/// `[35_37del;39T>A]`. Both were listed as encodings here before this change and
+/// both still are, so nothing entered or left the equivalence class.
+///
+/// **What #1232 is about is untouched.** The issue is that a spanning `delins`
+/// was retained across an unchanged interior base, and that several encodings of
+/// one variant were each separately stable — non-confluence. All four encodings
+/// still converge on one answer, that answer is still a two-member split at the
+/// unchanged base, and it is still a fixed point. The spanning
+/// `g.35_39delinsTA` is still not the answer.
+///
+/// **Licensed by `canonical-form-choice-when-both-legal`** (decided, operator
+/// ruling 2026-08-07), which is the record for exactly this situation: where two
+/// legal descriptions of one variant compete and no clause selects between them,
+/// ferro derives from the resulting sequence and emits what falls out — "not the
+/// input's spelling, not the previously-shipped string". The comment above
+/// already conceded the choice was an implementer's; the ruling says the
+/// implementer's choice is whatever the derivation yields, and the derivation
+/// changed. No spec clause is deviated from in either direction, because
+/// `general.md:34` is satisfied by both spellings — each is two members separated
+/// by an unchanged base.
+///
+/// This is a representation change for a consumer that stored the old string, and
+/// it is disclosed as one; it is not a correctness movement.
 #[test]
 fn issue_1232_spanning_delins_splits_at_unchanged_base() {
     converges_to(
-        "TEMPLATE:g.[35_37del;39T>A]",
+        // #1835: was `TEMPLATE:g.[35_37del;39T>A]` — the other member of the
+        // tie-break named above. Both remain in the encoding list below.
+        "TEMPLATE:g.[35C>T;37_39del]",
         &[
             "TEMPLATE:g.35_39delinsTA",
             "TEMPLATE:g.[35_37del;39T>A]",
@@ -193,8 +224,16 @@ fn soft_masked_reference_yields_the_same_canonical_form() {
     );
     // Pin the shared answer too, so this cannot pass by both sides regressing
     // to the same spanning delins.
+    //
+    // #1835: was `TEMPLATE:g.[35_37del;39T>A]`. The partition default flip moved
+    // #1232's canonical representative to the other member of the tie-break its
+    // own doc comment names; see `issue_1232_spanning_delins_splits_at_unchanged_base`.
+    // The property THIS row tests is unaffected — it is that masked and unmasked
+    // references agree, and the pinned string exists only so the row cannot pass
+    // by both sides collapsing to the spanning `delins`. That guard is unchanged:
+    // the pinned value is still a two-member split at the unchanged base.
     assert_eq!(
-        upper, "TEMPLATE:g.[35_37del;39T>A]",
+        upper, "TEMPLATE:g.[35C>T;37_39del]",
         "the #1232 split is the expected canonical form"
     );
 }

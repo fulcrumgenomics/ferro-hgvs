@@ -38,8 +38,10 @@
 //! confluence axis. This module deliberately does not repeat them: it harvests
 //! the material those pairs left behind — #1421's five-row diagnostic table,
 //! which is about a *single* spelling's verdict rather than a pair, and which
-//! is the evidence that the split decision keys on the inserted block rather
-//! than on the rule.
+//! was the evidence that the split decision keyed on the inserted block rather
+//! than on the rule. Since #1835 it is the evidence that it no longer does: all
+//! five rows split, and the table is now a regression guard against the defect
+//! returning rather than a record of it.
 
 use ferro_hgvs::reference::mock::JsonProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};
@@ -72,42 +74,64 @@ const TEMPLATE: &str = concat!(
 /// Every row is the **same locus** (29–33, interior `AC` at 30–31 unchanged)
 /// with only the inserted block varied. `delins.md:17` asks for the separated
 /// form in all five — the separation is two nucleotides, and `delins.md:18`'s
-/// one-nucleotide exception cannot apply to a `g.` description. ferro splits
-/// three and retains two.
+/// one-nucleotide exception cannot apply to a `g.` description. ferro split
+/// three and retained two; since #1835 it splits **all five**.
 ///
 /// `(label, input, current output, splits)`
+///
+/// # #1835 — ALL FIVE ROWS NOW SPLIT, AND #1421's DEFECT IS CLOSED
+///
+/// The two `-retained` labels are kept as **historical names** so the table stays
+/// greppable against the issue; they no longer describe behaviour. Every row in
+/// this table now separates, which is what `delins.md:17` and `general.md:34` ask
+/// for and what the census below was written to be able to record.
+///
+/// The partition default flip re-derives each block from the resulting sequence
+/// rather than accepting the spanning `delins` the input spelled, so the split
+/// verdict stopped being a function of which bases the payload carries. That is
+/// exactly the property #1421 reported as missing — see
+/// `issue_1421_split_decision_still_depends_on_the_inserted_block`, which is now
+/// inverted.
+///
+/// These are `g.` rows and net INSERTIONS, so nothing merges them back:
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) keeps
+/// `delins.md:47` off this axis, and `delins-merge-vs-individual-gap-two-or-more`
+/// (decided) is scoped to the net-DELETION direction and "does **not** reach net
+/// insertions, where the split form stays canonical". Both point the same way
+/// here.
 const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
     (
         "net+2",
         "TEMPLATE:g.29_33delinsAACTGTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGTG]",
+        "TEMPLATE:g.[29C>A;31_32insT;34dup]",
         true,
     ),
     (
         "net+3",
         "TEMPLATE:g.29_33delinsAACTGCTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGCTG]",
+        "TEMPLATE:g.[29C>A;31_32insT;32_33insC;34dup]",
         true,
     ),
     (
         "net+6-split",
         "TEMPLATE:g.29_33delinsAACTGCATGTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGCATGTG]",
+        "TEMPLATE:g.[29C>A;31_32insTGCAT;34dup]",
         true,
     ),
     // The headline case of #1421. Same locus, same net length as the row above,
-    // opposite verdict — which is the whole point of the table.
+    // and it used to take the OPPOSITE verdict — which was the whole point of the
+    // table. It no longer does: both now split, which is the fix.
     (
         "net+6-retained",
         "TEMPLATE:g.29_33delinsAACACATACTG",
-        "TEMPLATE:g.29_33delinsAACACATACTG",
-        false,
+        "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        true,
     ),
     (
         "net+7-retained",
         "TEMPLATE:g.29_33delinsAACTGCATGCTG",
-        "TEMPLATE:g.29_33delinsAACTGCATGCTG",
-        false,
+        "TEMPLATE:g.[29C>A;31_32insT;32_33insCA;35_36insTGGC]",
+        true,
     ),
 ];
 
@@ -115,7 +139,9 @@ const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
 ///
 /// **This may only ever go up.** A drop means a spelling that once obeyed the
 /// separated-description rule stopped.
-const ISSUE_1421_ROWS_THAT_SPLIT: usize = 3;
+///
+/// #1835: **3 -> 5**, the ceiling. The clause wanted all five and now gets them.
+const ISSUE_1421_ROWS_THAT_SPLIT: usize = 5;
 
 fn provider_for(sequence: &str, accession: &str) -> JsonProvider {
     let n = sequence.len() as u64;
@@ -156,27 +182,63 @@ fn normalize_with(normalizer: &Normalizer<JsonProvider>, input: &str) -> String 
 #[test]
 fn issue_1421_insert_block_table_is_unchanged() {
     let normalizer = Normalizer::new(provider_for(TEMPLATE, "TEMPLATE"));
+    // Every row is evaluated before anything fails, and all the mismatches are
+    // reported together. `assert_eq!` inside the loop stops at the first row, so
+    // a change that moves several of them — which is what a partition change
+    // does — showed one line and hid the rest, and each re-pin cost another full
+    // run to discover the next.
+    let mut moved: Vec<String> = Vec::new();
     for (label, input, expected, splits) in ISSUE_1421_INSERT_BLOCKS {
         let got = normalize_with(&normalizer, input);
-        assert_eq!(&got, expected, "#1421 row `{label}`: {input}");
+        if &got != expected {
+            moved.push(format!(
+                "  {label}: {input}\n    pinned: {expected}\n    actual: {got}"
+            ));
+        }
         // The recorded flag is checked against behaviour rather than left as
         // prose, so a row whose `expected` is edited without its `splits` — or
         // the reverse — fails here instead of silently disagreeing with the
         // census below.
-        assert_eq!(
-            got.contains(';'),
-            *splits,
-            "#1421 row `{label}`: recorded `splits` = {splits} disagrees with `{got}`"
-        );
+        if got.contains(';') != *splits {
+            moved.push(format!(
+                "  {label}: recorded `splits` = {splits} disagrees with `{got}`"
+            ));
+        }
     }
+    assert!(
+        moved.is_empty(),
+        "{} of {} #1421 rows moved:\n{}",
+        moved.len(),
+        ISSUE_1421_INSERT_BLOCKS.len(),
+        moved.join("\n")
+    );
 }
 
-/// The defect itself, stated as an assertion rather than as prose: two rows at
-/// one locus, identical net length, opposite split verdicts.
+/// #1421 IS CLOSED (#1835) — the split decision no longer depends on the
+/// inserted block.
 ///
-/// Whether a spanning `delins` is separated must be a function of which
-/// positions changed — not of which bases the payload happens to carry. While
-/// this test passes, it is not.
+/// This row used to assert the **defect**: two rows at one locus, identical net
+/// length, opposite split verdicts, with the doc comment reading "Whether a
+/// spanning `delins` is separated must be a function of which positions changed
+/// — not of which bases the payload happens to carry. While this test passes, it
+/// is not."
+///
+/// The partition default flip makes that sentence true. Both net+6 rows — and all
+/// five in [`ISSUE_1421_INSERT_BLOCKS`] — now separate, because each block is
+/// re-derived from the resulting sequence rather than accepted as the input
+/// spelled it. Payload bases can still change *where* the cut falls; they can no
+/// longer decide *whether* there is one.
+///
+/// **Deliberately kept and inverted rather than deleted.** The pair is the
+/// tightest statement of #1421 available — same locus, same net length,
+/// controlled for everything except the payload — so it is worth more as a
+/// regression guard against the defect returning than it was as a record of it.
+/// The name is left unchanged so the issue stays greppable; read the assertions.
+///
+/// Licensed by `canonical-form-choice-when-both-legal` and
+/// `derivation-may-not-be-bounded-by-the-inputs-spelling` (both decided), with
+/// `general.md:34` supplying the split and `delins.md:47` scoped away from this
+/// axis and this direction — see [`ISSUE_1421_INSERT_BLOCKS`].
 #[test]
 fn issue_1421_split_decision_still_depends_on_the_inserted_block() {
     let normalizer = Normalizer::new(provider_for(TEMPLATE, "TEMPLATE"));
@@ -188,8 +250,10 @@ fn issue_1421_split_decision_still_depends_on_the_inserted_block() {
         "expected the net+6 split row to still separate, got `{split}`"
     );
     assert!(
-        !retained.contains(';'),
-        "expected the net+6 retained row to still span, got `{retained}`"
+        retained.contains(';'),
+        "the net+6 `retained` row must separate too — that is #1421's fix. If this \
+         row has gone back to a single spanning member, the split verdict depends \
+         on the payload's bases again and #1421 has regressed; got `{retained}`"
     );
 }
 

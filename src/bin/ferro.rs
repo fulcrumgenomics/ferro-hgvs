@@ -228,12 +228,14 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
   or the variable may be removed once the choice is settled. Do not depend on
   it in production.
 
-    live       the shipped rule (default; also used when unset or empty)
+    live       the rule shipped up to and including v0.14.0. No longer the
+               default -- set it by name to reproduce pre-flip output.
     shadow     cut at the steps common to every minimal alignment
     canonical  the member-count-minimal minimal alignment
     canonical-coalesced
                canonical, plus the delins.md:44-47 merge -- a split whose
-               payload realigns as one block becomes a single delins
+               payload realigns as one block becomes a single delins.
+               THE DEFAULT; also used when unset or empty.
 
   An unrecognised value is REFUSED: this command exits with an error BEFORE it
   reads any input, naming the value you gave and the arms this build has. It

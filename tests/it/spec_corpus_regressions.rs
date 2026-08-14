@@ -913,6 +913,33 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 /// edit could stop emitting the `sep2` separation, or stop respelling a design as
 /// a spanning `delins` at all, and the regression would vanish with the rows
 /// (#1456/#1460/#1478).
+///
+/// # #1835 — THE FAMILY CONVERGED, AND THIS ROW NOW ASSERTS THAT
+///
+/// The spanning respelling reaches `c.[24del;30_31del;33del]`, which is what the
+/// authored member spelling already reached — the two agree. The paragraph above
+/// anticipated exactly this and named its licence: "A fix that converges these
+/// must therefore choose between two legal descriptions, which is
+/// `canonical-form-choice-when-both-legal` — `decided`, and it says to derive
+/// from the resulting sequence rather than to preserve either previously-shipped
+/// string." The default arm derives, so the spanning spelling is no longer
+/// preserved and lands where the members already were.
+///
+/// **The test name is now historical.** It is kept because three sibling modules
+/// cite it by name (`cis_confluence_axis` and `spec_conformance_axis`), and
+/// renaming it would silently orphan those references; read the assertions.
+///
+/// **The old body's instruction is followed only in part, deliberately.** It said
+/// "If they now agree the family has converged again — lower `split_two` and
+/// raise `converged` in `spec_conformance_axis` and delete this row." The row is
+/// NOT deleted: its two remaining assertions are the denotation guards, which are
+/// what separate "converged" from "a member was dropped", and deleting them would
+/// remove the only check that this row's convergence is not sequence loss. The
+/// `spec_conformance_axis` figures are re-blessed in this same change.
+///
+/// What is asserted now: both spellings reach one string, that string denotes the
+/// row's own bases, and the denotation is a real sequence rather than a
+/// degenerate one.
 #[test]
 fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
     let core = at_core();
@@ -923,10 +950,13 @@ fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
     //
     // `m3-all-del-p1-sep3` and `pair-del-del-p1-sep8` used to sit alongside this
     // row and were removed by #1649, which re-converged them — see the doc above.
+    // #1835: the third column is now equal to the fifth — the family converged,
+    // which is the state the comment above says made it converge before #1599.
     let rows = [(
         "m4-all-del-p1-sep2",
         "NM_TEST.1:c.24_33delinsAATTTA",
-        "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
+        // Was `c.[24T>A;26_29del;32_33delinsTA]` until #1835.
+        "NM_TEST.1:c.[24del;30_31del;33del]",
         "NM_TEST.1:c.[24del;27del;30del;33del]",
         // Was `c.[24del;30_33delinsA]` until #1716 — see the doc above.
         "NM_TEST.1:c.[24del;30_31del;33del]",
@@ -950,19 +980,23 @@ fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
             let output = normalize_3prime(&frame, spanning);
             assert_eq!(
                 output, spanning_output,
-                "{design} ({strand:?}): PINNED — the spanning delins stops at the partition \
-                 `general.md:34` gives it, because the join it used to make spans two codons \
-                 and `general.md:35`'s second conjunct (\"together affecting one amino acid\") \
-                 is unmet. On `main` this reached `{members_output}` and the family converged."
+                "{design} ({strand:?}): the spanning respelling is re-derived from the resulting \
+                 sequence (`canonical-form-choice-when-both-legal`, decided) rather than \
+                 preserved, so it lands on the partition `general.md:34` gives it"
             );
-            assert_ne!(
+            // #1835: this was an `assert_ne!` pinning the divergence. The family
+            // has converged, so the assertion is inverted — a re-divergence is
+            // now what fails, and it would be a confluence regression rather than
+            // a re-pin.
+            assert_eq!(
                 output, members_output,
-                "{design} ({strand:?}): this test exists because the two spellings DISAGREE. If \
-                 they now agree the family has converged again — lower `split_two` and raise \
-                 `converged` in `spec_conformance_axis` and delete this row"
+                "{design} ({strand:?}): the two spellings of one variant must converge. They \
+                 diverged from #1599 until #1835; if they diverge again, that is a confluence \
+                 regression and `spec_conformance_axis`'s `converged`/`split_two` figures move \
+                 with it"
             );
 
-            // …and the disagreement is about spelling only. Without this the row
+            // …and the agreement is about a real sequence. Without this the row
             // would be equally consistent with a member having been dropped,
             // which is a rank-1 defect and would have to be reported as one.
             let denoted = denotation_of(frame.provider(), frame.served(), &output);

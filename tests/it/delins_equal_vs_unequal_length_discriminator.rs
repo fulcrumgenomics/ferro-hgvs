@@ -111,19 +111,40 @@
 //! operator ruling closed that, for `:47`, scoped. Citing any of the three
 //! superseded positions is citing a record that has been overtaken.
 //!
-//! # Assert-then-flip
+//! # The assert-then-flip is WITHDRAWN (#1835) — row 2 was never going to merge
 //!
-//! Row 2's expectation below is ferro's **current, wrong** answer. When the
-//! ruling is implemented, it becomes:
+//! This section used to say that row 2's expectation was ferro's "current,
+//! **wrong**" answer, and that when `delins-merge-vs-individual-gap-two-or-more`
+//! was implemented the row would become the spanning
+//! `NC_000002.11:g.47639670_47639673delinsTT`. **That instruction is wrong and
+//! must not be followed.** It was written before the axis scope was decided.
 //!
-//! ```text
-//! NC_000002.11:g.47639670_47639673delinsTT   (unchanged — the spanning delins)
-//! ```
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes
+//! `DNA/delins.md:47` — the clause that recommends the spanning form over a
+//! payload-coincidence split — to the **coding DNA axis**. Row 2 is
+//! `NC_000002.11:g.`, a genomic reference. So `:47` does not reach it, and
+//! `general.md:34` governs unqualified: two variants separated by an unchanged
+//! nucleotide are described individually. Row 2's split is therefore
+//! **conformant**, and it always was; what was wrong was the note, not the
+//! output.
 //!
-//! and this test flips to assert that instead. It is asserted rather than
-//! `#[ignore]`d so that the day the behaviour moves, this file is one of the
-//! things that has to be read. Note the flip is an output-moving change and owes
-//! the release a `Representation-Change:` trailer.
+//! Note the direction scope points the same way about *which* record applies but
+//! not about the outcome: this row is a net deletion (4 nt span, 2 nt payload),
+//! so `delins-merge-vs-individual-gap-two-or-more` would reach it by direction —
+//! the AXIS scope is what excludes it, and the axis scope is the later and
+//! narrower of the two. Read them in that order.
+//!
+//! **The row's SPLIT nevertheless moved**, which is a separate and much smaller
+//! fact: the partition default flip re-derives the block from the resulting
+//! sequence, so the cut lands at a different place inside the same span. Both the
+//! old and the new spelling are two members separated by an unchanged base, so
+//! `general.md:34` is satisfied by each and `canonical-form-choice-when-both-legal`
+//! selects between them by derivation. That is an output-moving change and owes
+//! the release a `Representation-Change:` trailer, which #1835 carries.
+//!
+//! The contrast this module exists for is intact. Row 1 (equal-length) and row 2
+//! (unequal-length) still both split, and they still split for the reason the
+//! module argues — not because of a merge rule neither of them meets.
 //!
 //! # Gating, and the hermetic companion that covers what this file cannot
 //!
@@ -182,24 +203,31 @@ const BRCA2_EQUAL_LENGTH: Row = Row {
     bases: "GTG",
 };
 
-/// The decided ruling on `delins.md:47` governs: unequal length, so the retained
-/// interior base is an alignment coincidence rather than a denoted identity.
+/// Unequal length, and split — which `general.md:34` governs unqualified,
+/// because `delins.md:47` is scoped to the coding DNA axis and this is a `g.`
+/// row.
 ///
-/// **Assert-then-flip.** `expected` is the current, wrong output; the right one
-/// is the input string unchanged.
+/// **The assert-then-flip is withdrawn (#1835)** — see the module docs. `expected`
+/// is a conformant output, not "the current, wrong" one. It moved within the
+/// span when the partition default flipped (was
+/// `g.[47639670_47639671del;47639673G>T]`); both spellings are two members
+/// separated by the unchanged base at 47639672, and
+/// `canonical-form-choice-when-both-legal` selects between them by derivation.
 const MSH2_UNEQUAL_LENGTH: Row = Row {
     input: "NC_000002.11:g.47639670_47639673delinsTT",
-    expected: "NC_000002.11:g.[47639670_47639671del;47639673G>T]",
+    expected: "NC_000002.11:g.[47639670_47639671delinsT;47639673del]",
     accession: "NC_000002.11",
     span: (47_639_670, 47_639_673),
     bases: "AGTG",
 };
 
-/// The right answer for [`MSH2_UNEQUAL_LENGTH`] once the ruling is implemented.
+/// The form `delins.md:47` would recommend **if it reached this axis**. It does
+/// not, so ferro must NOT emit this.
 ///
-/// Named rather than left in prose so the flip is a two-line edit and so this
-/// string is greppable from the ruling record.
-const MSH2_RULING_CONFORMANT: &str = "NC_000002.11:g.47639670_47639673delinsTT";
+/// Kept, and repurposed from a flip target into a negative guard: the assertion
+/// below requires ferro's answer to differ from it. Named rather than left in
+/// prose so it stays greppable from the ruling record.
+const MSH2_SPANNING_FORM_OFF_AXIS: &str = "NC_000002.11:g.47639670_47639673delinsTT";
 
 /// Both rows, side by side. See the module docs for the whole argument.
 ///
@@ -262,23 +290,26 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts() {
         BRCA2_EQUAL_LENGTH.input
     );
 
-    // Row 2 — WRONG, pinned deliberately. See "Assert-then-flip" above.
+    // Row 2 — CONFORMANT, and no longer an assert-then-flip. See the module docs.
     assert_eq!(
         normalize(MSH2_UNEQUAL_LENGTH.input),
         MSH2_UNEQUAL_LENGTH.expected,
-        "unequal-length {} is currently split on a payload/reference coincidence, which is the \
-         alignment-driven split `delins.md:46` constructs and `delins.md:47` advises against. \
-         The decided ruling `delins-merge-vs-individual-gap-two-or-more` says the spanning form \
-         wins, i.e. {MSH2_RULING_CONFORMANT}. If this assertion just failed with that string, \
-         the defect is FIXED — flip the expectation and declare the representation change",
+        "unequal-length {} is split at the unchanged base at 47639672, which is what \
+         `general.md:34` requires. `delins.md:47` would recommend the spanning \
+         {MSH2_SPANNING_FORM_OFF_AXIS} instead, but \
+         `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47` to the coding \
+         DNA axis and this is a genomic reference, so it does not reach this row. If this just \
+         failed with the SPANNING form, that is a REGRESSION against the axis scope, not the \
+         fix an older revision of this message promised — read the module docs before re-pinning",
         MSH2_UNEQUAL_LENGTH.input
     );
 
-    // Guard the flip against being confused with a different move: state
-    // explicitly that today's output is not yet the conformant one.
+    // The negative guard the flip target became: ferro must not reach the
+    // off-axis spanning form.
     assert_ne!(
-        MSH2_UNEQUAL_LENGTH.expected, MSH2_RULING_CONFORMANT,
-        "the pinned output equals the ruling-conformant form — the assert-then-flip note above \
-         is stale and this test now pins correct behaviour"
+        MSH2_UNEQUAL_LENGTH.expected, MSH2_SPANNING_FORM_OFF_AXIS,
+        "the pinned output equals the off-axis spanning form — `delins.md:47` does not reach a \
+         `g.` row, so pinning its recommendation here would encode a violation of the decided \
+         `delins-payload-coincidence-carve-out-is-coding-dna-scoped`"
     );
 }

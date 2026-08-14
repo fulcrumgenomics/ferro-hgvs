@@ -532,21 +532,6 @@ const WORKED: &[Worked] = &[
         why: "and the split spelling is a fixed point, so the pair is confluent",
     },
     Worked {
-        id: "W58",
-        clause: "recommendations/general.md:34",
-        quote: "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\".",
-        input: "LRG_199t1:c.[992_1002del;1004T>C]",
-        published: "LRG_199t1:c.[992_1002del;1004T>C]",
-        answer: "LRG_199t1:c.[992_1002del;1004T>C]",
-        rebase: Rebase::Same,
-        fixture: Fixture::Slice,
-        why: "SVD-WG010:51 would have merged a del and a substitution separated by \
-              one nucleotide; it was rejected. The in-force exception \
-              (`general.md:35`) is about two *variants* affecting one amino acid, \
-              and ferro restricts it to the sub/unchanged/sub shape (ruling \
-              `codon-carve-out-shape-restriction`), so the pair stays split",
-    },
-    Worked {
         id: "W59",
         clause: "recommendations/protein/delins.md:21",
         quote: "two variants separated by one or more amino acids should be described individually and not as a \"delins\".",
@@ -1004,13 +989,26 @@ const PARTITIONS: &[Partition] = &[
     },
     Partition {
         id: "W49",
-        clause: "recommendations/DNA/delins.md:46",
-        quote: "giving an alternative description like `c.[850_869del;874_881del;887_897del;901_902insG]`",
+        clause: "recommendations/DNA/delins.md:47",
+        quote: "**The \"delins\" format is recommended**",
         input: "LRG_199t1:c.[850_869del;874_881del;887_897del;901_902insG]",
-        members: &[(850, 869), (874, 881), (887, 897), (901, 902)],
+        // #1835: was `&[(850, 869), (874, 881), (887, 897), (901, 902)]` — the
+        // four authored members, cited against `:46`. The split now CONVERGES on
+        // the spanning form, so this row's clause moves from `:46` (which names
+        // the split as an "alternative description") to `:47` (which recommends
+        // the delins), and it becomes a second witness for the row below rather
+        // than its counterpart.
+        members: &[(850, 901)],
         fixture: Fixture::Slice,
-        why: "the split the spec names as legal survives with all four members and \
-              their gaps of 4, 5 and 3 nt intact — nothing is merged into the hull",
+        why: "the split the spec names as an alternative converges on the form `:47` \
+              recommends. `delins-recommendation-reach-when-the-input-arrives-split` \
+              (decided, operator ruling 2026-08-12) settles this direction and cites \
+              this very row: the canonical derivation of this block is \
+              `c.[850_866del;870_880del;887_892del;895_896delinsC;899_901del]`, whose \
+              `895_896delinsC` consumes two reference bases to place one — a \
+              gap-bearing member, so an inserted sequence re-aligned and `:47` \
+              reaches it. The record calls this out as the reading under which \
+              `:44-47`'s own example comes out as the spec writes it",
     },
     Partition {
         id: "W49",
@@ -1052,15 +1050,20 @@ const PARTITIONS: &[Partition] = &[
         why: "the dup stays at its 3'-most position (the T-run is g.5–g.7) and the \
               substitution stays its own member",
     },
-    Partition {
-        id: "W58",
-        clause: "recommendations/general.md:34",
-        quote: "two variants separated by one or more nucleotides should be described individually",
-        input: "LRG_199t1:c.[992_1002del;1004T>C]",
-        members: &[(992, 1002), (1004, 1004)],
-        fixture: Fixture::Slice,
-        why: "an 11-nt deletion and a substitution one nucleotide apart",
-    },
+    // W58 is deliberately ABSENT from this list. It is a registered divergence —
+    // see `DIVERGENT` — because the operator ruling of 2026-08-12 that decided
+    // `rulings[delins-recommendation-reach-when-the-input-arrives-split]` (#1760)
+    // names `c.[992_993del;995_997del;999_1004del]` as its canonical derivation in
+    // the ruling's own grounds.
+    //
+    // It is not re-pinned here with ferro's three members, because this list means
+    // "the partitions the SPEC asserts", and pinning a derived partition into it
+    // would quietly change what the list is. Its member spans are not unpinned as a
+    // result: `DIVERGENT`'s `ferro_answer` fixes the whole string, and
+    // `the_recorded_divergences_are_still_exactly_what_was_recorded` asserts both
+    // that ferro still produces it AND that ferro still does not produce the spec's
+    // two-member form. So a change that made W58 conform fails there and the row
+    // would be promoted back into `WORKED` and `PARTITIONS` together, deliberately.
     Partition {
         id: "W59",
         clause: "recommendations/general.md:34",
@@ -1149,6 +1152,44 @@ const DIVERGENT: &[Divergence] = &[
               a `dup`, because the copy is not directly 3'-flanking \
               (`duplication.md:17`) — ferro gets right, and that is asserted \
               below rather than left implied",
+    },
+    Divergence {
+        id: "W58",
+        clause: "recommendations/general.md:34",
+        quote: "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\".",
+        input: "LRG_199t1:c.[992_1002del;1004T>C]",
+        spec_answer: "LRG_199t1:c.[992_1002del;1004T>C]",
+        ferro_answer: "LRG_199t1:c.[992_993del;995_997del;999_1004del]",
+        fixture: Fixture::Slice,
+        why: "**Ruled, not discovered.** The operator ruling of 2026-08-12 that \
+              decided `rulings[delins-recommendation-reach-when-the-input-arrives-split]` \
+              (#1760) names this row's derived form in its own grounds, as ground \
+              (2): \"W58, `LRG_199t1:c.[992_1002del;1004T>C]`, derives canonically \
+              to `c.[992_993del;995_997del;999_1004del]`: three pure deletions over \
+              a 13-base span for a 2-base payload, both of whose bases survived. \
+              Nothing is supplied, so it stays split.\" That form is what this arm \
+              produces, character for character, so the divergence is the ruling \
+              being implemented rather than a new disagreement with the spec.\n\n\
+              Ground (2) is load-bearing for the ruling as a whole: it is the only \
+              reading under which BOTH worked examples in the `:44-47` passage come \
+              out as the spec writes them. W49's canonical derivation carries a \
+              gap-bearing member (`895_896delinsC` consumes two reference bases to \
+              place one), so `:47` reaches it and it merges — which is what the \
+              clause recommends by name. W58's carries none, so `:46`'s mechanism \
+              cannot have occurred and `:17` / `general.md:34` govern unqualified. \
+              A wide reading would merge W58; a no-merge reading would split \
+              `:44-47`'s own example three lines from the clause recommending the \
+              merge. Only the ruled line satisfies both at once.\n\n\
+              Why the codon exception does not rescue the published two-member \
+              form: this row is on the CODING axis, where `general.md:35` is live, \
+              but `rulings[codon-carve-out-shape-restriction]` limits that exception \
+              to the sub/unchanged/sub shape and this pair is an 11-nt deletion \
+              beside a substitution. The antecedent is unsatisfied, so the clause \
+              does not fire.\n\n\
+              **This is the only registered divergence from a published worked \
+              example, and it must stay a set of one unless another is ruled.** \
+              Promoting a second row here without a ledger record naming it is the \
+              failure this registry exists to make visible",
     },
     Divergence {
         id: "W53",
@@ -2082,6 +2123,37 @@ fn the_recorded_parse_gaps_are_still_gaps() {
 /// converge them, it fails — not because converging is wrong, but because it is
 /// a representation change that has to name which of the two clauses it is now
 /// reading, rather than landing as a side effect.
+///
+/// # #1835 — THEY CONVERGED, AND THE CLAUSE IS NAMED
+///
+/// The paragraph above asks a change that converges this pair to say WHICH of the
+/// two clauses it is now reading. The answer is **`DNA/delins.md:47`**, and it is
+/// not this change's own reading — it is
+/// `delins-recommendation-reach-when-the-input-arrives-split` (decided, operator
+/// ruling 2026-08-12).
+///
+/// That record resolves the deadlock the paragraph above describes. It holds that
+/// `:47` reaches a payload-coincidence split ONLY where an inserted sequence
+/// re-aligned — operationally, where some member of the derived split supplies
+/// bases while consuming a different number of reference bases. It then applies
+/// that to this exact row: the canonical derivation of `c.850_901` is
+/// `c.[850_866del;870_880del;887_892del;895_896delinsC;899_901del]`, and
+/// `895_896delinsC` consumes two reference bases to place one. It is gap-bearing,
+/// so `:46`'s mechanism did occur, so `:47` speaks to it and recommends the span.
+///
+/// So `general.md:34` does not point the other way here after all — it governs
+/// only where `:47` does not reach, and the record's whole content is where that
+/// line falls. The record singles this pair out as the reason for its reading:
+/// "IT IS THE ONLY READING UNDER WHICH BOTH WORKED EXAMPLES IN THE SAME PASSAGE
+/// COME OUT AS THE SPEC WRITES THEM."
+///
+/// **W58 is the other of those two worked examples, and it is NOT converged by
+/// this change** — it stays split, which is what the record says it should do.
+/// Its own residue is a separate question and is deliberately not touched here;
+/// see `every_worked_example_produces_the_spec_published_answer`.
+///
+/// The converged form is the one the spec prints at `:44`, so the pair now agrees
+/// on the spec's recommended description rather than on a third string.
 #[test]
 fn the_spanning_delins_and_its_published_split_are_two_fixed_points() {
     let delins = run(Fixture::Slice, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG")
@@ -2092,15 +2164,15 @@ fn the_spanning_delins_and_its_published_split_are_two_fixed_points() {
     )
     .expect("the published alternative normalizes");
     assert_eq!(delins, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG");
+    // #1835: was pinned at the authored split; it now converges on the spanning
+    // form `:47` recommends.
+    assert_eq!(split, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG");
     assert_eq!(
-        split,
-        "LRG_199t1:c.[850_869del;874_881del;887_897del;901_902insG]"
-    );
-    assert_ne!(
         delins, split,
-        "the spec's own non-confluent pair converged. That may well be right — but \
-         `:47` and `general.md:34` point opposite ways here, so a change that \
-         picks one must say which, rather than land as a side effect."
+        "the spec's own pair must converge on `:47`'s recommended form. If these \
+         diverge again, `delins-recommendation-reach-when-the-input-arrives-split` \
+         has been regressed — that record turns on this row's derived \
+         `895_896delinsC` being gap-bearing."
     );
 }
 
@@ -2314,8 +2386,15 @@ fn the_unexecutable_census_is_pinned() {
         "the executed / unexecutable / delegated counts no longer partition the 95 rows"
     );
     assert_eq!(
+        // 2 -> 3 by the operator ruling of 2026-08-12 that decided
+        // `rulings[delins-recommendation-reach-when-the-input-arrives-split]`
+        // (#1760). W58 moved from `WORKED` to `DIVERGENT` because that ruling's
+        // own ground (2) names `c.[992_993del;995_997del;999_1004del]` as its
+        // canonical derivation. This is the ruling being recorded, not a table
+        // edit — which is exactly the distinction the message below demands, and
+        // the reason this pin fired rather than letting the move pass silently.
         (DIVERGENT.len(), PARSE_GAPS.len()),
-        (2, 1),
+        (3, 1),
         "the set of rows ferro does not satisfy changed. Each of these two tables \
          is an adjudication — a divergence with a competing clause, or a parser \
          defect — so a change here is a ruling, not a fixture edit. The third \

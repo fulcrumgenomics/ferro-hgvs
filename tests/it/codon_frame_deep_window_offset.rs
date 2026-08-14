@@ -409,9 +409,21 @@ fn a_length_changing_straddling_pair_deep_in_the_transcript_stays_split() {
         codon_of(451),
         "c.449 and c.451 must NOT share a codon",
     );
+    // #1835: the pair still STAYS SPLIT, which is what this row asserts, but the
+    // two members are re-derived from the resulting sequence and come back
+    // spelled the other way round — `[449C>T;451del]` rather than
+    // `[449del;451G>T]`. Both are two members separated by the unchanged c.450
+    // and both denote the same two bases (c.450 reads `T`, so
+    // "delete C, then G>T" and "C>T, then delete G" leave `TT` either way).
+    // `general.md:34` is satisfied by each, no clause selects between them, and
+    // `canonical-form-choice-when-both-legal` (decided) says the derivation does.
+    //
+    // The assertion is still that TWO members come back, which is the codon
+    // arithmetic being right; it is not a claim about which member carries the
+    // deletion.
     assert_eq!(
         normalize("NM_DEEP.1:c.[449del;451G>T]"),
-        "NM_DEEP.1:c.[449del;451G>T]",
+        "NM_DEEP.1:c.[449C>T;451del]",
         "two amino acids are affected, so the two variants are described \
          individually",
     );
@@ -502,17 +514,32 @@ fn a_literal_delins_straddling_a_codon_boundary_is_split() {
 /// `c.301`, the one position where the `c.` axis does merge.
 #[test]
 fn without_a_reading_frame_no_deep_position_merges() {
-    for input in [
-        "NM_DEEP.1:n.[301G>A;303T>C]",
-        "NM_DEEP.1:n.[353C>A;355G>T]",
-        "NM_DEEP.1:n.[397del;399T>A]",
-        "NM_DEEP.1:n.[449del;451G>T]",
-        "NM_DEEP.1:n.[353C>A;355_356delinsTA]",
+    // `(input, expected)` rather than `input` alone. #1835: four of the five are
+    // still returned verbatim; the fifth is re-derived to the other spelling of
+    // the same two members — see the `c.` sibling
+    // `a_length_changing_straddling_pair_deep_in_the_transcript_stays_split`,
+    // which moves identically. The property under test is that NEITHER POSITION
+    // MERGES on a frameless axis, and every row below still comes back as two
+    // members, so it holds for all five.
+    for (input, expected) in [
+        ("NM_DEEP.1:n.[301G>A;303T>C]", "NM_DEEP.1:n.[301G>A;303T>C]"),
+        ("NM_DEEP.1:n.[353C>A;355G>T]", "NM_DEEP.1:n.[353C>A;355G>T]"),
+        ("NM_DEEP.1:n.[397del;399T>A]", "NM_DEEP.1:n.[397del;399T>A]"),
+        // #1835: was returned verbatim; now the equivalent respelling.
+        ("NM_DEEP.1:n.[449del;451G>T]", "NM_DEEP.1:n.[449C>T;451del]"),
+        (
+            "NM_DEEP.1:n.[353C>A;355_356delinsTA]",
+            "NM_DEEP.1:n.[353C>A;355_356delinsTA]",
+        ),
     ] {
+        let got = normalize(input);
         assert_eq!(
-            normalize(input),
-            input,
+            got, expected,
             "`general.md:34`'s plain rule governs an axis with no amino acid to affect",
+        );
+        assert!(
+            got.contains(';'),
+            "`{input}` merged on a frameless axis, which is what this row forbids; got `{got}`"
         );
     }
 

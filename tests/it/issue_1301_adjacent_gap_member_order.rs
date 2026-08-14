@@ -121,9 +121,38 @@ fn an_insertion_still_sorts_before_a_duplication_sharing_its_span_beside_a_third
     // payloads shift through — a deletion at 266 or 267 would block the shift
     // and the pair would never reach the tie at all — so the members still
     // re-spell exactly as they did, and the tie is still broken by the key.
+    //
+    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
+    //
+    // Was `NC_TEST.1:g.[264_265insCA;264_265dup;270del]`; now
+    // `NC_TEST.1:g.[264_265insCAAA;270del]` — the same single insertion the
+    // two-member case above already reaches, so the third member has stopped
+    // blocking the derivation.
+    //
+    // LICENSED BY `duplication-must-ranks-the-label-not-the-partition` (decided,
+    // operator ruling 2026-08-13), which names this test by its full path. The
+    // record classes it as inside `contiguous-insertion-split-by-a-blocked-derivation`'s
+    // STATED reach: that record's REPRESENTATION EFFECT paragraph predicted this
+    // geometry by description in advance — a junction-adjacent `ins`+`dup` pair
+    // beside a third member far enough away to block the derivation, moving "to a
+    // single insertion".
+    //
+    // `duplication.md:18`'s MUST is not being ignored. Under that ruling it ranks
+    // the *label* for a change rather than requiring a partition that exposes
+    // one, and it is applied per piece of the partition re-derived from the
+    // resulting sequence; the single `CAAA` insertion is not a copy of the
+    // reference bases immediately 5' of its insertion point, so the clause does
+    // not reach it.
+    //
+    // WHAT THIS TEST NO LONGER EXERCISES, stated because the whole file is about
+    // it: with one member there is no `junction_rank` tie left to break here. The
+    // tie is still broken and still asserted on the protein cases below, where
+    // both members tie on start and end — the same fallback the two-member case
+    // above already records. The interbase-order assertion below is kept and is
+    // now trivially satisfied.
     let input = "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]";
     let output = normalize(input);
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCAAA;270del]");
     assert_preserving(input, &output);
 
     let starts = member_starts(&output);

@@ -457,16 +457,77 @@
 //!
 //! | evaluation arm (`FERRO_PARTITION`) | 3' | 5' |
 //! |---|---|---|
-//! | unset — the shipped rule | **0** of 997 | **0** of 997 |
+//! | `live` — the rule shipped to v0.14.0 | 0 of 997 | 0 of 997 |
 //! | `shadow` | 0 | 0 |
 //! | `canonical` | 1 | 1 |
-//! | `canonical-coalesced` | **3** | **3** |
+//! | unset = `canonical-coalesced` — **the shipped rule since #1835** | **3** of 997 | **3** of 997 |
 //!
 //! The 3 are one row at a separation of 3 and two at a separation of 2, all of
 //! them two-member designs collapsing to one member — every one a row
-//! `guard_violations` cannot see. The `canonical` arm's single residual is
-//! `s01-c1-pair-inv-del-p4-sep3` (`c.[9_12inv;16_19del]` -> `c.9_19delinsGTCAGTA`),
-//! which is not the coalesce pass and is also one of the coalesced arm's 3.
+//! `guard_violations` cannot see.
+//!
+//! # The 3 are named and adjudicated, because a count is not a verdict (#1835)
+//!
+//! The counter's own text says a rise "needs explaining and re-pinning rather
+//! than assuming either verdict", and that within the payload-coincidence shape a
+//! rise is a decided ruling arriving while outside it `general.md:34` still
+//! governs. So the rows were identified rather than counted, by instrumenting the
+//! census to print each merging row and re-running under three arms:
+//!
+//! ```text
+//! s01-c1-pair-inv-del-p4-sep3     c.[9_12inv;16_19del]  -> c.9_19delinsGTCAGTA
+//! s01-c3p-pair-del-sub-p4-sep2    c.[24_27del;30C>G]    -> c.24_30delinsTTG
+//! s01-c3m-pair-del-sub-p4-sep2    c.[24_27del;30C>G]    -> c.24_30delinsTTG
+//! ```
+//!
+//! **The `sep3` row is NOT the coalesce pass**, and the table above already says
+//! so — it is the `canonical` arm's single residual and it produces the identical
+//! string on both candidate arms. What that means is that the canonical
+//! partitioner returns this block as **one piece**: the minimal alignment of the
+//! resulting sequence has no unchanged interior column at all. `general.md:34`
+//! speaks about "two variants separated by one or more nucleotides", and
+//! `separation-is-a-property-of-the-spelling-not-of-the-variant` (decided) reads
+//! that separation off the partition re-derived from the resulting sequence, not
+//! off the authored spelling. There is no separation in the derived partition, so
+//! the clause has nothing to govern here. The row is counted because the counter
+//! keys on the *authored* member count, which is what makes it an instrument.
+//!
+//! **The two `sep2` rows ARE the coalesce pass, and they are the decided ruling
+//! arriving.** This is the case where reading only the authored spelling gets the
+//! answer backwards, so it is worth stating fully. Authored, the members are
+//! `24_27del` (a pure deletion) and `30C>G` (one base for one base) — neither
+//! supplies bases while consuming a different number, so on the authored spelling
+//! `delins-recommendation-reach-when-the-input-arrives-split` would keep `:47`
+//! away and the pair would stay split. But that record keys on "some member of
+//! the split **derived from the sequence**", and the derived split is different:
+//!
+//! ```text
+//! FERRO_PARTITION=canonical   c.[24_27del;30C>G] -> c.[24_26del;29_30delinsG]
+//! ```
+//!
+//! `29_30delinsG` consumes two reference bases to place one. It is gap-bearing,
+//! so an inserted sequence re-aligned, so `:47` reaches the split and recommends
+//! the span — which is what the coalesced arm then emits. The record anticipates
+//! exactly this misreading, in the paragraph headed "THE READING THAT LOOKS RIGHT
+//! AND IS MEASURABLY WRONG": the predicate keys on the gap, which the derived
+//! member has, not on the rendering, which the authored one does not.
+//!
+//! The other two scopes hold as well: both rows are on the `c.` axis
+//! (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`), and the block
+//! replaces 7 reference bases with 3 — a net deletion, which is the direction
+//! `delins-merge-vs-individual-gap-two-or-more` is scoped to.
+//!
+//! So all three are accounted for and none is a `general.md:34` deviation. The
+//! figure is re-pinned at 3, not waived.
+//!
+//! **#1616 is concurrently re-pinning this same counter to 8**, under a separate
+//! operator ruling, on the branch that deletes the input-relative weight bound.
+//! Two open PRs moving one counter to different values is a semantic conflict no
+//! textual check sees — the constants live on different lines, so `merge-tree`
+//! reports no conflict between the two branches. Whichever lands second must
+//! re-measure this figure on the merged tree rather than keeping its own; the
+//! merge queue is what forces that, since it rebuilds and re-runs against the
+//! projected `main`.
 //!
 //! **That table read 122 in the `canonical-coalesced` arm when this change was
 //! written, and #1698 took it to 3.** `fix(normalize): require a gap-bearing
@@ -607,7 +668,15 @@ pub(crate) const THREE_PRIME: Census = Census {
     // crossing itself resolved. 371 = 0 + 371 is the accounting identity that
     // makes this a fix rather than a re-partition.
     outputs_leaving_the_transcript: 0,
-    outputs_intronic_under_a_genomic_wrapper: 371,
+    // #1835: 371 -> 389. Eighteen more outputs are rendered against the genomic
+    // reference their junction crossing resolved, because the re-derived
+    // partition places a member across an exon junction where the previous one
+    // did not. The class is conformant by construction — that is what #1704's
+    // re-parenting made it — and its sibling `outputs_leaving_the_transcript`
+    // stays at 0, which is the counter that would move if any of the eighteen
+    // were being emitted on a bare transcript instead
+    // (`bare-transcript-intronic-position`, decided).
+    outputs_intronic_under_a_genomic_wrapper: 389,
     // Re-blessed DOWN to ZERO. #1627 refused `standards.md:39`'s 24 `X` rows
     // rather than re-emitting them; #1628 refused the residual 8 —
     // `checklist.md:16`'s `+` offset (4) and `checklist.md:45`'s hyphen range
@@ -637,10 +706,25 @@ pub(crate) const THREE_PRIME: Census = Census {
     // #1716 leaves `converged` alone and moves three family instances between
     // the `split_*` buckets — see the module docs' fifth RE-BLESSED section for
     // the three row ids and the diffed divergence sets.
-    converged: 9_402,
-    split_two: 2_223,
-    split_three: 226,
-    split_more: 31,
+    // # #1835 — the partition default flip, and the largest confluence move this
+    // census has taken
+    //
+    // `converged` 9 402 -> 11 016, with `split_two` -1 550, `split_three` -62 and
+    // `split_more` -2. Those three sum to exactly 1 614, the gain in `converged`,
+    // so **every class that left a divergent bucket went straight to
+    // convergence** and none merely dropped an arity. No divergence figure rises.
+    //
+    // Read it with the rank-1 counters directly above and below, which is what
+    // makes the gain safe to accept rather than merely large:
+    // `declined`, `unparseable_outputs`, `outputs_leaving_the_transcript` and
+    // `prohibition_violating_outputs` are all still **0**, `sequence_changed`
+    // and `non_idempotent_outputs` are unmoved at 4, and
+    // `outputs_denoting_no_sequence` is unmoved at 10. So nothing converged by
+    // losing a member, changing a base or ceasing to be a fixed point.
+    converged: 11_016,
+    split_two: 673,
+    split_three: 164,
+    split_more: 29,
     underdetermined: 0,
     // -- idempotency --
     //
@@ -667,7 +751,12 @@ pub(crate) const THREE_PRIME: Census = Census {
     guard_violations: 0,
     // -- instruments --
     coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // #1835: 0 -> 3. The three rows are named and adjudicated individually in
+    // the module docs' "The 3 are named and adjudicated" section; two are the
+    // `delins.md:47` pass reaching a derived split that carries a gap-bearing
+    // member, and one is a block the canonical partitioner returns whole, so it
+    // has no derived separation for `general.md:34` to govern.
+    coding_axis_separation_two_or_more_merges: 3,
 };
 
 /// The 5'-direction census, pinned.
@@ -710,7 +799,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // time**, by 284, and the same three measured zeros hold as at 3': no family
     // loses convergence, rises in arity, or becomes divergent that was not.
     // #1627 does not move it either: a refused row contributes no family.
-    converged: 9_228,
+    converged: 10_753,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -725,8 +814,13 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // #1716 moves the same three family instances as at 3', all three
     // *improving* on this side; `converged` is unchanged. Fifth RE-BLESSED
     // section.
-    split_two: 2_462,
-    split_three: 168,
+    // #1835: `converged` 9 228 -> 10 753, `split_two` -1 481, `split_three` -44,
+    // `split_more` unchanged — again summing exactly to the gain, so every moved
+    // class converged outright. The 5' direction gains 1 525 against the 3'
+    // direction's 1 614; the two moving by different amounts is the asymmetry
+    // every entry above records, and both move the same way.
+    split_two: 981,
+    split_three: 124,
     split_more: 24,
     underdetermined: 0,
     non_idempotent_outputs: 4,
@@ -738,7 +832,12 @@ pub(crate) const FIVE_PRIME: Census = Census {
     prohibited_conditional_accepted: 16,
     guard_violations: 0,
     coding_axis_separation_two_or_more_rows: 997,
-    coding_axis_separation_two_or_more_merges: 0,
+    // #1835: 0 -> 3. The three rows are named and adjudicated individually in
+    // the module docs' "The 3 are named and adjudicated" section; two are the
+    // `delins.md:47` pass reaching a derived split that carries a gap-bearing
+    // member, and one is a block the canonical partitioner returns whole, so it
+    // has no derived separation for `general.md:34` to govern.
+    coding_axis_separation_two_or_more_merges: 3,
 };
 
 /// The corpus's shape, independent of any property measured over it.

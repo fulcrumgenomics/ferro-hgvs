@@ -699,24 +699,28 @@ Normalization cuts each changed region of sequence into allele members. `FERRO_P
 
 | Value | Rule |
 |-------|------|
-| unset / empty / `live` | The shipped rule. This is what every normal invocation uses. |
+| unset / empty / `canonical-coalesced` | **The shipped rule**, and what every normal invocation uses. `canonical`, plus the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. Applied after the downstream passes rather than at partition time, so it cuts identically to `canonical` and differs only in what survives. |
+| `live` | The rule shipped up to and including v0.14.0: a single-gap alignment search plus two narrow escapes. **No longer the default** — set it by name to reproduce pre-flip output. |
 | `shadow` | Cut only at alignment steps common to *every* minimal alignment. |
-| `canonical` | The member-count-minimal minimal alignment. |
-| `canonical-coalesced` | `canonical`, plus the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. Applied after the downstream passes rather than at partition time, so it cuts identically to `canonical` and differs only in what survives. |
+| `canonical` | The member-count-minimal minimal alignment, without the merge above. |
 
 With the variable unset — or set to the empty string — output is byte-identical to a build with no switch at all.
+
+> **The default moved in v0.15.0**, from `live` to `canonical-coalesced`. If you are comparing against a stored corpus normalized by v0.14.0 or earlier, the like-for-like arm is now `FERRO_PARTITION=live`, not the unset one. The change is disclosed as a representation change in `CHANGELOG.md`; the ruling behind it is that a description is derived from the **resulting sequence** rather than preserved from the input's spelling, which `partition_block` — `live`'s cutter — cannot do.
 
 ### Running an A/B comparison
 
 Run the same input twice and diff the normalized descriptions. In `tsv` format the columns are `line, input, normalized, changed, status, detail`, so column 3 is the normalized string:
 
 ```bash
-# 1. the shipped behaviour
-ferro normalize --input variants.txt --reference /path/to/reference \
+# 1. a baseline arm, named explicitly. `live` is the pre-v0.15.0 rule, which is
+#    the one to use when the question is "what moved for my stored corpus";
+#    name the arm rather than relying on unset, which is now the NEW rule.
+FERRO_PARTITION=live ferro normalize --input variants.txt --reference /path/to/reference \
   --format tsv --error-mode lenient -j 10 > shipped.tsv
 
-# 2. the candidate rule
-FERRO_PARTITION=canonical ferro normalize --input variants.txt --reference /path/to/reference \
+# 2. the candidate rule — here, the shipped default
+ferro normalize --input variants.txt --reference /path/to/reference \
   --format tsv --error-mode lenient -j 10 > candidate.tsv
 
 # 3. what moved
@@ -757,7 +761,7 @@ A positive control on an input **known** to differ is still worth running, becau
 These three inputs run against the built-in test data, so they need no `--reference` and no prepared reference directory. Between them they separate all four arms — every pair of arms disagrees on at least one row, so the control tells you *which* arm you got, not merely that something changed:
 
 ```bash
-printf 'NM_001234.1:c.[5_6insAC;9del]\nNM_001234.1:c.[2del;5del]\nNM_001234.1:c.[2del;9del]\n' > control.txt
+printf 'NM_001234.1:c.[5_6insAC;9del]\nNM_001234.1:c.2_6delinsGA\nNM_001234.1:c.4_10delinsAC\n' > control.txt
 
 for arm in live shadow canonical canonical-coalesced; do
   echo "== $arm"
@@ -772,17 +776,19 @@ done
 
 The status check is not boilerplate. An unrecognised arm now aborts the process, and a pipeline reports the exit status of its *last* command — so `ferro … | tail | cut` reports `cut`'s success and the loop prints an empty column under the arm's heading. An empty column and an aborted run look identical, which is the same "a broken measurement reads as a result" failure this whole section is about. Redirecting first and testing the status makes the abort say so.
 
-| input | `live` | `shadow` | `canonical` | `canonical-coalesced` |
+| input | `live` | `shadow` | `canonical` | `canonical-coalesced` (= unset) |
 |---|---|---|---|---|
-| `c.[5_6insAC;9del]` | `c.6_9delinsACCAA` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` |
-| `c.[2del;5del]` | `c.[2del;6del]` | `c.[2del;6del]` | `c.2_4delinsG` | `c.2_4delinsG` |
-| `c.[2del;9del]` | `c.[2del;11del]` | `c.[2del;11del]` | `c.[2del;11del]` | `c.2_9delinsGCCCAA` |
+| `c.[5_6insAC;9del]` | `c.[5_6insA;7_9delinsCAA]` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` |
+| `c.2_6delinsGA` | `c.2_6delinsGA` | `c.2_6delinsGA` | `c.[2del;4_6delinsA]` | `c.2_6delinsGA` |
+| `c.4_10delinsAC` | `c.4_10delinsAC` | `c.4_10delinsAC` | `c.[4C>A;6_10del]` | `c.[4C>A;6_10del]` |
 
-Row 1 separates `live` from the other three, row 2 separates `{live, shadow}` from `{canonical, canonical-coalesced}`, and row 3 separates `canonical` from `canonical-coalesced`.
+**All six pairs of arms are separated**, which is what makes this tell you *which* arm you got rather than merely that something changed: row 1 separates `live` from the other three, row 2 isolates `canonical` (it is the only arm that does not merge that block), and row 3 separates `{live, shadow}` from `{canonical, canonical-coalesced}`. Rows 1 and 3 together separate `live` from `canonical-coalesced`; row 3 alone separates `shadow` from it.
+
+Because `canonical-coalesced` is now the default, running with the variable **unset** must reproduce that last column exactly. If it reproduces the `live` column instead, you are on a pre-v0.15.0 build.
 
 If the arm you selected does not produce its column above, the variable is not reaching ferro and any comparison you run is meaningless. Only once the control behaves is a zero on your own corpus informative.
 
-> The control this section used to give did not work. It offered `c.[2del;9del]`, `c.[3del;9del]`, `c.[2del;9dup]` and claimed `canonical` answers `c.[2del;33del]`; on those three inputs **no arm differs from `live`**, so the documented check failed for a correct setup and would have been read as "the variable is not reaching ferro". The table above is verified against both a debug and a release build.
+> **This control has now been wrong twice, so check it rather than trusting it.** The first version offered `c.[2del;9del]`, `c.[3del;9del]` and `c.[2del;9dup]` and claimed `canonical` answers `c.[2del;33del]`; on those three inputs no arm differed from `live` at all. Its replacement — `c.[5_6insAC;9del]`, `c.[2del;5del]`, `c.[2del;9del]` — was **also** wrong in four of its twelve cells when re-measured: `live` row 1 read `c.[5_6insA;7_9delinsCAA]` and not `c.6_9delinsACCAA`, and rows 2 and 3 separated *nothing*, every arm answering `c.[2del;6del]` and `c.[2del;11del]`. Both failures share one cause: `NM_001234.1` is a G homopolymer from `c.9` to `c.33`, so deletion pairs inside it shuffle to a common form on every arm instead of partitioning differently. A discriminating row has to be a `delins` whose payload re-aligns, which is what the three above are. The table is measured, not composed.
 
 **From Python, it must be set before the first normalization.** The value is read once per process and cached, so:
 

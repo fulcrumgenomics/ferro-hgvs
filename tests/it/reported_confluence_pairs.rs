@@ -183,7 +183,30 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// all three stay `PairState::NeitherReaches` in `reported_partition_verdicts`'
 /// `PAIR_STATES` and its `OPEN_GAPS` stays at twelve. What moved is that the
 /// family stopped having two canonical forms.
-const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
+/// **3 -> 9 under the partition default flip: ALL NINE reported pairs now
+/// converge, and the clause that carried it is
+/// `rulings[canonical-form-choice-when-both-legal]`** (decided) — ferro derives
+/// the description from the resulting sequence and emits what falls out, so two
+/// spellings of one variant derive the same pieces and reach one answer. The
+/// six that joined are `1420-v2`, `1420-v3`, `1420-v4`, `1421-n1`, `1421-n2` and
+/// `1421-n3`.
+///
+/// **Read what it did NOT buy, because the test's own warning is about exactly
+/// this.** A rise "onto a form neither spelling asserted ... is not progress
+/// even when it lands on the form the issue asks for" — and none of the six
+/// lands on the form its issue asks for. Every one of them converges while
+/// moving OFF `wanted`, which is why all six pairs also move to
+/// `PairState::NeitherReaches` in `reported_partition_verdicts.rs` and
+/// `OPEN_GAPS` rises 12 -> 18 in the same change. Convergence and conformance
+/// moved in opposite directions here; the census going up is not a fix.
+///
+/// Two of the six have a further, separate finding: `1420-v2` and `1420-v3`
+/// converge on a form `general.md:56` ranks BELOW the one they left (a `dup`
+/// and an `ins` where a substitution was available). That is a README rule-2
+/// preference miss, filed as issue #1878. `1420-v4` is licensed instead — the
+/// `g.` axis is outside `delins.md:47` by
+/// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+const CONVERGING_PAIRS_THREE_PRIME: usize = 9;
 
 /// How many reported pairs converge today under `ShuffleDirection::FivePrime`.
 ///
@@ -198,7 +221,14 @@ const CONVERGING_PAIRS_THREE_PRIME: usize = 3;
 /// a property of the partition the splitter can express, and that is what #1649
 /// changed; which end of the run the members then shuffle to is downstream of
 /// it and does not decide whether the two spellings meet.
-const CONVERGING_PAIRS_FIVE_PRIME: usize = 3;
+/// **3 -> 9 under the partition default flip, the same six pairs and the same
+/// clause as 3' — see [`CONVERGING_PAIRS_THREE_PRIME`], including why this
+/// rise is not by itself progress.** The two directions agree on the count
+/// but not always on the string: `1421-n3` converges on
+/// `g.[34G>T;37delinsCC;39_40insTACGT]` at 3' and
+/// `g.[34G>T;37delinsCC;38_39insTTACG]` at 5', which is why both its rows
+/// joined `FIVE_PRIME_MOVERS` next door.
+const CONVERGING_PAIRS_FIVE_PRIME: usize = 9;
 
 /// Both directions, because a rule that converges only under the default 3'
 /// direction has not solved the problem: 5' is a supported option and reaches
@@ -337,29 +367,68 @@ fn the_reported_pair_census_is_unchanged() {
 /// with — cite the clause, then delete it in the same PR that raises the census.
 #[test]
 fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
-    // The span spelling's answer is MEASURED here rather than written into the
-    // assertion below as a literal, so the forbidden string cannot drift away
-    // from what the span actually prints. Measured in both directions:
-    // `g.38_41delinsATTG` -> `g.[38T>A;40_41delinsTG]`.
+    // RE-EXPRESSED FOR THE PARTITION DEFAULT FLIP, AND THE HAZARD IT NAMES DID
+    // NOT OCCUR. This guard was written against one mechanism: the CIS spelling
+    // merging across the unchanged 38-40 to reach its span sibling's answer,
+    // which `general.md:34` forbids and which would have coincided with #1420's
+    // wanted form — a defect that reads as a fix.
+    //
+    // Under `canonical-coalesced` the pair does converge, but by the OPPOSITE
+    // route and without that merge. The cis is returned UNCHANGED at
+    // `g.[37dup;41del]` — its members still individual across the unchanged
+    // nucleotides, so `:34` is satisfied — and it is the SPAN that re-derives
+    // down onto it, off `g.[38T>A;40_41delinsTG]`.
+    //
+    // So the original `assert_ne!` would now fail on a convergence that is not
+    // the thing it was protecting against, while the real invariant — no merge
+    // across the unchanged interior — is untested. Both are fixed here: the cis
+    // is pinned positively, and the merged spelling is named as forbidden
+    // directly rather than inferred from equality with the span.
+    //
+    // What the convergence DOES cost is that neither spelling now reaches
+    // #1420's wanted form, because the surviving form spells the change at 38 as
+    // a `dup` where `general.md:56` ranks a substitution above it. That is a
+    // README rule-2 preference miss, disclosed in the PR trailer, pinned in
+    // `reported_partition_verdicts.rs` (`1420-v2/span` -> `Gap`, the pair ->
+    // `NeitherReaches`, `OPEN_GAPS` 12 -> 13) and filed as issue #1878. Closing
+    // #1878 should move the span back onto `MERGED_ACROSS_UNCHANGED` below —
+    // which is why that string stays named here rather than being deleted.
     const SPAN: &str = "TEMPLATE:g.38_41delinsATTG";
     const CIS: &str = "TEMPLATE:g.[37dup;41del]";
-    const SPAN_OUTPUT: &str = "TEMPLATE:g.[38T>A;40_41delinsTG]";
+    const CIS_OUTPUT: &str = "TEMPLATE:g.[37dup;41del]";
+    const CIS_OUTPUT_FIVE_PRIME: &str = "TEMPLATE:g.[36dup;41del]";
+    // The form #1420 asks for, and the form a merge across the unchanged 39
+    // would produce. Not currently reached by either spelling; see #1878.
+    const MERGED_ACROSS_UNCHANGED: &str = "TEMPLATE:g.[38T>A;40_41delinsTG]";
 
     for direction in DIRECTIONS {
-        let span = normalize_in(TEMPLATE, SPAN, direction);
-        assert_eq!(
-            span, SPAN_OUTPUT,
-            "{direction:?}: the `1420-v2` span spelling moved off its pinned \
-             answer. The forbidden string below is defined as what the span \
-             prints, so re-measure it before re-blessing either",
-        );
         let cis = normalize_in(TEMPLATE, CIS, direction);
+        let expected_cis = match direction {
+            ShuffleDirection::FivePrime => CIS_OUTPUT_FIVE_PRIME,
+            _ => CIS_OUTPUT,
+        };
+        assert_eq!(
+            cis, expected_cis,
+            "{direction:?}: the `1420-v2` cis spelling moved. Its members are \
+             three unchanged nucleotides apart (38, 39, 40), so `general.md:34` \
+             keeps them individual — a cis output that is NOT this string is \
+             the thing this guard exists to catch, whatever it converged with",
+        );
         assert_ne!(
-            cis, span,
-            "{direction:?}: the `1420-v2` cis spelling re-derived into its span \
-             sibling's answer across three unchanged nucleotides (38, 39, 40), \
-             which `general.md:34` forbids. It coincides with #1420's wanted \
-             form; that is not a licence to raise the census",
+            cis, MERGED_ACROSS_UNCHANGED,
+            "{direction:?}: the `1420-v2` cis spelling merged across three \
+             unchanged nucleotides (38, 39, 40), which `general.md:34` forbids. \
+             It coincides with #1420's wanted form; that is not a licence to \
+             raise the census",
+        );
+        let span = normalize_in(TEMPLATE, SPAN, direction);
+        assert_ne!(
+            span, MERGED_ACROSS_UNCHANGED,
+            "{direction:?}: the `1420-v2` span spelling now reaches #1420's \
+             wanted form again. If that is issue #1878 being fixed, this is the \
+             good news — re-pin `1420-v2/span` to `Canonical`, the pair to \
+             `OneReaches`, and `OPEN_GAPS` back to 12, and delete this \
+             assertion in the same change",
         );
     }
 }

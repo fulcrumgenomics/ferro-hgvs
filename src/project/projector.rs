@@ -14278,9 +14278,42 @@ mod tests {
         // path. That split is the reason the protein expectation below moved
         // twice: it reached the initiation codon, which forced `p.(Met1?)` for a
         // variant whose 5'-most changed base is `c.4`.
+        //
+        // #1835 — RE-PINNED BY THE PARTITION DEFAULT FLIP, to
+        // `c.[4del;6_7insGGGG]`.
+        //
+        // The paragraph above explains the merge by `general.md:35`: the
+        // sequence-first pass partitioned the trimmed block into an insertion and
+        // a two-base replacement ONE unchanged base apart, and `c.4`/`c.5`/`c.6`
+        // being one codon made that "two variants separated by one nucleotide,
+        // together affecting one amino acid". The default arm derives a different
+        // partition — a deletion at `c.4` and an insertion at the junction 6|7 —
+        // whose members are TWO unchanged bases apart (`c.5` and `c.6`).
+        // `general.md:35`'s precondition is a separation of exactly one, so the
+        // exception no longer reaches this block and `general.md:34` describes the
+        // members individually.
+        //
+        // So the merge did not stop being licensed; the shape it was licensed for
+        // stopped being the shape that is derived.
+        // `separation-is-a-property-of-the-spelling-not-of-the-variant` (decided)
+        // is what says the separation is read off the re-derived partition rather
+        // than off the input.
+        //
+        // The harm the paragraph above names is NOT reintroduced. That harm was a
+        // partition walking a change onto the initiation codon and then reporting
+        // the start as unpredictable; the answer here reaches `c.4` at the 5'-most
+        // and touches nothing in `c.1_3`, so `affects_init` stays false and the
+        // protein consequence stays computable — both asserted immediately below.
+        //
+        // **The protein string does not move at all**: it is still
+        // `NP_SEP.1:p.(Asp2delinsMetGly)`, byte-identical across the flip. So this
+        // row moves a nucleotide representation and no consequence, which is the
+        // outcome `delins.md:47`'s protein-level ground actually cares about and
+        // is the reason this re-pin costs a downstream consumer nothing beyond the
+        // `c.` string itself.
         assert_eq!(
             format!("{}", proj.coding.as_ref().expect("coding expected")),
-            "NM_SEP.1:c.4_6delinsATGGGG"
+            "NM_SEP.1:c.[4del;6_7insGGGG]"
         );
         // The 5'-most base this variant changes is `c.4`, so the initiation
         // codon is untouched and the consequence is the bounded in-frame one:
@@ -14385,17 +14418,24 @@ mod tests {
     /// `is_frameshift` off the built consequence rather than off the arm.
     ///
     /// The single-variant spelling of the identical sequence change
-    /// (`c.4_12delinsTAAAAGGGG`) is projected here too, but the two are asserted
-    /// **not** to be byte-identical, because measured they are not: the projector
-    /// normalizes first, which re-partitions that delins into three same-codon
+    /// (`c.4_12delinsTAAAAGGGG`) is projected here too. It used to be asserted
+    /// **not** to be byte-identical, because measured it was not: the projector
+    /// normalizes first, which re-partitioned that delins into three same-codon
     /// substitutions (`c.4G>T`, `c.5T>A`, `c.9A>G`), and the substitution-
-    /// combination path answers `p.[(Val2Ter);(Lys3=)]` — carrying a silent
-    /// residue downstream of a terminator. This divergence is present on `main`,
-    /// is unrelated to the combined build, and is deliberately left alone here;
-    /// the builder-level equivalence this change *does* own is asserted by
+    /// combination path answered `p.[(Val2Ter);(Lys3=)]` — carrying a silent
+    /// residue downstream of a terminator. That divergence was pinned rather than
+    /// adjudicated correct, so that "a fix to the substitution path has to come
+    /// past this test rather than silently changing one side".
+    ///
+    /// **#1835 is that fix arriving, and it comes past this test.** The partition
+    /// default flip re-derives the block instead of cutting it into three isolated
+    /// substitutions, so the combined path answers and both spellings now give
+    /// `p.(Val2Ter)`. The assertion below is therefore an equality between the two
+    /// spellings rather than two separate pins. The builder-level equivalence this
+    /// module already owned is still asserted by
     /// `cis_combined_frameshift_arm_matches_the_single_member_builder` in
-    /// `protein::indel`. Pinning it means a fix to the substitution path has to
-    /// come past this test rather than silently changing one side.
+    /// `protein::indel`; what has changed is that the projector-level equivalence
+    /// now holds too.
     #[test]
     fn project_cis_net_in_frame_but_mid_shift_stop_takes_the_frameshift_arm() {
         use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
@@ -14455,11 +14495,38 @@ mod tests {
         let multi_protein = format!("{}", proj.protein.expect("protein expected"));
         assert_eq!(multi_protein, "NP_FSSTOP.1:p.(Val2Ter)");
 
-        // The measured, pre-existing divergence described above. Pinned as a
-        // divergence — NOT adjudicated correct — so that closing it is a
-        // deliberate act rather than a silent one.
+        // #1835 — THE DIVERGENCE IS CLOSED, DELIBERATELY.
+        //
+        // This was pinned as a divergence — "NOT adjudicated correct — so that
+        // closing it is a deliberate act rather than a silent one". The partition
+        // default flip closes it, and this is that act.
+        //
+        // The single-variant spelling `c.4_12delinsTAAAAGGGG` used to normalize
+        // into three same-codon substitutions (`c.4G>T`, `c.5T>A`, `c.9A>G`),
+        // which sent it down the substitution-combination path and produced
+        // `p.[(Val2Ter);(Lys3=)]` — **a silent residue downstream of a
+        // terminator**, which is not a describable consequence of anything. Under
+        // the default arm that block is re-derived and no longer presents as three
+        // isolated substitutions, so the combined path answers, and the two
+        // spellings of one sequence change now agree on `p.(Val2Ter)`.
+        //
+        // `frameshift.md:22` is what makes `p.(Val2Ter)` the right answer for both:
+        // the first changed residue is itself the terminator, which may not be
+        // spelled `fsTer1` and is required as the nonsense substitution. The
+        // multi-member spelling already gave it; the single-member one now does
+        // too.
+        //
+        // Asserted as an EQUALITY between the two spellings rather than as two
+        // string pins, so a future change that moves them apart fails on the
+        // divergence rather than on whichever pin it happened to touch.
         let single_protein = format!("{}", single.protein.expect("protein expected"));
-        assert_eq!(single_protein, "NP_FSSTOP.1:p.[(Val2Ter);(Lys3=)]");
+        assert_eq!(single_protein, "NP_FSSTOP.1:p.(Val2Ter)");
+        assert_eq!(
+            single_protein, multi_protein,
+            "the single-member and multi-member spellings of one sequence change must \
+             agree on the protein consequence; they diverged until #1835, with the \
+             single-member side carrying a silent residue after a terminator"
+        );
 
         // `build_frameshift_variant` emitted a NONSENSE substitution here, not a
         // frameshift form, so `is_frameshift` must be `false` — derived from the

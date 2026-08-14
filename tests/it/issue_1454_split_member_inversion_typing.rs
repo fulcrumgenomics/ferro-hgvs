@@ -177,12 +177,47 @@ fn normalized_fixed_point(provider: &MockProvider, descriptor: &str) -> String {
 /// #1524, only the codon-frame triplet can — a substitution run member is
 /// exactly one maximal mismatch run, and `decompose_delins` has already typed
 /// those.
+///
+/// # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835) — IT IS NOW TWO MEMBERS,
+/// AND NEITHER IS AN `inv`
+///
+/// `c.10_15delinsTAATAT` now normalizes to `c.[9dup;15del]`. The test name says
+/// "is now one member" and is left alone so the #1524 history stays greppable;
+/// read the assertion.
+///
+/// WHY. The span `c.10_15` reads `AATATA` and the payload is `TAATAT` — the same
+/// bases rotated one position. Read column-wise that is five mismatches; read as
+/// an alignment it is one inserted `T` at the 5' end and one deleted `A` at the
+/// 3', cost two. `partition_block` compared position-wise on an equal-length
+/// block and so could only ever see the run; `partition_block_canonical` searches
+/// for the minimal alignment and finds the rotation.
+/// `canonical-form-choice-when-both-legal` and
+/// `derivation-may-not-be-bounded-by-the-inputs-spelling` (both decided) are what
+/// say the derived form governs rather than the authored one.
+///
+/// The inserted base is a copy of `c.9`, the base immediately 5' of the insertion
+/// point, so `DNA/duplication.md:18` REQUIRES it be labelled `dup` — the label is
+/// mandated, not chosen.
+///
+/// WHY IT IS NOT MERGED BACK, even though this is a `c.` axis where
+/// `DNA/delins.md:47` does reach. `delins-merge-vs-individual-gap-two-or-more` is
+/// scoped by DIRECTION to the net-deletion case — payload shorter than the span —
+/// and this block is EQUAL length (6 in, 6 out).
+/// `delins-recommendation-reach-when-the-input-arrives-split` sits under that
+/// scope and "does not widen any of them", so the gap-bearing test is never
+/// reached. The implementation matches: the coalescing pass is gated on
+/// `payload.len() < span.len()` (`merge.rs`), so an equal-length block never
+/// enters it. `general.md:34` therefore governs and the two members, separated by
+/// the unchanged `c.10_14`, are described individually.
+///
+/// Sequence preservation was checked independently of the normalizer: applying
+/// `c.10_15delinsTAATAT` and `c.[9dup;15del]` to `CORE` gives the same 64-mer.
 #[test]
 fn a_span_the_codon_exception_used_to_leave_behind_is_now_one_member() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:c.10_15delinsTAATAT"),
-        "NM_TEST.1:c.10_15delinsTAATAT",
+        "NM_TEST.1:c.[9dup;15del]",
     );
 }
 
@@ -192,6 +227,14 @@ fn a_span_the_codon_exception_used_to_leave_behind_is_now_one_member() {
 /// Pinned as convergence rather than as three independent strings: a test that
 /// pinned only the first would go green if a later change moved the others onto
 /// a different form, which is the opposite of what this issue is about.
+///
+/// #1835: the converged form is `c.[9dup;15del]`, not the spanning
+/// `c.10_15delinsTAATAT` — see
+/// [`a_span_the_codon_exception_used_to_leave_behind_is_now_one_member`] for the
+/// derivation and the licensing. **The property this test asserts is untouched
+/// and is the one that matters here**: all three spellings, including the one
+/// authored with an explicit `inv` member, still reach a single form. Confluence
+/// is what #1454 is about, and it is preserved; only the representative moved.
 #[test]
 fn the_other_spellings_of_the_variant_converge_on_the_same_form() {
     let provider = provider("NM_TEST.1", CORE, true);
@@ -202,7 +245,7 @@ fn the_other_spellings_of_the_variant_converge_on_the_same_form() {
     ] {
         assert_eq!(
             normalized_fixed_point(&provider, input),
-            "NM_TEST.1:c.10_15delinsTAATAT",
+            "NM_TEST.1:c.[9dup;15del]",
             "spelling `{input}` did not converge",
         );
     }
@@ -215,12 +258,30 @@ fn the_other_spellings_of_the_variant_converge_on_the_same_form() {
 /// while the transcript reference is `T`; `rules::is_revcomp` maps `A` to `T`
 /// and never to `U`, so without the fold this member reads as an ordinary delins
 /// and the `r.` axis silently keeps the defect.
+///
+/// # #1835 — THE `r.` AXIS STILL AGREES WITH `c.`, BUT ON A FORM WITH NO `inv`
+///
+/// `r.10_15delinsuaauau` now reaches `r.[9dup;15del]`, matching the `c.` axis
+/// exactly (see
+/// [`a_span_the_codon_exception_used_to_leave_behind_is_now_one_member`]). The
+/// test name predates the move; read the assertion.
+///
+/// **The `U`/`T` fold this row exists for is still being exercised, and that is
+/// not obvious from the output.** The payload arrives as `uaauau` and the
+/// transcript reference is `T`-alphabet, so reaching the rotation alignment at
+/// all requires the two to be compared in one alphabet — an unfolded comparison
+/// sees six mismatches, finds no rotation, and would land on a spanning `delins`
+/// rather than on `[9dup;15del]`. So the row still fails if the fold is removed;
+/// what it no longer does is witness the fold via an `inv` label specifically.
+///
+/// Cross-axis agreement is the stronger half of what this row buys, and it is
+/// unchanged: `c.`, `n.` and `r.` all reach `[9dup;15del]` over this core.
 #[test]
 fn the_rna_axis_reaches_the_same_inversion() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:r.10_15delinsuaauau"),
-        "NM_TEST.1:r.10_15delinsuaauau",
+        "NM_TEST.1:r.[9dup;15del]",
     );
 }
 
@@ -236,17 +297,46 @@ fn the_rna_axis_reaches_the_same_inversion() {
 /// This is what an over-general fix would break: a rule that typed *any*
 /// multi-base member as `inv` whenever its payload happened to be a reverse
 /// complement would have to change this row too, and it must not.
+///
+/// # #1835 — THE CONTRAST THIS ROW DREW IS GONE, AND THAT IS THE FINDING
+///
+/// Both frameless spellings now reach `n.[9dup;15del]` — the SAME form the `c.`
+/// axis reaches. The paragraph above says "the same core and the same span
+/// therefore split differently"; they no longer do.
+///
+/// **This is not the codon exception leaking onto a frameless axis.** It is the
+/// exception becoming irrelevant on this shape. The derivation now finds a
+/// rotation alignment — one inserted base at the 5' end, one deleted at the 3' —
+/// before any merging step runs, and that partition has no adjacent pair for a
+/// codon-frame exception to act on. So the exception declines on `c.` too, and
+/// the two axes agree because neither one applies it, not because the frameless
+/// one started to. `projection-codon-exception-is-decided-by-the-rendered-axis`
+/// (decided) says the exception reaches only an axis declaring a reading frame;
+/// nothing here contradicts that, and this row no longer tests it.
+///
+/// **WHAT IS LOST.** This was the discriminator for *where* the #1454 fix fires,
+/// and it can no longer discriminate: a frame-aware and a frameless axis produce
+/// identical output over this core, so removing the reading-frame condition
+/// would not redden it. The remaining guard for that condition in this module is
+/// `codon_triplet_over_an_ambiguous_centre_is_an_inversion`, which uses
+/// [`AMBIGUOUS_CORE`] and is unmoved by this change. Recorded as a real coverage
+/// loss rather than papered over; restoring it needs a core whose minimal
+/// alignment is not a rotation.
+///
+/// The rows still assert something worth having — that the two frameless
+/// providers agree with each other and that each output is a fixed point — but
+/// they are no longer evidence about reading frames.
 #[test]
 fn an_axis_without_a_reading_frame_is_not_re_split() {
     let coding = provider("NM_TEST.1", CORE, true);
     let noncoding = provider("NR_TEST.1", CORE, false);
     assert_eq!(
         normalized_fixed_point(&coding, "NM_TEST.1:n.10_15delinsTAATAT"),
-        "NM_TEST.1:n.[10A>T;12_15delinsATAT]",
+        "NM_TEST.1:n.[9dup;15del]",
     );
     assert_eq!(
         normalized_fixed_point(&noncoding, "NR_TEST.1:n.10_15delinsTAATAT"),
-        "NR_TEST.1:n.[10A>T;12_15delinsATAT]",
+        "NR_TEST.1:n.[9dup;15del]",
     );
 }
 
@@ -256,12 +346,26 @@ fn an_axis_without_a_reading_frame_is_not_re_split() {
 /// `c.12_15` is `TATA -> CTAT`, one contiguous mismatch run that is not itself a
 /// reverse complement, even though `13_15` (`ATA -> TAT`) inside it is. The fix
 /// types spans the split *creates*; it must not create one.
+///
+/// # #1835 — RE-PINNED TO `c.[11_12insC;15del]`, AND THE CONTROL STILL HOLDS
+///
+/// **The property this row exists to guard is intact: there is no `inv` in the
+/// output.** The interior `13_15` reverse complement is still not carved out.
+/// That is the whole #1034 / #1040 control, and it passes.
+///
+/// What moved is the same rotation the sibling rows above take: `TATA -> CTAT` is
+/// one inserted `C` at the 5' end and one deleted `A` at the 3' — cost two —
+/// rather than four mismatched columns. The inserted `C` is not a copy of the
+/// base 5' of it, so it stays an `ins` and `DNA/duplication.md:18` does not fire
+/// (contrast the `dup` in the sibling rows, where it does). Equal-length block,
+/// so `delins.md:47`'s net-deletion scope excludes it and `general.md:34`
+/// describes the two members individually.
 #[test]
 fn a_reverse_complement_sub_run_of_one_contiguous_change_stays_a_delins() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:c.12_15delinsCTAT"),
-        "NM_TEST.1:c.12_15delinsCTAT",
+        "NM_TEST.1:c.[11_12insC;15del]",
     );
 }
 
