@@ -101,9 +101,9 @@
     },
     {
       "id": "canonical-coalesced-default-1835",
-      "title": "canonical-coalesced default re-derives a shared-base delins into dup + delins",
-      "spec_section": "recommendations/general.md:157-160; DNA/delins.md:44-47",
-      "note": "#1835 makes `canonical-coalesced` the shipped partition rule. On `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` and its two sibling spellings the 2-base reference span and 5-base payload share a base, so deriving from the resulting sequence exposes `g.[28293dup;28295delinsCCC]` where mutalyzer emits the spanning `g.28294_28295delinsATCCC`. Both denote the same bases, so this is a representation choice and not a sequence disagreement. `rulings[canonical-form-choice-when-both-legal]` (decided) requires deriving the description from the resulting sequence rather than preserving a spelling, and `rulings[adjudication-precedence-order]` records that mutalyzer is not an authority: its normalizer minimizes a weighted description length with constants dated 2014 and states no separation rule, so a disagreement of this shape is two objectives meeting. Mutalyzer's answers are retained in the corpus as evidence and are never overwritten."
+      "title": "canonical-coalesced splits a net-insertion shared-base block, where the split is canonical",
+      "spec_section": "recommendations/DNA/delins.md:44-47; general.md:157-160; consultation/SVD-WG010.md:5,:16; DNA/duplication.md:90-92",
+      "note": "#1835 makes `canonical-coalesced` the shipped partition rule, so a block whose payload shares bases with the reference span is derived from the resulting sequence and emitted as members: `NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` becomes `g.[5207delinsGT;5208_5209insCTGT;5210_5211insT;5211_5212insATTATCT;5212_5213insGC]`, and `g.28294_28295delinsATCCC` becomes `g.[28293dup;28295delinsCCC]`. mutalyzer keeps the span. FERRO'S SPLIT IS THE CANONICAL FORM HERE, AND THE DIRECTION IS WHAT DECIDES IT. `rulings[delins-merge-vs-individual-gap-two-or-more]` recommends the spanning `delins`, but its 2026-08-11 operator ruling scopes that to the NET-DELETION case — a payload SHORTER than the span it replaces — and states in terms that it does NOT reach net insertions, 'where the split form remains canonical'. Every row in this cluster is a net INSERTION: span 6 nt against a 21 nt payload on the `NG_008939.1` family, 2 against 5 on `NG_007485.1`, 5 against 31 on `NM_003002.4`. So the recommendation of the span does not reach them and the split stands. DO NOT 'CORRECT' THIS BY CITING `:47` — that is the specific misreading the direction-scope ruling was written to stop, and it was made once on this PR before being caught against the record. The ruling's own grounds are that SVD-WG010 was REJECTED and its worked example is precisely a net-insertion merge, and that `DNA/duplication.md:90` publishes a net insertion AS a split. `rulings[canonical-form-choice-when-both-legal]` supplies the rest: derive from the resulting sequence, do not preserve the input's spelling. mutalyzer's answers are retained in the corpus as evidence and are never overwritten."
     }
   ],
   "cases": [
@@ -368,12 +368,6 @@
           "cluster": "canonical-coalesced-default-1835"
         },
         {
-          "axis": "normalized",
-          "policy": "ferro-policy-1835-canonical-coalesced-default",
-          "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
-          "cluster": "canonical-coalesced-default-1835"
-        },
-        {
           "axis": "noncoding",
           "policy": "ferro-policy-1835-canonical-coalesced-default",
           "note": "canonical-coalesced default (#1835): the 2-base reference span and 5-base payload share a base, so the derivation exposes g.[28293dup;28295delinsCCC] where mutalyzer emits the spanning g.28294_28295delinsATCCC. Both denote the same bases. mutalyzer is not an authority under rulings[adjudication-precedence-order]; its answer is retained above as evidence.",
@@ -389,12 +383,20 @@
         "input not for test_description_to_model_to_description"
       ],
       "input": "NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]",
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-763-transcript-set-enumeration",
-        "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
-        "cluster": "transcript-set-enumeration-763"
-      },
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-763-transcript-set-enumeration",
+          "note": "After the #856 bracket-literal fix the inserted payload is correct (the bracketed [ATCCC]/[ATC] is no longer reverse-complemented); the remaining divergence is transcript-set/version only — ferro enumerates the latest curated overlapping set (NM_058195.4 etc., #710) while mutalyzer lists the older NM_058195.3, and the input-gene consequence body is byte-identical. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). Accepted divergence (#763).",
+          "cluster": "transcript-set-enumeration-763"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ],
       "normalized": "NG_007485.1(NM_000077.4):c.161_162delinsATCCC",
       "genomic": "NG_007485.1:g.28294_28295delinsATCCC",
       "coding_protein_descriptions": [
@@ -1248,7 +1250,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1264,7 +1286,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1280,7 +1322,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1297,7 +1359,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1314,7 +1396,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1331,7 +1433,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsProAspAsnGluHisArgThr)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1347,7 +1469,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1363,7 +1505,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1385,7 +1547,21 @@
         "cluster": "inserted-inversion-854",
         "note": "An inserted `<range>inv` segment in a delins/ins payload means the reverse-complement (inverted copy) of that range's bases (DNA/insertion.md L52-62; DNA/inversion.md L5, L48-49, L53-62). ferro reverse-complements g.4300_4309 (GTCCTGTGCT -> AGCACAGGAC), keeps g.4310_4320 forward (CATTATCTGGC), then normalizes -- the deleted span ACGCCG and the insert AGCAC... share a leading A, trimmed -- yielding g.5208_5212delinsGCACAGGACCATTATCTGGC. mutalyzer leaves the segment forward (GTCCTGTGCT; inversion not applied) and so also skips the prefix trim; its output is spec-incorrect. ferro's output is the spec-correct value (#854).",
         "section": "HGVS §Inserted inversion (reverse complement)"
-      }
+      },
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1401,7 +1577,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1418,11 +1614,25 @@
         ]
       ],
       "to_test": true,
-      "accepted_divergence": {
-        "axis": "coding_protein_descriptions",
-        "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
-        "note": "ferro renders the stop-encoding delins protein consequence capped at the change site p.(Arg53_Arg54delinsSerCysAlaAlaArgTer) (delins.md L27-28); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsSerCysAlaAlaArg). Spec-correct per #911 (fixed in #913)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
+          "note": "ferro renders the stop-encoding delins protein consequence capped at the change site p.(Arg53_Arg54delinsSerCysAlaAlaArgTer) (delins.md L27-28); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsSerCysAlaAlaArg). Spec-correct per #911 (fixed in #913)."
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1438,7 +1648,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1454,7 +1684,27 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Arg54delinsAlaGlnAspHisTyrLeuAla)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": [
+        {
+          "axis": "coding_protein_descriptions",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1471,7 +1721,21 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
-      }
+      },
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1489,7 +1753,21 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
-      }
+      },
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -1506,7 +1784,21 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "ferro resolves the legacy LOVD gene-model selector (GENE_v001) on the NG_ genomic reference to its RefSeq transcript and projects the spec-correct protein consequence (#783, extending the #500/#637 selector resolution to the c./p. projection axes). The consequence is identical to the oracle; the only remaining delta is the protein reference form — HGVS p. descriptions reference the bare NP_ accession, while mutalyzer wraps it as NM_x(NP_y). ferro's bare-NP output is spec-correct.",
         "cluster": "bare-np-protein"
-      }
+      },
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [
@@ -2740,12 +3032,7 @@
       "keywords": [],
       "input": "NG_012337.1:g.4delins7_50",
       "normalized": "NG_012337.1:g.[3_4insGGTT;5_6insACCATATCTCTACTTTGTGTTTATGTTTGTGTATGCATT]",
-      "to_test": true,
-      "accepted_divergence": {
-        "axis": "normalized",
-        "policy": "ferro-policy-654-positional-insert-literal-expansion",
-        "note": "ferro emits the literal copied sequence for delins7_50; mutalyzer decomposes it into a two-insert allele. Both describe the same edit on a contiguous genomic reference."
-      }
+      "to_test": true
     },
     {
       "keywords": [],
@@ -4630,11 +4917,19 @@
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value.",
         "cluster": "bare-np-protein"
       },
-      "accepted_divergence": {
-        "axis": "normalized",
-        "policy": "ferro-policy-654-positional-insert-literal-expansion",
-        "note": "ferro expands the inverted copy-range delins payload to literal bases; mutalyzer keeps the positional copy notation (c.206_209delins191_220inv)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-654-positional-insert-literal-expansion",
+          "note": "ferro expands the inverted copy-range delins payload to literal bases; mutalyzer keeps the positional copy notation (c.206_209delins191_220inv)."
+        },
+        {
+          "axis": "rna_description",
+          "policy": "ferro-policy-1835-canonical-coalesced-default",
+          "note": "ferro derives the member split from the resulting sequence; mutalyzer keeps the span. This block is a NET INSERTION, which rulings[delins-merge-vs-individual-gap-two-or-more]'s 2026-08-11 direction scope explicitly does not reach — the split form remains canonical there. See the cluster note.",
+          "cluster": "canonical-coalesced-default-1835"
+        }
+      ]
     },
     {
       "keywords": [

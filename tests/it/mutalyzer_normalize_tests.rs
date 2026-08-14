@@ -4706,15 +4706,36 @@ fn axis_noncoding_idempotent() {
     // fewer means something was fixed and this pin went stale without anyone
     // noticing, which is how a partial fix comes to read as a complete one.
     //
-    // The 21 fall into three shapes, and they are not equally serious:
+    // The 62 fall into three shapes, and they are not equally serious:
     //
     // * 16 re-render as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
     //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization runs on the
     //   re-normalization that did not run on the projection.
-    // * 4 re-partition into members — `n.309delinsCTGA` ->
-    //   `n.[308_309insCT;310dup]`, all four from cross-reference `delins`
-    //   inputs (the #422 family).
+    // * 45 re-partition into members — `n.309delinsCTGA` ->
+    //   `n.[308_309insCT;310dup]`, from cross-reference `delins` inputs (the
+    //   #422 family).
     // * 1 is NOT 3'-shifted, asserted separately below.
+    //
+    // The residue moved UP, 21 -> 62, and the whole of that movement is in the
+    // second shape: 16 + 4 + 1 became 16 + 45 + 1. The repeat shape and the
+    // non-3'-shifted row are byte-for-byte what they were.
+    //
+    // WHAT THIS IS AND IS NOT. The cause is this PR making `canonical-coalesced`
+    // the shipped rule, so more blocks are re-partitioned into members — and the
+    // member split is the CANONICAL form for these, not a defect: every one is a
+    // net insertion, which `rulings[delins-merge-vs-individual-gap-two-or-more]`'s
+    // 2026-08-11 direction scope explicitly does not reach. So this is NOT 45
+    // wrong answers. What it is, and why it still has to be pinned rather than
+    // waved through, is that the PROJECTION and the RE-NORMALIZATION disagree
+    // about which of them does that re-partitioning: the projection emits the
+    // span, normalizing it again yields the members. Idempotency is a property
+    // of the pipeline, and it is violated whichever spelling is canonical. That
+    // is #1712, and this PR enlarges it rather than introducing it.
+    //
+    // So do NOT read this pin as licensing the residue, and do not "fix" it by
+    // making the members non-canonical — that would contradict the direction
+    // scope above. The fix is for the projection to derive what a second
+    // normalization would.
     assert_eq!(
         failures.len(),
         NONCODING_NON_IDEMPOTENT,
@@ -4745,7 +4766,18 @@ fn axis_noncoding_idempotent() {
 /// ([`axis_genomic_idempotent`]) reads 214 tested / 0 non-idempotent on the same
 /// run, which is what isolates this to the non-coding path rather than to
 /// normalization generally.
-const NONCODING_NON_IDEMPOTENT: usize = 21;
+///
+/// Re-measured on this branch, where `FERRO_PARTITION` defaults to
+/// `canonical-coalesced`, against the same reference: 681 axes tested — the
+/// denominator is unchanged, so this is not a fan-out change — and 62
+/// non-idempotent. `FERRO_PARTITION=live` on this same tree still produces 21;
+/// that arm passed against the old pin before it was raised, which is what
+/// attributes the movement to the default flip rather than to anything else on
+/// the branch. One consequence to expect: this pin tracks the SHIPPED default,
+/// so running under `FERRO_PARTITION=live` now fails this assertion by
+/// construction, reporting 21 against a pin of 62. That is the pin doing its
+/// job, not a second defect.
+const NONCODING_NON_IDEMPOTENT: usize = 62;
 
 /// The one row in that residue whose output is not 3'-shifted (#1712).
 const NONCODING_NOT_THREE_PRIME_SHIFTED: &str = "LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del";
