@@ -74,20 +74,34 @@
 //!
 //! # Status
 //!
-//! Green: 29 of 34 rows produce their recorded answer, all three confluence
-//! classes converge, every answer is a fixed point, and no emitted output puts
-//! two members on consecutive nucleotides.
+//! Green throughout, and **no row is red or `#[ignore]`d**: 29 of 34 rows
+//! produce their recorded answer, all three confluence classes converge, every
+//! answer is a fixed point, and no emitted output puts two members on
+//! consecutive nucleotides — with no row exempt from that last check.
 //!
-//! Red, `#[ignore]`d, and expected to stay red until fixed:
+//! A red row may never be weakened to green. A green re-classification is what
+//! [`the_corpus_census_is_unchanged`] exists to catch, and it now asserts the
+//! red set is **empty**, so re-introducing one is a deliberate edit.
 //!
-//! - **#1542** — `NC_000017.11:g.80110044_80110047delinsGTTGG` emits members at
-//!   separation 0 in a `dup`-shaped split, surviving #1537. The separation
-//!   reading is itself part of the open question: the adjacency depends on
-//!   treating a `dup` as occupying the position it duplicates, and under a
-//!   zero-width (interbase) reading the pair is not adjacent at all.
+//! ## #1542 was ruled on, and its guard was replaced rather than deleted
 //!
-//! That red test may not be weakened to green. A green re-classification is what
-//! [`the_corpus_census_is_unchanged`] exists to catch.
+//! `NC_000017.11:g.80110044_80110047delinsGTTGG` was the last red row, pinned at
+//! `g.[80110044C>G;80110045dup;80110047A>G]` and the one row exempted from the
+//! corpus-wide separation check. Both of those are gone, for two different
+//! reasons that are worth keeping apart:
+//!
+//! - **the instrument was wrong.** [`member_bounds`] read a `dup` as occupying
+//!   the position it duplicates, so the pair reported separation 0. A `dup`
+//!   inserts and consumes no reference position: on SPDI write footprints the
+//!   members were at separation `[1, 1]`, and the exemption was buying nothing;
+//! - **the real defect was elsewhere.** The partition depended on the *shuffle
+//!   direction* — `live`/3' split where `live`/5' and all three sequence-first
+//!   arms merged. Each answer was a fixed point, so no oracle could see it.
+//!
+//! So `the_dup_shaped_split_does_not_touch` is replaced by
+//! [`the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence`],
+//! which asserts the property the operator ruled on (2026-08-13) rather than
+//! the one that never held.
 //!
 //! ## #1541 stopped reproducing, and its guard now runs
 //!
@@ -130,7 +144,12 @@ use ferro_hgvs::conformance::case_harvest::{Case, Fixture, CASES_PATH, SPEC_DIR,
 use ferro_hgvs::conformance::reference_window::{WindowFixture, WindowProvider};
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
-use ferro_hgvs::{NormalizeConfig, Normalizer, ReferenceProvider, ShuffleDirection};
+use ferro_hgvs::hgvs::variant::HgvsVariant;
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{
+    from_sequences_detailed, parse_hgvs, FromSequencesOptions, NormalizeConfig, Normalizer,
+    ReferenceProvider, ShuffleDirection,
+};
 
 /// The command that rebuilds the committed slice, quoted in every failure whose
 /// remedy is a regeneration.
@@ -167,10 +186,24 @@ fn audited_provider() -> AuditedProvider<WindowProvider> {
 /// the normalizer (#1181/#1197). This is the mode every recorded answer in
 /// `cases.json` was measured under.
 fn run<P: ReferenceProvider + Clone>(provider: &P, input: &str) -> Result<String, String> {
+    run_in(provider, input, ShuffleDirection::ThreePrime)
+}
+
+/// [`run`] in an explicit shuffle direction.
+///
+/// Only [`the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence`]
+/// asks for the 5' one, and it asks because #1542's defect was visible *only*
+/// as a disagreement between the two: each direction's answer is a fixed point,
+/// so a single-direction run cannot see it.
+fn run_in<P: ReferenceProvider + Clone>(
+    provider: &P,
+    input: &str,
+    direction: ShuffleDirection,
+) -> Result<String, String> {
     let config = ErrorConfig::lenient();
     let parsed = parse_hgvs_with_config(input, config.clone())
         .map_err(|e| format!("preprocess error: {e}"))?;
-    let normalize_config = NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, config);
+    let normalize_config = NormalizeConfig::for_entry_point(direction, config);
     Normalizer::with_config(provider.clone(), normalize_config)
         .normalize(&parsed.result)
         .map(|n| n.to_string())
@@ -207,36 +240,88 @@ fn assert_the_slice_answered_everything<P>(provider: &AuditedProvider<P>, floor:
 // ---------------------------------------------------------------------------
 
 /// Every member boundary in `description`, as `(end of one, start of the next)`
-/// on the HGVS axis. `None` when a member does not begin with a plain integer
-/// coordinate (an intronic offset, a UTR position), which this crude reader
-/// deliberately declines rather than mis-parses.
+/// on the reference's own axis, read from each member's **SPDI write
+/// footprint**. Empty for a single-member description, which has a geometry but
+/// no boundaries; `None` when `description` does not parse or when a member does
+/// not convert — which declines rather than guesses.
 ///
-/// It reads the string rather than the parsed variant, on purpose: what
-/// `delins.md:16` constrains is the *description*, and re-deriving the spans
-/// from the code that produced them would check that code against itself.
-fn member_bounds(description: &str) -> Option<Vec<(u64, u64)>> {
-    let (_, body) = description.split_once(':')?;
-    let body = body.get(2..)?; // strip the `g.` / `c.` / `n.` / `r.` / `m.` prefix
-    let inner = body.strip_prefix('[')?.strip_suffix(']')?;
-    let leading_number = |s: &str| -> Option<u64> {
-        let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
-    };
-    let mut spans = Vec::new();
-    for member in inner.split(';') {
-        let start = leading_number(member)?;
-        let end = match member.split_once('_') {
-            Some((_, rest)) => leading_number(rest)?,
-            None => start,
-        };
-        spans.push((start, end));
-    }
+/// # Why not the string (#1542)
+///
+/// This used to be a textual leading-number parse, on the stated ground that
+/// `delins.md:16` constrains the *description* and re-deriving spans from the
+/// producing code would check that code against itself. The second half of that
+/// still holds and is why the footprint comes from
+/// [`hgvs_to_spdi`](ferro_hgvs::spdi::hgvs_to_spdi) — which applies the
+/// description to the reference and never asks the normalizer what a member
+/// covers — rather than from `src/normalize/`. The first half was wrong: the
+/// **positions a member writes** are not the integers it happens to spell.
+///
+/// Two shapes it got wrong, both load-bearing for the rule it feeds:
+///
+/// - a `dup` was measured as occupying the position it duplicates, so
+///   `80110045dup` read as `[80110045, 80110045]`. A duplication inserts; it
+///   consumes no reference position, and its footprint is empty at the junction
+///   3' of the copied base. That single reading is what made #1542 present as a
+///   `delins.md:16` violation at separation 0 when the members are in fact at
+///   separation **1**;
+/// - `101_102insT` read as `[101, 102]`, a two-base span. `insertion.md:15`
+///   calls those two the **flanking** nucleotides — the insertion sits between
+///   them and consumes neither — so the footprint is empty there too.
+///
+/// The interval is closed and 1-based so it reads against the HGVS coordinates
+/// beside it, with an insertion returned empty (`hi == lo - 1`). That is what
+/// makes `separation = next.lo - prev.hi - 1` uniform across edit kinds; the
+/// same geometry `examples/dump_confluence_divergences.rs` documents, where
+/// treating an insertion's `A_B` anchor as a consumed two-base span had already
+/// invalidated one published distribution.
+///
+/// Members are sorted by footprint, because a separation is a property of the
+/// geometry and not of the order the members are rendered in.
+fn member_bounds<P: ReferenceProvider + ?Sized>(
+    description: &str,
+    provider: &P,
+) -> Option<Vec<(i64, i64)>> {
+    let spans = member_footprints(description, provider)?;
     Some(spans.windows(2).map(|w| (w[0].1, w[1].0)).collect())
 }
 
+/// Each member's own closed, 1-based SPDI write footprint, ascending — the
+/// spans [`member_bounds`] reads its boundaries off. See that function for the
+/// geometry and for why the footprint rather than the spelled endpoints.
+///
+/// A **single-member** description yields one footprint rather than `None`: it
+/// has a geometry even though it has no boundaries, and
+/// [`the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence`]
+/// compares geometries between two descriptions that need not have the same
+/// member count.
+fn member_footprints<P: ReferenceProvider + ?Sized>(
+    description: &str,
+    provider: &P,
+) -> Option<Vec<(i64, i64)>> {
+    let members = match parse_hgvs(description).ok()? {
+        HgvsVariant::Allele(allele) => allele.variants,
+        single => vec![single],
+    };
+    let mut spans = Vec::with_capacity(members.len());
+    for member in &members {
+        let triple = hgvs_to_spdi(member, provider).ok()?;
+        // `position` is a 0-based interbase offset, so `+ 1` is the first base
+        // written; a pure insertion has an empty `deletion` and lands at
+        // `hi == lo - 1`.
+        let lo = i64::try_from(triple.position).ok()? + 1;
+        let hi = lo + i64::try_from(triple.deletion.len()).ok()? - 1;
+        spans.push((lo, hi));
+    }
+    spans.sort_unstable();
+    Some(spans)
+}
+
 /// The members of `description` that sit on consecutive nucleotides.
-fn adjacent_members(description: &str) -> Vec<(u64, u64)> {
-    member_bounds(description)
+fn adjacent_members<P: ReferenceProvider + ?Sized>(
+    description: &str,
+    provider: &P,
+) -> Vec<(i64, i64)> {
+    member_bounds(description, provider)
         .unwrap_or_default()
         .into_iter()
         .filter(|(previous_end, next_start)| *next_start <= previous_end + 1)
@@ -315,11 +400,11 @@ fn reverse_complement(bases: &str) -> String {
 /// before adding a second one — a form pinned without that disclosure is the
 /// freezing this paragraph forbids.
 ///
-/// The one red row's answer is pinned too, at today's **wrong** output. So
-/// fixing #1542 turns this test red as well as turning its `#[ignore]`d guard
-/// green — which is correct: a red row's answer moving is a representation
-/// change, and it should require re-blessing the fixture rather than passing
-/// unnoticed.
+/// A red row's answer is pinned too, at today's **wrong** output, so fixing the
+/// defect turns this test red as well as turning its `#[ignore]`d guard green.
+/// That is correct and it is not a formality: it is what forced #1542's new
+/// answer to be re-blessed here, with the ruling behind it written into the
+/// row's `note`, rather than passing unnoticed. There is no red row today.
 #[test]
 fn every_row_produces_its_recorded_answer() {
     let cases = cases();
@@ -426,14 +511,40 @@ fn the_confluence_classes_converge() {
     }
 }
 
+/// How many corpus rows produce a multi-member output, and so are actually
+/// examined by [`no_emitted_output_puts_two_members_on_consecutive_nucleotides`].
+///
+/// The denominator of that guard's zero. It is pinned rather than floored
+/// because the #1542 re-instrument changed *which* rows are readable, and a
+/// floor cannot tell a widening from a narrowing.
+///
+/// **15 on `main`, and it was 9 when this constant was written.** The pin was
+/// first measured on a base that predated #1835's flip of the default partition
+/// rule to `canonical-coalesced`; under that rule six further corpus rows are
+/// re-partitioned from the resulting sequence into a multi-member output, so
+/// this guard *examines* six more rows than it did. That is the denominator
+/// widening, which is the direction this pin exists to make visible — the
+/// guard's own claim, that no emitted output puts two members on consecutive
+/// nucleotides, is still **zero** over the larger set.
+const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 15;
+
 /// No emitted output puts two members on consecutive nucleotides
 /// (`DNA/delins.md:16`).
 ///
 /// A structural property, checked over the *whole* corpus rather than on the
 /// three rows that motivated it, because that is what makes it a guard rather
-/// than three more pins. Exactly one row is exempt — the #1542 reproducer — and
-/// it is exempt because it *is* the violation this check looks for; the
-/// `#[ignore]`d [`the_dup_shaped_split_does_not_touch`] holds it.
+/// than three more pins.
+///
+/// **No row is exempt any more (#1542).** The single exemption was the #1542
+/// reproducer, and it existed because [`member_bounds`] measured a `dup` as
+/// occupying the position it duplicates — so the row read as a violation that
+/// its SPDI write footprints say it never was. With the instrument corrected
+/// and the row's own re-derivation fixed, the corpus-wide guard covers every
+/// row and there is no longer a hole in it. `Case::allows_adjacent_members` —
+/// the predicate that granted the exemption — is deleted;
+/// `DefectKind::AdjacentMembers` is **kept**, because classifying which guard a
+/// future red row is expected to fail is a different job from waving that guard
+/// off, and no row carries it today.
 #[test]
 fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     let cases = cases();
@@ -443,23 +554,30 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     for case in &cases.cases {
         observed.push(run(&provider, &case.input));
     }
-    assert_the_slice_answered_everything(&provider, cases.cases.len());
 
     let mut violations = Vec::new();
+    let mut declined = Vec::new();
     let mut multi_member_outputs = 0usize;
     for (case, actual) in cases.cases.iter().zip(&observed) {
         let Ok(output) = actual else { continue };
-        let Some(bounds) = member_bounds(output) else {
+        // A `None` is a *decline*, and a decline reached by a bare `continue` is
+        // a row dropped out of a corpus-wide guard with nothing counting it —
+        // the shape `CLAUDE.md`'s "a generator must account for what it dropped"
+        // is about. It is collected and refused below rather than skipped.
+        let Some(bounds) = member_bounds(output, &provider) else {
+            declined.push(format!("  {} -> {output}", case.input));
             continue;
         };
         if bounds.is_empty() {
             continue;
         }
-        if case.allows_adjacent_members() {
-            continue;
-        }
         multi_member_outputs += 1;
-        for (previous_end, next_start) in adjacent_members(output) {
+        // Read off `bounds` rather than through `adjacent_members`, which would
+        // re-derive the same geometry and fetch every member's footprint twice.
+        for &(previous_end, next_start) in &bounds {
+            if next_start > previous_end + 1 {
+                continue;
+            }
             violations.push(format!(
                 "  {} -> {output}\n    members touch at {previous_end}/{next_start} — {}",
                 case.input, case.citation.clause
@@ -467,11 +585,33 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
         }
     }
 
-    // A zero is only meaningful if multi-member outputs were actually examined.
+    // After the geometry pass, not before it: reading each member's SPDI
+    // footprint fetches reference bases too, so a window that cannot serve one
+    // would otherwise turn into a silent `None` and a skipped row.
+    assert_the_slice_answered_everything(&provider, cases.cases.len());
+
     assert!(
-        multi_member_outputs >= 5,
-        "only {multi_member_outputs} multi-member output(s) were examined, so the separation check \
-         cannot have measured what it claims to"
+        declined.is_empty(),
+        "{} output(s) yielded no member geometry, so this guard did not see them. A decline is \
+         not a pass: `member_bounds` returns `None` only when the output fails to parse or a \
+         member fails to convert to SPDI, and either is a finding rather than a row to skip. It \
+         is also what evidences the #1542 widening — the textual reader declined a UTR position \
+         or an intronic offset outright, and the footprint reader resolves them:\n{}",
+        declined.len(),
+        declined.join("\n")
+    );
+
+    // A zero violation count is only meaningful if multi-member outputs were
+    // actually examined, and a *floor* cannot say whether the #1542 re-instrument
+    // widened the guard or narrowed it — both readings satisfy `>= 5`. Pinned
+    // exactly so a row that stops being examined is a failure rather than a
+    // quietly smaller denominator.
+    assert_eq!(
+        multi_member_outputs, MULTI_MEMBER_OUTPUTS_EXAMINED,
+        "the number of multi-member outputs this guard examines moved. Going up is usually a new \
+         corpus row and needs re-blessing here; going down means a row stopped producing a \
+         multi-member output or stopped being readable, and the zero above is then a smaller \
+         claim than it was"
     );
     assert!(
         violations.is_empty(),
@@ -479,6 +619,101 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
          nucleotides are described as deletion/insertion (delins) variants\"):\n{}",
         violations.len(),
         violations.join("\n")
+    );
+}
+
+/// How many members `description` has, reading no reference.
+///
+/// The count is the quantity #1542's rule is stated over, and it is a property
+/// of the parsed description alone — so this deliberately does **not** go
+/// through [`member_footprints`], whose `None` would conflate "not an allele"
+/// with "a member did not convert".
+fn member_count(description: &str) -> Option<usize> {
+    Some(match parse_hgvs(description).ok()? {
+        HgvsVariant::Allele(allele) => allele.variants.len(),
+        _ => 1,
+    })
+}
+
+/// The shuffle direction may move a member's placement; it may not change how
+/// many members there are (#1542).
+///
+/// [`the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence`] pins
+/// that rule on the one row that violated it. This states it as the **property**
+/// it is, over every row in the corpus — which is the difference between a fix
+/// and a regression pin, because `shift_and_coalesce_direction_symmetrically`
+/// re-shifts an adopted mirror in the caller's direction and then coalesces
+/// again, so the two directions' counts agreeing is an outcome of that pass
+/// rather than something its shape guarantees.
+///
+/// Only the **count** is compared. The placement legitimately differs — that is
+/// what the direction is *for* — so asserting string equality would pin 3' onto
+/// 5' and forbid shuffling altogether.
+///
+/// Every row must answer in both directions: a row that errors on one and not
+/// the other is a disagreement of the same kind, so declines are collected and
+/// refused rather than skipped.
+#[test]
+fn the_member_count_does_not_depend_on_the_shuffle_direction() {
+    let cases = cases();
+    let provider = audited_provider();
+
+    let mut compared = 0usize;
+    let mut declined = Vec::new();
+    let mut disagreements = Vec::new();
+    for case in &cases.cases {
+        let three_prime = run_in(&provider, &case.input, ShuffleDirection::ThreePrime);
+        let five_prime = run_in(&provider, &case.input, ShuffleDirection::FivePrime);
+        let (Ok(three_prime), Ok(five_prime)) = (&three_prime, &five_prime) else {
+            declined.push(format!(
+                "  {}\n    3': {three_prime:?}\n    5': {five_prime:?}",
+                case.input
+            ));
+            continue;
+        };
+        let (Some(three_count), Some(five_count)) =
+            (member_count(three_prime), member_count(five_prime))
+        else {
+            declined.push(format!(
+                "  {}\n    3': {three_prime}\n    5': {five_prime}\n    (an output does not \
+                 re-parse, so its member count is unreadable)",
+                case.input
+            ));
+            continue;
+        };
+        compared += 1;
+        if three_count != five_count {
+            disagreements.push(format!(
+                "  {}\n    3': {three_prime} ({three_count} member(s))\n    5': {five_prime} \
+                 ({five_count} member(s))",
+                case.input
+            ));
+        }
+    }
+
+    // Two normalizations per row, so the floor is twice the corpus.
+    assert_the_slice_answered_everything(&provider, cases.cases.len() * 2);
+
+    assert!(
+        declined.is_empty(),
+        "{} row(s) did not answer in both directions, so they say nothing either way:\n{}",
+        declined.len(),
+        declined.join("\n")
+    );
+    assert_eq!(
+        compared,
+        cases.cases.len(),
+        "a zero below is only a claim about the rows that were compared"
+    );
+    assert!(
+        disagreements.is_empty(),
+        "{} row(s) emit a different number of members depending only on the shuffle direction. \
+         Direction moves a member's placement; it may not change how many members there are, or \
+         the partition is being read off a placement rather than off the sequence — which the \
+         decided record `separation-is-a-property-of-the-spelling-not-of-the-variant` rules \
+         against:\n{}",
+        disagreements.len(),
+        disagreements.join("\n")
     );
 }
 
@@ -587,15 +822,18 @@ fn the_corpus_census_is_unchanged() {
         .filter(|case| case.is_red())
         .map(|case| case.input.as_str())
         .collect();
-    assert_eq!(
-        red,
-        ["NC_000017.11:g.80110044_80110047delinsGTTGG"],
+    assert!(
+        red.is_empty(),
         "the red set changed. Adding a row to it converts a regression into a recorded defect, \
          which is exactly the laundering this assertion exists to block; removing one claims a \
-         defect is fixed, which must come with the `#[ignore]` being lifted. The three #1541 rows \
-         left this set that way: PR #1484 merged, they converge, and \
-         `the_four_mer_inversion_pair_converges` was un-ignored in the same change. They are still \
-         unpinned below, because #1541's governing ruling is still open."
+         defect is fixed, which must come with the `#[ignore]` being lifted. Two rows have left \
+         this set, both that way. The three #1541 rows went when PR #1484 merged and \
+         `the_four_mer_inversion_pair_converges` was un-ignored (they are still unpinned below, \
+         because #1541's governing ruling is still open). #1542's went on the operator's \
+         2026-08-13 ruling, with `the_dup_shaped_split_does_not_touch` replaced by the \
+         un-ignored `the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence` — and \
+         note the guard it left behind is a *different* one, because separation was never the \
+         property that row violated. Found: {red:?}"
     );
 
     let issues: BTreeSet<&str> = cases
@@ -604,10 +842,9 @@ fn the_corpus_census_is_unchanged() {
         .filter_map(|case| case.defect.as_ref())
         .map(|defect| defect.issue.as_str())
         .collect();
-    assert_eq!(
-        issues,
-        ["#1542"].into_iter().collect::<BTreeSet<_>>(),
-        "every red row must name a filed issue, and only this one still reproduces"
+    assert!(
+        issues.is_empty(),
+        "every red row must name a filed issue, and none still reproduces: {issues:?}"
     );
 
     assert_eq!(
@@ -908,10 +1145,13 @@ fn the_arfgef2_pair_denotes_one_sequence() {
 // ---------------------------------------------------------------------------
 // The adjudication-sensitive rows: #1541's class, its control, and #1542.
 //
-// #1542 is the one live defect left. Its guard must stay red and `#[ignore]`d
-// until it is fixed; never weaken it. #1541's class stopped reproducing when PR
-// #1484 merged, so its guard runs — but the form it pins is unruled, which is
-// why that pin is documented as a stability tripwire rather than a target.
+// **No live defect is left, and no guard here is `#[ignore]`d.** #1542 was ruled
+// on 2026-08-13 and its guard was *replaced* rather than deleted — separation was
+// never the property that row violated, so
+// `the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence` asserts
+// the ruled property and runs. #1541's class stopped reproducing when PR #1484
+// merged, so its guard runs too — but the form it pins is unruled, which is why
+// that pin is documented as a stability tripwire rather than a target.
 // ---------------------------------------------------------------------------
 
 /// The form #1541's class converges on today. **A stability pin, not an
@@ -1061,28 +1301,60 @@ fn the_inversion_preference_control_still_holds() {
     }
 }
 
-/// #1542 — a `dup`-shaped split still emits members at separation 0.
+/// The window #1542's re-derivation is measured over.
 ///
-/// `NC_000017.11:g.80110044_80110047delinsGTTGG` becomes
-/// `g.[80110044C>G;80110045dup;80110047A>G]`; under
-/// `sep = next.start - prev.end - 1` the first two members are at separation 0,
-/// which `DNA/delins.md:16` forbids. #1537 fixed three sibling rows of this
-/// family and did not reach this one because of the `dup` shape.
+/// Twenty bases of flank either side of the input's own
+/// `g.80110044_80110047` span. The flank is not decoration: [`from_sequences_detailed`]
+/// reads no reference, so a change resting on a window edge is placed at that
+/// edge rather than where a wider read would put it — the condition its
+/// `placement_bounded_by_window` flag reports. Twenty bases is far more than
+/// this locus's ambiguous run, and the assertion below refuses a bounded
+/// placement outright rather than trusting the margin.
+const DUP_SHAPED_SPLIT_WINDOW: (u64, u64) = (80110024, 80110067);
+
+/// #1542 — the emitted partition is the partition of its own resulting sequence.
 ///
-/// The separation reading is itself part of the open question: the adjacency
-/// depends on treating a `dup` as occupying the position it duplicates, and
-/// under a zero-width (interbase) reading the pair is not adjacent at all. So
-/// the fix may well be a ruling on how a `dup`'s extent is read rather than a
-/// change to the splitter — but either way the row cannot stay as it is while
-/// [`no_emitted_output_puts_two_members_on_consecutive_nucleotides`] enforces
-/// the rule on every other row.
+/// # What this replaces, and why the old predicate was wrong
+///
+/// This test was `the_dup_shaped_split_does_not_touch`, `#[ignore]`d and red: it
+/// asserted that `NC_000017.11:g.80110044_80110047delinsGTTGG` -> `g.[80110044C>G;
+/// 80110045dup;80110047A>G]` puts no two members on consecutive nucleotides, on
+/// `DNA/delins.md:16`.
+///
+/// **Separation was never the right predicate for this row.** The adjacency it
+/// reported existed only in the instrument: [`member_bounds`] read a `dup` as
+/// occupying the position it duplicates. A duplication inserts and consumes no
+/// reference position, so the three members' SPDI write footprints are at
+/// separation **[1, 1]** — the old output was not a `:16` violation, and the
+/// corpus-wide guard's exemption for this row was buying nothing.
+///
+/// # What is asserted instead
+///
+/// The property the row does violate, and the one the operator ruled on
+/// (2026-08-13): **the emitted partition must equal the partition re-derived
+/// from the resulting sequence.** Both halves are checked, and they fail
+/// independently:
+///
+/// 1. **Direction may not change the partition.** Seven of the eight
+///    `FERRO_PARTITION` x direction configurations already emitted the merged
+///    form; only `live`/3' produced the split, so one variant had two normal
+///    forms differing by nothing but the shuffle direction. Each was a fixed
+///    point, which is why no oracle saw it.
+/// 2. **The member geometry is re-derivable.** [`from_sequences_detailed`] derives a
+///    description from a `(reference, resulting)` pair alone — it holds no
+///    provider, cuts with a different partitioner, and never sees this output —
+///    so comparing member footprints against it is not the normalizer checking
+///    itself. The pair handed to it is built from the *input's own stated
+///    payload*, not from anything normalization produced.
+///
+/// The whole-string form is pinned separately, by
+/// [`every_row_produces_its_recorded_answer`] against the fixture; what lives
+/// here is the geometry, which is what the ruling is about.
 ///
 /// The premise is [`the_dup_shaped_split_denotes_the_same_bases_as_its_input`],
-/// which passes: this is a representation defect, not a denotation one.
+/// which passes: this was a representation defect, not a denotation one.
 #[test]
-#[ignore = "#1542: a dup-shaped split still emits members at separation 0 (delins.md:16), \
-            surviving #1537. Red until the dup's extent is ruled on."]
-fn the_dup_shaped_split_does_not_touch() {
+fn the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence() {
     let cases = cases();
     let provider = audited_provider();
     let case: &Case = cases
@@ -1091,58 +1363,206 @@ fn the_dup_shaped_split_does_not_touch() {
         .find(|case| case.input == "NC_000017.11:g.80110044_80110047delinsGTTGG")
         .expect("#1542's row is in the corpus");
 
-    let output = run(&provider, &case.input);
-    assert_the_slice_answered_everything(&provider, 1);
+    let three_prime = run_in(&provider, &case.input, ShuffleDirection::ThreePrime);
+    let five_prime = run_in(&provider, &case.input, ShuffleDirection::FivePrime);
+    assert_the_slice_answered_everything(&provider, 2);
 
-    let output = output.expect("#1542's row normalizes");
-    let touching = adjacent_members(&output);
+    assert_eq!(
+        three_prime, five_prime,
+        "#1542: `{}` normalizes to two different strings depending only on the shuffle \
+         direction. This row is pinned on FULL STRING IDENTITY, which is stronger than the \
+         corpus-wide rule — on this input the two directions must agree on placement as well \
+         as on member count, because its merged form is placement-stable. The weaker \
+         count-only property is \
+         `the_member_count_does_not_depend_on_the_shuffle_direction`, and a failure there \
+         means the partition is being read off a placement rather than off the sequence — \
+         which the decided record \
+         `separation-is-a-property-of-the-spelling-not-of-the-variant` rules against.",
+        case.input
+    );
+    let output = three_prime.expect("#1542's row normalizes");
+
+    // The `(reference, resulting)` pair, built without the normalizer: the
+    // window's own bases, with the input's stated payload spliced over its
+    // stated span. `the_dup_shaped_split_denotes_the_same_bases_as_its_input`
+    // is the companion that pins those two strings against the fixture.
+    //
+    // Read through a plain provider rather than the audited one, because this
+    // read cannot fail *quietly*: `genomic_bases` panics naming the span when
+    // the committed slice cannot serve it, which is the fail-loud the audit
+    // discipline exists to guarantee.
+    let (window_start, window_end) = DUP_SHAPED_SPLIT_WINDOW;
+    let (span_start, span_end) = (80110044u64, 80110047u64);
+    let reference = genomic_bases(
+        &window_fixture().to_provider(),
+        "NC_000017.11",
+        window_start,
+        window_end,
+    );
+    // Derived from the two spans rather than written out, so widening the
+    // window cannot silently splice over the wrong bases.
+    let span_offset = (span_start - window_start) as usize;
+    let span_len = (span_end - span_start + 1) as usize;
+    assert_eq!(
+        &reference[span_offset..span_offset + span_len],
+        "CTGA",
+        "the window is not aligned on the input's own span"
+    );
+    let resulting = format!(
+        "{}GTTGG{}",
+        &reference[..span_offset],
+        &reference[span_offset + span_len..]
+    );
+
+    let derived = from_sequences_detailed(
+        "NC_000017.11",
+        window_start,
+        &reference,
+        &resulting,
+        &FromSequencesOptions::default(),
+    )
+    .expect("the (reference, resulting) pair re-derives");
     assert!(
-        touching.is_empty(),
-        "#1542: `{}` -> `{output}` puts members on consecutive nucleotides at {touching:?}. \
-         delins.md:16: \"changes involving two or more consecutive nucleotides are described as \
-         deletion/insertion (delins) variants\".",
+        !derived.placement_bounded_by_window,
+        "the re-derivation rested on a window edge, so it describes this window rather than \
+         this locus — widen DUP_SHAPED_SPLIT_WINDOW rather than reading the comparison below"
+    );
+    let re_derived = derived.variant.to_string();
+
+    // Unwrapped on each side before comparing, never compared as `Option`s.
+    // `member_footprints` returns `None` when a member does not convert to SPDI,
+    // and `assert_eq!(None, None)` is a **pass** — so an `Option` comparison
+    // here would go green on the day both sides stopped converting, which is the
+    // one outcome that must not read as agreement. Proven discriminating:
+    // forcing either side to `None` fails this test rather than satisfying it.
+    let output_footprints = member_footprints(&output, &provider).unwrap_or_else(|| {
+        panic!(
+            "#1542: the emitted `{output}` has no SPDI footprint, so this row's geometry cannot \
+             be compared and the comparison below would pass vacuously"
+        )
+    });
+    let re_derived_footprints = member_footprints(&re_derived, &provider).unwrap_or_else(|| {
+        panic!(
+            "#1542: the re-derived `{re_derived}` has no SPDI footprint, so this row's geometry \
+             cannot be compared and the comparison below would pass vacuously"
+        )
+    });
+    assert_eq!(
+        output_footprints, re_derived_footprints,
+        "#1542: `{}` -> `{output}`, whose members do not sit where a partition re-derived from \
+         the resulting sequence puts them (`{re_derived}`). A member boundary interior to a run \
+         of change is read off a placement, not off the sequence.",
         case.input
     );
 }
 
 #[cfg(test)]
 mod member_bounds_tests {
-    use super::{adjacent_members, member_bounds, reverse_complement};
+    use super::{adjacent_members, member_bounds, reverse_complement, window_fixture};
+    use ferro_hgvs::conformance::reference_window::WindowProvider;
+
+    fn provider() -> WindowProvider {
+        window_fixture().to_provider()
+    }
 
     #[test]
     fn a_single_member_description_has_no_boundaries() {
-        assert_eq!(member_bounds("NM_004006.2:c.76_83inv"), None);
+        assert_eq!(
+            member_bounds("NM_004006.2:c.76_83inv", &provider()),
+            Some(Vec::new()),
+            "one member has a footprint but no boundary between members"
+        );
     }
 
     #[test]
     fn a_genomic_allele_yields_its_boundaries() {
+        // **This pin was wrong until #1542**, and the correction is the whole
+        // point of re-instrumenting `member_bounds`. It used to read
+        // `[(80110044, 80110045), (80110045, 80110047)]`, from the leading
+        // integer of each member's spelling — which puts `80110045dup` on the
+        // base it duplicates and so reports the first pair at separation 0.
+        //
+        // A duplication *inserts*: it consumes no reference position, and its
+        // SPDI write footprint is empty at the junction 3' of the copied base
+        // (`lo = 80110046`, `hi = 80110045`). So the first boundary is
+        // `(80110044, 80110046)` — separation 1 — and the second
+        // `(80110045, 80110047)`, also 1. This output was never the
+        // `delins.md:16` violation the old instrument reported.
         assert_eq!(
-            member_bounds("NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]"),
-            Some(vec![(80110044, 80110045), (80110045, 80110047)])
+            member_bounds(
+                "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
+                &provider()
+            ),
+            Some(vec![(80110044, 80110046), (80110045, 80110047)])
+        );
+    }
+
+    #[test]
+    fn an_insertion_occupies_no_position_between_its_flanking_nucleotides() {
+        // `insertion.md:15` calls `a` and `b` in `a_b ins` the **flanking**
+        // nucleotides — the insertion sits between them and consumes neither.
+        // The old textual reader gave `101_102insT` the two-base span
+        // `[101, 102]`, which double-counts and inverts the separation on both
+        // sides. Sibling of the `dup` correction above, and the reason
+        // `examples/dump_confluence_divergences.rs` documents this geometry:
+        // reading the anchor as a consumed span had already invalidated one
+        // published distribution.
+        assert_eq!(
+            member_bounds(
+                "NC_000017.11:g.[80110040A>C;80110044_80110045insT]",
+                &provider()
+            ),
+            Some(vec![(80110040, 80110045)]),
+            "the insertion's footprint is empty at 80110044|80110045, so it starts at 80110045"
         );
     }
 
     #[test]
     fn a_range_member_uses_its_far_endpoint() {
+        // The numbers are **transcript** offsets, not the `c.` numbers in the
+        // string: an SPDI triple is stated on the reference sequence, so a `c.`
+        // position resolves through `cds_start` (`NM_000038.6`'s is 60 in the
+        // committed slice, so every member moves by the same +59). That is a frame
+        // shift and not a geometry change — the separation this reads off is 1
+        // either way — and it is uniform within one description, which is all a
+        // boundary needs. The decided record
+        // `c-and-n-positions-are-flat-transcript-offsets` is what makes that
+        // resolution well defined.
         assert_eq!(
-            member_bounds("NM_000038.6:c.[5265_5266delinsTG;5268T>G]"),
-            Some(vec![(5266, 5268)])
+            member_bounds("NM_000038.6:c.[5265_5266delinsTG;5268T>G]", &provider()),
+            Some(vec![(5325, 5327)])
         );
     }
 
     #[test]
-    fn a_non_plain_coordinate_declines_rather_than_mis_parsing() {
-        // A UTR member would otherwise parse as coordinate 6 rather than -6.
-        assert_eq!(member_bounds("NM_024312.4:c.[-6_-3G[6];12A>T]"), None);
+    fn a_utr_member_is_resolved_rather_than_declined() {
+        // The old textual reader declined here, because `-6` does not begin
+        // with a digit and mis-parsing it as `6` would have been worse. Reading
+        // the footprint resolves it properly against the transcript, so a whole
+        // class of rows the corpus-wide guard used to skip is now covered.
+        assert!(
+            member_bounds("NM_024312.4:c.[-6_-3G[6];12A>T]", &provider()).is_some(),
+            "a 5'UTR member resolves through the provider"
+        );
     }
 
     #[test]
     fn touching_members_are_reported_and_separated_ones_are_not() {
         assert_eq!(
-            adjacent_members("NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]"),
+            adjacent_members("NC_000017.11:g.[80110044C>G;80110045G>T]", &provider()),
             vec![(80110044, 80110045)]
         );
-        assert!(adjacent_members("NM_000038.6:c.[5265_5266delinsTG;5268T>G]").is_empty());
+        assert!(
+            adjacent_members("NM_000038.6:c.[5265_5266delinsTG;5268T>G]", &provider()).is_empty()
+        );
+        assert!(
+            adjacent_members(
+                "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
+                &provider()
+            )
+            .is_empty(),
+            "separation [1, 1] — see `a_genomic_allele_yields_its_boundaries`"
+        );
     }
 
     #[test]

@@ -358,11 +358,24 @@ const CDS_END: u64 = 63;
 /// touches; `delins-adjacent-members-when-both-consume-reference` already
 /// records the adjacent repeat-expansion shape as outside its reach, and the
 /// same holds here. The 5' direction has no residue at all.
+///
+/// # Re-blessed again by #1542's direction-symmetric coalesce
+///
+/// `shift_and_coalesce_direction_symmetrically` stops the member *count* being a
+/// function of `ShuffleDirection`; the classes that gain are ones whose 3'
+/// answer split where their 5' answer already merged. The corresponding 5'
+/// census is **unchanged**, which is the shape of the finding: the fix moves the
+/// 3' answer onto the 5' one rather than moving both. No divergence figure rises
+/// and `sequence_changed` stays 0. On the pre-flip base the move was +2
+/// converged / -2 `split 2`; the figures below are **re-measured on the rebase
+/// onto #1835**, where that pin has only one divergent class left to reach, not
+/// composed from the two branches' deltas.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    // #1835: the partition default flip — see the section above.
+    // #1835: the partition default flip, then #1542's direction-symmetric
+    // coalesce — see the two sections above.
     converged: 11_271,
     split_two: 1,
     split_three: 0,

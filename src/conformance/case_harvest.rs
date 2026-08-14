@@ -141,18 +141,6 @@ impl Case {
     pub fn is_red(&self) -> bool {
         self.defect.is_some()
     }
-
-    /// Whether the corpus-wide separation-0 check must exempt this row.
-    ///
-    /// Exactly one row is exempt, and only because it *is* the reproducer for
-    /// the violation the check looks for. Exempting it here is what lets the
-    /// check run over the whole corpus rather than being switched off wholesale.
-    pub fn allows_adjacent_members(&self) -> bool {
-        matches!(
-            self.defect.as_ref().map(|d| d.kind),
-            Some(DefectKind::AdjacentMembers)
-        )
-    }
 }
 
 /// The live defect a red row reproduces.
@@ -176,6 +164,15 @@ pub enum DefectKind {
     Confluence,
     /// The output puts two members on consecutive nucleotides
     /// (`DNA/delins.md:16`).
+    ///
+    /// **Recording this kind buys no exemption (#1542).** It used to: a
+    /// `Case::allows_adjacent_members` predicate keyed on it, and the
+    /// corpus-wide guard skipped any row carrying it. That was a permanent
+    /// single-row hole, and it existed only because the guard's instrument
+    /// measured a `dup` as occupying the position it duplicates. With the
+    /// instrument reading SPDI write footprints instead, the row it exempted is
+    /// not a violation and never was, so the predicate is gone and this variant
+    /// classifies which guard a red row is expected to fail — nothing more.
     AdjacentMembers,
 }
 
@@ -278,8 +275,16 @@ mod tests {
         assert!(err.contains("non-numeric line"), "{err}");
     }
 
+    /// No `DefectKind` exempts a row from any guard (#1542).
+    ///
+    /// This test used to be `only_an_adjacent_members_defect_exempts_a_row_from
+    /// _the_separation_check`, and it pinned exactly that: a
+    /// `DefectKind::AdjacentMembers` row was skipped by the corpus-wide
+    /// `delins.md:16` check. The exemption is gone — see that variant's own doc
+    /// — so what is pinned now is that recording a defect classifies a row and
+    /// grants it nothing.
     #[test]
-    fn only_an_adjacent_members_defect_exempts_a_row_from_the_separation_check() {
+    fn recording_a_defect_classifies_a_row_and_exempts_it_from_nothing() {
         let mut case = Case {
             input: "x".to_string(),
             expected: None,
@@ -289,24 +294,19 @@ mod tests {
             defect: None,
         };
         assert!(!case.is_red());
-        assert!(!case.allows_adjacent_members());
 
-        case.defect = Some(Defect {
-            issue: "#1".to_string(),
-            kind: DefectKind::Confluence,
-            summary: "s".to_string(),
-        });
-        assert!(case.is_red());
-        assert!(
-            !case.allows_adjacent_members(),
-            "a confluence defect must not buy an exemption from delins.md:16"
-        );
+        for kind in [DefectKind::Confluence, DefectKind::AdjacentMembers] {
+            case.defect = Some(Defect {
+                issue: "#1".to_string(),
+                kind,
+                summary: "s".to_string(),
+            });
+            assert!(case.is_red(), "{kind:?} marks the row red");
+        }
 
-        case.defect = Some(Defect {
-            issue: "#2".to_string(),
-            kind: DefectKind::AdjacentMembers,
-            summary: "s".to_string(),
-        });
-        assert!(case.allows_adjacent_members());
+        // The exemption predicate is not merely unused, it does not exist: a
+        // `Case` exposes `is_red` and nothing that can wave a guard off.
+        case.defect = None;
+        assert!(!case.is_red());
     }
 }

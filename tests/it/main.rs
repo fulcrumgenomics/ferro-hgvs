@@ -277,6 +277,7 @@ mod issue_1508_overlap_across_region_boundary;
 mod issue_1513_adjacent_junction_insertions;
 mod issue_1517_inv_priority_over_delins;
 mod issue_1536_cds_boundary_delins;
+mod issue_1542_direction_symmetry;
 mod issue_1543_allele_member_reference_validation;
 mod issue_1578_followup_equivalence_rungs;
 mod issue_1578_followup_ring_declines;

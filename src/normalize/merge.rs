@@ -3076,6 +3076,38 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     provider: &P,
     direction: ShuffleDirection,
 ) -> Option<Vec<HgvsVariant>> {
+    canonicalize_from_sequence_with_rule(variants, phase, provider, direction, partition_rule())
+}
+
+/// [`canonicalize_from_sequence`], with the partitioner named rather than read
+/// from the environment.
+///
+/// # Why this split exists
+///
+/// [`partition_rule`] caches its read of `FERRO_PARTITION` in a `OnceLock`, so a
+/// single test binary can exercise **one** arm and no more. That is what let
+/// #1835's flip of [`DEFAULT_PARTITION_RULE`] silently neuter a guard: the guard
+/// still ran, still passed, and was measuring an arm ferro had stopped shipping.
+/// A guard that can only ever see the arm the process was started with cannot
+/// state a property of the partitioner.
+///
+/// So the rule is a **parameter** here, and
+/// [`direction_symmetry::the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm`]
+/// asserts the direction-symmetry invariant across every arm
+/// [`PARTITION_RULE_NAMES`] advertises — in one process, with no environment
+/// variable involved. Adding an arm adds it to that guard for free, because the
+/// guard iterates the name list rather than a second list of its own.
+///
+/// Production callers must keep using [`canonicalize_from_sequence`]: a call
+/// site that named its own rule would ignore the operator's switch, which is the
+/// failure `partition_rule_from_env`'s refusal exists to prevent.
+fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+    provider: &P,
+    direction: ShuffleDirection,
+    rule: PartitionRule,
+) -> Option<Vec<HgvsVariant>> {
     if variants.is_empty() || (variants.len() > 1 && phase != AllelePhase::Cis) {
         return None;
     }
@@ -3268,7 +3300,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // not the whole of it; `normalize_with_diagnostics()` is exercised by the
     // several dozen other `tests/it/` files that call it.
     let mut pieces = partition_block_for_rule(
-        partition_rule(),
+        rule,
         &ref_bytes[lo..hi_ref],
         &result[lo..hi_alt],
         axis_min_separation(frame.carries_translated_frame()),
@@ -3392,227 +3424,234 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         w_lo,
         &ref_bytes,
     );
-    shift_pieces(&mut pieces, &ref_bytes, direction);
-    coalesce_adjacent_pieces(&mut pieces);
-    // Partitioning decides where the members are; this decides how wide each
-    // one is spelled, and the two are not the same question — see
-    // `shrink_pieces_to_differences`.
-    shrink_pieces_to_differences(&mut pieces, &ref_bytes);
+    // Everything from the placement to the last widening pass, as one unit, so
+    // it can be run in either direction. See
+    // [`place_direction_symmetrically`], which is what makes the *member count*
+    // it produces independent of `direction`. The passes are unchanged and in
+    // their measured order; only their enclosure is new.
+    let place_pieces = |pieces: &mut Vec<Piece>, direction: ShuffleDirection| {
+        shift_pieces(pieces, &ref_bytes, direction);
+        coalesce_adjacent_pieces(pieces);
+        // Partitioning decides where the members are; this decides how wide each
+        // one is spelled, and the two are not the same question — see
+        // `shrink_pieces_to_differences`.
+        shrink_pieces_to_differences(pieces, &ref_bytes);
 
-    // An input-relative weight bound stood here, and it was the last gate in
-    // this pass that read the *input's spelling* rather than the sequence:
-    // `derived_columns > changed_columns_of_edits(&edits)`, where weight is
-    // `sum over members of max(ref_len, alt_len)` and `edits` is the input's own
-    // member list. On refusal this function returned `None` and the variant fell
-    // back to the per-member pipeline, which never re-aligns across members — so
-    // the input's spelling survived verbatim. It stated itself as "a
-    // canonicalization may re-partition and re-type the change; it may not
-    // describe *more* change than the input already did", and it cited no clause,
-    // because there is none: nothing in `docs/recommendations/` compares a
-    // candidate description to the input, and `background/basics.md:38`'s list of
-    // design values — stable, meaningful, memorable, unequivocal — does not
-    // include minimality.
-    //
-    // It also contradicted the `decided` ruling
-    // `canonical-form-choice-when-both-legal` in terms, which holds that ferro
-    // derives the description from the resulting sequence and does not preserve
-    // the input's spelling.
-    //
-    // And what it refused was keyed on the retained bases, which is why narrowing
-    // it was not available. Writing `g` for the reference bases a split keeps but
-    // a span must cover, `span - split = g - (sum max(r_i, a_i) - max(sum r_i,
-    // sum a_i))`. Retained bases are exactly the `DNA/delins.md:44-47`
-    // construction — an unchanged interior surviving only because payload bases
-    // coincide with the reference — so the bound refused every merge `:47`
-    // recommends ("**The "delins" format is recommended**") and admitted only
-    // merges with no coincidence to merge across.
-    //
-    // It did NOT refuse every merge unconditionally, and an earlier revision of
-    // this comment said it did (`span_weight >= split_weight` always). #1591
-    // pins the counter-example: a gap-free split weighing `max(3,1) + max(1,3) =
-    // 6` is spanned by one member weighing `max(4,4) = 4`, and that merge was
-    // accepted. See
-    // `weight_bound_worked_examples::a_span_outweighs_a_split_that_keeps_reference_bases`,
-    // renamed from `a_span_always_outweighs_a_split_of_the_same_block` for this
-    // reason. Do not restore the unconditional claim.
-    //
-    // Measured on the 11,272-class cis corpus: removing it converges 2,910
-    // classes at 3' (8,361 -> 11,271) and 2,905 at 5' (8,367 -> 11,272), and
-    // loses none — exactly one class is left divergent at 3' and none at 5', so
-    // no converged class can have stopped being so. The figures 3,245/3,251 and
-    // 3,244/3,249 appear in earlier revisions of this comment and in review;
-    // both describe bases this tree no longer has, and the first pair is
-    // explicitly withdrawn. See
-    // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` for the
-    // full record, including the twenty rows whose form moved and the clause each
-    // was adjudicated against.
-    //
-    // Do not restore it. Two consequences of its absence are worth knowing. Every
-    // widening pass below used to be placed *after* it for the same reason — a
-    // widening judged against the input's weight is accepted for one spelling of
-    // a variant and refused for another — so those placement notes now record
-    // history rather than a live constraint. And
-    // `coalesce_coding_frame_separation` no longer has to hand back the pieces it
-    // replaced, since nothing downstream weighs them.
+        // An input-relative weight bound stood here, and it was the last gate in
+        // this pass that read the *input's spelling* rather than the sequence:
+        // `derived_columns > changed_columns_of_edits(&edits)`, where weight is
+        // `sum over members of max(ref_len, alt_len)` and `edits` is the input's own
+        // member list. On refusal this function returned `None` and the variant fell
+        // back to the per-member pipeline, which never re-aligns across members — so
+        // the input's spelling survived verbatim. It stated itself as "a
+        // canonicalization may re-partition and re-type the change; it may not
+        // describe *more* change than the input already did", and it cited no clause,
+        // because there is none: nothing in `docs/recommendations/` compares a
+        // candidate description to the input, and `background/basics.md:38`'s list of
+        // design values — stable, meaningful, memorable, unequivocal — does not
+        // include minimality.
+        //
+        // It also contradicted the `decided` ruling
+        // `canonical-form-choice-when-both-legal` in terms, which holds that ferro
+        // derives the description from the resulting sequence and does not preserve
+        // the input's spelling.
+        //
+        // And what it refused was keyed on the retained bases, which is why narrowing
+        // it was not available. Writing `g` for the reference bases a split keeps but
+        // a span must cover, `span - split = g - (sum max(r_i, a_i) - max(sum r_i,
+        // sum a_i))`. Retained bases are exactly the `DNA/delins.md:44-47`
+        // construction — an unchanged interior surviving only because payload bases
+        // coincide with the reference — so the bound refused every merge `:47`
+        // recommends ("**The "delins" format is recommended**") and admitted only
+        // merges with no coincidence to merge across.
+        //
+        // It did NOT refuse every merge unconditionally, and an earlier revision of
+        // this comment said it did (`span_weight >= split_weight` always). #1591
+        // pins the counter-example: a gap-free split weighing `max(3,1) + max(1,3) =
+        // 6` is spanned by one member weighing `max(4,4) = 4`, and that merge was
+        // accepted. See
+        // `weight_bound_worked_examples::a_span_outweighs_a_split_that_keeps_reference_bases`,
+        // renamed from `a_span_always_outweighs_a_split_of_the_same_block` for this
+        // reason. Do not restore the unconditional claim.
+        //
+        // Measured on the 11,272-class cis corpus: removing it converges 2,910
+        // classes at 3' (8,361 -> 11,271) and 2,905 at 5' (8,367 -> 11,272), and
+        // loses none — exactly one class is left divergent at 3' and none at 5', so
+        // no converged class can have stopped being so. The figures 3,245/3,251 and
+        // 3,244/3,249 appear in earlier revisions of this comment and in review;
+        // both describe bases this tree no longer has, and the first pair is
+        // explicitly withdrawn. See
+        // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` for the
+        // full record, including the twenty rows whose form moved and the clause each
+        // was adjudicated against.
+        //
+        // Do not restore it. Two consequences of its absence are worth knowing. Every
+        // widening pass below used to be placed *after* it for the same reason — a
+        // widening judged against the input's weight is accepted for one spelling of
+        // a variant and refused for another — so those placement notes now record
+        // history rather than a live constraint. And
+        // `coalesce_coding_frame_separation` no longer has to hand back the pieces it
+        // replaced, since nothing downstream weighs them.
 
-    // `delins.md:44-47`.
-    //
-    // Measured while the weight bound still stood, and kept because it is the
-    // sharpest available statement of what that bound cost: judged *before* the
-    // bound this pass lost 427 converged classes per direction over the
-    // 11,272-class corpus (5': 8,387 -> 7,960), 427 regressions and 0 gains.
-    // Every one was a pair whose merged form was accepted for the spelling that
-    // arrived as a single `delins` — whose input weight is the wide one — and
-    // refused for the spelling that arrived as separate members. The re-spelling
-    // itself is spelling-independent; the bound it was judged against was not.
-    // That input-relative comparand was #1440, and it is now gone.
-    //
-    // Placement relative to the 3'-shift and the width minimisation is NOT the
-    // mechanism: moving the call across those produced byte-identical censuses.
-    // Only the bound mattered.
-    //
-    // # Gated to the coding DNA axis, by operator ruling (2026-08-11)
-    //
-    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47`'s
-    // carve-out to `c.` and nothing else. On the other DNA axes —
-    // `g.`/`m.`/`o.`/`n.` — `general.md:34` governs and the members stay
-    // individual. `:47`'s own stated reason is that the merge "prevents software
-    // tools making incorrect predictions for the consequences on protein level",
-    // and off the coding axis there is no protein consequence to mispredict.
-    //
-    // The gate is the axis KIND, and deliberately **not**
-    // `AxisFrame::reading_frame` — see `payload_coalesce_applies`. The RNA axis
-    // is not something that ruling reaches: it rules under DNA recommendations,
-    // whose jurisdiction is the DNA directory, and `RNA/delins.md` states no
-    // `:47` counterpart that could carry the carve-out there. So RNA is outside
-    // the ruling rather than decided against, and the arm must not merge on it.
-    //
-    // # Do not add a CDS-region test here — it is unreachable, and that is measured
-    //
-    // `DNA/repeated.md:23` scopes its own restriction finer than the axis ("This
-    // restriction only applies to the coding sequence, which does not include the
-    // introns or the UTR sequence"), which invites an extra precondition
-    // excluding `c.-n`, `c.*n` and intronic `c.n±m` spans. Such a gate was built
-    // and measured: over the 11,272-class designed cis corpus it was **reached
-    // 60,194 times and rejected nothing**, and it changed no row of the 785,461
-    // normalized from ClinVar and Paraphase.
-    //
-    // The zero is STRUCTURAL, not reassurance. `collect_canonical_edits` refuses
-    // any member whose region is not the axis's positive body, so a UTR or
-    // intronic member never reaches this call at all. Relaxing *that* exclusion
-    // is the precondition for the refinement to become measurable; until then it
-    // is dead weight.
-    if payload_coalesce_applies(partition_rule(), kind) {
-        coalesce_payload_alignment_split(&mut pieces, &ref_bytes);
-    }
+        // `delins.md:44-47`.
+        //
+        // Measured while the weight bound still stood, and kept because it is the
+        // sharpest available statement of what that bound cost: judged *before* the
+        // bound this pass lost 427 converged classes per direction over the
+        // 11,272-class corpus (5': 8,387 -> 7,960), 427 regressions and 0 gains.
+        // Every one was a pair whose merged form was accepted for the spelling that
+        // arrived as a single `delins` — whose input weight is the wide one — and
+        // refused for the spelling that arrived as separate members. The re-spelling
+        // itself is spelling-independent; the bound it was judged against was not.
+        // That input-relative comparand was #1440, and it is now gone.
+        //
+        // Placement relative to the 3'-shift and the width minimisation is NOT the
+        // mechanism: moving the call across those produced byte-identical censuses.
+        // Only the bound mattered.
+        //
+        // # Gated to the coding DNA axis, by operator ruling (2026-08-11)
+        //
+        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47`'s
+        // carve-out to `c.` and nothing else. On the other DNA axes —
+        // `g.`/`m.`/`o.`/`n.` — `general.md:34` governs and the members stay
+        // individual. `:47`'s own stated reason is that the merge "prevents software
+        // tools making incorrect predictions for the consequences on protein level",
+        // and off the coding axis there is no protein consequence to mispredict.
+        //
+        // The gate is the axis KIND, and deliberately **not**
+        // `AxisFrame::reading_frame` — see `payload_coalesce_applies`. The RNA axis
+        // is not something that ruling reaches: it rules under DNA recommendations,
+        // whose jurisdiction is the DNA directory, and `RNA/delins.md` states no
+        // `:47` counterpart that could carry the carve-out there. So RNA is outside
+        // the ruling rather than decided against, and the arm must not merge on it.
+        //
+        // # Do not add a CDS-region test here — it is unreachable, and that is measured
+        //
+        // `DNA/repeated.md:23` scopes its own restriction finer than the axis ("This
+        // restriction only applies to the coding sequence, which does not include the
+        // introns or the UTR sequence"), which invites an extra precondition
+        // excluding `c.-n`, `c.*n` and intronic `c.n±m` spans. Such a gate was built
+        // and measured: over the 11,272-class designed cis corpus it was **reached
+        // 60,194 times and rejected nothing**, and it changed no row of the 785,461
+        // normalized from ClinVar and Paraphase.
+        //
+        // The zero is STRUCTURAL, not reassurance. `collect_canonical_edits` refuses
+        // any member whose region is not the axis's positive body, so a UTR or
+        // intronic member never reaches this call at all. Relaxing *that* exclusion
+        // is the precondition for the refinement to become measurable; until then it
+        // is dead weight.
+        if payload_coalesce_applies(rule, kind) {
+            coalesce_payload_alignment_split(pieces, &ref_bytes);
+        }
 
-    // Placed here — after the partition, the shift and the width minimisation —
-    // because it widens. While the input-relative weight bound stood, that
-    // placement was load-bearing: a widening judged against the *input's* weight
-    // is accepted for one spelling of a variant and refused for another. The
-    // bound is gone, so the ordering is now merely the one that was measured;
-    // see `coalesce_whole_block_inversion`'s own doc for the worked case.
-    //
-    // It sits *before* `apply_coding_codon_exception`, and on a `c.`/`n.` axis
-    // the two do reach for the same pieces: a 5 nt whole-block inversion whose
-    // changed columns fall at offsets 0/2/4 inside one codon is exactly the
-    // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges
-    // (`general.md:35`). Stub this call and that is what happens —
-    // `c.[1G>T;3T>A;5A>C]` comes out as `c.[1_3delinsTTA;5A>C]`.
-    //
-    // **The order between them is nevertheless not observable, and that is
-    // measured, not assumed.** Moving this call to *after* the codon exception
-    // leaves the whole suite green, the new `c.`-axis test included. The reason
-    // is that this rule reads only three things — the hull the pieces span, the
-    // sequence they denote, and whether every separation is a single base — and
-    // the codon exception preserves all three: it splices the unchanged middle
-    // base into the payload explicitly (denoted sequence unchanged), it grows
-    // the left piece by exactly what it takes from the right (hull unchanged),
-    // and it only ever *closes* a one-base gap, never opens one, so the gaps
-    // that remain are a subset of the gaps that were there
-    // (`every_separation_is_a_single_base`'s verdict unchanged). A codon-merged
-    // partition therefore reconstructs to the same span, and this rule reaches
-    // the same `inv` from either side.
-    //
-    // Two reasons to keep the order written down anyway. It stops being neutral
-    // the moment the codon exception can merge across more than one unchanged
-    // base, since that would break the third invariant above and let a widened
-    // partition fail the gate. And where both fire, the `inv` is the answer
-    // regardless of who reaches it — the codon exception's product is a
-    // `delins`, which `delins.md:5` defines as a replacement "which is not a
-    // substitution or inversion", so over a reverse-complement span it is not a
-    // description the spec admits.
-    //
-    // Pinned by `issue_1040_inv_overrecognition_probes::
-    // a_derived_whole_block_inversion_outranks_the_codon_exception`.
-    //
-    // `coalesce_compensating_gap_split` runs first: a split whose boundaries the
-    // alignment manufactured is put back together as one span, which then
-    // arrives below as a single piece and is typed by
-    // `crate::normalize::rules` rather than needing the inversion gate at all.
-    // It is placed here, after the weight bound, for the same reason the call
-    // below is — it widens.
-    //
-    // Scoped to the two `partition_block_canonical` arms, and the scoping is a
-    // **measurement boundary, not a belief**: the defect is that partitioner's,
-    // and whether the same rule is right for `partition_block` is a question
-    // with its own blast radius that this change does not answer. Left unscoped
-    // it does fire on the live arm — measured, once, on a 164 nt `n.` block that
-    // `partition_block` splits into eighteen members and this merges into one
-    // spanning `delins`. That may well be the better description; it is not one
-    // to ship as a side effect of fixing a different arm, and the shipped output
-    // must not move in a pre-flip change. Remove the scoping when `live` goes.
-    //
-    // Written as a positive match over the arms it argues for, like the call
-    // above, and **not** as `!= Live`. That negation also selects
-    // [`PartitionRule::Shadow`], whose pieces come from
-    // `partition_block_sequence_first` — boundaries taken from the alignment
-    // steps common to *every* minimal alignment, which is precisely the set no
-    // alignment can have manufactured. Applying a "your boundaries are a shifted
-    // coincidence" rule there contradicts its own premise, and nothing below
-    // measures or pins that arm.
-    //
-    // The limit this scoping does **not** reach, stated rather than implied:
-    // every non-`Live` arm falls back to `partition_block` when its own splitter
-    // declines, so on a `canonical` bake-off run a declining block still reaches
-    // this rule with live pieces. The gate keys on the arm, not on which
-    // partitioner produced the pieces. Shipped output is unaffected either way —
-    // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
-    // widening the arm it is labelled with did not cause.
-    // Scoped to the coding DNA axis as well as to the arms, per the decided
-    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (#1711): the
-    // pass can only merge *across unchanged reference bases*, which is exactly
-    // the population `general.md:34` keeps individual, and `DNA/delins.md:47` —
-    // the only clause that overrides it here — reaches `c.` and nothing else.
-    // See `compensating_gap_coalesce_applies` for the argument and for the
-    // competing reading it decides against.
-    if compensating_gap_coalesce_applies(partition_rule(), kind) {
-        coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
-    }
-    // The whole-block rule generalised to every maximal run of consecutive
-    // pieces, plus the flanked shape a whole-block test cannot express. Route 0
-    // inside it is `coalesce_whole_block_inversion` verbatim, so this is
-    // additive: a block that coalesces today still coalesces by that same path.
-    coalesce_inversion_runs(
-        &mut pieces,
-        &ref_bytes,
-        lo,
-        &ref_bytes[lo..hi_ref],
-        &result[lo..hi_alt],
-    );
+        // Placed here — after the partition, the shift and the width minimisation —
+        // because it widens. While the input-relative weight bound stood, that
+        // placement was load-bearing: a widening judged against the *input's* weight
+        // is accepted for one spelling of a variant and refused for another. The
+        // bound is gone, so the ordering is now merely the one that was measured;
+        // see `coalesce_whole_block_inversion`'s own doc for the worked case.
+        //
+        // It sits *before* `apply_coding_codon_exception`, and on a `c.`/`n.` axis
+        // the two do reach for the same pieces: a 5 nt whole-block inversion whose
+        // changed columns fall at offsets 0/2/4 inside one codon is exactly the
+        // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges
+        // (`general.md:35`). Stub this call and that is what happens —
+        // `c.[1G>T;3T>A;5A>C]` comes out as `c.[1_3delinsTTA;5A>C]`.
+        //
+        // **The order between them is nevertheless not observable, and that is
+        // measured, not assumed.** Moving this call to *after* the codon exception
+        // leaves the whole suite green, the new `c.`-axis test included. The reason
+        // is that this rule reads only three things — the hull the pieces span, the
+        // sequence they denote, and whether every separation is a single base — and
+        // the codon exception preserves all three: it splices the unchanged middle
+        // base into the payload explicitly (denoted sequence unchanged), it grows
+        // the left piece by exactly what it takes from the right (hull unchanged),
+        // and it only ever *closes* a one-base gap, never opens one, so the gaps
+        // that remain are a subset of the gaps that were there
+        // (`every_separation_is_a_single_base`'s verdict unchanged). A codon-merged
+        // partition therefore reconstructs to the same span, and this rule reaches
+        // the same `inv` from either side.
+        //
+        // Two reasons to keep the order written down anyway. It stops being neutral
+        // the moment the codon exception can merge across more than one unchanged
+        // base, since that would break the third invariant above and let a widened
+        // partition fail the gate. And where both fire, the `inv` is the answer
+        // regardless of who reaches it — the codon exception's product is a
+        // `delins`, which `delins.md:5` defines as a replacement "which is not a
+        // substitution or inversion", so over a reverse-complement span it is not a
+        // description the spec admits.
+        //
+        // Pinned by `issue_1040_inv_overrecognition_probes::
+        // a_derived_whole_block_inversion_outranks_the_codon_exception`.
+        //
+        // `coalesce_compensating_gap_split` runs first: a split whose boundaries the
+        // alignment manufactured is put back together as one span, which then
+        // arrives below as a single piece and is typed by
+        // `crate::normalize::rules` rather than needing the inversion gate at all.
+        // It is placed here, after the weight bound, for the same reason the call
+        // below is — it widens.
+        //
+        // Scoped to the two `partition_block_canonical` arms, and the scoping is a
+        // **measurement boundary, not a belief**: the defect is that partitioner's,
+        // and whether the same rule is right for `partition_block` is a question
+        // with its own blast radius that this change does not answer. Left unscoped
+        // it does fire on the live arm — measured, once, on a 164 nt `n.` block that
+        // `partition_block` splits into eighteen members and this merges into one
+        // spanning `delins`. That may well be the better description; it is not one
+        // to ship as a side effect of fixing a different arm, and the shipped output
+        // must not move in a pre-flip change. Remove the scoping when `live` goes.
+        //
+        // Written as a positive match over the arms it argues for, like the call
+        // above, and **not** as `!= Live`. That negation also selects
+        // [`PartitionRule::Shadow`], whose pieces come from
+        // `partition_block_sequence_first` — boundaries taken from the alignment
+        // steps common to *every* minimal alignment, which is precisely the set no
+        // alignment can have manufactured. Applying a "your boundaries are a shifted
+        // coincidence" rule there contradicts its own premise, and nothing below
+        // measures or pins that arm.
+        //
+        // The limit this scoping does **not** reach, stated rather than implied:
+        // every non-`Live` arm falls back to `partition_block` when its own splitter
+        // declines, so on a `canonical` bake-off run a declining block still reaches
+        // this rule with live pieces. The gate keys on the arm, not on which
+        // partitioner produced the pieces. Shipped output is unaffected either way —
+        // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
+        // widening the arm it is labelled with did not cause.
+        // Scoped to the coding DNA axis as well as to the arms, per the decided
+        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (#1711): the
+        // pass can only merge *across unchanged reference bases*, which is exactly
+        // the population `general.md:34` keeps individual, and `DNA/delins.md:47` —
+        // the only clause that overrides it here — reaches `c.` and nothing else.
+        // See `compensating_gap_coalesce_applies` for the argument and for the
+        // competing reading it decides against.
+        if compensating_gap_coalesce_applies(rule, kind) {
+            coalesce_compensating_gap_split(pieces, &ref_bytes);
+        }
+        // The whole-block rule generalised to every maximal run of consecutive
+        // pieces, plus the flanked shape a whole-block test cannot express. Route 0
+        // inside it is `coalesce_whole_block_inversion` verbatim, so this is
+        // additive: a block that coalesces today still coalesces by that same path.
+        coalesce_inversion_runs(
+            pieces,
+            &ref_bytes,
+            lo,
+            &ref_bytes[lo..hi_ref],
+            &result[lo..hi_alt],
+        );
 
-    // Applied last among the widening passes. This used to be forced: the
-    // input-relative weight bound judged the partition, the codon exception
-    // (`general.md:35`) is a licensed widening on top of an already-accepted
-    // partition, and running it first let a legitimate codon merge inflate the
-    // weight and trip a refusal. With the bound deleted nothing weighs the
-    // partition, so the order is kept as measured rather than as required.
-    apply_coding_codon_exception(
-        &mut pieces,
-        frame.carries_translated_frame(),
-        w_lo,
-        &ref_bytes,
-    );
+        // Applied last among the widening passes. This used to be forced: the
+        // input-relative weight bound judged the partition, the codon exception
+        // (`general.md:35`) is a licensed widening on top of an already-accepted
+        // partition, and running it first let a legitimate codon merge inflate the
+        // weight and trip a refusal. With the bound deleted nothing weighs the
+        // partition, so the order is kept as measured rather than as required.
+        apply_coding_codon_exception(pieces, frame.carries_translated_frame(), w_lo, &ref_bytes);
+    };
+
+    // The member count is a property of the sequence, so it may not depend on
+    // which way the placement ran (#1542).
+    place_direction_symmetrically(&mut pieces, direction, place_pieces);
+
     // A veto stood here that refused the whole group whenever any derived piece
     // was an inversion. It was not an input-relative gate — it read only the
     // pieces and the reference, so two spellings of one variant always got the
@@ -9276,6 +9315,137 @@ fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
         } else {
             i += 1;
         }
+    }
+}
+
+/// Run the placement chain in `direction` — and in the **other** direction too,
+/// adopting the mirror's partition where it emits strictly fewer members
+/// (#1542).
+///
+/// # The defect
+///
+/// Every merging pass in [`canonicalize_from_sequence`] runs *after*
+/// [`shift_pieces`], and each keys on where the pieces ended up. So whether two
+/// pieces merge depends on where the requested direction happened to park a pure
+/// indel between them — which makes the **member count** a function of
+/// `ShuffleDirection`.
+///
+/// [`coalesce_adjacent_pieces`], the enforcement point for `delins.md:16`, is
+/// only the first such pass. The measured producer on the **shipped default**
+/// arm is [`coalesce_inversion_runs`], five passes further on:
+///
+/// ```text
+/// reference   ACGTACGTACGTACGTACGT AGCA ACGTACGTACGTACGTACGT
+/// input       NC_TEST.1:g.21_24delinsCATGC
+///
+/// 3'  ->  g.[20_21insC;21_22insT;25del]     three members
+/// 5'  ->  g.[20_21insC;22_24inv]            two members
+/// ```
+///
+/// Both directions cut the identical block (`AGCA -> CATGC`) into the identical
+/// three pieces, and both still hold three pieces after the shift and the
+/// `delins.md:16` merge — the pieces differ only in *placement*, which is what
+/// direction is for. It is `coalesce_inversion_runs` that then sees an inversion
+/// at 5' and no inversion at 3'. Each answer is a fixed point, so no idempotency,
+/// re-parse, in-bounds or denoted-sequence oracle can see it.
+///
+/// **This is why the mirror wraps the whole chain rather than the shift and the
+/// `delins.md:16` merge alone.** An earlier revision of this function mirrored
+/// only those two, which is the pass that produces the defect on
+/// [`PartitionRule::Live`]; it left the shipped default untouched, because on
+/// that arm the disagreement is created downstream of where it looked.
+///
+/// # The rule
+///
+/// **The shuffle direction may move a member's placement; it may not change how
+/// many members there are.** Direction is documented as an orthogonal axis (see
+/// [`crate::normalize::FromSequencesOptions`]), and a partition that varies with
+/// it is reading a separation off a placement rather than off the sequence —
+/// which `separation-is-a-property-of-the-spelling-not-of-the-variant` (decided
+/// 2026-08-10) rules against: the separation `general.md:34` keys on is read off
+/// the partition **re-derived from the resulting sequence**. The governing record
+/// is `canonical-form-choice-when-both-legal` (decided 2026-08-07): a form is
+/// derived from the resulting sequence, never from the traversal that reached it.
+///
+/// So the mirror is asked as well, and where it closes a gap this direction did
+/// not, its partition is adopted and re-placed the requested way. Adopting the
+/// *merged* side rather than the split one is not a preference for merging: it
+/// is that a separation one legal placement erases was never a separation, while
+/// a gap both placements leave open is real.
+///
+/// # Why this is not the reserved `dup` carve-out
+///
+/// `delins-adjacent-members-when-both-consume-reference` is **decided**, and its
+/// ruling reserves one shape from itself: two **members** at separation zero,
+/// one of them a `dup` that merging would destroy. This is not that shape, on
+/// the operator's 2026-08-13 ruling for #1542: the input is a single spanning
+/// `delins` carrying no members, so any `dup` is *manufactured* by one direction
+/// rather than carried; and
+/// `duplication-must-ranks-the-label-not-the-partition` (decided 2026-08-13)
+/// settles whole-block re-derivation — `duplication.md:18` ranks the label
+/// applied to a derived change, and never requires a partition that exposes one.
+///
+/// # Termination
+///
+/// Each adoption replaces the pieces with a strictly shorter list, so the loop
+/// can run at most `pieces.len() - 1` times; the bound is stated rather than
+/// assumed, and reaching it returns the shorter side rather than spinning.
+/// In practice one round settles every case measured — see
+/// [`the_member_count_does_not_depend_on_the_shuffle_direction`] and the
+/// `direction_symmetry` unit tests.
+///
+/// # Cost
+///
+/// The mirror is computed only where its answer *can* differ, and the
+/// precondition is exact rather than a heuristic: [`shift_pieces`] moves nothing
+/// but pure indels, so a block with none of those places identically in both
+/// directions and every downstream pass then sees identical input. A single
+/// piece likewise has no gap to close. Both are cheap to test and neither can
+/// hide a case.
+fn place_direction_symmetrically<F>(pieces: &mut Vec<Piece>, direction: ShuffleDirection, place: F)
+where
+    F: Fn(&mut Vec<Piece>, ShuffleDirection),
+{
+    if pieces.len() <= 1 || !pieces.iter().any(Piece::is_pure_indel) {
+        place(pieces, direction);
+        return;
+    }
+
+    // Bounded by the piece count: every iteration that continues has strictly
+    // shortened `pieces`, and a partition cannot be shortened below one.
+    for _ in 0..pieces.len() {
+        let mut mirrored = pieces.clone();
+        place(&mut mirrored, opposite_direction(direction));
+        let mut placed = pieces.clone();
+        place(&mut placed, direction);
+
+        // Strictly fewer, never merely different: a mirror that merges the
+        // *same* number of pieces at different coordinates is the 3'/5' choice
+        // doing its job, and adopting it there would silently overrule the
+        // caller's direction.
+        if mirrored.len() < placed.len() {
+            // Adopt the merged partition and re-place it the way the caller
+            // asked, on the next iteration. A merged `delins` is not a pure
+            // indel and so does not move; the pieces around it still place
+            // themselves in the requested direction.
+            *pieces = mirrored;
+        } else {
+            *pieces = placed;
+            return;
+        }
+    }
+    place(pieces, direction);
+}
+
+/// The other shuffle direction.
+///
+/// A free function rather than a method on [`ShuffleDirection`], because the
+/// mirror above is the only caller and "the opposite direction" is not a concept
+/// the public normalization API otherwise has.
+fn opposite_direction(direction: ShuffleDirection) -> ShuffleDirection {
+    match direction {
+        ShuffleDirection::ThreePrime => ShuffleDirection::FivePrime,
+        ShuffleDirection::FivePrime => ShuffleDirection::ThreePrime,
     }
 }
 
@@ -19188,6 +19358,210 @@ mod tests {
                 separation_held > 1_000,
                 "enumeration did not exercise the separation regime: {separation_held} of {checked}"
             );
+        }
+    }
+
+    /// The shuffle direction may move a member's placement; it may not change
+    /// how many members there are — **on every arm** (#1542).
+    ///
+    /// # Why this is not in `tests/it/`
+    ///
+    /// [`partition_rule`] caches its read of `FERRO_PARTITION` in a `OnceLock`,
+    /// so an integration test can only ever see the arm its process started
+    /// with. #1835 flipped [`DEFAULT_PARTITION_RULE`] from
+    /// [`PartitionRule::Live`] to [`PartitionRule::CanonicalCoalesced`], and the
+    /// corpus guard in `tests/it/case_harvest.rs` went on passing while
+    /// measuring the arm ferro had stopped shipping — the whole of
+    /// `merge.rs` could be reverted with that guard still green. A property of
+    /// *the partitioner* has to be stated over every partitioner, which needs
+    /// the rule to be an argument; that is
+    /// [`canonicalize_from_sequence_with_rule`].
+    ///
+    /// # The arms are not listed here
+    ///
+    /// They are read from [`PARTITION_RULE_NAMES`] through
+    /// [`partition_rule_from_env`] — the same resolution the operator's switch
+    /// uses — so a fifth arm is covered by this guard the moment it is
+    /// nameable, with nothing to remember. A second hand-written list of arms is
+    /// exactly the "positive arm list" failure
+    /// [`PartitionRule::cuts_with_canonical`] documents.
+    #[cfg(test)]
+    mod direction_symmetry {
+        use rayon::prelude::*;
+
+        use super::*;
+
+        /// The flanking bases every core is embedded in.
+        ///
+        /// Long enough that a shift in either direction stays inside the served
+        /// sequence, and periodic so that a pure indel at the block edge has
+        /// somewhere to roll — a core in unique flanks would pin every piece
+        /// and make the corpus unable to express the defect at all.
+        const PAD: &str = "ACGTACGTACGTACGTACGT";
+
+        /// Every word of length `n` over the DNA alphabet, in a fixed order.
+        fn words(n: usize) -> Vec<String> {
+            let mut out = vec![String::new()];
+            for _ in 0..n {
+                out = out
+                    .iter()
+                    .flat_map(|word| {
+                        ["A", "C", "G", "T"]
+                            .into_iter()
+                            .map(move |base| format!("{word}{base}"))
+                    })
+                    .collect();
+            }
+            out
+        }
+
+        /// The corpus: every 4-base core, replaced by every 5-base payload.
+        ///
+        /// **The shape is chosen because it is the one that reaches the
+        /// partitioner**, not because it is where the defect happened to be
+        /// found. A single spanning `delins` whose payload differs in length
+        /// from its span is handed to [`canonicalize_from_sequence`] as one
+        /// member and re-partitioned from the resulting sequence, which is the
+        /// function under test; a corpus of already-split alleles would mostly
+        /// be refused before reaching it.
+        ///
+        /// Cores are enumerated exhaustively rather than sampled. The rows that
+        /// exhibited the defect on the shipped default are 12 of the 256 cores,
+        /// and no stride over them could have been justified after the fact.
+        fn corpus() -> Vec<(String, String)> {
+            let payloads = words(5);
+            words(4)
+                .into_iter()
+                .flat_map(|core| {
+                    payloads
+                        .iter()
+                        .map(move |payload| (core.clone(), payload.clone()))
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
+            let lo = PAD.len() + 1;
+            let hi = PAD.len() + 4;
+
+            // Parallel over the corpus: 256 cores x 1024 payloads x 4 arms is
+            // 1,048,576 re-derivations, which is ~68 s single-threaded — past
+            // nextest's 60 s SLOW threshold. Nothing is shared: each row builds
+            // its own `MockProvider`, so this is a pure fan-out and the corpus
+            // did not have to be sampled down to fit a time budget.
+            let corpus = corpus();
+            let mut arms = 0usize;
+            let mut compared = 0usize;
+            let mut disagreements: Vec<String> = Vec::new();
+
+            for name in PARTITION_RULE_NAMES {
+                let rule = partition_rule_from_env(Some(name))
+                    .unwrap_or_else(|e| panic!("{name} is an arm this build has: {e}"));
+                arms += 1;
+
+                let found: Vec<(usize, Vec<String>)> = corpus
+                    .par_iter()
+                    .map(|(core, payload)| {
+                        let mut compared = 0usize;
+                        let mut disagreements = Vec::new();
+                        if payload == core {
+                            return (compared, disagreements);
+                        }
+                        let mut provider = MockProvider::new();
+                        provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
+                        let input = format!("NC_TEST.1:g.{lo}_{hi}delins{payload}");
+                        let Ok(variant) = parse_hgvs(&input) else {
+                            return (compared, disagreements);
+                        };
+                        let members = [variant];
+
+                        let three = canonicalize_from_sequence_with_rule(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            ShuffleDirection::ThreePrime,
+                            rule,
+                        );
+                        let five = canonicalize_from_sequence_with_rule(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            ShuffleDirection::FivePrime,
+                            rule,
+                        );
+
+                        // A row one direction re-derives and the other declines
+                        // is a disagreement of the same kind, so the two `None`s
+                        // are compared rather than skipped: skipping them would
+                        // let a change that made the pass decline on one
+                        // direction read as a clean run.
+                        match (&three, &five) {
+                            (None, None) => {}
+                            (Some(three), Some(five)) if three.len() == five.len() => {}
+                            _ => disagreements.push(format!(
+                                "  FERRO_PARTITION={name} core={core} {input}\n    3': {}\n    \
+                                 5': {}",
+                                describe(&three),
+                                describe(&five),
+                            )),
+                        }
+                        compared += 1;
+                        (compared, disagreements)
+                    })
+                    .collect();
+
+                for (rows, mut found) in found {
+                    compared += rows;
+                    disagreements.append(&mut found);
+                }
+            }
+
+            // A zero above is only a claim about what was measured. Both floors
+            // are asserted so an empty corpus, or a name list that stopped
+            // resolving, cannot present as a pass.
+            assert_eq!(
+                arms,
+                PARTITION_RULE_NAMES.len(),
+                "every arm this build advertises must be measured"
+            );
+            assert!(
+                compared >= 4 * 250_000,
+                "the corpus collapsed to {compared} comparisons, so a zero below says nothing"
+            );
+            assert!(
+                disagreements.is_empty(),
+                "{} row(s) re-derive a different number of members depending only on the shuffle \\
+                 direction. Direction moves a member's placement; it may not change how many \\
+                 members there are, or the partition is being read off a placement rather than \\
+                 off the sequence — which `canonical-form-choice-when-both-legal` (derive from \\
+                 the resulting sequence) and \\
+                 `separation-is-a-property-of-the-spelling-not-of-the-variant` both rule \\
+                 against. Showing the first 20:\\n{}",
+                disagreements.len(),
+                disagreements
+                    .iter()
+                    .take(20)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\\n")
+            );
+        }
+
+        /// One re-derivation, for a failure message.
+        fn describe(rebuilt: &Option<Vec<HgvsVariant>>) -> String {
+            match rebuilt {
+                None => "declined".to_string(),
+                Some(members) => format!(
+                    "{} ({} member(s))",
+                    members
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                    members.len()
+                ),
+            }
         }
     }
 }

@@ -181,11 +181,23 @@ const TX_CONTIG: &str = "chr_synth";
 /// observation one change earlier, and it holds again: `n.` and `r.` gain
 /// 1 456 and 1 456 against `cis_confluence_axis`'s 2 910, which is what an
 /// axis-neutral partitioner change looks like on a corpus half the size.
+///
+/// # Re-blessed again by #1542's direction-symmetric coalesce
+///
+/// `shift_and_coalesce_direction_symmetrically` stops the member *count* being a
+/// function of `ShuffleDirection`; the classes that gain are ones whose 3'
+/// answer split where their 5' answer already merged. The corresponding 5'
+/// census is **unchanged**, which is the shape of the finding: the fix moves the
+/// 3' answer onto the 5' one rather than moving both. No divergence figure rises
+/// and `sequence_changed` stays 0. On the pre-flip base the move was +2
+/// converged / -2 `split 2`; the figures below are **re-measured on the rebase
+/// onto #1835** rather than composed from the two branches' deltas.
 const N_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see the section above.
+    // #1835: the partition default flip, then #1542's direction-symmetric
+    // coalesce — see the two sections above.
     converged: 5_635,
     split_two: 1,
     split_three: 0,
@@ -227,11 +239,20 @@ const N_THREE_PRIME: Census = Census {
 /// the residue is two classes rather than a family. If a later change needs the
 /// mechanism, dump the divergent class ids on the two axes and diff them; do not
 /// cite this comment as though it had.
+///
+/// **Re-blessed again by #1542's direction-symmetric coalesce**, as its `n.`
+/// twin is. `shift_and_coalesce_direction_symmetrically` stops the member
+/// *count* being a function of `ShuffleDirection`; the classes that gain are
+/// ones whose 3' answer split where their 5' answer already merged. The
+/// corresponding 5' census is **unchanged**. No divergence figure rises and
+/// `sequence_changed` stays 0. Re-measured on the rebase onto #1835 rather than
+/// composed from the two branches' deltas.
 const R_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    // #1835: the partition default flip — see `N_THREE_PRIME`.
+    // #1835: the partition default flip, then #1542's direction-symmetric
+    // coalesce — see `N_THREE_PRIME`.
     converged: 5_633,
     split_two: 3,
     split_three: 0,
