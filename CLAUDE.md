@@ -936,6 +936,15 @@ adjudications and do not need records.
 - **undecided** — a first-class state. The generator refuses an `undecided` record that names a
   governing clause, so an open question cannot smuggle in a ruling nobody made. Prefer an honest
   `undecided` record to no record.
+- **house-choice** — `decided`, and **ours rather than the spec's**: a `rulings` record carrying a
+  `house_choice` object, made under `README.md` rule 5's silent limb or rule 6, naming **no**
+  governing and no deviated-from clause. The generator and the ledger reader both refuse one that
+  names either, mirroring the `undecided` refusal — that arm stops a record claiming more certainty
+  than the project has, this one stops it claiming more authority than the spec gave it. Use it
+  whenever the honest statement is "the recommendations do not reach this and we picked X"; the
+  alternative is what happened to the minimal-alignment rule, which had no home here and grew six
+  drifting prose restatements instead. It must say what was considered and rejected, and the record
+  is never citable as conformance.
 
 **A test that merely pins today's output is not an adjudication record.** It is a change
 detector, and this repo has already been bitten by the difference —

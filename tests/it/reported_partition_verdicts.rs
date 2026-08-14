@@ -1642,10 +1642,24 @@ fn every_reported_pair_is_still_one_variant_by_equivalence() {
 /// three #1420 rows whose replacement is the same length as the span it
 /// replaces.
 ///
-/// Equal length is what makes the changed/unchanged column pattern well defined
-/// without an alignment, which is why only #1420 appears here: #1419's rows are
-/// net deletions and #1421's are net insertions, so their columns do not line
-/// up one-to-one and the pattern is a choice rather than a fact.
+/// **The premise this doc used to state is false, and the ledger says so.** It
+/// read "equal length is what makes the changed/unchanged column pattern well
+/// defined without an alignment", with #1419's net deletions and #1421's net
+/// insertions excluded because "their columns do not line up one-to-one".
+/// `rulings[unchanged-is-read-over-every-minimal-alignment]` records the
+/// counter-example directly: `CAG -> AGA` is equal length and still has edit
+/// distance 2, so a position-wise reading of an equal-length block is not
+/// automatically the minimal one and "which columns changed" is not settled by
+/// the lengths matching. Read the record rather than this comment; it is the
+/// only place the rule is stated.
+///
+/// What is true, and is all this table needs, is narrower: these three rows are
+/// the ones whose replacement is the same length as its span, so a
+/// **position-wise** column pattern can be written down for them at all. That
+/// pattern is what [`reported_spans_change_the_columns_the_reports_state`]
+/// computes and checks against the reference. Whether it is also the minimal
+/// alignment's pattern is the record's question, not this table's, and no
+/// assertion here turns on the answer.
 const EQUAL_LENGTH_SPANS: &[(&str, usize, &str, &str)] = &[
     ("1420-v2", 38, "TTGC", "ATTG"),
     ("1420-v3", 37, "ATTG", "CATT"),
@@ -1654,13 +1668,20 @@ const EQUAL_LENGTH_SPANS: &[(&str, usize, &str, &str)] = &[
 
 /// The #1420 arguments are checked against the reference, not taken on trust.
 ///
-/// Each row's canonical form follows from *which columns change*: v2 and v3
-/// have an unchanged interior column, so delins.md:17 separates them; v4 has
-/// none, so delins.md:16 coalesces it. That distinction is the reason v4's
-/// correction points the opposite way to v2's and v3's, and it is the one part
-/// of #1420's reasoning that is a fact about the sequence rather than a reading
-/// of the recommendations — so it is computed here rather than asserted in a
-/// comment.
+/// #1420's own reasoning runs off *which columns change*: v2 and v3 have an
+/// unchanged interior column, so `delins.md:17` separates them; v4 has none, so
+/// `delins.md:16` coalesces it. That distinction is the reason v4's correction
+/// points the opposite way to v2's and v3's, and it is computed here rather
+/// than asserted in a comment.
+///
+/// **What is computed is the position-wise pattern**, which is a fact about
+/// these strings. It is *not* the same thing as which bases are unchanged in
+/// the sense `general.md:34` keys on — that notion is column-based over every
+/// minimal alignment and is settled by
+/// `rulings[unchanged-is-read-over-every-minimal-alignment]`, which also records
+/// why an equal-length block does not settle it by itself. Nothing here asserts
+/// the two coincide; the assertion is only that the position-wise pattern is
+/// what #1420 says it is.
 #[test]
 fn reported_spans_change_the_columns_the_reports_state() {
     // `X` = changed, `.` = unchanged, one character per position in the span.

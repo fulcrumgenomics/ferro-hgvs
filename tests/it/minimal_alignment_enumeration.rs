@@ -467,9 +467,13 @@ fn the_weight_bound_records_four_rows_are_position_wise_readings() {
         );
 
         // The whole point: the position-wise reading is NOT one of the minimal
-        // alignments, so the changed-column set the record derived from it is a
-        // choice and not a fact. Position-wise costs one substitution per
-        // mismatched column; minimal costs 2.
+        // alignments, so the changed-column set
+        // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`
+        // derived from it is a choice and not a fact. That is
+        // `rulings[unchanged-is-read-over-every-minimal-alignment]` applied to
+        // these four rows, not a reading taken here — read that record, which
+        // is the only place the rule is stated. Position-wise costs one
+        // substitution per mismatched column; minimal costs 2.
         let position_wise_cost = (reference.len() - position_wise.len()) as u32;
         assert!(
             position_wise_cost > 2,

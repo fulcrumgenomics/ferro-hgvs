@@ -65,9 +65,10 @@
 //! changed that the input left alone. The bound refuses it, and the per-member
 //! pipeline answers instead — which is why the output is the input.
 //!
-//! **This row is NOT protection — adjudicated 2026-08-10, by measurement.** For
-//! a net-zero block the column correspondence is unique, so *which columns
-//! changed* is a fact rather than a choice:
+//! **This row is NOT protection — adjudicated 2026-08-10, by measurement.** The
+//! columns below are the **position-wise** ones, which is what a net-zero block
+//! lets you write down; they are not, by themselves, an answer to which bases
+//! `general.md:34` counts as unchanged:
 //!
 //! ```text
 //! pos      2  3  4  5  6  7  8  9 10 11 12
@@ -86,6 +87,17 @@
 //! cannot apply to a `g.` description, which has no amino acid. **So the derived
 //! form is exactly what the spec's stated rules produce, and the input is a
 //! spelling they never generate.**
+//!
+//! **This passage used to argue that from the wrong premise, and the premise is
+//! settled elsewhere.** It read "for a net-zero block the column correspondence
+//! is unique, so *which columns changed* is a fact rather than a choice", stated
+//! as a general truth about equal-length blocks. It is not one:
+//! `rulings[unchanged-is-read-over-every-minimal-alignment]` records `CAG ->
+//! AGA` as an equal-length block with edit distance 2, where the position-wise
+//! reading is *not* minimal and two of the three bases are unchanged. That
+//! record is the only statement of the rule; do not restate it here. For **this**
+//! block the position-wise reading happens to be the one the derivation takes,
+//! which is all the worked example needs and all it now claims.
 //!
 //! The weights make the refusal vivid: the input spells `1 + 1 = 2`, the
 //! derivation `max(4,4) + max(5,5) = 9`. `9 > 2`, so the bound refuses — even

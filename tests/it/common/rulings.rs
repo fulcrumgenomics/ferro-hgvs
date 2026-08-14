@@ -166,6 +166,71 @@ impl Guard {
     }
 }
 
+/// The `README.md` rule a clause-free house choice is made under.
+///
+/// A closed set of two, mirroring `generate_spec_fixture`'s `overrides::HouseRule`.
+/// Free text here would let a record write a spec clause into the slot reserved
+/// for the project's own authority, which is the substitution [`HouseChoice`]
+/// exists to prevent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HouseRule {
+    /// `README.md` rule 5, silent limb — the recommendations are incomplete
+    /// here, so ferro decides under rule 6 and violates nothing.
+    RuleFiveSilent,
+    /// `README.md` rule 6 — among multiple conformant forms, the maintainers
+    /// choose.
+    RuleSix,
+}
+
+impl HouseRule {
+    /// The ledger's own spelling, which is also what rendered output uses.
+    pub fn token(self) -> &'static str {
+        match self {
+            HouseRule::RuleFiveSilent => "rule-five-silent",
+            HouseRule::RuleSix => "rule-six",
+        }
+    }
+
+    /// Human-readable form, for rendered documents.
+    pub fn label(self) -> &'static str {
+        match self {
+            HouseRule::RuleFiveSilent => "`README.md` rule 5 (silent limb)",
+            HouseRule::RuleSix => "`README.md` rule 6",
+        }
+    }
+
+    /// Parse the ledger's spelling. `None` for anything outside the closed set.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "rule-five-silent" => Some(HouseRule::RuleFiveSilent),
+            "rule-six" => Some(HouseRule::RuleSix),
+            _ => None,
+        }
+    }
+}
+
+/// A ruling that is the project's own, made where the recommendations are
+/// silent.
+///
+/// See `generate_spec_fixture`'s `overrides::HouseChoice` for the full
+/// reasoning; the short version is that the ledger previously had no way to say
+/// "no clause reaches this and we chose X", so such choices lived as prose in
+/// `src/` and `tests/` and drifted apart there.
+///
+/// Carrying it as a *record* rather than as a `status` value is deliberate: a
+/// house choice is `decided` — a choice has been made — and the two published
+/// tables (`CLAUDE.md`, `docs/NORMALIZATION_CONTRACT.md`) partition the ledger
+/// by status. A third status would have re-partitioned both and made every
+/// house choice read as a species of open question, which is the opposite of
+/// what it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HouseChoice {
+    /// The `README.md` rule the choice is made under.
+    pub under: HouseRule,
+    /// What was weighed and put aside in reaching it. Never blank.
+    pub considered_and_rejected: String,
+}
+
 /// Splits a guard citation into the file it names and the function within it.
 ///
 /// The grammar is deliberately narrow — a repo-relative path ending in `.rs`,
@@ -241,6 +306,16 @@ pub struct Record {
     /// What enforces this record's ruling, or its stated reason that nothing
     /// does. Required — see [`Guard`].
     pub guard: Guard,
+    /// Present when the ruling is the project's own rather than the spec's —
+    /// see [`HouseChoice`]. `None` for every record that rules on a clause.
+    ///
+    /// Exposed rather than folded into [`Self::governing`]'s absence because the
+    /// two are different states and conflating them is what the field exists to
+    /// stop: a `decided` record with no governing clause used to be
+    /// unrepresentable, and `normalization_contract_doc.rs` publishes the note
+    /// "an open record names a conflict without choosing a side" for a missing
+    /// governing clause — which would be exactly wrong on a house choice.
+    pub house_choice: Option<HouseChoice>,
     /// Every clause the record names, in the ledger's own order, each tagged
     /// with the role the record's verdict fields give it.
     pub citations: Vec<Citation>,
@@ -441,6 +516,62 @@ fn guard_from(record: &serde_json::Value, id: &str) -> Guard {
     }
 }
 
+/// The `house_choice` field of one record, if it carries one.
+///
+/// Absence is the ordinary case and reads as `None`; anything present is
+/// validated in full, for the reason [`guard_from`] gives about a present
+/// self-contradictory field. The two required keys are checked explicitly
+/// rather than by a permissive `get`-and-default, because a house choice that
+/// silently lost its `considered_and_rejected` would publish a conclusion with
+/// its reasoning deleted and nothing would fail.
+fn house_choice_from(record: &serde_json::Value, id: &str) -> Option<HouseChoice> {
+    let value = match record.get("house_choice") {
+        None | Some(serde_json::Value::Null) => return None,
+        Some(value) => value,
+    };
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("record {id} has a non-object `house_choice`: {value}"));
+    for key in object.keys() {
+        assert!(
+            key == "under" || key == "considered_and_rejected",
+            "record {id} has an unknown `house_choice` key {key:?}; only `under` and \
+             `considered_and_rejected` parse"
+        );
+    }
+    let under_token = required_str(
+        value,
+        "under",
+        &format!("the `house_choice` of record {id}"),
+    );
+    let under = HouseRule::from_token(under_token).unwrap_or_else(|| {
+        panic!(
+            "record {id} makes its house choice under {under_token:?}, which is not one of \
+             {:?}. `under` names the `README.md` rule the project chose under, never a spec \
+             clause — a house choice that could name a clause here would be claiming the \
+             authority it exists to disclaim",
+            [
+                HouseRule::RuleFiveSilent.token(),
+                HouseRule::RuleSix.token()
+            ]
+        )
+    });
+    let considered_and_rejected = required_str(
+        value,
+        "considered_and_rejected",
+        &format!("the `house_choice` of record {id}"),
+    );
+    assert!(
+        !considered_and_rejected.trim().is_empty(),
+        "record {id} has a blank `house_choice.considered_and_rejected`; a house choice with no \
+         rejected alternative is a conclusion with its reasoning deleted"
+    );
+    Some(HouseChoice {
+        under,
+        considered_and_rejected: considered_and_rejected.to_string(),
+    })
+}
+
 /// Every record in a parsed ledger document.
 ///
 /// Split from [`records`] so the malformed-input cases below can drive it
@@ -558,6 +689,39 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
 
             let guard = guard_from(record, &id);
 
+            // A house choice states that no clause reaches the point. The two
+            // verdict fields state that one does. Refused here as well as in the
+            // generator because this reader is what the committed tests and both
+            // published documents are built from: a record that reached them
+            // carrying both would be rendered as a house choice *and* indexed as
+            // a governing authority for the clause it names.
+            let house_choice = house_choice_from(record, &id);
+            if house_choice.is_some() {
+                assert!(
+                    status == "decided",
+                    "record {id} carries a `house_choice` but is {status:?}; a choice that has \
+                     been made is decided by definition"
+                );
+                if let Some(governing) = governing {
+                    panic!(
+                        "record {id} is a `house_choice` and names {governing:?} as governing. A \
+                         house choice is what the project does where the recommendations do NOT \
+                         decide, so it cannot also hold a clause to govern"
+                    );
+                }
+                assert!(
+                    deviates_from.is_empty(),
+                    "record {id} is a `house_choice` and names {deviates_from:?} as deviated \
+                     from; there is nothing to deviate from where the recommendations are silent"
+                );
+            } else {
+                assert!(
+                    status != "decided" || governing.is_some(),
+                    "record {id} is decided but names neither a governing clause nor a \
+                     `house_choice`"
+                );
+            }
+
             Record {
                 id,
                 status,
@@ -568,6 +732,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 guard,
                 citations,
                 governing: governing.map(str::to_string),
+                house_choice,
             }
         })
         .collect();
@@ -632,6 +797,122 @@ fn a_well_formed_document_parses() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, "decided");
     assert_eq!(records[0].citations[0].role, Role::Governing);
+}
+
+/// A record whose ruling is the project's own, for the house-choice cases.
+///
+/// Built by *removing* `governing` from the valid record rather than by writing
+/// a second literal, so the two fixtures cannot drift into disagreeing about
+/// everything except the field under test.
+fn one_house_choice_record() -> serde_json::Value {
+    let mut document = one_valid_record();
+    let record = &mut document["rulings"][0];
+    record
+        .as_object_mut()
+        .expect("the fixture record is an object")
+        .remove("governing");
+    record["house_choice"] = serde_json::json!({
+        "under": "rule-six",
+        "considered_and_rejected": "the alternative form, rejected for a stated reason",
+    });
+    document
+}
+
+/// The positive control for the house-choice arm, and its discriminator.
+///
+/// The second half is what gives the first any force: with the `house_choice`
+/// removed the very same record is refused, so "decided with no governing
+/// clause" is legal *because of* the declaration and not by accident.
+#[test]
+fn a_house_choice_record_parses_and_is_the_only_clause_free_decided_shape() {
+    let records = records_from_value(&one_house_choice_record(), "<test>");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, "decided");
+    assert!(records[0].governing.is_none());
+    let choice = records[0]
+        .house_choice
+        .as_ref()
+        .expect("the record declares a house choice");
+    assert_eq!(choice.under, HouseRule::RuleSix);
+    // Every clause it names is context, never an authority.
+    assert!(records[0].citations.iter().all(|c| c.role == Role::Cited));
+}
+
+#[test]
+#[should_panic(expected = "names neither a governing clause nor a `house_choice`")]
+fn a_decided_record_with_no_governing_clause_and_no_house_choice_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record")
+        .remove("house_choice");
+    records_from_value(&document, "<test>");
+}
+
+/// The refusal the field exists for: a house choice may not claim that a clause
+/// governs. Overclaiming spec authority is what turned one implementer's choice
+/// into six prose restatements presented as compliance.
+#[test]
+#[should_panic(expected = "names \"docs/a.md:1\" as governing")]
+fn a_house_choice_that_claims_a_governing_clause_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["governing"] = serde_json::json!("docs/a.md:1");
+    records_from_value(&document, "<test>");
+}
+
+/// The sibling refusal: a clause that reaches far enough to be departed from is
+/// a clause that reaches.
+#[test]
+#[should_panic(expected = "as deviated from")]
+fn a_house_choice_that_deviates_from_a_clause_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["deviates_from"] = serde_json::json!(["docs/a.md:1"]);
+    records_from_value(&document, "<test>");
+}
+
+#[test]
+#[should_panic(expected = "decided by definition")]
+fn an_undecided_house_choice_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["status"] = serde_json::json!("undecided");
+    document["rulings"][0]["clauses"] = serde_json::json!([
+        { "clause": "docs/a.md:1", "quote": "a quoted clause" },
+        { "clause": "docs/b.md:2", "quote": "another quoted clause" },
+    ]);
+    records_from_value(&document, "<test>");
+}
+
+/// `under` names a `README.md` rule and nothing else — in particular not a spec
+/// clause, which is the value a drifting record would most plausibly reach for.
+#[test]
+#[should_panic(expected = "which is not one of")]
+fn a_house_choice_under_a_spec_clause_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["house_choice"]["under"] = serde_json::json!("docs/a.md:1");
+    records_from_value(&document, "<test>");
+}
+
+#[test]
+#[should_panic(expected = "blank `house_choice.considered_and_rejected`")]
+fn a_house_choice_with_nothing_rejected_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["house_choice"]["considered_and_rejected"] = serde_json::json!("  ");
+    records_from_value(&document, "<test>");
+}
+
+#[test]
+#[should_panic(expected = "unknown `house_choice` key")]
+fn an_unknown_house_choice_key_is_rejected() {
+    let mut document = one_house_choice_record();
+    document["rulings"][0]["house_choice"]["governing"] = serde_json::json!("docs/a.md:1");
+    records_from_value(&document, "<test>");
+}
+
+/// Absence reads as absence, so every record predating the field is unaffected.
+#[test]
+fn an_absent_house_choice_reads_as_none() {
+    let records = records_from_value(&one_valid_record(), "<test>");
+    assert!(records[0].house_choice.is_none());
 }
 
 /// An id outside the citation grammar is rejected. Not cosmetic: the scan
@@ -797,9 +1078,17 @@ fn an_absent_applies_to_reads_as_none() {
 /// An explicit `null` verdict field still means "not set" — that is a
 /// legitimate JSON spelling of absent, and the ledger's own records simply omit
 /// the keys.
+///
+/// Driven on an `undecided` record because that is the status for which "both
+/// verdict fields absent" is the *correct* shape. It used to be driven on the
+/// `decided` fixture, which now trips the rule that a decided record names
+/// either a governing clause or a `house_choice` — a rule that did not exist
+/// when this test was written, and whose absence is what made a clause-free
+/// decided ruling unrepresentable in the first place.
 #[test]
 fn a_null_verdict_field_reads_as_absent() {
     let mut document = one_valid_record();
+    document["rulings"][0]["status"] = serde_json::json!("undecided");
     document["rulings"][0]["governing"] = serde_json::Value::Null;
     document["rulings"][0]["deviates_from"] = serde_json::Value::Null;
     let records = records_from_value(&document, "<test>");
