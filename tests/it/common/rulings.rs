@@ -80,6 +80,16 @@ pub struct Record {
     /// `decided` or `undecided`, verbatim from the ledger. No other value
     /// parses; see [`STATUSES`].
     pub status: String,
+    /// The record's `question` prose, verbatim — what the record is *about*,
+    /// as opposed to how it came out.
+    ///
+    /// Required rather than optional. A record with no question is a verdict
+    /// with nothing to be a verdict on, and the id cannot stand in for it: an
+    /// id states the question in shorthand and, for at least one record in this
+    /// ledger, states it as the negation of its own ruling. Exposed because
+    /// `normalization_contract_doc.rs` renders it, and a rendering that fell
+    /// back to the id would publish that negation as the question.
+    pub question: String,
     /// The record's `rationale` prose, verbatim.
     ///
     /// Exposed because a rationale cites *other records* — that is how the
@@ -94,6 +104,15 @@ pub struct Record {
     /// so the strongest available evidence of which axes it reaches;
     /// `ledger_clause_jurisdiction.rs` reads the axis prefix of each entry.
     pub applies_to: Vec<String>,
+    /// The curated equivalence classes whose convergence this record's ruling
+    /// decides, verbatim, in the ledger's own order. Absent or `null` reads as
+    /// none.
+    ///
+    /// Exposed because it is the record's own pointer at the pinned evidence
+    /// that its ruling is enforced — `spec_equivalence_classes_converge` is what
+    /// fails if the ruling stops holding — and a published rendering of a record
+    /// that omitted it would drop the only link from the prose to the guard.
+    pub equivalence_classes: Vec<String>,
     /// Every clause the record names, in the ledger's own order, each tagged
     /// with the role the record's verdict fields give it.
     pub citations: Vec<Citation>,
@@ -182,6 +201,31 @@ fn required_str<'a>(value: &'a serde_json::Value, field: &str, subject: &str) ->
     }
 }
 
+/// An optional array-of-strings field.
+///
+/// Absent or `null` reads as empty; a present value of any other shape panics,
+/// for the same reason [`optional_str`] does. Silently reading a malformed
+/// `applies_to` as empty would narrow a record's declared reach to nothing and
+/// pass every jurisdiction check built on it.
+fn string_array(record: &serde_json::Value, field: &str, id: &str) -> Vec<String> {
+    match record.get(field) {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .unwrap_or_else(|| panic!("record {id} has a non-array `{field}`: {value}"))
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        panic!("record {id} has a non-string `{field}` entry: {entry}")
+                    })
+                    .to_string()
+            })
+            .collect(),
+    }
+}
+
 /// Every record in a parsed ledger document.
 ///
 /// Split from [`records`] so the malformed-input cases below can drive it
@@ -211,6 +255,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                  value is a status no citation could agree with"
             );
 
+            let question = required_str(record, "question", &format!("record {id}")).to_string();
             let rationale = required_str(record, "rationale", &format!("record {id}")).to_string();
 
             let governing = optional_str(record, "governing", &id);
@@ -292,28 +337,17 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 );
             }
 
-            let applies_to: Vec<String> = match record.get("applies_to") {
-                None | Some(serde_json::Value::Null) => Vec::new(),
-                Some(value) => value
-                    .as_array()
-                    .unwrap_or_else(|| panic!("record {id} has a non-array `applies_to`: {value}"))
-                    .iter()
-                    .map(|entry| {
-                        entry
-                            .as_str()
-                            .unwrap_or_else(|| {
-                                panic!("record {id} has a non-string `applies_to` entry: {entry}")
-                            })
-                            .to_string()
-                    })
-                    .collect(),
-            };
+            let applies_to: Vec<String> = string_array(record, "applies_to", &id);
+
+            let equivalence_classes: Vec<String> = string_array(record, "equivalence_classes", &id);
 
             Record {
                 id,
                 status,
+                question,
                 rationale,
                 applies_to,
+                equivalence_classes,
                 citations,
                 governing: governing.map(str::to_string),
             }
@@ -363,6 +397,7 @@ fn one_valid_record() -> serde_json::Value {
         "rulings": [{
             "id": "a-test-record",
             "status": "decided",
+            "question": "Does a well-formed record parse?",
             "rationale": "A test record, with prose that cites no other record.",
             "governing": "docs/a.md:1",
             "clauses": [{ "clause": "docs/a.md:1", "quote": "a quoted clause" }],
@@ -426,6 +461,26 @@ fn a_missing_rationale_is_rejected() {
         .as_object_mut()
         .expect("record is an object")
         .remove("rationale");
+    records_from_value(&document, "<test>");
+}
+
+/// A missing `question` is rejected rather than read as empty prose.
+///
+/// The id is not a fallback for it. At least one record in this ledger is
+/// decided the *opposite* way to what its id reads as, so a renderer that
+/// substituted the id for an absent question would publish that record's
+/// question — and by implication its answer — backwards, and it would look like
+/// prose rather than like a missing field. (The record is named in
+/// `clause_ruling_index.rs`; it is deliberately not named here, per this
+/// module's header.)
+#[test]
+#[should_panic(expected = "has no `question`")]
+fn a_missing_question_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record is an object")
+        .remove("question");
     records_from_value(&document, "<test>");
 }
 

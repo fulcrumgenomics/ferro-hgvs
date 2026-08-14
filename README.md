@@ -310,6 +310,17 @@ Rule 7's disclosure mechanism — the `Representation-Change:` trailer and how i
 changelog — is documented in
 [CONTRIBUTING.md](CONTRIBUTING.md#declaring-a-representation-change).
 
+### Where the individual decisions live
+
+Rules 5 and 6 above say *how* a question is decided where the recommendations are silent,
+ambiguous or self-contradictory. **What was decided, case by case**, is recorded separately, as
+adjudication records — each naming the clauses in tension, which one governs, which is deviated
+from, and why. Those records are published in full, with their clause quotes, in
+[docs/NORMALIZATION_CONTRACT.md](docs/NORMALIZATION_CONTRACT.md).
+
+That document is generated from the records and gated against them, so it cannot drift; it
+deliberately does not restate the seven rules above, which are stated only here.
+
 ## Deriving a description from sequences
 
 If what you have is **bases** rather than a description — a window out of a BAM, a VCF row, an

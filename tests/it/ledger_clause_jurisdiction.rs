@@ -561,6 +561,12 @@ fn record(
     Record {
         id: id.to_string(),
         status: "decided".to_string(),
+        // Neither field is read by the jurisdiction rule, which compares a
+        // record's cited clauses against the axes its `applies_to` names. They
+        // are filled rather than defaulted because `Record` has no `Default`:
+        // a record assembled from parts must state every part it carries.
+        question: format!("A synthetic record for {id}."),
+        equivalence_classes: Vec::new(),
         rationale: rationale.to_string(),
         applies_to: applies_to.iter().map(|s| s.to_string()).collect(),
         citations: clauses
