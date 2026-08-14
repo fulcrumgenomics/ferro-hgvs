@@ -797,11 +797,33 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // merge and is silent on which axes — its `applies_to` holds six `c.`/`r.`
     // strings and no genomic one. Scoped to DNA axes: `RNA/delins.md:18` is
     // the `r.` axis's own authority and is not ruled on here, and the `n.`
-    // axis is left open. **Moves no row**: it declines a merge, so
+    // axis is left open *by this record*, which its successor below has since
+    // closed. **Moves no row**: it declines a merge, so
     // `ProjectionSplitsSingleMember` stays at 9 and `ProjectionPinned` at 1168,
     // exactly as on `main`. Merging as #1664 asks would take them to 7 and 1170.
     (
         "projection-codon-exception-is-decided-by-the-rendered-axis",
+        "decided",
+    ),
+    // The half the record above parked, on the `n.` axis. **Decided by operator
+    // ruling (2026-08-13)**: the PROJECTOR is the wrong side, so it re-derives
+    // the `n.` axis on its own reference rather than reframing the form the
+    // `c.` frame chose — the symmetry with the genomic axis's
+    // `normalize_or_fallback` (#737) completed. The grounds are that record's
+    // own three, re-applied: `DNA/delins.md:42`'s "together affecting one amino
+    // acid" is no more statable against a non-coding DNA reference than against
+    // a genomic one; `general.md:23`/`:28` make the `n.` prefix a mandatory
+    // claim about the type of reference sequence; and a merged `n.` string is
+    // not re-derivable from that reference. The refused direction — teaching
+    // the normalizer that `n.` on a coding transcript is frame-aware — re-opens
+    // #1241. **Cost accepted**: `r.` merges on `RNA/delins.md:18`'s own
+    // authority, so one change spells differently on `n.` and `r.`;
+    // spec-licensed, the same shape as the `g.`/`c.` divergence the record
+    // above accepts. **Moves rows**: `axis_noncoding_idempotent` goes 20 -> 0
+    // over 681 projected axes on the live arm, genomic control 214/0. That
+    // count is partition-sensitive and is re-read on the #1835 default flip.
+    (
+        "noncoding-axis-is-re-derived-on-its-own-reference",
         "decided",
     ),
     // `delins.md:17` ("described individually … not as a delins") against

@@ -2101,13 +2101,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// discoverable without enabling `trace` logs — this now backs the default
     /// `normalize=True` surface, so a silent non-canonical fallback would
     /// otherwise be invisible in production). Shared by
-    /// [`Self::reanchor_and_normalize_genomic`] and
-    /// [`Self::project_to_genomic_normalized`] so the fallback/log semantics stay
-    /// identical between the two call sites.
-    fn normalize_or_fallback(&self, v: HgvsVariant) -> HgvsVariant {
+    /// [`Self::reanchor_and_normalize_genomic`],
+    /// [`Self::project_to_genomic_normalized`] and
+    /// [`Self::noncoding_axis_with_reason`] so the fallback/log semantics stay
+    /// identical across every axis the projector re-derives on its own
+    /// reference.
+    ///
+    /// `frame` names the axis for the log line only. It is passed rather than
+    /// derived from `v` because the interesting thing on a failure is *which
+    /// derivation* produced the variant, and a re-anchored genomic pivot and a
+    /// reframed `n.` axis can both print as forms whose prefix does not say
+    /// which projector step wrote them.
+    fn normalize_or_fallback(&self, frame: &str, v: HgvsVariant) -> HgvsVariant {
         self.normalizer.normalize(&v).unwrap_or_else(|e| {
             log::warn!(
-                "genomic-frame renormalization failed for {v}; \
+                "{frame}-frame renormalization failed for {v}; \
                  emitting un-normalized form: {e}"
             );
             v
@@ -2134,7 +2142,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         build: Option<&str>,
     ) -> Result<HgvsVariant, FerroError> {
         let reanchored = self.reanchor_genome_output(gv, build)?;
-        Ok(self.normalize_or_fallback(reanchored))
+        Ok(self.normalize_or_fallback("genomic", reanchored))
     }
 
     /// Project a transcript-coordinate (`c.`/`n.`/`r.`) variant onto its genomic
@@ -2162,7 +2170,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
     ) -> Result<HgvsVariant, FerroError> {
         let projected = self.project_to_genomic(variant)?;
-        Ok(self.normalize_or_fallback(projected))
+        Ok(self.normalize_or_fallback("genomic", projected))
     }
 
     /// Project a `c.pter`/`c.qter` (telomere-flank marker) coding input onto its
@@ -4629,24 +4637,44 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Returns `(axis, decline_reason)`; the reason is `None` whenever the axis
     /// is `Some`.
     ///
-    /// # The axis is NOT re-normalized on its own reference (#1712)
+    /// # The axis IS re-derived on its own reference (#1712)
     ///
-    /// The coordinates reframe and the `c.` form's edit is cloned verbatim, so
-    /// the `n.` axis inherits whatever canonical form the *coding* frame settled
-    /// on — including forms the coding frame chose because it has a reading
-    /// frame and `n.` does not. Bare normalization of the resulting `n.` string
-    /// therefore rewrites 20 of the 681 projected axes measured against the
-    /// prepared GRCh38 reference (`c.3305_3306del` -> `n.3709_3710del`, which
-    /// normalizes on to `n.3708_3710T[1]`).
+    /// `noncoding_from_coding` reframes the coordinates and clones the `c.`
+    /// form's edit verbatim, so on its own the `n.` axis would inherit whatever
+    /// canonical form the *coding* frame settled on — including forms the coding
+    /// frame chose **because** it declares a reading frame, which `n.` does not.
+    /// The reframed form is therefore normalized here, on the `n.` axis's own
+    /// reference, exactly as the genomic axis is
+    /// ([`Self::normalize_or_fallback`], #737).
     ///
-    /// Adding a `normalize` here closes all 20 and is the obvious symmetry with
-    /// the genomic axis ([`Self::normalize_or_fallback`], #737) — but it is
-    /// **not** a free correction. Which of the projector and the normalizer is
-    /// the wrong side of the `n.`-versus-`c.` disagreement is a question the
-    /// decided record `projection-codon-exception-is-decided-by-the-rendered-axis`
-    /// declines to reach: its scope paragraph names the `n.` axis and rules only
-    /// on the genomic one. See the residue pinned by `axis_noncoding_idempotent`
-    /// and #1712.
+    /// **Decided by `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`**
+    /// (operator ruling, 2026-08-13), which closes the half its predecessor
+    /// `projection-codon-exception-is-decided-by-the-rendered-axis` deliberately
+    /// parked — that record's scope paragraph names this axis and rules only on
+    /// the genomic one. In one line: `general.md:23`/`:28` make the `n.` prefix
+    /// a mandatory claim that the reference is a *non-coding* DNA sequence, and
+    /// `DNA/delins.md:42`'s antecedent — "together affecting one amino acid" —
+    /// is not statable against such a reference, so a frame-derived merge
+    /// rendered under `n.` contradicts its own prefix. Read the record, not this
+    /// comment.
+    ///
+    /// Without the normalize, bare normalization rewrote 20 of the 681 projected
+    /// `n.` axes measured against the prepared GRCh38 reference
+    /// (`c.3305_3306del` -> `n.3709_3710del`, which normalizes on to
+    /// `n.3708_3710T[1]`); with it the residue is 0, pinned by
+    /// `axis_noncoding_idempotent`.
+    ///
+    /// **Accepted cost, stated rather than discovered later:** `r.` merges on
+    /// `RNA/delins.md:18`'s own authority, so one change now spells differently
+    /// on `n.` and `r.`. That divergence is spec-licensed — the same shape as
+    /// the `g.`/`c.` divergence the parked record already accepts — not a
+    /// defect.
+    ///
+    /// **Known cost, and it is not fixed here:** the normalizer's own provider
+    /// fetches do not route through this projector's transcript cache, so a
+    /// projection that previously took one `get_transcript` now takes one per
+    /// variant. See `projection::transcript_cache_collapses_repeat_lookups` and
+    /// #1860.
     fn noncoding_axis_with_reason(
         &self,
         normalized: &HgvsVariant,
@@ -4671,7 +4699,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             transcript_id,
             gene_symbol,
         ) {
-            Ok(v) => (Some(v), None),
+            // Re-derive on the `n.` reference rather than shipping the reframed
+            // `c.` form — see the ruling in this function's doc comment. The
+            // fallback is the un-normalized reframed form, so a normalize error
+            // costs canonicality and never the axis.
+            Ok(v) => (Some(self.normalize_or_fallback("non-coding", v)), None),
             Err(e) => {
                 log::trace!("c→n derivation failed for {transcript_id}: {e}");
                 (None, variant_decline_explanation(&e))
@@ -5580,7 +5612,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     // via the same `normalize_or_fallback` helper (warn-logs the
                     // dropped error) that `reanchor_and_normalize_genomic` uses.
                     let raw = result?;
-                    let genomic = self.normalize_or_fallback(raw);
+                    let genomic = self.normalize_or_fallback("genomic", raw);
                     return Ok(self.terminus_multiaxis_projection(
                         normalized,
                         transcript_id,

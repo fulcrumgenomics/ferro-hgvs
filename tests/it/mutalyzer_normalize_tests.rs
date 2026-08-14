@@ -4690,43 +4690,32 @@ fn axis_noncoding_idempotent() {
     // otherwise report zero failures and read as a pass.
     assert!(tested > 0, "exercised no cases");
 
-    // Pinned at its measured value with a tripwire, never at zero. The residue
-    // is real and is filed as #1712; re-pinning it to zero would assert a fix
-    // nobody has written, and `#[ignore]`ing the test would leave a guard that
-    // never guards — this repository has already lost one that way.
+    // The residue is now ZERO, and it is asserted as the contract rather than
+    // as a measurement — same as `axis_genomic_idempotent` above, and for the
+    // same reason. There is deliberately no exemption list, and the absence is
+    // the guard.
     //
-    // Failing in *either* direction is the point. More rows is a regression;
-    // fewer means something was fixed and this pin went stale without anyone
-    // noticing, which is how a partial fix comes to read as a complete one.
+    // It was pinned at 20 with a tripwire while the question was open. The two
+    // shapes it held, both of which are now closed:
     //
-    // The 20 fall into two shapes, and both have the same cause:
-    //
-    // * 16 re-render as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
-    //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization runs on the
+    // * 16 re-rendered as a repeat — `n.3709_3710del` -> `n.3708_3710T[1]`,
+    //   `n.36_37insGCGCGC` -> `n.33_36GC[5]`. Tract maximization ran on the
     //   re-normalization that did not run on the projection.
-    // * 4 re-partition into members — `n.309delinsCTGA` ->
+    // * 4 re-partitioned into members — `n.309delinsCTGA` ->
     //   `n.[308_309insCT;310dup]`, all four from cross-reference `delins`
     //   inputs (the #422 family).
     //
-    // Both are the `n.` axis inheriting a form the *coding* frame chose because
-    // it declares a reading frame and `n.` does not, so re-deriving on the `n.`
-    // reference disagrees. Closing them means settling which of the projector
-    // and the normalizer is the wrong side of that, and the decided record
-    // `projection-codon-exception-is-decided-by-the-rendered-axis` states that
-    // it does not reach the `n.` axis — its scope paragraph names that axis and
-    // declines to rule on it. Measured: adding a `normalize` to
-    // `noncoding_axis_with_reason` takes this count to zero, and turns three
-    // committed guards red, each of which pins today's answer to that same
-    // question. So the count stays here until it is ruled on.
-    assert_eq!(
-        failures.len(),
-        NONCODING_NON_IDEMPOTENT,
-        "the non-coding non-idempotency residue moved (#1712). Update the pin \
-         and the shape breakdown together, and say which direction it moved:\n{}",
-        failures.join("\n")
-    );
+    // Both were the `n.` axis inheriting a form the *coding* frame chose
+    // because it declares a reading frame and `n.` does not. Which of the
+    // projector and the normalizer was the wrong side of that is settled by
+    // `rulings[noncoding-axis-is-re-derived-on-its-own-reference]` (operator
+    // ruling on #1712, 2026-08-13): the PROJECTOR was, so it re-derives the
+    // `n.` axis on the `n.` reference, symmetric with what the genomic axis has
+    // done since #737. Measured against the prepared GRCh38 reference on the
+    // live arm (`FERRO_PARTITION` unset): 681 tested, 20 -> 0, with the genomic
+    // control at 214 tested / 0 on the same run.
 
-    // The 21st row is gone, and this asserts it stays gone. It was
+    // The 21st row is gone, and this names it if it comes back. It was
     // `LRG_24t1:n.245_252del -> LRG_24t1:n.246_253del`, filed as "not
     // 3'-shifted" — but the shift was the symptom. `LRG_24t1` is a different
     // sequence from the `NM_001114101.3` the projection resolved (1191 bases /
@@ -4736,8 +4725,14 @@ fn axis_noncoding_idempotent() {
     // sequences are identical, so this row renders
     // `LRG_24(NM_001114101.3):n.245_252del` and is a fixed point.
     //
-    // Asserted as an absence *plus* the surviving shapes above, so a regression
-    // that reintroduced it would fail on the count as well.
+    // It runs BEFORE the count assertion and is now logically SUBSUMED by it —
+    // the residue is zero, so any row at all fails the count. It is kept, and
+    // kept first, for the message: a regression that reintroduced this row
+    // alongside others would otherwise be reported as a bare list, and the
+    // cause (a namespace echo onto a transcript with a different 5' extent) is
+    // not one a reader recovers from the list. Its real guard, which reads the
+    // two references' bases directly and cannot go vacuous, is
+    // `lrg_noncoding_axis_names_the_transcript_it_was_measured_against`.
     assert!(
         !failures.iter().any(|f| f.contains("LRG_24t1:n.")),
         "the LRG transcript-frame row is back in the residue (#1712): renaming \
@@ -4745,20 +4740,40 @@ fn axis_noncoding_idempotent() {
          transcript's sequence matches the resolved one:\n{}",
         failures.join("\n")
     );
+
+    // `NONCODING_NON_IDEMPOTENT` is a named zero rather than an inlined `0` so
+    // the constant's doc comment can carry the residue's history — a bare `0`
+    // here would read as a contract that never had one.
+    assert_eq!(
+        failures.len(),
+        NONCODING_NON_IDEMPOTENT,
+        "normalize is not idempotent on the non-coding axis (#1712). The \
+         projector re-derives this axis on its own reference, so every row it \
+         emits must already be what bare normalization would produce; there is \
+         no exemption list to add to:\n{}",
+        failures.join("\n")
+    );
 }
 
-/// The measured non-idempotency residue on the `n.` axis — see #1712.
+/// The non-idempotency residue on the `n.` axis — **zero**, see #1712.
 ///
-/// Measured at `origin/main` `5bf0b4ff` against the prepared GRCh38 reference:
-/// 681 axes tested, **20** non-idempotent. The genomic control
-/// ([`axis_genomic_idempotent`]) reads 214 tested / 0 non-idempotent on the same
-/// run, which is what isolates this to the non-coding path rather than to
-/// normalization generally.
+/// A named zero, not a pin: since
+/// `rulings[noncoding-axis-is-re-derived-on-its-own-reference]` the projector
+/// re-derives this axis on its own reference, so every `n.` axis it emits is
+/// what bare normalization would produce and there is nothing left to allow.
 ///
-/// It was 21 when #1788 pinned it. The row that left is the LRG one, closed by
-/// the transcript-frame guard in `frame_projection_owned`; the assertion below
-/// keeps it from coming back.
-const NONCODING_NON_IDEMPOTENT: usize = 20;
+/// The history is kept here because a bare `0` would read as a contract that
+/// never had a residue, and this one had three values in four days. It was
+/// **21** when #1788 pinned it, against `origin/main` `3228d228`. It became
+/// **20** when #1844 closed the LRG row — `LRG_24t1:n.245_252del`, a #860
+/// namespace echo renaming the axis onto a transcript with eight extra 5'
+/// bases, so a rule 1 denotation defect rather than this question. It is **0**
+/// since the ruling, measured against the prepared GRCh38 reference on the live
+/// arm (`FERRO_PARTITION` unset): 681 axes tested, 0 non-idempotent, with the
+/// genomic control ([`axis_genomic_idempotent`]) at 214 tested / 0 on the same
+/// run — which is what isolates the movement to the non-coding path rather than
+/// to normalization generally.
+const NONCODING_NON_IDEMPOTENT: usize = 0;
 
 /// The `n.` axis of an LRG-parented projection names the transcript whose bases
 /// it was computed against (#1712).
