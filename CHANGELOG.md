@@ -128,16 +128,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removing the standalone `triples_are_disjoint` guard.
 - **A `from_sequences` derivation whose insertion rolls to the contig's first base is now
   re-anchored rather than refused.** When the observed window begins at position 1 — a variant
-  anchored at `1A>C`/`1A>T`, say — the 5'-shuffle can roll a pure insertion in an ambiguous run
-  onto interbase 0, whose only HGVS spelling names position 0, a base that does not exist. Because
-  the window already starts at the accession's first base, `sequence_normalize` cannot widen the 5'
-  flank to escape it, so these derivations were dropped with "the derivation places an inserted
-  payload immediately 5' of the window's first base". Interbase 0 and interbase 1 denote the same
-  sequence whenever the payload's leading base equals the terminal base (the insertion sits in a
-  run reaching the terminus), so the insertion is now presented at the leftmost *nameable*
-  interbase — `1_2ins…`, the payload rotated one base — which is the terminal analogue of the
-  3'-most rule. A payload that genuinely cannot cross the first base still refuses, since it names a
-  sequence no in-window placement does.
+  anchored at `1A>C`/`1A>T`, say — the 5'-shuffle can roll a pure insertion onto interbase 0, whose
+  only HGVS spelling names position 0, a base that does not exist. Because the window already starts
+  at the accession's first base, `sequence_normalize` cannot widen the 5' flank to escape it, so
+  these derivations were dropped with "the derivation places an inserted payload immediately 5' of
+  the window's first base". There are now two escapes, one per shape:
+  - **The insertion crosses the terminal base unchanged** (an ambiguous run reaching the terminus,
+    base 1 itself not changed): it is presented at the leftmost *nameable* interbase — `1_2ins…`,
+    the payload rotated one base — the terminal analogue of the 3'-most rule.
+  - **Base 1 is itself rewritten** (a dense substitution stack, the primer/adapter-artifact shape):
+    the leading insertion is folded rightward into a single span anchored at base 1, so
+    `g.[1A>C;2T>A;3G>T]` derives to `g.1_3inv` (the span is a reverse complement) and
+    `g.[1G>C;2T>A;3G>T]` to `g.1_3delinsCAT`. This is the span form Mutalyzer emits for the same
+    inputs (`g.1_5delinsCAAGA`, `g.1_3inv`), reached without needing an interbase 5' of position 1.
+
+  A pure insertion genuinely *before* base 1 with no piece to fold into still refuses, since it
+  names a sequence no in-window placement does.
 
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 

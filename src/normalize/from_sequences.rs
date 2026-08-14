@@ -1131,13 +1131,15 @@ mod tests {
         assert_eq!(derived.to_string(), "NC_TEST.1:g.1_2insTA");
     }
 
-    /// The escape is not a blanket amnesty for interbase 0: a payload that
-    /// cannot cross the terminal base (`alt[0] != reference[0]`) is genuinely an
-    /// insertion *before* base 1, denoting a sequence no other placement does,
-    /// and still refuses with the 5'-anchor message. Here a leading `G` sits
-    /// before a `C`, so there is no run to shuffle along.
+    /// A pure insertion before base 1 with **no piece to fold into** is a
+    /// genuine insertion at a non-existent anchor and still refuses. Here the
+    /// whole block is a single inserted `G` (`CATATG` -> `GCATATG` share the
+    /// suffix `CATATG`), so there is no following delins to absorb it, and the
+    /// leading base is not itself rewritten — the span-form escape does not
+    /// apply. The base-1-rewriting span form is covered in the
+    /// `sequence_normalize` integration suite, which drives this same path.
     #[test]
-    fn a_contig_start_insertion_that_cannot_cross_the_terminus_still_refuses() {
+    fn a_lone_contig_start_insertion_still_refuses() {
         let err = from_sequences(
             "NC_TEST.1",
             1,
