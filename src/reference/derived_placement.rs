@@ -349,6 +349,9 @@ pub fn placement_from_candidate(nc: Accession, candidate: &AffineCandidate) -> G
         nc_start: candidate.nc_start,
         nc_end: candidate.nc_end,
         strand: candidate.strand,
+        // A derived `NG_` placement is affine by construction: it is only
+        // emitted when a gapless alignment was found (#728).
+        gaps: Vec::new(),
     }
 }
 
@@ -548,6 +551,7 @@ impl DerivedPlacements {
                         nc_start: p.nc_start,
                         nc_end: p.nc_end,
                         strand,
+                        gaps: Vec::new(),
                     },
                 ))
             })

@@ -3141,10 +3141,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     }
 
     /// Re-anchor an NC-frame genome variant into a genomic parent's own frame
-    /// using its [`GenomicPlacement`] (#480): apply the affine NC→parent
-    /// transform to the interval, and reverse-complement the edit when the
-    /// parent runs antiparallel to the chromosome. If an endpoint falls outside
-    /// the placed span the variant is returned unchanged (chromosome frame).
+    /// using its [`GenomicPlacement`] (#480): map each endpoint with
+    /// [`GenomicPlacement::nc_to_parent`], and reverse-complement the edit when
+    /// the parent runs antiparallel to the chromosome. If an endpoint falls
+    /// outside the placed span the variant is returned unchanged (chromosome
+    /// frame).
+    ///
+    /// The transform is affine only when the placement carries no alignment
+    /// gaps (#1833); an LRG whose record lists indel `<diff>`s is mapped through
+    /// its gap list instead, and an endpoint landing on a chromosome base the
+    /// parent does not contain declines like an out-of-span one.
     fn reanchor_genome_to_parent(
         gv: crate::hgvs::variant::GenomeVariant,
         placement: &crate::reference::GenomicPlacement,
@@ -7514,6 +7520,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1008,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         let vp = VariantProjector::new(projector, provider);
@@ -7546,6 +7553,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1008,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         provider.add_legacy_gene_model("GENE1", "NM_TX2.1");
@@ -7584,6 +7592,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1008,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         provider.add_legacy_gene_model("GENE1", "NM_TX2.1");
@@ -7627,6 +7636,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 30000,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         // NG_900.1 parent sequence: bases 4300..=4320 (1-based) are the insert.
@@ -7669,6 +7679,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 30000,
                 strand: crate::reference::Strand::Minus,
+                gaps: Vec::new(),
             },
         );
         let insert = "GTCCTGTGCTCATTATCTGGC"; // parent bases 4300..=4320
@@ -7707,6 +7718,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 30000,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         // NG_900.1 parent sequence: bases 4300..=4320 (1-based) are the insert.
@@ -7750,6 +7762,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1008,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         let vp = VariantProjector::new(projector, provider);
@@ -7805,6 +7818,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1008,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         let vp = VariantProjector::new(projector, provider);
@@ -7878,6 +7892,7 @@ mod tests {
                 nc_start: 2000,
                 nc_end: 2010,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             },
         );
         let vp = VariantProjector::new(projector, provider);
@@ -10318,6 +10333,7 @@ mod tests {
                     nc_start: 1000,
                     nc_end: 1008,
                     strand: crate::reference::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             let vp = VariantProjector::new(projector, provider);
@@ -10559,6 +10575,7 @@ mod tests {
                     nc_start: 2000,
                     nc_end: 2010,
                     strand: crate::reference::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             let vp = VariantProjector::new(projector, provider);
@@ -10602,6 +10619,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1010,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             };
             // Genomic axis at chromosome 5000 — well outside the placed span.
             let genomic = HgvsVariant::Genome(GenomeVariant {
@@ -10860,6 +10878,7 @@ mod tests {
                 nc_start: 1000,
                 nc_end: 1010,
                 strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
             };
             // The end boundary is a compound range, so `.inner()` is `None`:
             // there is no single position to re-anchor.
@@ -10909,6 +10928,7 @@ mod tests {
                     nc_start: 1000,
                     nc_end: 1010,
                     strand: crate::reference::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             let vp = VariantProjector::new(projector, provider);
@@ -12160,6 +12180,7 @@ mod tests {
                     nc_start: 1000,
                     nc_end: 1012,
                     strand: crate::reference::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             let vp = VariantProjector::new(projector, provider);
@@ -13406,6 +13427,7 @@ mod tests {
                     nc_start: 20000,
                     nc_end: 20010,
                     strand: crate::reference::transcript::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             if with_grch37 {
@@ -13417,6 +13439,7 @@ mod tests {
                         nc_start: 10000,
                         nc_end: 10010,
                         strand: crate::reference::transcript::Strand::Plus,
+                        gaps: Vec::new(),
                     },
                 );
             }
@@ -13602,6 +13625,7 @@ mod tests {
                     nc_start: 20000,
                     nc_end: 20010,
                     strand: crate::reference::transcript::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             provider.add_genomic_placement(
@@ -13612,6 +13636,7 @@ mod tests {
                     nc_start: 10000,
                     nc_end: 10010,
                     strand: crate::reference::transcript::Strand::Plus,
+                    gaps: Vec::new(),
                 },
             );
             let vp = VariantProjector::new(projector, provider).with_assembly(Some("GRCh37"));

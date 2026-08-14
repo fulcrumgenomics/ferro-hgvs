@@ -265,6 +265,7 @@ mod tests {
             nc_start: start,
             nc_end: end,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         }
     }
 

@@ -10,8 +10,8 @@ use crate::reference::transcript::Transcript;
 use crate::reference::Strand;
 
 /// Chromosomal placement of a genomic *parent* reference — an `NG_` RefSeqGene
-/// or an `LRG_` — on its `NC_` chromosome contig, as a single contiguous affine
-/// span.
+/// or an `LRG_` — on its `NC_` chromosome contig, as a single contiguous span
+/// plus the alignment gaps inside it.
 ///
 /// cdot aligns transcripts only to chromosomes (`NM_`→`NC_`), so a c./n./r.
 /// input parented on an `NG_`/`LRG_` resolves to chromosome coordinates that do
@@ -27,16 +27,18 @@ use crate::reference::Strand;
 /// chromosome region, so coordinates count down as chromosome coordinates count
 /// up, and edits must be reverse-complemented into the parent frame).
 ///
-/// **The placed span may be narrower than the parent, and for an LRG whose
-/// alignment carries indels it is (#1499)** — 46 of the 1 294 records in a
-/// prepared GRCh38 reference. A real LRG↔chromosome alignment
-/// is not affine — the record's `<diff>` list carries `lrg_ins`/`other_ins`
-/// elements this type cannot express — so `parse_lrg_main_assembly_placement`
-/// trims the span to the prefix that *is* affine and the rest is declined by
-/// [`Self::nc_to_parent`] / [`Self::parent_to_nc`]. Read `nc_start`/`nc_end` as
-/// "the region this transform maps exactly", never as "where the parent sits on
-/// the chromosome", and do not re-derive the parent's extent from their width
-/// (#1503).
+/// **The mapping is affine only when [`gaps`](Self::gaps) is empty.** A real
+/// LRG↔chromosome alignment is not affine: alongside its single
+/// `<mapping_span>` the record lists `<diff>` elements, and the two insertion
+/// kinds shift every coordinate past them in opposite directions (#1499/#1833).
+/// 46 of the 1 294 LRG records in a prepared GRCh38 reference carry at least one.
+/// `gaps` models them exactly, so `nc_start`/`nc_end` remain the whole placed
+/// chromosome span and every coordinate inside it maps to the parent's own
+/// frame — see [`Self::nc_to_parent`] / [`Self::parent_to_nc`].
+///
+/// Because the two frames then have different widths, the parent's extent is
+/// **not** `parent_start + (nc_end - nc_start)`. Use [`Self::parent_end`], which
+/// derives it from the gap list (#1503).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenomicPlacement {
     /// The chromosome (`NC_`) accession the parent is placed on.
@@ -52,6 +54,202 @@ pub struct GenomicPlacement {
     pub nc_end: u64,
     /// Parent orientation relative to the chromosome.
     pub strand: Strand,
+    /// Alignment gaps between the parent and the chromosome, in ascending
+    /// parent-coordinate order. **Empty means a pure affine**, which is the case
+    /// for every `NG_` placement and for 1 248 of the 1 294 LRG records.
+    ///
+    /// Construct with [`AlignmentGap::parent_only`] /
+    /// [`AlignmentGap::chromosome_only`], or leave it `Vec::new()`.
+    pub gaps: Vec<AlignmentGap>,
+}
+
+/// One gap in a parent↔chromosome alignment: a run of bases present on exactly
+/// one side (#1833).
+///
+/// This is the `<diff>` list of an LRG `<mapping_span>` minus its `mismatch`
+/// entries, which substitute a base and shift no coordinate. The vocabulary is
+/// closed at `mismatch` / `lrg_ins` / `other_ins`, verified over all 1 294
+/// records in a prepared GRCh38 reference (479 / 63 / 47 in the main-assembly
+/// mappings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlignmentGap {
+    /// Parent-frame anchor, read differently per [`kind`](Self::kind) — the LRG
+    /// XML's own convention, which differs by `<diff>` type and is the single
+    /// easiest thing to get wrong here:
+    ///
+    /// - [`ParentOnly`](AlignmentGapKind::ParentOnly): the **first** parent base
+    ///   of the unaligned run (`lrg_ins`'s `lrg_start`, which with `lrg_end`
+    ///   bounds the unaligned LRG bases themselves).
+    /// - [`ChromosomeOnly`](AlignmentGapKind::ChromosomeOnly): the **last
+    ///   aligned** parent base before the chromosome-only run (`other_ins`'s
+    ///   `lrg_start`, which with `lrg_end` gives the *flanking* LRG coordinates
+    ///   — the run sits between them and occupies no parent coordinate at all).
+    pub parent_at: u64,
+    /// Which side carries the unaligned bases, and how many.
+    pub kind: AlignmentGapKind,
+}
+
+/// Which side of a [`AlignmentGap`] carries bases the other side does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignmentGapKind {
+    /// `len` parent bases with no chromosome counterpart (LRG `lrg_ins`).
+    /// Coordinates inside the run have no chromosome image, so
+    /// [`GenomicPlacement::parent_to_nc`] declines them.
+    ParentOnly { len: u64 },
+    /// `len` chromosome bases with no parent counterpart (LRG `other_ins`).
+    /// Coordinates inside the run have no parent image, so
+    /// [`GenomicPlacement::nc_to_parent`] declines them.
+    ChromosomeOnly { len: u64 },
+}
+
+impl AlignmentGap {
+    /// A run of `len` parent bases with no chromosome counterpart, beginning at
+    /// parent coordinate `first_parent_base`.
+    pub fn parent_only(first_parent_base: u64, len: u64) -> Self {
+        Self {
+            parent_at: first_parent_base,
+            kind: AlignmentGapKind::ParentOnly { len },
+        }
+    }
+
+    /// A run of `len` chromosome bases with no parent counterpart, sitting
+    /// immediately after parent coordinate `last_aligned_parent_base`.
+    pub fn chromosome_only(last_aligned_parent_base: u64, len: u64) -> Self {
+        Self {
+            parent_at: last_aligned_parent_base,
+            kind: AlignmentGapKind::ChromosomeOnly { len },
+        }
+    }
+
+    /// Parent bases this gap consumes (zero for a chromosome-only run).
+    fn parent_len(&self) -> u64 {
+        match self.kind {
+            AlignmentGapKind::ParentOnly { len } => len,
+            AlignmentGapKind::ChromosomeOnly { .. } => 0,
+        }
+    }
+
+    /// Chromosome bases this gap consumes (zero for a parent-only run).
+    fn nc_len(&self) -> u64 {
+        match self.kind {
+            AlignmentGapKind::ParentOnly { .. } => 0,
+            AlignmentGapKind::ChromosomeOnly { len } => len,
+        }
+    }
+
+    /// The last parent coordinate that still aligns *before* this gap.
+    ///
+    /// For a parent-only run that is the base below its first unaligned one; for
+    /// a chromosome-only run it is [`parent_at`](Self::parent_at) itself, which
+    /// already names the flank. Returns `None` for a parent-only run anchored at
+    /// coordinate 0, which no LRG emits and which cannot be expressed.
+    fn last_aligned_parent_base(&self) -> Option<u64> {
+        match self.kind {
+            AlignmentGapKind::ParentOnly { .. } => self.parent_at.checked_sub(1),
+            AlignmentGapKind::ChromosomeOnly { .. } => Some(self.parent_at),
+        }
+    }
+
+    /// The order a gap list must be in for [`GenomicPlacement`]'s walk:
+    /// **strictly** ascending parent coordinate.
+    ///
+    /// Strictly, because two gaps sharing one anchor have no well-defined
+    /// order — a chromosome-only run's anchor is the *flank* it sits after,
+    /// while a parent-only run's is its own first unaligned base, so at equal
+    /// anchors the two readings genuinely disagree and either choice invents
+    /// something the record does not say. No LRG asks: over all 1 294 records in
+    /// a prepared GRCh38 reference, **zero** have two indel `<diff>`s sharing an
+    /// `lrg_start` (measured). So the walk declines that case rather than
+    /// picking an order for it.
+    ///
+    /// Abutting gaps of opposite kinds are a different thing and are ordinary —
+    /// two records have them (`LRG_1321`: chromosome-only at 12957, parent-only
+    /// at 12958; `LRG_1075`: parent-only at 8212..8975, chromosome-only at
+    /// 8975). Their anchors still differ, so they order without a tie-break.
+    ///
+    /// Exposed so the parser's sort and the walk's ordering check cannot drift
+    /// apart into two spellings of one rule.
+    pub fn sort_key(&self) -> u64 {
+        self.parent_at
+    }
+}
+
+/// One maximal run of parent bases that align to consecutive chromosome bases.
+///
+/// `nc_consumed` counts chromosome bases placed *before* this block, walking
+/// from `nc_start` upwards on the plus strand and from `nc_end` downwards on the
+/// minus strand — so the block's own chromosome anchor is `nc_start +
+/// nc_consumed` or `nc_end - nc_consumed` respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AlignedBlock {
+    parent_start: u64,
+    nc_consumed: u64,
+    len: u64,
+}
+
+/// Walks a placement's aligned blocks in ascending parent order.
+///
+/// **Fails closed.** The gap list is public, so a caller can hand us one that is
+/// unsorted, overlapping, or wider than the span. Every step uses checked
+/// arithmetic and the walk simply *ends* when it cannot continue, which makes
+/// the coordinate lookups return `None` (decline) rather than answer from a
+/// half-applied gap list — the direction this whole model exists to close.
+struct BlockWalk<'a> {
+    placement: &'a GenomicPlacement,
+    gap: usize,
+    parent_cursor: u64,
+    nc_consumed: u64,
+    done: bool,
+}
+
+impl Iterator for BlockWalk<'_> {
+    type Item = AlignedBlock;
+
+    fn next(&mut self) -> Option<AlignedBlock> {
+        let total_nc = self.placement.nc_end.checked_sub(self.placement.nc_start)? + 1;
+        loop {
+            if self.done {
+                return None;
+            }
+            let Some(gap) = self.placement.gaps.get(self.gap) else {
+                // Tail block: whatever chromosome is left over.
+                self.done = true;
+                let len = total_nc.checked_sub(self.nc_consumed)?;
+                let block = AlignedBlock {
+                    parent_start: self.parent_cursor,
+                    nc_consumed: self.nc_consumed,
+                    len,
+                };
+                return (len > 0).then_some(block);
+            };
+            self.gap += 1;
+
+            // Aligned run from the cursor up to this gap. A zero-length run is
+            // legitimate and not rare: two gaps can abut, which is exactly the
+            // `LRG_1321` / `LRG_1075` shape where a chromosome-only run sits
+            // flush against a parent-only one.
+            let run_end = gap.last_aligned_parent_base()?;
+            let len = (run_end + 1).checked_sub(self.parent_cursor)?;
+            let block = AlignedBlock {
+                parent_start: self.parent_cursor,
+                nc_consumed: self.nc_consumed,
+                len,
+            };
+            self.parent_cursor = run_end.checked_add(1)?.checked_add(gap.parent_len())?;
+            self.nc_consumed = self
+                .nc_consumed
+                .checked_add(len)?
+                .checked_add(gap.nc_len())?;
+            if self.nc_consumed > total_nc {
+                // The gap list claims more chromosome than the span holds.
+                self.done = true;
+                return None;
+            }
+            if len > 0 {
+                return Some(block);
+            }
+        }
+    }
 }
 
 /// Select the placement matching a resolved genome build from a parent's
@@ -78,24 +276,144 @@ pub(crate) fn select_placement_for_build(
 }
 
 impl GenomicPlacement {
+    /// The aligned blocks of this placement, in ascending parent order.
+    ///
+    /// Yields **nothing** when the gap list is not in strictly ascending
+    /// [`AlignmentGap::sort_key`] order, which makes every coordinate lookup
+    /// decline. Both halves matter:
+    ///
+    /// - **Checked up front**, because the walk consumes the list in order, so
+    ///   an out-of-order entry is discovered only *after* the blocks before it
+    ///   have been emitted — and a coordinate landing in one of those answers
+    ///   with the un-gapped arithmetic instead of declining. Measured on a
+    ///   two-gap list with the entries reversed: parent 3 answered `1002` where
+    ///   the sorted list declines.
+    /// - **Strict**, because two gaps sharing an anchor have no well-defined
+    ///   order and no record has them — see [`AlignmentGap::sort_key`].
+    fn blocks(&self) -> BlockWalk<'_> {
+        let ordered = self
+            .gaps
+            .windows(2)
+            .all(|w| w[0].sort_key() < w[1].sort_key());
+        BlockWalk {
+            placement: self,
+            gap: 0,
+            parent_cursor: self.parent_start,
+            nc_consumed: 0,
+            done: !ordered,
+        }
+    }
+
+    /// Chromosome coordinate of a block-relative offset, honouring the strand.
+    fn nc_at(&self, nc_consumed: u64) -> Option<u64> {
+        let nc = match self.strand {
+            Strand::Plus | Strand::Unknown => self.nc_start.checked_add(nc_consumed)?,
+            Strand::Minus => self.nc_end.checked_sub(nc_consumed)?,
+        };
+        // Belt and braces: the walk already caps `nc_consumed` at the span
+        // width, so this cannot fire on a list [`Self::gaps_are_consistent`]
+        // accepts. It is here because `gaps` is public, and a coordinate outside
+        // the span is exactly the answer this model exists to stop emitting.
+        (self.nc_start..=self.nc_end).contains(&nc).then_some(nc)
+    }
+
+    /// Whether the gap list is one this placement's walk can honour end to end.
+    ///
+    /// True when the gaps are strictly ordered, none overlaps another, and the
+    /// aligned blocks plus the chromosome-only runs together account for
+    /// **exactly** the placed chromosome span. That last clause is the one worth
+    /// having: an overlapping pair leaves the walk unable to continue, and
+    /// without this check the placement would still exist while every
+    /// coordinate lookup silently declined — present but useless, which reads
+    /// like "this parent is unplaceable" rather than "this gap list is wrong".
+    ///
+    /// Holds for all 1 294 LRG records in a prepared GRCh38 reference
+    /// (measured), so on real data it is an assertion rather than a filter.
+    pub fn gaps_are_consistent(&self) -> bool {
+        let Some(width) = self.nc_end.checked_sub(self.nc_start) else {
+            return false;
+        };
+        let placed: u64 = self.blocks().map(|b| b.len).sum();
+        let chromosome_only: u64 = self.gaps.iter().map(|g| g.nc_len()).sum();
+        placed.checked_add(chromosome_only) == width.checked_add(1)
+    }
+
+    /// The last parent-frame coordinate this placement covers, **including**
+    /// parent bases that have no chromosome counterpart.
+    ///
+    /// **Not** `parent_start + (nc_end - nc_start)`: the two frames have
+    /// different widths exactly when [`gaps`](Self::gaps) is non-empty, so this
+    /// adds back the parent-only runs and removes the chromosome-only ones
+    /// (#1503). For `LRG_1075` — the prepared reference's only placement with
+    /// `parent_start > 1`, and indel-bearing — the chromosome side is 14 788
+    /// bases against 772 parent-only and 1 341 chromosome-only, and this returns
+    /// **15 267**, which is the `LRG_1075g` record's own length and the span's
+    /// own `lrg_end`.
+    ///
+    /// Note a coordinate inside a trailing parent-only run is `<= parent_end()`
+    /// and still has no chromosome image, so [`Self::parent_to_nc`] declines it.
+    /// This answers "how far does the parent reach", not "what can be mapped".
+    ///
+    /// It is a sum, so it is **order-independent** and answers even for a gap
+    /// list [`Self::gaps_are_consistent`] rejects. That is deliberate — the two
+    /// are different questions, and the parser asks both — but it does mean a
+    /// non-`None` extent here is not on its own evidence that the placement maps
+    /// anything.
+    ///
+    /// Returns `None` only on arithmetic overflow, which no real placement
+    /// approaches.
+    pub fn parent_end(&self) -> Option<u64> {
+        let mut end = self
+            .parent_start
+            .checked_add(self.nc_end.checked_sub(self.nc_start)?)?;
+        for gap in &self.gaps {
+            end = end.checked_add(gap.parent_len())?;
+        }
+        for gap in &self.gaps {
+            end = end.checked_sub(gap.nc_len())?;
+        }
+        Some(end)
+    }
+
     /// Map a 1-based chromosome (`NC_`) coordinate into the parent's own frame.
     ///
-    /// Returns `None` when `nc_pos` lies outside the placed span, or when the
-    /// parent's strand is unknown — the caller should then decline to re-anchor
-    /// rather than emit an out-of-frame coordinate.
+    /// Returns `None` when `nc_pos` lies outside the placed span, when it falls
+    /// inside a [`ChromosomeOnly`](AlignmentGapKind::ChromosomeOnly) run (those
+    /// bases are absent from the parent, so there is no coordinate to return),
+    /// or when the parent's strand is unknown — the caller should then decline to
+    /// re-anchor rather than emit an out-of-frame coordinate.
     pub fn nc_to_parent(&self, nc_pos: u64) -> Option<u64> {
         if nc_pos < self.nc_start || nc_pos > self.nc_end {
             return None;
         }
-        match self.strand {
-            Strand::Plus => Some(self.parent_start + (nc_pos - self.nc_start)),
-            Strand::Minus => Some(self.parent_start + (self.nc_end - nc_pos)),
+        // Chromosome bases consumed before `nc_pos`, which is the offset the
+        // block table is keyed on in both strand directions.
+        let consumed = match self.strand {
+            Strand::Plus => nc_pos - self.nc_start,
+            Strand::Minus => self.nc_end - nc_pos,
             // An unknown-orientation parent has no defined parent frame, so
             // decline rather than guess `Plus`. This matches how the rest of the
-            // codebase treats `Strand::Unknown` (transcript projection, annotation
-            // validation), and the placement parsers only ever emit Plus/Minus.
-            Strand::Unknown => None,
+            // codebase treats `Strand::Unknown` (transcript projection,
+            // annotation validation), and the placement parsers only ever emit
+            // Plus/Minus. Note `parent_to_nc` deliberately does *not* mirror
+            // this — it has always treated Unknown as ascending, and changing
+            // that is not this model's business.
+            Strand::Unknown => return None,
+        };
+        if self.gaps.is_empty() {
+            return Some(self.parent_start + consumed);
         }
+        for block in self.blocks() {
+            if consumed < block.nc_consumed {
+                // Landed in a chromosome-only run before this block.
+                return None;
+            }
+            let within = consumed - block.nc_consumed;
+            if within < block.len {
+                return block.parent_start.checked_add(within);
+            }
+        }
+        None
     }
 
     /// Map a 1-based parent-frame coordinate back onto its chromosome (`NC_`)
@@ -103,18 +421,36 @@ impl GenomicPlacement {
     /// `NG_`/`LRG_`-relative genomic *input* position into the chromosome frame so
     /// cdot can enumerate the transcripts overlapping it.
     ///
-    /// Returns `None` when `parent_pos` lies outside the placed span (parent
-    /// coordinates `parent_start ..= parent_start + (nc_end - nc_start)`).
+    /// Returns `None` when `parent_pos` lies outside the placed span
+    /// (`parent_start ..= `[`parent_end`](Self::parent_end)), or when it falls
+    /// inside a [`ParentOnly`](AlignmentGapKind::ParentOnly) run — those parent
+    /// bases are absent from the chromosome, so there is no coordinate to return.
     pub fn parent_to_nc(&self, parent_pos: u64) -> Option<u64> {
-        let parent_end = self.parent_start + (self.nc_end - self.nc_start);
-        if parent_pos < self.parent_start || parent_pos > parent_end {
+        if parent_pos < self.parent_start {
             return None;
         }
-        let offset = parent_pos - self.parent_start;
-        match self.strand {
-            Strand::Plus | Strand::Unknown => Some(self.nc_start + offset),
-            Strand::Minus => Some(self.nc_end - offset),
+        if self.gaps.is_empty() {
+            let parent_end = self.parent_start + (self.nc_end - self.nc_start);
+            if parent_pos > parent_end {
+                return None;
+            }
+            let offset = parent_pos - self.parent_start;
+            return match self.strand {
+                Strand::Minus => Some(self.nc_end - offset),
+                _ => Some(self.nc_start + offset),
+            };
         }
+        for block in self.blocks() {
+            if parent_pos < block.parent_start {
+                // Landed in a parent-only run before this block.
+                return None;
+            }
+            let within = parent_pos - block.parent_start;
+            if within < block.len {
+                return self.nc_at(block.nc_consumed.checked_add(within)?);
+            }
+        }
+        None
     }
 }
 
@@ -689,6 +1025,7 @@ mod placement_tests {
             nc_start: 1000,
             nc_end: 1008,
             strand,
+            gaps: Vec::new(),
         }
     }
 
@@ -699,6 +1036,7 @@ mod placement_tests {
             nc_start: 1000,
             nc_end: 1008,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         }
     }
 
@@ -794,6 +1132,289 @@ mod placement_tests {
         // Parent span is 1..=9; 0 and 10 fall outside.
         assert_eq!(p.parent_to_nc(0), None);
         assert_eq!(p.parent_to_nc(10), None);
+    }
+
+    // ------------------------------------------------------------------
+    // #1833 — a gapped placement maps every coordinate in its span exactly
+    // ------------------------------------------------------------------
+
+    /// The same 9-base span, with `len` parent bases inserted at parent
+    /// coordinate `at` and `nc` chromosome bases inserted after parent
+    /// coordinate `nc_at`. The chromosome span is widened accordingly so the
+    /// two frames still balance, which is the shape a real record has.
+    fn gapped(strand: Strand, gaps: Vec<AlignmentGap>, nc_end: u64) -> GenomicPlacement {
+        GenomicPlacement {
+            nc: Accession::new("NC", "000001", Some(11)),
+            parent_start: 1,
+            nc_start: 1000,
+            nc_end,
+            strand,
+            gaps,
+        }
+    }
+
+    #[test]
+    fn a_parent_only_run_is_declined_and_shifts_the_chromosome_side_back() {
+        // Parent 1..=12; parent bases 5..=7 have no chromosome counterpart, so
+        // the chromosome side is 9 bases wide (1000..=1008).
+        let p = gapped(Strand::Plus, vec![AlignmentGap::parent_only(5, 3)], 1008);
+        assert_eq!(p.parent_end(), Some(12));
+        assert_eq!(p.parent_to_nc(4), Some(1003));
+        // The run itself: no chromosome image, so declined rather than guessed.
+        assert_eq!(p.parent_to_nc(5), None);
+        assert_eq!(p.parent_to_nc(7), None);
+        // …and everything after it resumes where the run left the chromosome —
+        // the affine would have said 1007, three bases too far.
+        assert_eq!(p.parent_to_nc(8), Some(1004));
+        assert_eq!(p.parent_to_nc(12), Some(1008));
+        assert_eq!(p.parent_to_nc(13), None);
+        // The inverse never names a coordinate inside the run.
+        assert_eq!(p.nc_to_parent(1003), Some(4));
+        assert_eq!(p.nc_to_parent(1004), Some(8));
+    }
+
+    #[test]
+    fn a_chromosome_only_run_is_declined_and_shifts_the_parent_side_on() {
+        // Parent 1..=9; three chromosome bases sit between parent 4 and 5, so
+        // the chromosome side is 12 bases wide (1000..=1011).
+        let p = gapped(
+            Strand::Plus,
+            vec![AlignmentGap::chromosome_only(4, 3)],
+            1011,
+        );
+        assert_eq!(p.parent_end(), Some(9));
+        assert_eq!(p.parent_to_nc(4), Some(1003));
+        assert_eq!(p.parent_to_nc(5), Some(1007));
+        assert_eq!(p.parent_to_nc(9), Some(1011));
+        assert_eq!(p.parent_to_nc(10), None);
+        // The chromosome bases inside the run have no parent image.
+        for nc in 1004..=1006 {
+            assert_eq!(p.nc_to_parent(nc), None, "nc {nc} is chromosome-only");
+        }
+        assert_eq!(p.nc_to_parent(1003), Some(4));
+        assert_eq!(p.nc_to_parent(1007), Some(5));
+    }
+
+    #[test]
+    fn a_minus_strand_gap_walks_the_chromosome_downwards() {
+        // The discriminating direction: on the minus strand parent coordinate 1
+        // anchors at `nc_end` and a gap must trim towards `nc_start`.
+        let p = gapped(Strand::Minus, vec![AlignmentGap::parent_only(5, 3)], 1008);
+        assert_eq!(p.parent_to_nc(1), Some(1008));
+        assert_eq!(p.parent_to_nc(4), Some(1005));
+        assert_eq!(p.parent_to_nc(5), None);
+        assert_eq!(p.parent_to_nc(8), Some(1004));
+        assert_eq!(p.parent_to_nc(12), Some(1000));
+        assert_eq!(p.nc_to_parent(1004), Some(8));
+        assert_eq!(p.nc_to_parent(1005), Some(4));
+    }
+
+    #[test]
+    fn every_mappable_coordinate_round_trips_through_a_gapped_placement() {
+        // Both kinds, both strands, adjacent as well as separated — the property
+        // a per-point assertion cannot state.
+        for strand in [Strand::Plus, Strand::Minus] {
+            for gaps in [
+                vec![AlignmentGap::parent_only(5, 3)],
+                vec![AlignmentGap::chromosome_only(4, 3)],
+                // Abutting, in both orders: the `LRG_1321` / `LRG_1075` shape.
+                vec![
+                    AlignmentGap::chromosome_only(4, 3),
+                    AlignmentGap::parent_only(5, 2),
+                ],
+                vec![
+                    AlignmentGap::parent_only(5, 2),
+                    AlignmentGap::chromosome_only(6, 3),
+                ],
+            ] {
+                let parent_only: u64 = gaps.iter().map(|g| g.parent_len()).sum();
+                let nc_only: u64 = gaps.iter().map(|g| g.nc_len()).sum();
+                let nc_end = 1000 + 8 + nc_only - parent_only;
+                let p = gapped(strand, gaps.clone(), nc_end);
+                let mut mapped = 0;
+                for parent in 1..=p.parent_end().expect("extent") {
+                    let Some(nc) = p.parent_to_nc(parent) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        p.nc_to_parent(nc),
+                        Some(parent),
+                        "round-trip at parent {parent} ({strand:?}, {gaps:?})"
+                    );
+                    mapped += 1;
+                }
+                // The transform is only interesting if it mapped anything.
+                assert_eq!(mapped, 9 - parent_only, "{strand:?} {gaps:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parent_end_is_derived_from_the_gap_list_not_the_span_width() {
+        // The whole reason this accessor exists: with gaps the two frames have
+        // different widths, so `parent_start + (nc_end - nc_start)` is wrong in
+        // both directions.
+        let wider_parent = gapped(Strand::Plus, vec![AlignmentGap::parent_only(5, 3)], 1008);
+        assert_eq!(wider_parent.parent_start + (1008 - 1000), 9);
+        assert_eq!(wider_parent.parent_end(), Some(12));
+
+        let wider_nc = gapped(
+            Strand::Plus,
+            vec![AlignmentGap::chromosome_only(4, 3)],
+            1011,
+        );
+        assert_eq!(wider_nc.parent_start + (1011 - 1000), 12);
+        assert_eq!(wider_nc.parent_end(), Some(9));
+
+        // No gaps: unchanged, which is what keeps every `NG_` placement and the
+        // 1 248 indel-free LRG records exactly where they were.
+        assert_eq!(placement(Strand::Plus).parent_end(), Some(9));
+    }
+
+    #[test]
+    fn gaps_are_consistent_separates_a_walkable_list_from_a_broken_one() {
+        // The check the parser gates on, exercised directly — `parent_end` is a
+        // sum and cannot see any of these, which is why both are asked.
+        assert!(placement(Strand::Plus).gaps_are_consistent(), "no gaps");
+        assert!(
+            gapped(Strand::Plus, vec![AlignmentGap::parent_only(5, 3)], 1008).gaps_are_consistent()
+        );
+        assert!(gapped(
+            Strand::Minus,
+            vec![AlignmentGap::chromosome_only(4, 3)],
+            1011
+        )
+        .gaps_are_consistent());
+
+        for (why, gaps, nc_end) in [
+            (
+                "a pair that overlaps",
+                vec![
+                    AlignmentGap::parent_only(5, 4),
+                    AlignmentGap::chromosome_only(6, 2),
+                ],
+                1008u64,
+            ),
+            (
+                "a chromosome-only run wider than the span",
+                vec![AlignmentGap::chromosome_only(4, 500)],
+                1008,
+            ),
+            (
+                "an unsorted list",
+                vec![
+                    AlignmentGap::parent_only(7, 1),
+                    AlignmentGap::parent_only(3, 2),
+                ],
+                1005,
+            ),
+            (
+                "two gaps on one anchor",
+                vec![
+                    AlignmentGap::chromosome_only(4, 2),
+                    AlignmentGap::parent_only(4, 2),
+                ],
+                1008,
+            ),
+        ] {
+            assert!(
+                !gapped(Strand::Plus, gaps, nc_end).gaps_are_consistent(),
+                "must be rejected: {why}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inconsistent_gap_list_declines_rather_than_answers() {
+        // `gaps` is public, so a caller can hand us one the walk cannot honour.
+        // Fail closed: a wrong coordinate is what this model exists to remove.
+        let overlapping = gapped(
+            Strand::Plus,
+            vec![
+                AlignmentGap::parent_only(5, 4),
+                // Anchored *inside* the run above, so the aligned run between
+                // them has negative length.
+                AlignmentGap::chromosome_only(6, 2),
+            ],
+            1008,
+        );
+        assert_eq!(overlapping.parent_to_nc(9), None);
+        assert_eq!(overlapping.nc_to_parent(1005), None);
+
+        let overrunning = gapped(
+            Strand::Plus,
+            // Claims 500 chromosome bases from a 9-base span.
+            vec![AlignmentGap::chromosome_only(4, 500)],
+            1008,
+        );
+        assert_eq!(overrunning.parent_to_nc(5), None);
+        assert_eq!(overrunning.nc_to_parent(1007), None);
+    }
+
+    #[test]
+    fn two_gaps_on_one_anchor_decline_rather_than_pick_an_order() {
+        // The two kinds read `parent_at` differently, so at equal anchors the
+        // order is undetermined and both readings are defensible. Nothing in the
+        // 1 294-record corpus has this shape; answering would be inventing one.
+        let colliding = gapped(
+            Strand::Plus,
+            vec![
+                AlignmentGap::chromosome_only(4, 2),
+                AlignmentGap::parent_only(4, 2),
+            ],
+            1008,
+        );
+        for parent in 1..=12 {
+            assert_eq!(colliding.parent_to_nc(parent), None, "parent {parent}");
+        }
+        for nc in 1000..=1008 {
+            assert_eq!(colliding.nc_to_parent(nc), None, "nc {nc}");
+        }
+        // Control: separating the anchors by one makes it the ordinary
+        // `LRG_1321` shape, which answers.
+        let abutting = gapped(
+            Strand::Plus,
+            vec![
+                AlignmentGap::chromosome_only(4, 2),
+                AlignmentGap::parent_only(5, 2),
+            ],
+            1008,
+        );
+        assert_eq!(abutting.parent_to_nc(4), Some(1003));
+        assert_eq!(abutting.parent_to_nc(5), None);
+        assert_eq!(abutting.parent_to_nc(7), Some(1006));
+    }
+
+    #[test]
+    fn a_gap_list_in_any_order_gives_the_same_answers() {
+        // The walk is order-sensitive by construction, and the parser sorts —
+        // but a library caller building a placement by hand may not, and an
+        // unsorted list must not produce a *different* coordinate. It may only
+        // decline.
+        let sorted = gapped(
+            Strand::Plus,
+            vec![
+                AlignmentGap::parent_only(3, 2),
+                AlignmentGap::parent_only(7, 1),
+            ],
+            1005,
+        );
+        let reversed = gapped(
+            Strand::Plus,
+            vec![
+                AlignmentGap::parent_only(7, 1),
+                AlignmentGap::parent_only(3, 2),
+            ],
+            1005,
+        );
+        for parent in 1..=12 {
+            let (a, b) = (sorted.parent_to_nc(parent), reversed.parent_to_nc(parent));
+            assert!(
+                b.is_none() || b == a,
+                "an unsorted gap list may decline at parent {parent}, never answer differently \
+                 ({a:?} vs {b:?})"
+            );
+        }
     }
 }
 

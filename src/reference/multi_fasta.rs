@@ -82,7 +82,7 @@ use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
 use crate::reference::authoritative::CanonicalOverrides;
 use crate::reference::prepared_index::{load_fai_index, FastaIndexEntry, PreparedIndex};
-use crate::reference::provider::{GenomicPlacement, ReferenceProvider};
+use crate::reference::provider::{AlignmentGap, GenomicPlacement, ReferenceProvider};
 use crate::reference::transcript::Transcript;
 
 /// Supplemental transcript info for a single transcript.
@@ -3092,84 +3092,90 @@ fn xml_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-/// The first LRG coordinate at which a mapping stops being an affine (#1499),
-/// or `None` when it never does.
+/// Parse the indel `<diff>` elements of one `<mapping_span>` into an ordered
+/// [`AlignmentGap`] list (#1833).
 ///
-/// **An LRG↔chromosome alignment is not affine, and one `<mapping_span>` does
-/// not make it one.** Alongside the span the record lists `<diff>` elements —
-/// the vocabulary is closed at `mismatch`, `lrg_ins` (bases present in the LRG
-/// with no chromosome counterpart) and `other_ins` (the reverse), verified over
-/// all 1 294 LRG records in the prepared reference. The two insertion kinds
-/// shift every coordinate past them, in opposite directions, and
-/// [`GenomicPlacement`] is a pure affine with nowhere to carry them: composing
-/// it with cdot's `NM_`→`NC_` step therefore drifts by the *net* indel count
-/// between the LRG origin and the projected position.
+/// **A single `<mapping_span>` does not make a mapping affine.** Alongside the
+/// span the record lists `<diff>` elements; the vocabulary is closed at
+/// `mismatch` / `lrg_ins` (bases present in the LRG with no chromosome
+/// counterpart) / `other_ins` (the reverse), verified over all 1 294 LRG records
+/// in a prepared GRCh38 reference — 479 / 63 / 47 in the main-assembly mappings.
+/// Before #1833 the two insertion kinds were simply dropped, so every coordinate
+/// past one drifted by the net indel count: `LRG_292` (BRCA1) is 193 689 bases
+/// against a chromosome side of 193 687, and the affine placed all but the first
+/// 13 168 of them wrongly.
 ///
-/// `LRG_292` is the worked case. One span, `1..193689` onto
-/// `NC_000017.11:43024295..43217981` — but the chromosome side is 193 687
-/// bases, two short, from 3 `lrg_ins` bases against 1 `other_ins` base.
-/// Measured against the frozen `LRG_292g` record, the affine is exact up to
-/// `LRG_292:g.13168` and then off by +2 for the remaining ~93 % of the record,
-/// so `LRG_292(NM_007294.4):c.1del` projected to `LRG_292:g.93888del` where the
-/// record's own frame says `g.93890del`. The result is well-formed and
-/// in-bounds, so none of the four normalization oracles can see it.
+/// **`mismatch` is deliberately absent.** It substitutes a base and shifts
+/// nothing, so it leaves the coordinate mapping exact — and since #1490 the
+/// bases come from the LRG's own frozen record rather than being synthesized
+/// from the chromosome, so it has no remaining consequence here. 119 of the
+/// 1 294 records carry mismatches and no indel; treating any `<diff>` as a gap
+/// would model 165 records where 46 is correct.
 ///
-/// Returning the departure point rather than a bare "is it affine" lets the
-/// caller keep the exact prefix instead of dropping the accession. That matters:
-/// over the prepared reference, refusing the whole of every indel-bearing record
-/// would have refused 31 projections that were already landing on the right
-/// base, alongside the 51 that were not.
+/// **The two kinds spell their LRG coordinates differently**, which is the
+/// single easiest thing to get wrong: for `lrg_ins`, `lrg_start`/`lrg_end` bound
+/// the unaligned LRG bases themselves; for `other_ins` they are the *flanking*
+/// LRG coordinates, the run sitting between them. [`AlignmentGap::parent_only`]
+/// and [`AlignmentGap::chromosome_only`] take exactly those two conventions.
 ///
-/// `mismatch` is deliberately absent: it substitutes a base and shifts nothing,
-/// so the affine still maps every coordinate exactly — and since #1490 the bases
-/// themselves come from the LRG's own frozen record rather than being
-/// synthesized from the chromosome, so a mismatch has no remaining consequence
-/// here. Over the prepared reference that is the difference between narrowing 46
-/// records and narrowing 165.
+/// **An indel diff's `other_start`/`other_end` never POSITION a gap.** They are
+/// read for one thing only — the length of an `other_ins` run, which its own
+/// `lrg_start`/`lrg_end` cannot give because those are *flanks* (`LRG_292`:
+/// 15459/15460, one apart, for a run of any size). They are never used to place
+/// a gap in either frame, because they are the flanking *chromosome*
+/// coordinates, and for adjacent diffs a
+/// flank can name a base that lies inside the neighbouring diff's own range:
+/// `LRG_1321` has an `other_ins` of 1 000 `N`s at `NC_000012.12:7083651-7084650`
+/// and an `lrg_ins` of 231 bases whose chromosome flanks are `7083650`/`7083651`
+/// — the second of which is the last base of the first run. Positioning off the
+/// flanks loses the insertion; positioning off the LRG coordinates and letting
+/// the walk consume each side in turn reproduces it exactly.
 ///
-/// **Fails closed.** An indel `<diff>` whose coordinate attribute is missing or
-/// unparseable yields a horizon of `0`, which the caller reads as "nothing is
-/// affine" and declines the placement outright. Skipping such a diff would leave
-/// the span *wider* than the data supports — a silently wrong coordinate rather
-/// than a refusal, which is the direction this whole fix exists to close.
-fn affine_horizon(mapping_body: &str) -> Option<u64> {
-    mapping_body
-        .match_indices("<diff ")
-        .filter_map(|(i, _)| {
-            let rest = &mapping_body[i..];
-            let tag = &rest[..rest.find('>').unwrap_or(rest.len())];
-            let attr = match xml_attr(tag, "type") {
-                // LRG bases `lrg_start..=lrg_end` are unaligned: `lrg_start` is
-                // the first coordinate the affine cannot reach.
-                Some("lrg_ins") => "lrg_start",
-                // Chromosome bases sit *between* the flanking LRG coordinates,
-                // so `lrg_start` still maps and `lrg_end` is the first that
-                // does not.
-                Some("other_ins") => "lrg_end",
-                // The one type that is legitimately skipped: a `mismatch`
-                // substitutes a base and shifts no coordinate, so the affine
-                // still maps everything past it exactly.
-                Some("mismatch") => return None,
-                // Absent, or outside the closed vocabulary. Skipping it would
-                // leave the span *wider* than the data supports, which is the
-                // silently-wrong-coordinate direction this whole pass exists to
-                // close — the identical argument the missing-coordinate case
-                // below is already decided on, so it gets the identical answer:
-                // horizon `0`, and the caller declines the placement.
-                //
-                // Measured non-firing on real data: over all 1 294 LRG records
-                // of the prepared reference the `<diff type=…>` vocabulary is
-                // exactly `mismatch` (7 945), `lrg_ins` (1 030) and `other_ins`
-                // (907), and **0** `<diff>` elements carry no `type` at all.
-                _ => return Some(0),
-            };
-            Some(
-                xml_attr(tag, attr)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0),
-            )
-        })
-        .min()
+/// **Fails closed.** Returns `None` when an indel `<diff>` has a missing or
+/// unparseable coordinate, or a `lrg_end` below its `lrg_start`. The caller then
+/// declines the placement outright rather than keep a span the data does not
+/// support — a silently wrong coordinate is the direction this exists to close.
+fn parse_span_alignment_gaps(span_body: &str) -> Option<Vec<AlignmentGap>> {
+    let mut gaps: Vec<AlignmentGap> = Vec::new();
+    for (i, _) in span_body.match_indices("<diff ") {
+        let rest = &span_body[i..];
+        let tag = &rest[..rest.find('>').unwrap_or(rest.len())];
+        let kind = xml_attr(tag, "type")?;
+        if kind != "lrg_ins" && kind != "other_ins" {
+            // `mismatch` — and, defensively, any vocabulary this parser has not
+            // seen. An unknown type could shift coordinates, so it must not be
+            // silently ignored.
+            if kind != "mismatch" {
+                return None;
+            }
+            continue;
+        }
+        let lrg_start: u64 = xml_attr(tag, "lrg_start")?.parse().ok()?;
+        let lrg_end: u64 = xml_attr(tag, "lrg_end")?.parse().ok()?;
+        if lrg_end < lrg_start {
+            return None;
+        }
+        gaps.push(match kind {
+            "lrg_ins" => AlignmentGap::parent_only(lrg_start, lrg_end - lrg_start + 1),
+            _ => {
+                let other_start: u64 = xml_attr(tag, "other_start")?.parse().ok()?;
+                let other_end: u64 = xml_attr(tag, "other_end")?.parse().ok()?;
+                if other_end < other_start {
+                    return None;
+                }
+                AlignmentGap::chromosome_only(lrg_start, other_end - other_start + 1)
+            }
+        });
+    }
+    // Strictly ascending parent order — see `AlignmentGap::sort_key`, which the
+    // walk's own ordering check also reads, so the two cannot drift apart. Two
+    // indel diffs sharing an `lrg_start` have no well-defined order and no LRG
+    // has them (0 of 1 294 records, measured), so refuse rather than pick one.
+    gaps.sort_by_key(AlignmentGap::sort_key);
+    if gaps.windows(2).any(|w| w[0].parent_at == w[1].parent_at) {
+        return None;
+    }
+    Some(gaps)
 }
 
 /// Parse an LRG's chromosomal placement from its XML record (#480).
@@ -3178,24 +3184,17 @@ fn affine_horizon(mapping_body: &str) -> Option<u64> {
 /// e.g. GRCh38) and its single `<mapping_span …>` to build a
 /// [`GenomicPlacement`] mapping LRG coordinates onto the `NC_` chromosome.
 /// Returns `None` when there is no main-assembly mapping, its `other_id` is not
-/// a parseable accession, or it is not a single contiguous span (a single
-/// affine placement cannot represent a gapped mapping — the projector then
+/// a parseable accession, or it is not a single contiguous span (multiple spans
+/// are a different mapping shape this parser does not model — the projector then
 /// keeps the chromosome coordinates rather than mis-anchor).
 ///
-/// The span is additionally narrowed to its affine-exact prefix when the mapping
-/// carries indel `<diff>`s — see [`affine_horizon`] — and `None` is returned when
-/// that prefix is empty. Every coordinate the returned placement still accepts is
-/// one the affine maps exactly; the rest are declined by
-/// [`GenomicPlacement::nc_to_parent`] / [`GenomicPlacement::parent_to_nc`]
-/// returning `None`, which
-/// [`VariantProjector::reanchor_genome_to_parent`](crate::project::VariantProjector)
-/// already turns into an `UnsupportedProjection` rather than a drifted
-/// coordinate under the parent accession (#480/#655).
-///
-/// Base *serving* is unaffected: `get_sequence` / `get_sequence_length` consult a
-/// placement only when `own_record(id).is_none()`, and every one of the 1 294 LRG
-/// records in the prepared reference has its own `LRG_<N>g` record (measured), so
-/// no LRG reaches `synthesize_parent_sequence` at all (#1462/#1490).
+/// The span's indel `<diff>` list is carried onto the placement as an
+/// [`AlignmentGap`] list, so an indel-bearing record maps **every** coordinate
+/// in its span exactly rather than drifting past the first indel (#1499/#1833).
+/// The placement is declined outright when the gap list cannot be read, or when
+/// the reconstructed parent extent disagrees with the span's own `lrg_end` —
+/// that check is the model's integrity assertion and it holds for all 1 294
+/// records in a prepared GRCh38 reference (measured).
 fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
     let mut search = xml;
     loop {
@@ -3217,21 +3216,40 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
                 .map(|(_, a)| a)
                 .ok()?;
 
-            // Require exactly one span: a single affine transform.
-            let spans: Vec<&str> = body
+            // Require exactly one span. Two spans are a genuinely discontiguous
+            // placement, which is a different shape from the within-span indels
+            // the gap list models, and one this parser does not attempt.
+            let spans: Vec<(&str, &str)> = body
                 .match_indices("<mapping_span ")
                 .map(|(i, _)| {
                     let s = &body[i..];
                     let e = s.find('>').unwrap_or(s.len());
-                    &s[..e]
+                    let open_tag = &s[..e];
+                    // The `<diff>` children live between the open tag and
+                    // `</mapping_span>`. A **self-closing** span (`… />`) has
+                    // none, and its body must be empty rather than "the rest of
+                    // the mapping" — otherwise a sibling element's diffs would
+                    // be attributed to it.
+                    let span_body = if open_tag.trim_end().ends_with('/') {
+                        ""
+                    } else {
+                        let after = &s[e.saturating_add(1).min(s.len())..];
+                        match after.find("</mapping_span>") {
+                            Some(c) => &after[..c],
+                            // An unclosed span is malformed; treat it as having
+                            // no diffs rather than swallowing whatever follows.
+                            None => "",
+                        }
+                    };
+                    (open_tag, span_body)
                 })
                 .collect();
             if spans.len() != 1 {
                 return None;
             }
-
-            let span = spans[0];
+            let (span, span_body) = spans[0];
             let parent_start: u64 = xml_attr(span, "lrg_start")?.parse().ok()?;
+            let parent_end_attr: u64 = xml_attr(span, "lrg_end")?.parse().ok()?;
             let o1: u64 = xml_attr(span, "other_start")?.parse().ok()?;
             let o2: u64 = xml_attr(span, "other_end")?.parse().ok()?;
             let strand = match xml_attr(span, "strand") {
@@ -3239,43 +3257,79 @@ fn parse_lrg_main_assembly_placement(xml: &str) -> Option<GenomicPlacement> {
                 _ => crate::reference::transcript::Strand::Plus,
             };
             let (nc_start, nc_end) = if o1 <= o2 { (o1, o2) } else { (o2, o1) };
-
-            // A single span is necessary but **not sufficient** for an affine
-            // (#1499) — so narrow the span to the part that genuinely is one.
             // `body` is this mapping's own inner text, so the GRCh37
             // `other_assembly` mapping's diffs (967 `lrg_ins` / 860 `other_ins`
             // across the prepared reference) are correctly out of scope.
-            let (nc_start, nc_end) = match affine_horizon(body) {
-                None => (nc_start, nc_end),
-                // Nothing at or after `parent_start` aligns: no usable affine.
-                Some(h) if h <= parent_start => return None,
-                Some(h) => {
-                    // Bases past the anchor that still map exactly. `parent_start`
-                    // is the parent coordinate of `nc_start` on the plus strand
-                    // and of `nc_end` on the minus strand, so the trim always
-                    // comes off the end *away* from the anchor and the anchor
-                    // itself is untouched.
-                    let placed = h - 1 - parent_start;
-                    use crate::reference::transcript::Strand;
-                    match strand {
-                        Strand::Minus => (nc_end.checked_sub(placed)?.max(nc_start), nc_end),
-                        // The parser above emits only Plus/Minus; `Unknown` is
-                        // spelled out rather than left to a wildcard so a new
-                        // variant has to be considered here. It follows
-                        // `parent_to_nc`, which also treats Unknown as ascending.
-                        Strand::Plus | Strand::Unknown => {
-                            (nc_start, nc_start.checked_add(placed)?.min(nc_end))
-                        }
-                    }
-                }
+            // Say so when the gap list is unreadable. The refusal itself is
+            // right — a placement the model cannot honour must not exist — but
+            // `None` is also what "this LRG has no XML file" and "it has no
+            // main-assembly mapping" return, and the caller caches all three
+            // identically. Without a line here, alignment data this parser
+            // cannot model is indistinguishable from an unplaced parent, which
+            // is the same confusion `gaps_are_consistent` is documented as
+            // existing to prevent one level down. `warn` rather than `trace`
+            // because it never fires on data that exists: all 1 294 records in
+            // a prepared GRCh38 reference parse.
+            let Some(gaps) = parse_span_alignment_gaps(span_body) else {
+                warn!(
+                    "{nc}: declining the LRG placement — its <mapping_span>'s <diff> list is not \
+                     one this parser can model (unreadable or missing indel coordinate, a \
+                     lrg_end below its lrg_start, an unrecognised <diff type>, or two indel \
+                     diffs sharing one lrg_start)"
+                );
+                return None;
             };
-            return Some(GenomicPlacement {
+            let placement = GenomicPlacement {
                 nc,
                 parent_start,
                 nc_start,
                 nc_end,
                 strand,
-            });
+                gaps,
+            };
+            // Two integrity assertions, not formalities — they ask different
+            // questions and both hold for every one of the 1 294 records in a
+            // prepared GRCh38 reference (measured). Fail closed on either: an
+            // unverifiable placement is worse than none.
+            //
+            // 1. The gap list must be *walkable* — strictly ordered, no overlap,
+            //    and covering exactly the placed chromosome span. Without this a
+            //    self-overlapping pair yields a placement that exists while every
+            //    lookup declines, which reads as "unplaceable parent" rather than
+            //    "bad alignment data".
+            // 2. Walking it must land on exactly the parent extent the span
+            //    itself declares, which catches an unmodelled diff kind or a
+            //    mis-read coordinate convention.
+            //
+            // Each names *which* assertion failed, for the same reason as the
+            // gap-list refusal above: the caller cannot tell a declined
+            // placement from an absent one, and these two fire only on
+            // alignment data no record currently carries.
+            if !placement.gaps_are_consistent() {
+                warn!(
+                    "{}: declining the LRG placement — its {} alignment gap(s) do not walk the \
+                     placed chromosome span {}..={} (out of order, overlapping, or not covering \
+                     it exactly)",
+                    placement.nc,
+                    placement.gaps.len(),
+                    placement.nc_start,
+                    placement.nc_end
+                );
+                return None;
+            }
+            if placement.parent_end() != Some(parent_end_attr) {
+                warn!(
+                    "{}: declining the LRG placement — walking its {} alignment gap(s) reaches \
+                     parent extent {:?}, but the <mapping_span> declares lrg_end={}; the gap \
+                     model and the record disagree",
+                    placement.nc,
+                    placement.gaps.len(),
+                    placement.parent_end(),
+                    parent_end_attr
+                );
+                return None;
+            }
+            return Some(placement);
         }
 
         // Advance past this non-main mapping. If it lacks a `</mapping>` close
@@ -3395,6 +3449,7 @@ fn parse_refseqgene_alignments(
             nc_start,
             nc_end,
             strand,
+            gaps: Vec::new(),
         };
         // Keep at most one placement per (NG version, build): first wins if a
         // release lists the same alignment twice.
@@ -3719,46 +3774,30 @@ impl ReferenceProvider for MultiFastaProvider {
         // width instead made bounds checks reject legitimate placed
         // coordinates as past-the-end.
         //
-        // **`nc_end - nc_start` is a chromosome-frame width standing in for a
-        // parent-frame one, and the two differ whenever the alignment carries
-        // indels.** `GenomicPlacement` is a pure affine with no `parent_end`:
-        // the LRG parser reads `lrg_end` and discards it (see
-        // `genomic_placement_on_build`), and `parent_to_nc` reconstructs the
-        // parent's end the same way. `LRG_1075` shows the gap — its GRCh38 span
-        // is `lrg_start=1049 lrg_end=15267` onto
-        // `NC_000004.12:190173122-190187909`, so the LRG side is 14 219 wide
-        // and the chromosome side 14 788, against a `LRG_1075g` record of
-        // 15 267 bases (i.e. exactly `lrg_end`).
+        // **A chromosome-frame width is not a parent-frame one**, and the two
+        // differ whenever the alignment carries indels. `GenomicPlacement::parent_end`
+        // is what answers this in the parent's own frame: since #1833 the
+        // placement carries the span's indel `<diff>` list, so the extent is
+        // derived rather than assumed affine. `LRG_1075` is the worked case —
+        // its GRCh38 span is `lrg_start=1049 lrg_end=15267` onto
+        // `NC_000004.12:190173122-190187909`, so the LRG side is 14 219 wide and
+        // the chromosome side 14 788. `parent_start + (nc_end - nc_start)`
+        // yields 15 836 where the `LRG_1075g` record is 15 267 bases;
+        // `parent_end()` yields exactly 15 267.
         //
-        // Since #1499 that record's span is **narrowed** to its affine-exact
-        // prefix, so this expression now under-reports rather than over-reports
-        // — 8 211 rather than the pre-#1499 15 836, against a true 15 267.
-        //
-        // **The two directions are not equivalent, and under-reporting is the
-        // worse one.** An over-reporting length is permissive; an
-        // under-reporting one is restrictive, so every bounds check keyed on it
-        // — `FERRO_ASSERT_IN_BOUNDS` among them — turns a legitimate placed
-        // coordinate into a spurious past-the-end failure. That is the same
-        // symptom #1494 closed, arriving from a different cause: #1494's was
-        // the span width dropping the `parent_start - 1` bases beneath the
-        // placement (see `a_record_less_parent_length_counts_from_coordinate_one`),
-        // this one is the narrowed span no longer reaching the parent's end.
-        //
-        // Either way it is not the parent's extent, which is #1503's point:
-        // carry `parent_end` on the placement rather than re-derive it from the
-        // other frame. That touches `parent_to_nc` and therefore projection, so
-        // it wants its own measurement rather than riding along with this.
-        //
-        // Latent rather than live, and #1499 narrowed the exposed population
-        // further: an accession reaches this branch only when `own_record`
-        // finds nothing, every one of the prepared reference's 1 294 LRG
-        // records has its own `LRG_<N>g` record (measured), and every #728
-        // derived `NG_` has `parent_start == 1` and an exact affine. So nothing
-        // in the reachable population is affected today.
+        // Latent rather than live, in both directions: an accession reaches this
+        // branch only when `own_record` finds nothing, every one of the prepared
+        // reference's 1 294 LRG records has its own `LRG_<N>g` record
+        // (measured), and every #728 derived `NG_` has `parent_start == 1` and
+        // an empty gap list — for which `parent_end()` is the same arithmetic
+        // this line used to spell out. So the reachable population is unmoved
+        // and a record-less, indel-bearing parent is no longer over-long.
         if self.own_record(id).is_none() {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
-                    return Ok(placement.parent_start + (placement.nc_end - placement.nc_start));
+                    if let Some(parent_end) = placement.parent_end() {
+                        return Ok(parent_end);
+                    }
                 }
             }
         }
@@ -4035,24 +4074,27 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // #1499 — a single-span mapping is not automatically an affine one
+    // #1499 / #1833 — one `<mapping_span>` does not make a mapping affine
     // ----------------------------------------------------------------------
+    //
+    // Every fixture below is a REAL main-assembly mapping from the prepared
+    // reference, verbatim apart from three cosmetic edits: `other_id_syn` is
+    // dropped, `mismatch` diffs are dropped where they are not the point, and a
+    // `lrg_sequence`/`other_sequence` payload longer than eight bases is
+    // replaced by a note of its length. The parser reads neither sequence
+    // attribute — the payload lengths it needs come from the coordinates — so
+    // eliding them changes nothing it sees, and the elision keeps the geometry
+    // legible. Every expected coordinate is MEASURED against the frozen
+    // `LRG_<N>g` record by 11-base window comparison, never inferred.
 
-    /// `LRG_292`'s real GRCh38 main-assembly mapping, trimmed to the span, one
-    /// of its `mismatch` diffs and all three of its indel `<diff>`s. One span,
-    /// so the `spans.len() != 1` guard above passes it — and the span is still
-    /// not an affine: the record is 193 689 bases while the chromosome side is
-    /// `43217981 - 43024295 + 1 = 193 687`, the difference being 3 `lrg_ins`
-    /// bases against 1 `other_ins` base.
+    /// `LRG_292` (BRCA1), the record the issue is named for: 193 689 LRG bases
+    /// onto a 193 687-base chromosome span, three `lrg_ins` bases against one
+    /// `other_ins`. Minus strand, so the chromosome walks *down* as the LRG
+    /// walks up.
     ///
-    /// Measured on the prepared reference before this fix, by comparing an
-    /// 11-base window of the `LRG_292g` record against the chromosome around
-    /// `parent_to_nc`'s answer: exact (offset 0) up to `LRG_292:g.13000`, then
-    /// **+2** from the first `lrg_ins` on, **+1** between the `other_ins` and
-    /// the last `lrg_ins`, and **+2** for the remaining ~93 % of the record.
-    /// End to end that made `LRG_292(NM_007294.4):c.1del` project to
-    /// `LRG_292:g.93888del` where the record's own frame says `g.93890del`.
-    const LRG_292_INDEL_MAPPING: &str = r#"
+    /// The affine placed only the first 13 168 bases correctly — 6.8 % of the
+    /// record, so essentially all of BRCA1's CDS was on the wrong side of it.
+    const LRG_292_MAPPING: &str = r#"
       <mapping coord_system="GRCh38.p13" other_name="17" other_id="NC_000017.11" other_start="43024295" other_end="43217981" type="main_assembly">
         <mapping_span lrg_start="1" lrg_end="193689" other_start="43024295" other_end="43217981" strand="-1">
           <diff type="mismatch" lrg_start="2600" lrg_end="2600" other_start="43215382" other_end="43215382" lrg_sequence="G" other_sequence="A" />
@@ -4064,142 +4106,209 @@ mod tests {
     "#;
 
     #[test]
-    fn an_indel_bearing_span_is_narrowed_to_its_affine_exact_prefix() {
-        // The whole point of the fixture: it has exactly ONE `<mapping_span>`,
-        // so the gapped-mapping guard does not reach it, and it is still not
-        // expressible as an affine.
-        assert_eq!(LRG_292_INDEL_MAPPING.matches("<mapping_span ").count(), 1);
-        let p = parse_lrg_main_assembly_placement(LRG_292_INDEL_MAPPING)
-            .expect("the prefix below the first indel is still a valid affine");
+    fn an_indel_bearing_span_maps_every_coordinate_exactly() {
+        // The whole point of the fixture: exactly ONE `<mapping_span>`, so the
+        // gapped-mapping guard above does not reach it, and it is still not an
+        // affine.
+        assert_eq!(LRG_292_MAPPING.matches("<mapping_span ").count(), 1);
+        let p = parse_lrg_main_assembly_placement(LRG_292_MAPPING).expect("placed");
 
-        // Minus strand, so `parent_start` anchors at `nc_end`; the trim comes
-        // off `nc_start`. The first departure is the `lrg_ins` at LRG 13169, so
-        // the last exactly-placed base is LRG 13168 at chromosome
-        // 43217981 - 13167 = 43204814.
-        assert_eq!(p.nc_end, 43217981, "the anchored end must not move");
-        assert_eq!(p.nc_start, 43204814);
+        // The span is the WHOLE record, not a prefix of it.
+        assert_eq!((p.nc_start, p.nc_end), (43024295, 43217981));
         assert_eq!(p.parent_start, 1);
+        assert_eq!(p.parent_end(), Some(193689), "the LRG_292g record's length");
+        assert_eq!(p.gaps.len(), 3, "the `mismatch` diff is not a gap");
 
-        // Everything inside the narrowed span still maps, and maps exactly.
-        assert_eq!(p.nc_to_parent(43217981), Some(1));
-        assert_eq!(p.nc_to_parent(43204814), Some(13168));
+        // Below the first indel the affine was already right, and stays right.
+        assert_eq!(p.parent_to_nc(1), Some(43217981));
         assert_eq!(p.parent_to_nc(13168), Some(43204814));
 
-        // And the drifted region is declined rather than mis-mapped. Chromosome
-        // 43204813 is LRG 13171 in the record's own frame; the affine would have
-        // called it 13169 (measured, +2 — see `LRG_292_INDEL_MAPPING`).
-        assert_eq!(p.nc_to_parent(43204813), None);
+        // The `lrg_ins` bases themselves have no chromosome image.
         assert_eq!(p.parent_to_nc(13169), None);
-        assert_eq!(p.parent_to_nc(160875), None);
+        assert_eq!(p.parent_to_nc(13170), None);
+
+        // Past it, the coordinate the affine got wrong. `13171 -> 43204813` is
+        // the diff's own `other_start` flank; the affine said 43204811.
+        assert_eq!(p.parent_to_nc(13171), Some(43204813));
+        // Between the two insertion kinds the drift was +1, not +2.
+        assert_eq!(p.parent_to_nc(15459), Some(43202525));
+        // The `other_ins` base is skipped: 15460 lands two below 15459.
+        assert_eq!(p.parent_to_nc(15460), Some(43202523));
+        assert_eq!(p.nc_to_parent(43202524), None, "chromosome-only base");
+        // And the last base of the record, which the affine could not reach at
+        // all — it ran out of chromosome two bases early.
+        assert_eq!(p.parent_to_nc(193689), Some(43024295));
+        assert_eq!(p.nc_to_parent(43024295), Some(193689));
     }
 
+    /// `LRG_1321` — the shape a naive walk loses. Its `other_ins` of 1 000 `N`s
+    /// occupies `NC_000012.12:7083651-7084650`, and the `lrg_ins` of 231 bases
+    /// that abuts it lists chromosome flanks `7083650`/`7083651` — the second of
+    /// which is the **last base of the other run**. Position off those flanks and
+    /// the 231-base insertion disappears; position off the LRG coordinates and
+    /// let the walk consume each side in turn, and it does not.
+    ///
+    /// It is also the record that needs the tie-break in `AlignmentGap::sort_key`:
+    /// the chromosome-only run is anchored at LRG 12957 and the parent-only run
+    /// starts at 12958.
+    const LRG_1321_MAPPING: &str = r#"
+      <mapping coord_system="GRCh38.p13" other_name="12" other_id="NC_000012.12" other_start="7078209" other_end="7097607" type="main_assembly">
+        <mapping_span lrg_start="1" lrg_end="18630" other_start="7078209" other_end="7097607" strand="-1">
+          <diff type="other_ins" lrg_start="12957" lrg_end="12958" other_start="7083651" other_end="7084650" lrg_sequence="-" other_sequence="1000 bases elided" />
+          <diff type="lrg_ins" lrg_start="12958" lrg_end="13188" other_start="7083650" other_end="7083651" lrg_sequence="231 bases elided" other_sequence="-" />
+        </mapping_span>
+      </mapping>
+    "#;
+
     #[test]
-    fn a_chromosome_insertion_narrows_the_span_too() {
-        // `other_ins` shifts coordinates just as `lrg_ins` does, in the other
-        // direction — the horizon must not key on `lrg_ins` only. Its LRG
-        // coordinates are the *flanks*, so `lrg_start` (4) still maps and
-        // `lrg_end` (5) is the first that does not.
-        let xml = r#"
-          <mapping other_id="NC_000017.11" type="main_assembly">
-            <mapping_span lrg_start="1" lrg_end="9" other_start="100" other_end="109" strand="1">
-              <diff type="other_ins" lrg_start="4" lrg_end="5" other_start="104" other_end="104" lrg_sequence="-" other_sequence="T" />
-            </mapping_span>
-          </mapping>
-        "#;
-        let p = parse_lrg_main_assembly_placement(xml).expect("the prefix is a valid affine");
-        // Plus strand: the anchor is `nc_start`, so the trim comes off `nc_end`.
-        assert_eq!(p.nc_start, 100);
-        assert_eq!(p.nc_end, 103);
-        assert_eq!(p.parent_to_nc(4), Some(103));
-        assert_eq!(p.parent_to_nc(5), None);
-        assert_eq!(p.nc_to_parent(104), None);
+    fn two_abutting_gaps_of_opposite_kinds_are_both_honoured() {
+        let p = parse_lrg_main_assembly_placement(LRG_1321_MAPPING).expect("placed");
+        assert_eq!(p.parent_end(), Some(18630), "the LRG_1321g record's length");
+        // 1000 chromosome-only against 231 parent-only: the two frames differ by
+        // 769, which is exactly the span-width difference.
+        assert_eq!((p.nc_end - p.nc_start + 1) - 18630, 769);
+
+        assert_eq!(p.parent_to_nc(12957), Some(7084651));
+        // The 231 LRG bases have no chromosome image…
+        assert_eq!(p.parent_to_nc(12958), None);
+        assert_eq!(p.parent_to_nc(13188), None);
+        // …and the next aligned base resumes below BOTH runs. The affine said
+        // 7084419 — 769 bases out, which is the naive walk's error too if it
+        // drops the `lrg_ins` on the flank collision.
+        assert_eq!(p.parent_to_nc(13189), Some(7083650));
+        assert_eq!(p.parent_to_nc(18630), Some(7078209));
+
+        // The 1 000 chromosome bases are unreachable from the parent frame.
+        for nc in [7083651, 7084000, 7084650] {
+            assert_eq!(p.nc_to_parent(nc), None, "nc {nc} is chromosome-only");
+        }
+        assert_eq!(p.nc_to_parent(7084651), Some(12957));
+        assert_eq!(p.nc_to_parent(7083650), Some(13189));
     }
 
-    /// `LRG_1075`'s real GRCh38 shape: plus strand **and `lrg_start` 1049**, the
-    /// prepared reference's only placement with `parent_start > 1`. That is
-    /// where the `h - 1 - parent_start` arithmetic can go wrong without any
-    /// other test noticing, and it is not a hypothetical shape — the same record
-    /// is indel-bearing, so it goes through the narrowing path.
-    #[test]
-    fn the_prefix_is_measured_from_parent_start_not_from_one() {
-        let xml = r#"
-          <mapping other_id="NC_000004.12" type="main_assembly">
-            <mapping_span lrg_start="1049" lrg_end="15267" other_start="190173122" other_end="190187909" strand="1">
-              <diff type="lrg_ins" lrg_start="8212" lrg_end="8975" other_start="190180284" other_end="190180285" lrg_sequence="GAGT" other_sequence="-" />
-            </mapping_span>
-          </mapping>
-        "#;
-        let p = parse_lrg_main_assembly_placement(xml).expect("the prefix is a valid affine");
-        assert_eq!(p.parent_start, 1049);
-        assert_eq!(p.nc_start, 190173122, "the anchored end must not move");
-        // 8212 - 1 - 1049 = 7162 bases past the anchor.
-        assert_eq!(p.nc_end, 190173122 + 7162);
-        assert_eq!(p.parent_to_nc(1049), Some(190173122));
-        assert_eq!(p.parent_to_nc(8211), Some(190180284));
-        assert_eq!(p.parent_to_nc(8212), None);
-        // Below `parent_start` was already outside the span and stays outside.
-        assert_eq!(p.parent_to_nc(1048), None);
-    }
+    /// `LRG_792` — 19 indel diffs of both kinds, several clustered within a few
+    /// hundred bases and sized 1–78. Nothing here is a new *shape*; it is the
+    /// record that fails a model which is right about one gap and wrong about
+    /// accumulating them.
+    const LRG_792_MAPPING: &str = r#"
+      <mapping coord_system="GRCh38.p13" other_name="9" other_id="NC_000009.12" other_start="133238219" other_end="133280214" type="main_assembly">
+        <mapping_span lrg_start="1" lrg_end="42144" other_start="133238219" other_end="133280214" strand="-1">
+          <diff type="lrg_ins" lrg_start="22694" lrg_end="22694" other_start="133257521" other_end="133257522" lrg_sequence="G" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25302" lrg_end="25313" other_start="133254914" other_end="133254915" lrg_sequence="12 bases elided" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25322" lrg_end="25331" other_start="133254906" other_end="133254907" lrg_sequence="10 bases elided" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25342" lrg_end="25342" other_start="133254896" other_end="133254897" lrg_sequence="T" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25347" lrg_end="25347" other_start="133254892" other_end="133254893" lrg_sequence="T" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25366" lrg_end="25443" other_start="133254874" other_end="133254875" lrg_sequence="78 bases elided" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25462" lrg_end="25491" other_start="133254856" other_end="133254857" lrg_sequence="30 bases elided" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="25493" lrg_end="25494" other_start="133254855" other_end="133254856" lrg_sequence="AG" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="29198" lrg_end="29199" other_start="133251152" other_end="133251153" lrg_sequence="AG" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="32481" lrg_end="32499" other_start="133247871" other_end="133247872" lrg_sequence="19 bases elided" other_sequence="-" />
+          <diff type="other_ins" lrg_start="32838" lrg_end="32839" other_start="133247532" other_end="133247532" lrg_sequence="-" other_sequence="T" />
+          <diff type="lrg_ins" lrg_start="33643" lrg_end="33647" other_start="133246727" other_end="133246728" lrg_sequence="TGCAC" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="34339" lrg_end="34346" other_start="133246036" other_end="133246037" lrg_sequence="TTAGAGTT" other_sequence="-" />
+          <diff type="other_ins" lrg_start="34642" lrg_end="34643" other_start="133245728" other_end="133245740" lrg_sequence="-" other_sequence="13 bases elided" />
+          <diff type="other_ins" lrg_start="35617" lrg_end="35618" other_start="133244748" other_end="133244752" lrg_sequence="-" other_sequence="AAACA" />
+          <diff type="other_ins" lrg_start="37333" lrg_end="37334" other_start="133243028" other_end="133243031" lrg_sequence="-" other_sequence="CTTT" />
+          <diff type="lrg_ins" lrg_start="38572" lrg_end="38572" other_start="133241789" other_end="133241790" lrg_sequence="T" other_sequence="-" />
+          <diff type="other_ins" lrg_start="39445" lrg_end="39446" other_start="133240916" other_end="133240916" lrg_sequence="-" other_sequence="A" />
+          <diff type="lrg_ins" lrg_start="41404" lrg_end="41405" other_start="133238957" other_end="133238958" lrg_sequence="AG" other_sequence="-" />
+        </mapping_span>
+      </mapping>
+    "#;
 
-    /// An indel `<diff>` whose coordinate cannot be read must **narrow to
-    /// nothing**, not be skipped. Skipping it leaves the span wider than the
-    /// data supports, which is the silently-wrong-coordinate direction this
-    /// whole change exists to close.
     #[test]
-    fn an_unreadable_indel_diff_declines_the_placement() {
-        for tag in [
-            r#"<diff type="lrg_ins" lrg_end="9" other_start="104" other_end="105" />"#,
-            r#"<diff type="lrg_ins" lrg_start="not-a-number" lrg_end="9" />"#,
-            r#"<diff type="other_ins" lrg_start="4" other_start="104" other_end="104" />"#,
-            // The `type` attribute is unreadable in exactly the sense the three
-            // above are, and it fails open unless it is handled: with no
-            // recognised type there is no way to tell an indel from a
-            // `mismatch`, so skipping the element leaves the span wider than
-            // the data supports. `mismatch` is the only value that may be
-            // skipped, and it has its own arm; everything else declines.
-            r#"<diff lrg_start="4" lrg_end="5" other_start="104" other_end="104" />"#,
-            r#"<diff type="lrg_delins" lrg_start="4" lrg_end="5" other_start="104" other_end="104" />"#,
+    fn nineteen_clustered_indels_accumulate_in_order() {
+        let p = parse_lrg_main_assembly_placement(LRG_792_MAPPING).expect("placed");
+        assert_eq!(p.gaps.len(), 19);
+        assert_eq!(p.parent_end(), Some(42144), "the LRG_792g record's length");
+
+        // Each row is (parent coordinate, chromosome coordinate) measured
+        // against the frozen record. They walk through the dense 25 302–25 494
+        // cluster, where the cumulative parent-only total goes 1 → 13 → 23 → 24
+        // → 25 → 103 → 133 → 135 in the space of 200 bases.
+        for (parent, nc) in [
+            (1u64, 133280214u64),
+            (22693, 133257522),
+            (22695, 133257521),
+            (25301, 133254915),
+            (25314, 133254914),
+            (25332, 133254906),
+            (25343, 133254896),
+            (25348, 133254892),
+            (25444, 133254874),
+            (25492, 133254856),
+            (25495, 133254855),
+            // Past the first `other_ins`, so the two kinds are now cancelling.
+            (32840, 133247530),
+            (42144, 133238219),
         ] {
-            let xml = format!(
-                r#"
-              <mapping other_id="NC_000017.11" type="main_assembly">
-                <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1">
-                  {tag}
-                </mapping_span>
-              </mapping>
-            "#
-            );
-            assert!(
-                parse_lrg_main_assembly_placement(&xml).is_none(),
-                "an unreadable indel diff must fail closed: {tag}"
-            );
+            assert_eq!(p.parent_to_nc(parent), Some(nc), "parent {parent}");
+            assert_eq!(p.nc_to_parent(nc), Some(parent), "nc {nc}");
+        }
+
+        // Every parent-only base in the cluster is declined, not approximated.
+        for parent in [22694u64, 25302, 25313, 25322, 25331, 25342, 25366, 25443] {
+            assert_eq!(p.parent_to_nc(parent), None, "parent {parent} is LRG-only");
         }
     }
 
+    /// `LRG_1075` — plus strand **and `lrg_start = 1049`**, the prepared
+    /// reference's only placement whose parent frame does not start at 1, and
+    /// indel-bearing besides. It is where an offset measured from 1 rather than
+    /// from `parent_start` goes wrong with nothing else noticing, and it carries
+    /// the other abutting pair: a 764-base `lrg_ins` ending at 8975 with an
+    /// `other_ins` anchored on that same 8975.
+    const LRG_1075_MAPPING: &str = r#"
+      <mapping coord_system="GRCh38.p13" other_name="4" other_id="NC_000004.12" other_start="190173122" other_end="190187909" type="main_assembly">
+        <mapping_span lrg_start="1049" lrg_end="15267" other_start="190173122" other_end="190187909" strand="1">
+          <diff type="lrg_ins" lrg_start="8212" lrg_end="8975" other_start="190180284" other_end="190180285" lrg_sequence="764 bases elided" other_sequence="-" />
+          <diff type="other_ins" lrg_start="8975" lrg_end="8976" other_start="190180285" other_end="190180988" lrg_sequence="-" other_sequence="704 bases elided" />
+          <diff type="other_ins" lrg_start="9008" lrg_end="9009" other_start="190181022" other_end="190181022" lrg_sequence="-" other_sequence="T" />
+          <diff type="lrg_ins" lrg_start="9238" lrg_end="9238" other_start="190181251" other_end="190181252" lrg_sequence="C" other_sequence="-" />
+          <diff type="other_ins" lrg_start="9277" lrg_end="9278" other_start="190181291" other_end="190181291" lrg_sequence="-" other_sequence="G" />
+          <diff type="other_ins" lrg_start="9346" lrg_end="9347" other_start="190181361" other_end="190181361" lrg_sequence="-" other_sequence="T" />
+          <diff type="lrg_ins" lrg_start="9393" lrg_end="9393" other_start="190181407" other_end="190181408" lrg_sequence="G" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="9412" lrg_end="9412" other_start="190181425" other_end="190181426" lrg_sequence="C" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="9551" lrg_end="9551" other_start="190181563" other_end="190181564" lrg_sequence="T" other_sequence="-" />
+          <diff type="other_ins" lrg_start="10566" lrg_end="10567" other_start="190182579" other_end="190183212" lrg_sequence="-" other_sequence="634 bases elided" />
+          <diff type="lrg_ins" lrg_start="11694" lrg_end="11694" other_start="190184339" other_end="190184340" lrg_sequence="T" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="13091" lrg_end="13091" other_start="190185735" other_end="190185736" lrg_sequence="T" other_sequence="-" />
+          <diff type="lrg_ins" lrg_start="15053" lrg_end="15054" other_start="190187696" other_end="190187697" lrg_sequence="AA" other_sequence="-" />
+        </mapping_span>
+      </mapping>
+    "#;
+
     #[test]
-    fn no_placement_when_the_affine_exact_prefix_is_empty() {
-        // The first LRG base is itself unaligned, so there is no prefix to keep
-        // and the placement is declined outright — the same answer the
-        // gapped-mapping guard gives, reached the same way.
-        let xml = r#"
-          <mapping other_id="NC_000017.11" type="main_assembly">
-            <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="108" strand="1">
-              <diff type="lrg_ins" lrg_start="1" lrg_end="1" other_start="99" other_end="100" lrg_sequence="A" other_sequence="-" />
-            </mapping_span>
-          </mapping>
-        "#;
-        assert!(parse_lrg_main_assembly_placement(xml).is_none());
+    fn the_walk_is_measured_from_parent_start_not_from_one() {
+        let p = parse_lrg_main_assembly_placement(LRG_1075_MAPPING).expect("placed");
+        assert_eq!(p.parent_start, 1049);
+        assert_eq!(p.parent_end(), Some(15267), "the LRG_1075g record's length");
+        // The reason `parent_end` exists: the chromosome side is 14 788 bases
+        // and the parent side 14 219, so neither width answers the question.
+        assert_eq!(p.nc_end - p.nc_start + 1, 14788);
+        assert_eq!(p.parent_start + (p.nc_end - p.nc_start), 15836);
+
+        assert_eq!(p.parent_to_nc(1049), Some(190173122));
+        assert_eq!(p.parent_to_nc(1048), None, "below the placed span");
+        assert_eq!(p.parent_to_nc(8211), Some(190180284));
+        // The 764-base `lrg_ins`, then the 704-base `other_ins` flush against
+        // it: 8976 resumes one past the chromosome run's end.
+        assert_eq!(p.parent_to_nc(8212), None);
+        assert_eq!(p.parent_to_nc(8975), None);
+        assert_eq!(p.parent_to_nc(8976), Some(190180989));
+        // …where the affine said 190181049, 60 bases out.
+        assert_eq!(p.nc_to_parent(190180989), Some(8976));
+        assert_eq!(p.nc_to_parent(190180500), None, "chromosome-only");
+        assert_eq!(p.parent_to_nc(15267), Some(190187909));
     }
 
     /// The discriminating case: a `mismatch` diff substitutes a base and shifts
-    /// **nothing**, so the affine still maps every coordinate correctly and the
-    /// span must not be narrowed. 119 of the prepared reference's 1 294 LRG
-    /// records are in exactly this state (against 46 carrying an indel diff);
-    /// keying the horizon on any `<diff>` at all would truncate all 119 for no
-    /// reason, and the bases those mismatches name are already served from the
-    /// record itself since #1490.
+    /// **nothing**, so the placement must carry no gap for it. 119 of the 1 294
+    /// records are mismatch-only; keying on any `<diff>` would model 165 records
+    /// where 46 is correct, and the bases those mismatches name are served from
+    /// the LRG's own record anyway since #1490.
     #[test]
-    fn mismatch_diffs_alone_do_not_narrow_a_placement() {
+    fn mismatch_diffs_alone_leave_the_placement_affine() {
         let xml = r#"
           <mapping other_id="NC_000017.11" type="main_assembly">
             <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1">
@@ -4207,23 +4316,20 @@ mod tests {
             </mapping_span>
           </mapping>
         "#;
-        let p = parse_lrg_main_assembly_placement(xml)
-            .expect("a mismatch-only mapping is still a valid affine");
-        assert_eq!(p.parent_start, 1);
-        assert_eq!(p.nc_start, 100);
-        assert_eq!(p.nc_end, 109);
-        // And it still maps: the mismatch changes a base, not a coordinate.
+        let p = parse_lrg_main_assembly_placement(xml).expect("placed");
+        assert!(p.gaps.is_empty(), "a mismatch shifts no coordinate");
+        assert_eq!((p.nc_start, p.nc_end), (100, 109));
+        assert_eq!(p.parent_end(), Some(10));
         assert_eq!(p.nc_to_parent(103), Some(4));
         assert_eq!(p.parent_to_nc(4), Some(103));
     }
 
     /// An indel `<diff>` under a *non*-main mapping (the GRCh37 `other_assembly`
     /// mapping, or a transcript mapping) says nothing about the main-assembly
-    /// alignment and must not narrow it. Across the prepared reference the
-    /// non-main mappings carry 967 `lrg_ins` and 860 `other_ins` diffs the
-    /// main-assembly mappings do not.
+    /// alignment. Across the prepared reference the non-main mappings carry 967
+    /// `lrg_ins` and 860 `other_ins` diffs the main-assembly mappings do not.
     #[test]
-    fn an_indel_diff_under_another_mapping_does_not_narrow_the_placement() {
+    fn an_indel_diff_under_another_mapping_does_not_gap_the_placement() {
         let xml = r#"
           <mapping coord_system="GRCh37.p13" other_id="NC_000017.10" type="other_assembly">
             <mapping_span lrg_start="1" lrg_end="10" other_start="1" other_end="9" strand="1">
@@ -4234,41 +4340,143 @@ mod tests {
             <mapping_span lrg_start="1" lrg_end="10" other_start="100" other_end="109" strand="1" />
           </mapping>
         "#;
-        let p = parse_lrg_main_assembly_placement(xml)
-            .expect("an indel in the GRCh37 mapping must not decline the GRCh38 placement");
-        assert_eq!(p.nc_start, 100);
-        assert_eq!(p.nc_end, 109);
+        let p = parse_lrg_main_assembly_placement(xml).expect("placed");
+        assert!(p.gaps.is_empty());
+        assert_eq!((p.nc_start, p.nc_end), (100, 109));
     }
 
-    /// End-to-end provider path: an indel-bearing LRG XML resolves to the
-    /// narrowed placement, so a coordinate past the horizon reaches
-    /// `VariantProjector::reanchor_genome_to_parent`'s "endpoint falls outside
-    /// the placed genomic span" arm and is declined with
-    /// `UnsupportedProjection` instead of being stamped, drifted, under the
-    /// `LRG_` accession (#480/#655).
+    /// Fail closed on data the model cannot express, in all four ways it can
+    /// arrive. Keeping a wider span than the data supports is a silently wrong
+    /// coordinate, which is the direction this whole change exists to close.
     #[test]
-    fn provider_narrows_an_indel_bearing_lrg_placement() {
+    fn an_unmodellable_mapping_declines_rather_than_guesses() {
+        for (why, span_body, lrg_end) in [
+            (
+                "an indel diff with no `lrg_start`",
+                r#"<diff type="lrg_ins" lrg_end="9" other_start="104" other_end="105" />"#,
+                "12",
+            ),
+            (
+                "an indel diff whose coordinate is not a number",
+                r#"<diff type="lrg_ins" lrg_start="not-a-number" lrg_end="9" />"#,
+                "12",
+            ),
+            (
+                "an `other_ins` with no chromosome extent",
+                r#"<diff type="other_ins" lrg_start="4" lrg_end="5" />"#,
+                "12",
+            ),
+            (
+                "a diff type this parser has never seen",
+                r#"<diff type="inversion" lrg_start="4" lrg_end="5" other_start="104" other_end="105" />"#,
+                "10",
+            ),
+            (
+                // No diff at all, and the two frames disagree by two bases: the
+                // record claims unaligned bases it never declares, so the walk
+                // cannot reconstruct `lrg_end` and the placement is refused.
+                "a width mismatch no diff accounts for",
+                "",
+                "12",
+            ),
+            (
+                // Two indel diffs anchored on one LRG coordinate. The two kinds
+                // read their anchor differently — a flank for `other_ins`, the
+                // first unaligned base for `lrg_ins` — so at equal anchors the
+                // order is genuinely undetermined and either choice would invent
+                // a reading the record does not state. No LRG has this shape
+                // (0 of 1 294, measured), so decline rather than pick.
+                "two indel diffs sharing one lrg_start",
+                r#"<diff type="other_ins" lrg_start="4" lrg_end="5" other_start="104" other_end="104" lrg_sequence="-" other_sequence="T" />
+                  <diff type="lrg_ins" lrg_start="4" lrg_end="5" other_start="103" other_end="104" lrg_sequence="AA" other_sequence="-" />"#,
+                "11",
+            ),
+        ] {
+            let xml = format!(
+                r#"
+              <mapping other_id="NC_000017.11" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="{lrg_end}" other_start="100" other_end="109" strand="1">
+                  {span_body}
+                </mapping_span>
+              </mapping>
+            "#
+            );
+            assert!(
+                parse_lrg_main_assembly_placement(&xml).is_none(),
+                "must fail closed: {why}"
+            );
+        }
+    }
+
+    /// End-to-end provider path: an indel-bearing LRG XML resolves to a
+    /// gap-aware placement, so a coordinate past the first indel is re-anchored
+    /// onto the base the `LRG_292g` record actually names rather than one two
+    /// bases off — the projection defect #1499 reported.
+    #[test]
+    fn provider_resolves_a_gapped_lrg_placement() {
         let (mut provider, dir) = build_provider_with_test_genome();
         let xml_dir = dir.path().join("lrg");
         std::fs::create_dir_all(&xml_dir).unwrap();
-        std::fs::write(xml_dir.join("LRG_292.xml"), LRG_292_INDEL_MAPPING).unwrap();
+        std::fs::write(xml_dir.join("LRG_292.xml"), LRG_292_MAPPING).unwrap();
         std::fs::write(xml_dir.join("LRG_999.xml"), LRG_XML_SAMPLE).unwrap();
         provider.lrg_xml_dir = Some(xml_dir);
 
         let indel = crate::hgvs::variant::Accession::new("LRG", "292", None);
-        let p = provider
-            .genomic_placement(&indel)
-            .expect("the affine-exact prefix is still placed");
-        assert_eq!((p.nc_start, p.nc_end), (43204814, 43217981));
-        assert_eq!(p.parent_to_nc(160875), None);
-        // The cache round-trips the narrowed placement, not the raw span.
-        let again = provider.genomic_placement(&indel).expect("cached");
-        assert_eq!(again, p);
+        let p = provider.genomic_placement(&indel).expect("placed");
+        assert_eq!((p.nc_start, p.nc_end), (43024295, 43217981));
+        assert_eq!(p.gaps.len(), 3);
+        // #1499's own worked coordinate: `LRG_292:g.160875`.
+        assert_eq!(p.parent_to_nc(160875), Some(43057109));
+        // The cache round-trips the gap list, not just the span.
+        assert_eq!(provider.genomic_placement(&indel).as_ref(), Some(&p));
 
-        // Control: the indel-free record beside it is unaffected.
+        // Control: the indel-free record beside it is untouched.
         let plain = crate::hgvs::variant::Accession::new("LRG", "999", None);
         let q = provider.genomic_placement(&plain).expect("placed");
+        assert!(q.gaps.is_empty());
         assert_eq!((q.nc_start, q.nc_end), (50182096, 50206639));
+    }
+
+    /// `get_sequence_length` for a record-less parent must report the parent's
+    /// own extent, which is the gap list's answer and not the chromosome span's
+    /// width (#1494/#1503/#1833).
+    ///
+    /// Latent on the shipped reference — every one of its 1 294 LRG records has
+    /// an `LRG_<N>g` record, so nothing reaches this branch, and every #728
+    /// derived `NG_` is gapless, where the two answers coincide. Pinned anyway
+    /// because the arithmetic it replaced was wrong by construction and a latent
+    /// wrong answer is one provider change away from being live.
+    #[test]
+    fn a_record_less_parents_length_comes_from_the_gap_list() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        // 12 LRG bases onto a 10-base chromosome window: two of them are an
+        // `lrg_ins`, so the parent runs to 12 where the chromosome side is 10.
+        std::fs::write(
+            xml_dir.join("LRG_998.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_TEST.1" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="12" other_start="1" other_end="10" strand="1">
+                  <diff type="lrg_ins" lrg_start="11" lrg_end="12" other_start="10" other_end="11" lrg_sequence="CG" other_sequence="-" />
+                </mapping_span>
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        // The discriminator: no `LRG_998g` record, so the length must come from
+        // the placement rather than from a FASTA entry.
+        assert!(provider.own_record("LRG_998").is_none());
+        assert_eq!(provider.get_sequence_length("LRG_998").unwrap(), 12);
+        // What the pre-#1833 arithmetic said, for contrast: `parent_start +
+        // (nc_end - nc_start)` = 1 + 9 = 10, two bases short of the parent.
+        let p = provider
+            .genomic_placement(&crate::hgvs::variant::Accession::new("LRG", "998", None))
+            .expect("placed");
+        assert_eq!(p.parent_start + (p.nc_end - p.nc_start), 10);
+        assert_eq!(p.parent_end(), Some(12));
     }
 
     /// End-to-end provider path: `genomic_placement` reads the LRG XML from the
@@ -4319,8 +4527,12 @@ mod tests {
     /// `LRG_292:g.160875` served `T` for the record's `G`, a `+2` shift.
     ///
     /// The fixture mirrors that shape: a 12-base LRG record placed on a 10-base
-    /// chromosome window (a 2-base LRG insertion the affine cannot represent),
-    /// with disjoint alphabets so a single served base names which path ran.
+    /// chromosome window, with disjoint alphabets so a single served base names
+    /// which path ran. The 2-base difference is spelled as the `lrg_ins` `<diff>`
+    /// a real LRG carries — since #1833 the parser reads that list and refuses a
+    /// span whose declared `lrg_end` its gap list cannot reconstruct, so an
+    /// undeclared width mismatch would now yield *no* placement and quietly cost
+    /// this test its discriminator (asserted below).
     #[test]
     fn lrg_with_its_own_record_is_served_from_the_record_not_the_placement() {
         let dir = tempdir().unwrap();
@@ -4351,7 +4563,9 @@ mod tests {
             xml_dir.join("LRG_999.xml"),
             r#"
               <mapping coord_system="GRCh38" other_id="NC_000017.11" type="main_assembly">
-                <mapping_span lrg_start="1" lrg_end="12" other_start="1" other_end="10" strand="1" />
+                <mapping_span lrg_start="1" lrg_end="12" other_start="1" other_end="10" strand="1">
+                  <diff type="lrg_ins" lrg_start="11" lrg_end="12" other_start="10" other_end="11" lrg_sequence="CG" other_sequence="-" />
+                </mapping_span>
               </mapping>
             "#,
         )
@@ -4689,6 +4903,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             nc_start: 1000,
             nc_end: 1099,
             strand: crate::reference::transcript::Strand::Unknown,
+            gaps: Vec::new(),
         };
         // In-span coordinate, but unknown strand → decline.
         assert_eq!(placement.nc_to_parent(1000), None);

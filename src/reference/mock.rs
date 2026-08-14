@@ -1058,6 +1058,7 @@ mod tests {
             nc_start: 1000,
             nc_end: 1008,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         };
         let mut provider = JsonProvider::new();
         provider.add_genomic_placement("NG_900.1", mk(11)); // GRCh38

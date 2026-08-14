@@ -103,6 +103,7 @@ fn bare_ng_genomic_projects_onto_single_transcript_plus_strand() {
             nc_start: 1000,
             nc_end: 1013,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);
@@ -147,6 +148,7 @@ fn bare_ng_genomic_projects_onto_single_transcript_minus_strand() {
             nc_start: 1000,
             nc_end: 1013,
             strand: Strand::Minus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);
@@ -191,6 +193,7 @@ fn project_normalized_de_anchors_bare_ng_genomic() {
             nc_start: 1000,
             nc_end: 1013,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);
@@ -245,6 +248,7 @@ fn ng_context_coding_input_keeps_pivot_path_unchanged() {
             nc_start: 1000,
             nc_end: 1013,
             strand: Strand::Plus,
+            gaps: Vec::new(),
         },
     );
     let vp = VariantProjector::new(projector, provider);

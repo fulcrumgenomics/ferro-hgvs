@@ -62,5 +62,5 @@ pub use loader::{detect_genome_build, TranscriptDb};
 pub use mock::{JsonProvider, MockProvider};
 pub use multi_fasta::MultiFastaProvider;
 pub use protein::ProteinCache;
-pub use provider::{GenomicPlacement, ReferenceProvider};
+pub use provider::{AlignmentGap, AlignmentGapKind, GenomicPlacement, ReferenceProvider};
 pub use transcript::{Exon, Strand, Transcript};
