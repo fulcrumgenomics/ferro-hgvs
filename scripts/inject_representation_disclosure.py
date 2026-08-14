@@ -40,6 +40,23 @@ about the decline vocabulary.
 The bullet is matched to its commit by the **PR number** GitHub puts in the squash subject,
 which is the one token both sides are guaranteed to share.
 
+## Correcting a disclosure that is already merged
+
+A trailer lives in a commit message, so once it is on `main` it cannot be corrected without
+rewriting released history. The changelog copy, on the other hand, is **rendered by this
+script on every run** -- which makes the script, not `CHANGELOG.md`, the place a correction
+has to live. `EDITORIAL_CORRECTIONS` below is that register: an entry is appended under its
+bullet after the trailer's own words, inside the same blockquote, opening with a label that
+says whose words it is. Hand-editing `CHANGELOG.md` instead fails twice over -- release-plz
+discards it when it regenerates the pending section, and `--check` reports it as drift
+against the trailer.
+
+The first of those two reaches only the **pending** section. A released section is never
+regenerated, so registering a correction against a block that is already on disk is
+*reported* as drift rather than repaired -- `inject` judges an existing block, it does not
+rewrite one. Remove that block from `CHANGELOG.md` first and the re-run attaches the
+correction with it.
+
 ## Usage
 
     python scripts/inject_representation_disclosure.py --check      # CI: is CHANGELOG.md current?
@@ -84,6 +101,56 @@ HEADING_RE = re.compile(r"^(?P<hashes>#{2,})\s+(?P<title>.*\S)\s*$")
 
 #: The PR number GitHub writes into a squash subject, in the bullet's link or bare.
 PR_RE = re.compile(r"\(#(?P<number>\d+)\)|\[#(?P<linked>\d+)\]")
+
+#: Editorial corrections to a merged disclosure, keyed by PR number, one string per
+#: paragraph.
+#:
+#: **Why this is a register and not a `CHANGELOG.md` edit.** The trailer is immutable once
+#: its commit is on `main`, and correcting it would mean rewriting released history. Editing
+#: the changelog copy instead fails twice: release-plz regenerates the pending section on
+#: every push to `main`, and `--check` reports the edited block as drift against the trailer
+#: it no longer matches. What *is* durable is this script -- it re-renders the block on every
+#: run, so a correction registered here survives every regeneration and is what `--check`
+#: then demands.
+#:
+#: **The trailer's own words stay verbatim.** A correction is rendered as a further
+#: paragraph in the same blockquote and must open by naming itself as editorial and citing
+#: the issue that raised it, because whose words these are is the distinction the release
+#: checklist turns on -- not which block they sit in.
+#:
+#: **Add an entry only to correct a statement of fact**: something the trailer got wrong, or
+#: a cost it did not disclose. Not to summarise it, re-word it, or improve its prose. Append
+#: a paragraph rather than rewriting one, so two corrections to one disclosure conflict
+#: visibly instead of overwriting each other.
+EDITORIAL_CORRECTIONS: dict[str, list[str]] = {
+    "1835": [
+        "**Editorial correction (#1886) — not the trailer's words.** The trailer names\n"
+        "`pre-v0.15.0` as the output `FERRO_PARTITION=live` reproduces. The release carrying\n"
+        "this change is the one heading this section, so read that as *output from before\n"
+        "this change* — every release up to and including v0.13.1. `release-plz.toml` sets\n"
+        "`features_always_increment_minor`, so which release a `feat:` lands in is not\n"
+        "knowable when its trailer is written; naming one is now against house style, and\n"
+        "`CONTRIBUTING.md` asks for the version-free phrasing instead.",
+        "**Editorial correction (#1886) — not the trailer's words.** The trailer discloses\n"
+        "confluence only. The flip also moves **2 rows of 932** on the HGVS spec corpus,\n"
+        "measured per arm at `45820926` against a prepared GRCh38 reference, 3' direction,\n"
+        "with the two rows #1846 cannot terminate on excluded: `live` 646, `shadow` 646,\n"
+        "`canonical` 642, **`canonical-coalesced` — the new default — 644**. Two rows stop\n"
+        "matching the spec's stated form and none starts, and both are named here because\n"
+        "the bare count reads as a regression and neither row is one. `DNA/delins.md`\n"
+        "publishes one variant as two corpus rows — the spanning\n"
+        "`c.850_901delinsTTCCTCGATGCCTG` that `:47` recommends, and the split `:46` calls\n"
+        'its "alternative description" — and both echoed themselves before; the new\n'
+        "default converges the split onto the spanning form, which is what any change that\n"
+        "converges a published pair must cost. The other row,\n"
+        "`LRG_199t1:c.992_1004delinsAC`, is harvested from `consultation/SVD-WG010.md` —\n"
+        "the **rejected** proposal, whose answer `tests/it/spec_worked_example_rules.rs`\n"
+        "already pins as one ferro must not produce — and the new default no longer echoes\n"
+        "it either. Read this as neither more nor less conformant: the measurement supports\n"
+        "neither claim. 3' only, because #1879 removes the 5' direction from the public\n"
+        "surface in this same release.",
+    ],
+}
 
 
 def squash_commits(repo: Path) -> dict[str, str]:
@@ -216,6 +283,28 @@ def wrap_disclosure(value: str) -> list[str]:
     return [f"{DISCLOSURE_PREFIX}{line}".rstrip() for line in value.splitlines()]
 
 
+def wrap_correction(paragraphs: list[str]) -> list[str]:
+    """Render `EDITORIAL_CORRECTIONS` paragraphs as further lines of the same blockquote.
+
+    Inside the trailer's own blockquote rather than beside it, deliberately. A correction
+    that a reader can meet without the statement it corrects is worse than none, and every
+    other placement can be separated from it: a paragraph after the block is dropped the next
+    time release-plz regenerates the section, and one before it re-orders on the next
+    trailer.
+
+    What keeps the trailer's words distinguishable is therefore the **label**, which each
+    paragraph carries, not the block boundary -- so each paragraph is separated by a bare
+    `  >` and must open by naming itself. That is also why this returns the separator: a
+    correction lazily continuing the trailer's last line would read as the author's own
+    sentence, which is the one thing this must never do.
+    """
+    lines: list[str] = []
+    for paragraph in paragraphs:
+        lines.append(DISCLOSURE_PREFIX.rstrip())
+        lines.extend(f"{DISCLOSURE_PREFIX}{line}".rstrip() for line in paragraph.splitlines())
+    return lines
+
+
 def inject(changelog: str, by_pr: dict[str, str]) -> tuple[str, list[str], list[str]]:
     """Return `(rewritten changelog, changed bullets, problems)`.
 
@@ -280,21 +369,26 @@ def inject(changelog: str, by_pr: dict[str, str]) -> tuple[str, list[str], list[
             )
             continue
 
-        wanted = wrap_disclosure(value)
+        wanted = wrap_disclosure(value) + wrap_correction(EDITORIAL_CORRECTIONS.get(number, []))
         if existing:
             # Already carried a block: judge it rather than trust it. The trailer in the
-            # commit message is the single source of truth — editing the changelog copy
-            # instead makes the two disagree with nothing to notice, which is the failure
-            # this whole script exists to remove. Fix by correcting the trailer and
-            # re-running, not by editing `CHANGELOG.md`.
+            # commit message is the single source of truth for its own words — editing the
+            # changelog copy instead makes the two disagree with nothing to notice, which is
+            # the failure this whole script exists to remove. Fix by correcting the trailer
+            # and re-running, not by editing `CHANGELOG.md`; and where the trailer is already
+            # merged and so cannot be corrected, by registering the correction in
+            # `EDITORIAL_CORRECTIONS`, which is rendered here and so cannot be regenerated
+            # away.
             if existing != wanted:
                 problems.append(
                     f"#{number}'s disclosure in the changelog no longer matches its "
-                    "`Representation-Change:` trailer. The trailer is the source of "
-                    "truth; re-run `python scripts/inject_representation_disclosure.py` "
-                    "after correcting it.\n"
+                    "`Representation-Change:` trailer (plus any registered editorial "
+                    "correction). Those two are the source of truth, and a re-run judges an "
+                    "existing block rather than rewriting it: revert the changelog edit, or "
+                    "delete the block and let release-plz or a re-run of "
+                    "`python scripts/inject_representation_disclosure.py` re-attach it.\n"
                     f"  changelog says: {_flatten(existing)[:160]!r}\n"
-                    f"  trailer says:   {_flatten(wanted)[:160]!r}"
+                    f"  should say:     {_flatten(wanted)[:160]!r}"
                 )
             continue
 
