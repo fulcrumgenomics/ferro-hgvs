@@ -65,8 +65,9 @@
 //!    quote the zero.
 //! 4. **…and only at the scale it builds them** (#1460). The families are drawn
 //!    against 20-mers, so a change gated on *length* rather than on shape sees the
-//!    same path on both sides no matter how many families exist. #1403 caps a
-//!    partition at `MAX_SPLIT_BLOCK` (1024) and measured a guaranteed zero here
+//!    same path on both sides no matter how many families exist. #1403 capped a
+//!    partition at `MAX_SPLIT_BLOCK` — **1024 at the time**, 4096 since #1899
+//!    derived it from `MAX_CANONICAL_WINDOW` — and measured a guaranteed zero here
 //!    even after the conflict families landed. `long_corpus_sequences` is the
 //!    answer, and it is deliberately narrow: two cores, one family, 16 rows. Adding
 //!    scale is expensive in a way adding a family is not — check the dump cost
@@ -140,7 +141,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection};
+use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection, MAX_CANONICAL_BLOCK};
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};
@@ -636,25 +637,66 @@ const PROTEIN_FAMILIES: &[(&str, &str)] = &[
 /// of the block being partitioned, not on how its members are arranged.
 const LONG_FAMILY: (&str, &str) = (
     "long_block_inversion",
-    "#1403 — a near-palindromic block straddling the MAX_SPLIT_BLOCK cap",
+    "#1403 — a near-palindromic block straddling the canonical block limit",
 );
 
-/// The long cores, as `(label, sequence)`. Two lengths that straddle the cap the
-/// normalizer applies at 1024 bases (`merge::MAX_SPLIT_BLOCK`): one block that
-/// fits under it and one that does not, which is the pair a change to the cap moves
-/// between. The exact boundary is the one `partition_block`'s own comment records —
-/// 1024 confluent, 1026 not.
+/// The long cores, as `(label, sequence)`: one block the canonicalizer accepts
+/// and one it refuses, which is the pair a change to the limit moves between.
 ///
-/// The **label** is what lands in the dump's `reference` column, not the sequence:
-/// a kilobase core would otherwise be repeated verbatim on every row of the dump.
-/// Labels are as good a row identity as the sequence — they only have to be unique
-/// and stable — and the short-core rows are untouched, so no existing key moves.
+/// # Derived from the constant, never restated (#1925)
+///
+/// These used to be the literals `[1024, 1100]`, straddling `MAX_SPLIT_BLOCK`
+/// when that was `1024`. #1899 derived that cap from `MAX_CANONICAL_WINDOW`,
+/// taking it to **4096**, and both cores landed on the same side of it — so the
+/// one family whose point is *size* stopped measuring size, and the guard below
+/// went on passing because it restated `1024` as a literal of its own.
+///
+/// Two things changed as a result, and the second matters more than the first.
+/// The lengths are now computed from [`MAX_CANONICAL_BLOCK`], so the pair cannot
+/// be left behind again. And they straddle the limit that **actually fires on
+/// the shipping path** — the padded-window test — rather than `MAX_SPLIT_BLOCK`,
+/// whose only functional reader also demands `reference.len() != result.len()`
+/// and so was never reachable by this family's equal-length `inv` at any size.
+///
+/// # The gate measures the CHANGED INTERVAL, not the core length
+///
+/// This is the trap, and the first attempt at this fix fell into it: cores of
+/// exactly `MAX_CANONICAL_BLOCK` and `+2` produced **byte-identical behaviour**,
+/// because the interval the window is built around runs from the first differing
+/// base to the last, and [`near_palindromic_core`] puts those
+/// [`EDGE_PERTURBATION`] bases in from each end. So a core of `n` presents a
+/// changed interval of `n - 2 * EDGE_PERTURBATION`, and cores straddling the
+/// limit give intervals that are both comfortably under it.
+///
+/// Measured before and after: at cores `[3840, 3842]` both rows normalized
+/// identically (`g.257_4096inv` and `g.257_4098inv` each collapsing to four
+/// substitutions); the corpus straddled nothing while looking like it did. The
+/// cores below are offset so the **intervals** land at the limit and one base
+/// past it.
+///
+/// The margin is `2`, not `1`: [`near_palindromic_core`] refuses an odd length,
+/// and the limit itself is even.
+///
+/// The **label** is what lands in the dump's `reference` column, not the
+/// sequence: a kilobase core would otherwise be repeated verbatim on every row.
+/// Labels are as good a row identity as the sequence — they only have to be
+/// unique and stable.
 fn long_corpus_sequences() -> Vec<(String, String)> {
-    [1024usize, 1100]
+    let at_limit = MAX_CANONICAL_BLOCK as usize + 2 * EDGE_PERTURBATION;
+    [at_limit, at_limit + 2]
         .into_iter()
         .map(|len| (format!("nearpalindrome_{len}"), near_palindromic_core(len)))
         .collect()
 }
+
+/// How far in from each end [`near_palindromic_core`] breaks the palindrome.
+///
+/// Load-bearing for [`long_corpus_sequences`], not a free parameter: it sets the
+/// gap between a core's length and the width of the changed interval the
+/// normalizer's window is actually built around (`len - 2 * EDGE_PERTURBATION`),
+/// which is what decides whether the long cores straddle the gate or merely look
+/// as though they do.
+const EDGE_PERTURBATION: usize = 10;
 
 /// A near-palindromic core: an exact reverse-complement palindrome with two
 /// positions perturbed, so inverting the whole core changes exactly **four** bases
@@ -690,7 +732,7 @@ fn near_palindromic_core(len: usize) -> String {
     // reverse complement, so two of them give the four the shape is named for.
     let mirror: Vec<u8> = (0..half).rev().map(|i| complement(seq[i])).collect();
     seq.extend(mirror);
-    for offset in [10, half + 7] {
+    for offset in [EDGE_PERTURBATION, half + 7] {
         seq[offset] = complement(seq[offset]);
     }
     String::from_utf8(seq).expect("ACGT is valid UTF-8")
@@ -1014,8 +1056,8 @@ fn dump(seeds: u32) -> Vec<Row> {
             // `EXON_SPANS` is a fixed 7/7/6 split of a **20-base** core, chosen
             // so the junctions land inside the shapes the short corpus builds.
             // `multi_exon_provider` hands `Transcript::new` the whole core
-            // regardless, so on a 1024-base core the transcript declares 1024
-            // bases while its exon table maps 20 and `spliced_genomic` emits
+            // regardless, so on a long core the transcript declares the core's
+            // full length while its exon table maps 20 and `spliced_genomic` emits
             // only those 20 — every position past 20 is declared and unmapped.
             // Rows drawn against that provider are not wrong-looking (all eight
             // came out as fixed points) but they are not measuring anything
@@ -1653,7 +1695,7 @@ fn provider_for(axis: &str, core: &str) -> MockProvider {
 /// Split out of [`normalize_one`] so [`dump`] can build it **once per cell**
 /// instead of once per row. `provider_for` is not cheap: every call re-pads the
 /// core with 512 bases (`padded`), and the coding and multi-exon axes also build a
-/// `Transcript` — on the 1024-base long cores that is a ~1.5 kB copy per input, and
+/// `Transcript` — on the long cores that is a multi-kilobase copy per input, and
 /// the corpus has tens of thousands of rows. Nothing about it varies with the row.
 fn normalizer_for(axis: &str, core: &str, direction: ShuffleDirection) -> Normalizer<MockProvider> {
     Normalizer::with_config(
@@ -2117,8 +2159,8 @@ mod tests {
             .collect();
         let mut label_keyed = 0usize;
         for row in dump(2) {
-            // A label is not over `ACGT` — `revcomp_sep0_at0` and
-            // `nearpalindrome_1024` both fail this — so it is the one predicate
+            // A label is not over `ACGT` — `revcomp_sep0_at0` and any
+            // `nearpalindrome_<n>` both fail this — so it is the one predicate
             // that separates the two kinds of string without consulting the map.
             //
             // The alphabet is per-axis, and that is load-bearing rather than a
@@ -2365,20 +2407,45 @@ mod tests {
         parse_hgvs(input).map(|v| of(&v)).unwrap_or(0)
     }
 
-    /// The corpus must build a block past the normalizer's split cap (#1460).
+    /// The corpus must build a block past the normalizer's length gate (#1460).
     ///
-    /// The cap is a *length* gate — `merge.rs` returns the un-partitioned whole
-    /// block once either side exceeds `MAX_SPLIT_BLOCK` — so a corpus of 20-mers
-    /// takes the same path on both sides of any change to it, by construction.
-    /// That is why #1403 measured `0 of 18,432` here and why the zero was
-    /// guaranteed rather than informative. Fixing #1456 added the shapes that were
-    /// missing; this adds the scale.
+    /// The gate is a *length* one — `canonicalize_from_sequence` pads the changed
+    /// interval and refuses once the window exceeds `MAX_CANONICAL_WINDOW` — so a
+    /// corpus of 20-mers takes the same path on both sides of any change to it, by
+    /// construction. That is why #1403 measured `0 of 18,432` here and why the zero
+    /// was guaranteed rather than informative. Fixing #1456 added the shapes that
+    /// were missing; this adds the scale.
+    ///
+    /// # The bound is IMPORTED, and that is the whole point (#1925)
+    ///
+    /// This test used to open `const SPLIT_CAP: u64 = 1024;` with a comment saying
+    /// to update it by hand if the constant moved. The constant moved — #1899 took
+    /// `MAX_SPLIT_BLOCK` to 4096 — and this kept passing on `1100 > 1024` while
+    /// both long cores sat below the real gate. **A guard that restates the value
+    /// it guards cannot observe that value changing**, and a comment asking a
+    /// future reader to notice is not a mitigation; it is the defect written down.
+    ///
+    /// It also now names the gate that fires on the shipping path.
+    /// `MAX_SPLIT_BLOCK`'s only functional reader additionally requires
+    /// `reference.len() != result.len()`, and this family's whole-core `inv` is
+    /// equal-length, so it could never have tripped that cap at any size — the
+    /// assertion was measuring a threshold this corpus cannot reach even when the
+    /// number is right.
+    ///
+    /// # …and the STRADDLE is asserted, not left to the cores' arithmetic
+    ///
+    /// Importing the bound fixes half of it. The other half is that the two long
+    /// cores must land on **opposite sides** of the gate, which is a relation
+    /// between them and not a property of either — no length assertion can see
+    /// it, because the gate reads the changed interval and a length assertion
+    /// reads the core. The third assertion below pins that relation directly,
+    /// and it is the one that fails if the `2 * EDGE_PERTURBATION` offset in
+    /// [`long_corpus_sequences`] is dropped.
     #[test]
     fn the_corpus_emits_a_block_past_the_split_cap() {
-        // `MAX_SPLIT_BLOCK` is crate-private (`src/normalize/merge.rs`), so
-        // the bound is restated rather than imported. If it ever moves, this test
-        // is measuring the wrong threshold and should be updated with it.
-        const SPLIT_CAP: u64 = 1024;
+        use std::collections::BTreeSet;
+
+        let split_cap = MAX_CANONICAL_BLOCK as u64;
         let rows = dump(1);
         let genomic: Vec<&Row> = rows.iter().filter(|row| row.axis == "g").collect();
         let longest = genomic
@@ -2387,8 +2454,8 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(
-            longest > SPLIT_CAP,
-            "the longest block the corpus builds is {longest} bases, under the {SPLIT_CAP}-base \
+            longest > split_cap,
+            "the longest block the corpus builds is {longest} bases, under the {split_cap}-base \
              split cap — so every row takes the same path on both sides of a change to it"
         );
 
@@ -2401,18 +2468,57 @@ mod tests {
         const SENTINELS: [&str; 3] = ["<parse-error>", "<declined>", "<panic>"];
         let past_cap: Vec<&&Row> = genomic
             .iter()
-            .filter(|row| longest_span(&row.input) > SPLIT_CAP)
+            .filter(|row| longest_span(&row.input) > split_cap)
             .collect();
-        let measured = past_cap
+        let measured: Vec<&Row> = past_cap
             .iter()
             .filter(|row| !SENTINELS.contains(&row.output.as_str()))
-            .count();
+            .map(|row| **row)
+            .collect();
         assert!(
-            measured > 0,
-            "all {} rows past the {SPLIT_CAP}-base cap normalized to a sentinel, so the corpus \
+            !measured.is_empty(),
+            "all {} rows past the {split_cap}-base cap normalized to a sentinel, so the corpus \
              builds the scale but measures nothing at it: {:?}",
             past_cap.len(),
             past_cap.iter().map(|r| &r.output).collect::<Vec<_>>()
+        );
+
+        // Measuring *at* the scale is still not STRADDLING the gate, and neither
+        // assertion above can tell those apart. Both read a **length** —
+        // `longest_span` is the span the input names, which is the core — while
+        // the gate reads the **changed interval**, which `near_palindromic_core`
+        // leaves `2 * EDGE_PERTURBATION` bases narrower than the core it is cut
+        // from. Drop that offset from `long_corpus_sequences` and the cores sit
+        // at exactly the limit and `+2`, with *both* intervals comfortably under
+        // it: `longest` is still past the cap, neither row is a sentinel, and the
+        // two cores derive identically. The corpus would straddle nothing while
+        // every assertion above stayed green — #1925 recurring one level up, and
+        // measured: that sabotage passes without this.
+        //
+        // So pin the RELATION between the cores rather than either core's size.
+        // The verdict is read off the output's spelling, which is how the dump
+        // reports it: an accepted block is re-derived into substitutions, a
+        // refused one keeps its `inv` (trimmed to the changed interval, but an
+        // `inv` still).
+        let refused: BTreeSet<&str> = measured
+            .iter()
+            .filter(|row| row.output.ends_with("inv"))
+            .map(|row| row.reference.as_str())
+            .collect();
+        let derived: BTreeSet<&str> = measured
+            .iter()
+            .filter(|row| !row.output.ends_with("inv"))
+            .map(|row| row.reference.as_str())
+            .collect();
+        assert!(
+            !refused.is_empty() && !derived.is_empty() && refused != derived,
+            "every past-cap core reached the same verdict (re-derived: {derived:?}, kept as \
+             `inv`: {refused:?}), so the long family straddles nothing — the gate reads the \
+             CHANGED INTERVAL, `len - 2 * EDGE_PERTURBATION`, and not the core length: {:?}",
+            measured
+                .iter()
+                .map(|row| (&row.reference, &row.input, &row.output))
+                .collect::<Vec<_>>()
         );
     }
 

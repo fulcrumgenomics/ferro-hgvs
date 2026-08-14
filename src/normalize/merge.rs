@@ -1896,6 +1896,45 @@ const MAX_CANONICAL_WINDOW: i64 = 4096;
 /// Padding either side of the changed interval, giving the 3'-shift room.
 const CANONICAL_PAD: i64 = 128;
 
+/// Widest changed interval the sequence-first canonicalizer will accept, in
+/// reference columns — **the length gate that actually fires on the shipping
+/// path**.
+///
+/// It is a consequence, not a choice: `canonicalize_from_sequence` pads the
+/// changed interval by [`CANONICAL_PAD`] on each side and refuses when the
+/// resulting window exceeds [`MAX_CANONICAL_WINDOW`], so a block of this width
+/// is the widest that still fits. Stated here because the primitive is a
+/// *window* width while everything that wants to reason about coverage — a
+/// corpus, a guard, a bug report — is asking about a *block*, and re-deriving
+/// `4096 - 2 * 128` by hand at each of those sites is how the two drift.
+///
+/// # This is exported for measurement, and why that matters
+///
+/// [`MAX_SPLIT_BLOCK`] reads like the length gate and is not one any more:
+/// `past_the_split_cap` is its only functional reader, it additionally requires
+/// `reference.len() != result.len()`, and since the cap became
+/// [`MAX_CANONICAL_WINDOW`] the window test above refuses such a block one step
+/// earlier on every axis. So a corpus that straddles `MAX_SPLIT_BLOCK` measures
+/// nothing about the shipping path. `examples/dump_normalized_corpus.rs` did
+/// exactly that, against a **restated literal** of `1024` that stayed green when
+/// the constant moved to 4096 (#1925) — which is why this is a `pub` constant
+/// the corpus imports rather than a number its guard repeats.
+///
+/// # What checks it, and what does not
+///
+/// `the_corpus_emits_a_block_past_the_split_cap` imports this and asserts the
+/// corpus builds a block wider than it *and* that such a row actually
+/// normalizes rather than landing on a sentinel. That is a real check on the
+/// corpus, and it is **not** a check that this constant equals the gate: both
+/// sides read the same definition, so they cannot disagree.
+///
+/// Nothing currently pins the equality behaviourally — a test driving
+/// `canonicalize_from_sequence` at exactly this width and at one base wider,
+/// asserting the first is canonicalized and the second refused, is the check
+/// that would, and it is not written. Stated rather than left implied, because
+/// a derived constant reads like it has been verified and this one has not.
+pub const MAX_CANONICAL_BLOCK: i64 = MAX_CANONICAL_WINDOW - 2 * CANONICAL_PAD;
+
 /// Longest **length-changing** block the canonicalizer will attempt to
 /// partition.
 ///
