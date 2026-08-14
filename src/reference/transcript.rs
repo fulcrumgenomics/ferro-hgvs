@@ -802,32 +802,37 @@ impl Transcript {
         // Get the genomic coordinates of the intron
         let (g_start, g_end) = (intron.genomic_start?, intron.genomic_end?);
 
-        match self.strand {
-            Strand::Plus => {
-                if offset > 0 {
-                    // c.N+offset: offset bases after the 5' exon boundary
-                    // genomic = intron start + offset - 1 (offset is 1-based)
-                    Some(g_start + offset as u64 - 1)
-                } else {
-                    // c.N-offset: |offset| bases before the 3' exon boundary
-                    // genomic = intron end - |offset| + 1
-                    Some(g_end - (-offset) as u64 + 1)
-                }
-            }
-            Strand::Minus => {
-                // On minus strand, genomic coordinates are reversed relative to transcript
-                if offset > 0 {
-                    // c.N+offset: offset bases after the 5' exon boundary
-                    // For minus strand: intron end - offset + 1
-                    Some(g_end - offset as u64 + 1)
-                } else {
-                    // c.N-offset: |offset| bases before the 3' exon boundary
-                    // For minus strand: intron start + |offset| - 1
-                    Some(g_start + (-offset) as u64 - 1)
-                }
-            }
-            Strand::Unknown => None,
-        }
+        // An offset is a *distance into this intron*, so it is judged on its
+        // magnitude — never on whether it happens to equal one of the parser's
+        // unknown-offset sentinels. #1765.
+        //
+        // `unsigned_abs` is total where `-offset` is not: `i64::MIN` has no
+        // positive twin, so the old `(-offset) as u64` aborted with "attempt to
+        // negate with overflow" under `debug_assertions` and wrapped silently in
+        // a `--release` wheel. The checked add/sub then keep an oversized
+        // magnitude from wrapping the genomic coordinate.
+        let distance = offset.unsigned_abs();
+
+        let genomic = match (self.strand, offset > 0) {
+            // c.N+offset: `offset` bases 3' of the upstream exon boundary,
+            // counted from the intron's first base (the offset is 1-based).
+            (Strand::Plus, true) => g_start.checked_add(distance)?.checked_sub(1)?,
+            // c.N-offset: `|offset|` bases 5' of the downstream exon boundary,
+            // counted back from the intron's last base.
+            (Strand::Plus, false) => g_end.checked_sub(distance)?.checked_add(1)?,
+            // On the minus strand genomic coordinates run against transcript
+            // ones, so the two arms swap which intron edge they anchor on.
+            (Strand::Minus, true) => g_end.checked_sub(distance)?.checked_add(1)?,
+            (Strand::Minus, false) => g_start.checked_add(distance)?.checked_sub(1)?,
+            (Strand::Unknown, _) => return None,
+        };
+
+        // An offset larger than the intron it is measured into names no
+        // intronic base, so it names no genomic coordinate either. Without this
+        // the arithmetic stays in range for any magnitude `u64` can hold, and
+        // `i64::MAX - 1` returned a coordinate-shaped number ~9.2e18 bases
+        // outside the intron rather than declining. #1765.
+        (g_start..=g_end).contains(&genomic).then_some(genomic)
     }
 
     /// Map an offset that points *past a transcript terminus* to a genomic
@@ -1713,5 +1718,103 @@ mod tests {
         let tx = make_test_transcript_with_genomic();
         // tx 12 is interior to exon 2 (tx 8..14), not an exon boundary.
         assert_eq!(tx.intronic_to_genomic(12, 3), None);
+    }
+
+    /// A two-exon plus-strand transcript with a genuine *interior* intron, so
+    /// the intron arms of [`Transcript::intronic_to_genomic`] are exercised
+    /// rather than the beyond-terminus fallback. The geometry matches the
+    /// fixture in `tests/python/test_numeric_entry_point_validation.py`, so the
+    /// numbers here and the ones measured across FFI are the same numbers:
+    ///
+    /// ```text
+    ///   exon 1: tx   1..100, genomic 1001..1100
+    ///   intron:               genomic 1101..2000   (900 bases)
+    ///   exon 2: tx 101..200, genomic 2001..2100
+    /// ```
+    fn make_interior_intron_transcript() -> Transcript {
+        Transcript {
+            id: "NM_TEST.1".to_string(),
+            strand: Strand::Plus,
+            cds_start: Some(11),
+            cds_end: Some(190),
+            exons: vec![
+                Exon::with_genomic(1, 1, 100, 1001, 1100),
+                Exon::with_genomic(2, 101, 200, 2001, 2100),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1001),
+            genomic_end: Some(2100),
+            ..Default::default()
+        }
+    }
+
+    /// #1765: the hazard is the offset's **magnitude**, not whether it happens
+    /// to equal an unknown-offset sentinel.
+    ///
+    /// The arms used to be unchecked mixed-width arithmetic, so `i64::MIN + 1`
+    /// — one step away from the sentinel a boundary guard refuses by identity —
+    /// still reached `g_end - (-offset) as u64 + 1` and aborted with "attempt
+    /// to subtract with overflow" under `debug_assertions`, wrapping silently
+    /// in a `--release` wheel. Measured across FFI in #1765 as
+    /// `pyo3_runtime.PanicException`.
+    #[test]
+    fn intronic_to_genomic_declines_an_offset_whose_arithmetic_would_overflow() {
+        let tx = make_interior_intron_transcript();
+
+        // Controls: an ordinary measured distance still resolves, from either
+        // side of the intron.
+        assert_eq!(tx.intronic_to_genomic(100, 5), Some(1105));
+        assert_eq!(tx.intronic_to_genomic(101, -5), Some(1996));
+
+        // `i64::MIN` has no positive twin, so negating it overflows before the
+        // cast; `i64::MIN + 1` negates fine and then underflows the subtract.
+        assert_eq!(tx.intronic_to_genomic(100, i64::MIN), None);
+        assert_eq!(tx.intronic_to_genomic(100, i64::MIN + 1), None);
+        assert_eq!(tx.intronic_to_genomic(101, i64::MIN + 1), None);
+    }
+
+    /// The other half of #1765, and the half that never panicked: an offset
+    /// larger than the intron it is measured into names no intronic base, so it
+    /// must name no genomic coordinate either.
+    ///
+    /// `i64::MAX - 1` needed no overflow to do damage — `u64` has room for it,
+    /// so the old code returned `9223372036854776906`, a coordinate-shaped
+    /// number ~9.2e18 bases outside a 900-base intron. In a `--release` wheel
+    /// that is what the caller gets, with no error and no marker.
+    #[test]
+    fn intronic_to_genomic_declines_an_offset_that_leaves_its_own_intron() {
+        let tx = make_interior_intron_transcript();
+
+        // The intron spans g 1101..2000, so 900 is the largest offset either
+        // arm can honour and 901 is one past it.
+        assert_eq!(tx.intronic_to_genomic(100, 900), Some(2000));
+        assert_eq!(tx.intronic_to_genomic(100, 901), None);
+        assert_eq!(tx.intronic_to_genomic(101, -900), Some(1101));
+        assert_eq!(tx.intronic_to_genomic(101, -901), None);
+
+        assert_eq!(tx.intronic_to_genomic(100, i64::MAX - 1), None);
+        assert_eq!(tx.intronic_to_genomic(100, i64::MAX), None);
+    }
+
+    /// The same two properties on the minus strand, where the arms walk the
+    /// other way: `intronic_to_genomic(5, +n)` counts *down* from the intron's
+    /// high edge and `(6, -n)` counts *up* from its low edge.
+    #[test]
+    fn intronic_to_genomic_bounds_the_offset_on_the_minus_strand_too() {
+        let tx = make_minus_test_transcript();
+
+        // exon 1 is g 200..204 and exon 2 is g 100..104, so the intron spans
+        // g 105..199 — 95 bases.
+        assert_eq!(tx.intronic_to_genomic(5, 1), Some(199));
+        assert_eq!(tx.intronic_to_genomic(5, 95), Some(105));
+        assert_eq!(tx.intronic_to_genomic(5, 96), None);
+        assert_eq!(tx.intronic_to_genomic(6, -1), Some(105));
+        assert_eq!(tx.intronic_to_genomic(6, -95), Some(199));
+        assert_eq!(tx.intronic_to_genomic(6, -96), None);
+
+        assert_eq!(tx.intronic_to_genomic(5, i64::MAX), None);
+        assert_eq!(tx.intronic_to_genomic(5, i64::MAX - 1), None);
+        assert_eq!(tx.intronic_to_genomic(6, i64::MIN), None);
+        assert_eq!(tx.intronic_to_genomic(6, i64::MIN + 1), None);
     }
 }

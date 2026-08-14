@@ -148,19 +148,30 @@ class TestNormalizationError:
 class TestProjectionError:
     """Coordinate conversions raise a typed ``ProjectionError`` end-to-end."""
 
+    # Both tests below used ``c_to_p("NM_000088.3", 0)`` as their vehicle. That
+    # stopped being a projection failure: ``c.0`` is not a coordinate on the c.
+    # axis at all, and the numeric entry points now refuse it as ``ParseError``
+    # / ``E1003`` the way ``parse`` does. It only ever *reached* the converter
+    # because a zero base fell into the 5'UTR arm, where it failed with "Cannot
+    # convert UTR position to protein" — the right exception class for the wrong
+    # reason. ``c.-10`` is a genuine 5'UTR position and fails there honestly, so
+    # it exercises the same raise site while the tests keep their own subject,
+    # which is the exception *typing* and not what ``c.0`` means.
+
     def test_raises_projection_error(self) -> None:
         mapper = ferro_hgvs.CoordinateMapper()
-        # The transcript resolves, but CDS position 0 is not a valid coordinate,
-        # so the conversion (not the reference lookup) fails.
+        # The transcript resolves and c.-10 is a real coordinate, but it is in
+        # the 5' UTR and so has no protein position: the conversion (not the
+        # reference lookup, and not argument validation) is what fails.
         with pytest.raises(ferro_hgvs.ProjectionError):
-            mapper.c_to_p("NM_000088.3", 0)
+            mapper.c_to_p("NM_000088.3", -10)
 
     def test_backcompat_both_bases(self) -> None:
         # Conversion sites historically spanned ValueError and RuntimeError, so
         # ProjectionError must satisfy either ``except`` clause.
         mapper = ferro_hgvs.CoordinateMapper()
         with pytest.raises(ferro_hgvs.ProjectionError) as info:
-            mapper.c_to_p("NM_000088.3", 0)
+            mapper.c_to_p("NM_000088.3", -10)
         assert isinstance(info.value, ValueError)
         assert isinstance(info.value, RuntimeError)
 
