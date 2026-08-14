@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import ferro_hgvs
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -61,9 +63,31 @@ class TestFromManifest:
     """from_manifest constructors backed by MultiFastaProvider."""
 
     def test_normalizer_from_manifest(self) -> None:
+        # The tiny manifest is a FASTA and no cdot, so it serves NM_TEST.1's
+        # BASES and resolves no CDS. Normalize on the `n.` axis, which needs no
+        # CDS — `background/numbering.md:52` numbers it over the reference
+        # sequence's own nucleotides — so this stays a test of the loader
+        # plumbing rather than of CDS resolution.
         norm = ferro_hgvs.Normalizer.from_manifest(str(MANIFEST_TINY))
-        out = norm.normalize("NM_TEST.1:c.1A>G")
-        assert "NM_TEST.1" in out
+        out = norm.normalize("NM_TEST.1:n.1A>G")
+        # The exact value, not just containment: the fixture is deterministic
+        # (`transcripts/test.fna` is a single `NM_TEST.1` / `ATGCATGCAT`), so
+        # `n.1` is the leading `A` and a substitution has no run to shift along.
+        # `assert "NM_TEST.1" in out` would also be satisfied by the input
+        # echoed back, which is the state #1870 exists to make unrepresentable.
+        assert out == "NM_TEST.1:n.1A>G"
+
+    def test_manifest_without_cds_refuses_the_coding_axis(self) -> None:
+        # The sibling half, and the reason the row above moved off `c.`: the
+        # decided `rulings[c-description-against-an-unresolvable-cds-is-refused]`
+        # refuses a `c.` description against a transcript whose CDS the
+        # reference cannot resolve, in every mode, rather than returning the
+        # input labelled ok. This asserts the bindings surface that refusal as a
+        # typed error rather than swallowing it.
+        norm = ferro_hgvs.Normalizer.from_manifest(str(MANIFEST_TINY))
+        with pytest.raises(ferro_hgvs.NormalizationError) as excinfo:
+            norm.normalize("NM_TEST.1:c.1A>G")
+        assert "has no CDS start" in str(excinfo.value)
 
     def test_equivalence_checker_from_manifest(self) -> None:
         chk = ferro_hgvs.EquivalenceChecker.from_manifest(str(MANIFEST_TINY))

@@ -1219,6 +1219,28 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "duplication-must-ranks-the-label-not-the-partition",
         "decided",
     ),
+    // Whether a `c.` description against a transcript whose CDS the reference
+    // cannot resolve normalizes silently — the input returned as its own
+    // output, `status: ok`, empty warnings, in every mode — or is refused.
+    // **Refused.** `background/numbering.md:21` governs: a `c.` number is
+    // defined by the position of the `ATG` start codon, so with nothing
+    // locating that codon `c.528` names no base ferro can identify;
+    // `refseq.md:129` is the second authority on what a `c.` reference IS.
+    // Refused at **normalize**, not parse — the input's spelling is conformant
+    // and the fact is the REFERENCE's, which `parse_hgvs` holds no provider to
+    // see — and **unconditionally across strict/lenient/silent**, which is not
+    // a new mode policy but lenient's own contract under
+    // `absolute-prohibition-enforcement-stage` ("it fails only if it cannot
+    // NORMALIZE"). The `n.` axis on the same records is untouched and must
+    // stay so: `numbering.md:52` counts the reference sequence's own
+    // nucleotides and needs no CDS. **A real, one-directional migration** —
+    // ~68,100 of 225,662 served `c.`-addressable accessions move from answered
+    // to refused. Pinned by
+    // `tests/it/issue_1870_cds_less_transcript_refusal.rs`.
+    (
+        "c-description-against-an-unresolvable-cds-is-refused",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

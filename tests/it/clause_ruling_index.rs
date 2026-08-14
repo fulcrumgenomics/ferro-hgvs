@@ -105,8 +105,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 28 records, 25 decided / 3 undecided
-//! 111 clause lines, of which 30 are named by more than one record
+//! 29 records, 26 decided / 3 undecided
+//! 112 clause lines, of which 33 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -118,14 +118,19 @@
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
 //! docs/background/glossary.md:311
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/background/glossary.md:310-311)
-//! docs/background/numbering.md:21
+//! docs/background/numbering.md:21  [MULTI]
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (governing)
 //! docs/background/numbering.md:40
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
-//! docs/background/numbering.md:44
+//! docs/background/numbering.md:44  [MULTI]
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
-//! docs/background/numbering.md:52
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
+//! docs/background/numbering.md:52  [MULTI]
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (governing)
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
+//! docs/background/refseq.md:129
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //! docs/background/standards.md:36  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
@@ -419,6 +424,15 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/background/numbering.md:21
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (governing)
+//! docs/background/numbering.md:44
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
+//! docs/background/numbering.md:52
+//!     `c-and-n-positions-are-flat-transcript-offsets` — decided (governing)
+//!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //! docs/background/standards.md:36
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
@@ -847,7 +861,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (28, 25, 3),
+        (29, 26, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1011,7 +1025,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        30,
+        33,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

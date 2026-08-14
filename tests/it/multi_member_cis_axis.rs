@@ -632,11 +632,35 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 
 /// The pinned gated census, measured against a prepared reference.
 ///
-/// How to read it. **0 declined**: the harvester selects on `parse_hgvs`, so
-/// every row parses, and the normalizer declines none of them. **96 unwindowed**
-/// are rows whose members do not all resolve to SPDI triples on one sequence, or
-/// whose span is wider than [`MAX_WINDOW`]; they are counted rather than skipped
-/// so `sequence_changed: 0` cannot quietly mean "nothing was checked".
+/// How to read it. **6 declined**: the harvester selects on `parse_hgvs`, so
+/// every row parses; what the normalizer declines is a `c.` description against
+/// a transcript whose CDS this reference cannot resolve, which the decided
+/// `rulings[c-description-against-an-unresolvable-cds-is-refused]` refuses in
+/// every mode. The six are named below. **90 unwindowed** are rows whose members
+/// do not all resolve to SPDI triples on one sequence, or whose span is wider
+/// than [`MAX_WINDOW`]; they are counted rather than skipped so
+/// `sequence_changed: 0` cannot quietly mean "nothing was checked".
+///
+/// # 0 -> 6 declined, 96 -> 90 unwindowed, by #1870
+///
+/// The move is `declined +6 / unwindowed -6` and nothing else, which is what
+/// says it is one population changing bucket rather than two things happening
+/// at once: those six rows previously normalized to *themselves* — the ruling's
+/// finding is that on such an accession `normalize` was the identity — and a
+/// row that cannot be re-derived could not be windowed either, so it was already
+/// being counted as unwindowed. They are three transcripts, and all three are in
+/// the ruling's measured class (verified against the served-accession probe,
+/// not inferred from the failure):
+///
+/// ```text
+/// NM_000500.5:c.[701T>A;713T>A;719T>A]
+/// NM_001040075.1:c.[533C=;646G=]        NM_001040075.1:c.[533C=;646G>C]
+/// NM_001040075.1:c.[533C>T;646G>C]
+/// NM_006894.4:c.[472G>A;560T>C]         NM_006894.4:c.[472G>A;923A>G]
+/// ```
+///
+/// `respellable` and `respelling_converged` are unchanged at 461/401 and
+/// [`CONVERGED_ROWS`] is untouched, so no row that used to converge stopped.
 ///
 /// The two numbers worth arguing about are the last pair: of **461** rows whose
 /// spanning-`delins` respelling can be built at all, **395 (86%)** normalize to
@@ -750,9 +774,12 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 /// losing a member.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
-    declined: 0,
+    // #1870: 0 -> 6. See the "0 -> 6 declined" section above; the six rows are
+    // named there and the matching -6 is on `unwindowed`.
+    declined: 6,
     not_idempotent: 0,
-    unwindowed: 96,
+    // #1870: 96 -> 90, the same six rows.
+    unwindowed: 90,
     sequence_changed: 0,
     respellable: 461,
     // #1835: see the section above — six rows started converging, none stopped.

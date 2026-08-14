@@ -1453,6 +1453,36 @@ fn genomic_wrapper_for(bare: &Accession, chromosome: &str) -> Option<Accession> 
     Some(bare.clone().with_genomic_context(outer))
 }
 
+/// A **bare genomic parent**: an `NG_`/`NC_`/`LRG_` reference with nothing in its
+/// transcript-selector slot.
+///
+/// Such a reference is not a transcript. A `c.` description against one names an
+/// *implied* transcript that [`Normalizer::rewrite_legacy_gene_selector`] is what
+/// resolves (#500/#792/#923), so until that rewrite has run — or when it declines —
+/// the accession in hand is the genomic parent rather than the coding reference the
+/// description is really about.
+///
+/// **This is one predicate with two consumers, and it must stay that way.** The
+/// rewrite uses its negation to decide it has nothing to do, and the #1870 CDS
+/// refusal in [`Normalizer::normalize_cds`] uses it to scope itself off a reference
+/// the ruling never asked about. Those two must agree by construction: a RefSeqGene
+/// record carries no CDS *by construction*, so if the refusal's copy of this rule
+/// ever admitted a case the rewrite's copy excluded, the refusal would reject a
+/// description the rewrite was still going to resolve. That was measured, not
+/// imagined — unscoped, the refusal newly failed `NG_012337.1(10683):c.274G>T` (a
+/// recorded mutalyzer divergence whose accepted value is ferro's own pass-through)
+/// and declined 6 rows of `multi_member_cis_axis`.
+///
+/// Deliberately **not** [`Accession::admits_gene_selector`], which is
+/// `!is_transcript_reference() && genomic_context.is_none()`. Its first term is the
+/// complement of a prefix *whitelist*, so `NT_`/`NW_` scaffolds and custom
+/// accessions satisfy it; substituting it here would widen the carve-out and
+/// re-admit exactly the rows above.
+fn is_bare_genomic_parent(accession: &Accession) -> bool {
+    (matches!(accession.prefix.as_ref(), "NG" | "NC") || accession.is_lrg())
+        && accession.genomic_context.is_none()
+}
+
 /// The number of cis members a variant describes.
 ///
 /// A cis allele reports its member count; everything else is one member. A
@@ -5750,6 +5780,64 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 }
                 return Ok((HV::Cds(variant.clone()), warnings));
             }
+
+            // #1870: the provider serves this transcript's BASES but resolves
+            // no `cds_start`, so `c.1` has nowhere to sit. Refuse.
+            //
+            // Ruled by the decided
+            // `rulings[c-description-against-an-unresolvable-cds-is-refused]`.
+            // Read that record before changing the shape of this check; the
+            // three things it settles are that this is a REFERENCE fact rather
+            // than an input-conformance one (so it is answered here, at
+            // normalize, where a provider exists, and not at parse), that the
+            // refusal is unconditional across strict/lenient/silent (lenient's
+            // own contract under `absolute-prohibition-enforcement-stage` is
+            // that it "fails only if it cannot NORMALIZE", which is exactly
+            // this case), and that the `n.` axis on the same accession is
+            // untouched — `n.` numbers the transcript's own bases and needs no
+            // CDS.
+            //
+            // Placed here, ahead of every other pass, for the same reason the
+            // `cds_start_NF` decline above is: the W4004 bounds gate, the
+            // c.→tx conversion, the 3' shuffle and the canonical split all
+            // read `cds_start`, and none of them can be trusted without it.
+            // What used to happen instead is that each of them individually
+            // fell back to returning the input, so `normalize` was the
+            // identity on such an accession and said `status: ok` while doing
+            // it — all five of `c.528del`…`c.532del` came back distinct.
+            //
+            // `ConversionError` and its message deliberately match
+            // `project`'s, which already refuses this exact fact
+            // (`src/project/protein/helpers.rs`, `src/convert/coding.rs`), so
+            // the two surfaces stop disagreeing about one input.
+            //
+            // SCOPED TO A TRANSCRIPT REFERENCE, and the scope is load-bearing
+            // rather than defensive. The ruling's subject is a record that
+            // serves a TRANSCRIPT's bases while resolving no CDS. A bare
+            // genomic parent — `NG_`/`NC_`/`LRG_` with no transcript in its
+            // selector slot — is not a transcript at all: it is a genomic
+            // reference whose `c.` description names an implied transcript
+            // that `rewrite_legacy_gene_selector` (#500/#793/#923) is what
+            // resolves. When that resolution declines, `transcript_accession()`
+            // still reads the *parent*, so an unscoped check looks up the
+            // `NG_` record — served from the RefSeqGene FASTA and carrying no
+            // CDS by construction — and refuses a question this ruling never
+            // asked. Measured: unscoped, it newly failed
+            // `NG_012337.1(10683):c.274G>T` (a recorded mutalyzer divergence
+            // whose accepted value is ferro's own pass-through) and declined 6
+            // rows of `multi_member_cis_axis`. `is_bare_genomic_parent` is the
+            // SAME function `rewrite_legacy_gene_selector` gates on, so the two
+            // cannot drift apart; see its doc comment.
+            if transcript.cds_start.is_none() && !is_bare_genomic_parent(&variant.accession) {
+                return Err(FerroError::ConversionError {
+                    msg: format!(
+                        "transcript {} has no CDS start; a c. description cannot be normalized \
+                         against a reference that resolves no CDS — use the non-coding (n.) or \
+                         genomic (g.) representation instead",
+                        variant.accession.transcript_accession()
+                    ),
+                });
+            }
         }
 
         // Can't normalize variants with unknown edits or positions
@@ -7666,11 +7754,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return None;
         };
         let accession = &c.accession;
-        // Only a genomic-reference selector slot (`NG_`/`NC_`/`LRG_`) is in scope.
-        let is_genomic_ref = matches!(accession.prefix.as_ref(), "NG" | "NC") || accession.is_lrg();
-        // A selector that already names a transcript context is not a bare
-        // gene-model selector — leave it.
-        if !is_genomic_ref || accession.genomic_context.is_some() {
+        // Only a genomic-reference selector slot (`NG_`/`NC_`/`LRG_`) is in scope,
+        // and a selector that already names a transcript context is not a bare
+        // gene-model selector — leave it. Both halves are `is_bare_genomic_parent`,
+        // which the #1870 CDS refusal in `normalize_cds` scopes itself with; see
+        // that function's doc comment for why the two must remain one predicate.
+        if !is_bare_genomic_parent(accession) {
             return None;
         }
         // With a gene-symbol selector, resolve it via the legacy gene model
@@ -16421,9 +16510,15 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_no_cds_returns_unchanged() {
-        // A coding (`c.`) variant whose provider transcript record carries no
-        // CDS bounds (cds_start/cds_end = None) must normalize without error.
+    fn test_normalize_no_cds_is_refused() {
+        // #1870, INVERTED FROM `test_normalize_no_cds_returns_unchanged`. A
+        // coding (`c.`) variant whose provider transcript record carries no
+        // CDS bounds (cds_start/cds_end = None) is REFUSED. It used to
+        // normalize without error, which meant returning the input verbatim
+        // with an empty warning vector — silence, not leniency. See the
+        // decided
+        // `rulings[c-description-against-an-unresolvable-cds-is-refused]`.
+        //
         // Uses an NM_ accession so the c. coordinate system is valid (a c.
         // description on a non-coding NR_/XR_ reference is rejected at parse,
         // #486); the missing-CDS path is exercised via the provider record.
@@ -16453,12 +16548,31 @@ mod tests {
 
         // c. variant whose transcript record carries no CDS bounds
         let variant = parse_hgvs("NM_001566.1:c.10del").unwrap();
-        let result = normalizer.normalize(&variant);
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("a c. description against a CDS-less record must be refused");
+        let msg = err.to_string();
         assert!(
-            result.is_ok(),
-            "No CDS should not error, got: {:?}",
-            result.err()
+            msg.contains("NM_001566.1") && msg.contains("has no CDS start"),
+            "refusal must name the accession and the missing CDS start, got: {msg}"
         );
+        assert_eq!(
+            err.code(),
+            Some(crate::error::ErrorCode::ConversionFailed),
+            "the refusal reuses `project`'s own code so the two surfaces agree"
+        );
+
+        // The `n.` axis on the SAME record is untouched: it numbers the
+        // transcript's own bases and needs no CDS. This record's sequence is
+        // `(ATGC)*`, which has no repeat for a `del` to shift along, so the
+        // assertion here is that it ANSWERS. The shifting half is proved on a
+        // homopolymer record in
+        // `issue_1870_cds_less_transcript_refusal::the_n_axis_still_shifts_on_the_same_record`.
+        let noncoding = parse_hgvs("NM_001566.1:n.10del").unwrap();
+        let answered = normalizer
+            .normalize(&noncoding)
+            .expect("the n. axis needs no CDS and must keep working");
+        assert_eq!(answered.to_string(), "NM_001566.1:n.10del");
     }
 
     #[test]
