@@ -7,7 +7,7 @@ use crate::FerroError;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -452,7 +452,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             let url = format!("{}{}{}", urls::REFSEQ_RNA_BASE, i, urls::REFSEQ_RNA_SUFFIX);
             let output_path = transcript_dir.join(&filename);
 
-            if config.skip_existing && output_path.exists() {
+            if reuse_existing(config.skip_existing, &output_path) {
                 eprintln!("  Skipping {} (exists)", filename);
                 // Treat skipped pre-existing files as discovered so downstream
                 // steps (count_transcripts, manifest persistence) see them.
@@ -485,7 +485,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         for gz_path in &manifest.transcript_fastas {
             let fasta_path = gz_path.with_extension("").with_extension("fna");
 
-            if config.skip_existing && fasta_path.exists() {
+            if reuse_existing(config.skip_existing, &fasta_path) {
                 eprintln!("  Skipping decompress {} (exists)", fasta_path.display());
             } else {
                 decompress_gzip(gz_path, &fasta_path)?;
@@ -494,7 +494,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
             // Index with samtools if available, otherwise use our indexer
             let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-            if config.skip_existing && fai_path.exists() {
+            if reuse_existing(config.skip_existing, &fai_path) {
                 eprintln!("  Skipping index {} (exists)", fai_path.display());
             } else {
                 index_fasta(&fasta_path)?;
@@ -526,7 +526,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         for i in 1..=urls::REFSEQ_RNA_COUNT {
             let gz_name = format!("human.{}.protein.faa.gz", i);
             let gz_path = protein_dir.join(&gz_name);
-            if config.skip_existing && gz_path.exists() {
+            if reuse_existing(config.skip_existing, &gz_path) {
                 eprintln!("  Skipping {} (exists)", gz_name);
                 gz_paths.push(gz_path);
                 continue;
@@ -552,11 +552,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
         for gz_path in &gz_paths {
             let faa_path = gz_path.with_extension("").with_extension("faa");
-            if !(config.skip_existing && faa_path.exists()) {
+            if !reuse_existing(config.skip_existing, &faa_path) {
                 decompress_gzip(gz_path, &faa_path)?;
             }
             let fai_path = PathBuf::from(format!("{}.fai", faa_path.display()));
-            if !(config.skip_existing && fai_path.exists()) {
+            if !reuse_existing(config.skip_existing, &fai_path) {
                 index_fasta(&faa_path)?;
             }
             if !manifest.protein_fastas.contains(&faa_path) {
@@ -576,11 +576,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         let gz_path = genome_dir.join("GRCh38.fna.gz");
         let fasta_path = genome_dir.join("GRCh38.fna");
 
-        if config.skip_existing && fasta_path.exists() {
+        if reuse_existing(config.skip_existing, &fasta_path) {
             eprintln!("  Skipping genome download (exists)");
             // Ensure index exists even for skipped files
             let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-            if !fai_path.exists() {
+            if !artifact_is_complete(&fai_path) {
                 eprintln!("  Indexing existing genome...");
                 index_fasta(&fasta_path)?;
             }
@@ -615,11 +615,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         let gz_path = genome_dir.join("GRCh37.fna.gz");
         let fasta_path = genome_dir.join("GRCh37.fna");
 
-        if config.skip_existing && fasta_path.exists() {
+        if reuse_existing(config.skip_existing, &fasta_path) {
             eprintln!("  Skipping GRCh37 genome download (exists)");
             // Ensure index exists even for skipped files
             let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-            if !fai_path.exists() {
+            if !artifact_is_complete(&fai_path) {
                 eprintln!("  Indexing existing GRCh37 genome...");
                 index_fasta(&fasta_path)?;
             }
@@ -660,11 +660,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             let gz_path = refseqgene_dir.join(&filename);
             let fasta_path = refseqgene_dir.join(format!("refseqgene.{}.genomic.fna", i));
 
-            if config.skip_existing && fasta_path.exists() {
+            if reuse_existing(config.skip_existing, &fasta_path) {
                 eprintln!("  Skipping {} (exists)", filename);
                 // Ensure index exists even for skipped files
                 let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-                if !fai_path.exists() {
+                if !artifact_is_complete(&fai_path) {
                     index_fasta(&fasta_path)?;
                 }
                 continue;
@@ -714,7 +714,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
                     manifest.refseqgene_alignments = Some(path);
                 }
             };
-            if config.skip_existing && aln_path.exists() {
+            if reuse_existing(config.skip_existing, &aln_path) {
                 eprintln!("  Skipping {} (exists)", name);
                 record(&mut manifest, aln_path);
             } else {
@@ -730,7 +730,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         // transcript, used to resolve legacy gene-model selectors (#500/#637).
         let summary_name = urls::REFSEQGENE_SUMMARY_FILE;
         let summary_path = refseqgene_dir.join(summary_name);
-        if config.skip_existing && summary_path.exists() {
+        if reuse_existing(config.skip_existing, &summary_path) {
             eprintln!("  Skipping {} (exists)", summary_name);
             manifest.refseqgene_summary = Some(summary_path);
         } else {
@@ -768,10 +768,10 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             let mut lrg_exists = false;
 
             // Download/skip FASTA
-            if config.skip_existing && fasta_path.exists() {
+            if reuse_existing(config.skip_existing, &fasta_path) {
                 // Ensure index exists even for skipped files
                 let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-                if !fai_path.exists() {
+                if !artifact_is_complete(&fai_path) {
                     index_fasta(&fasta_path)?;
                 }
                 fasta_skipped += 1;
@@ -796,7 +796,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
             // Download/skip XML only if FASTA exists
             if lrg_exists {
-                if config.skip_existing && xml_path.exists() {
+                if reuse_existing(config.skip_existing, &xml_path) {
                     xml_skipped += 1;
                 } else {
                     match download_file(&xml_url, &xml_path) {
@@ -832,7 +832,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
 
         // Download LRG to RefSeq mapping file
         let mapping_path = lrg_dir.join("lrg_refseq_mapping.txt");
-        if config.skip_existing && mapping_path.exists() {
+        if reuse_existing(config.skip_existing, &mapping_path) {
             eprintln!("  Skipping LRG-RefSeq mapping (exists)");
         } else {
             eprintln!("  Downloading LRG-RefSeq mapping...");
@@ -877,7 +877,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         //    provider's directory scan picks it up like the RefSeq transcripts.
         eprintln!("\n=== Downloading Ensembl cDNA transcripts (GRCh38, ~75MB) ===");
         let gz_path = ensembl_dir.join("Homo_sapiens.GRCh38.cdna.all.fa.gz");
-        if config.skip_existing && gz_path.exists() {
+        if reuse_existing(config.skip_existing, &gz_path) {
             eprintln!("  Skipping {} (exists)", gz_path.display());
         } else {
             download_file(urls::ENSEMBL_CDNA_GRCH38, &gz_path)?;
@@ -885,14 +885,14 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         }
         // `with_extension("")` strips only the `.gz`, leaving the `.fa`.
         let fasta_path = gz_path.with_extension("");
-        if config.skip_existing && fasta_path.exists() {
+        if reuse_existing(config.skip_existing, &fasta_path) {
             eprintln!("  Skipping decompress {} (exists)", fasta_path.display());
         } else {
             decompress_gzip(&gz_path, &fasta_path)?;
             eprintln!("  Decompressed {}", fasta_path.display());
         }
         let fai_path = PathBuf::from(format!("{}.fai", fasta_path.display()));
-        if config.skip_existing && fai_path.exists() {
+        if reuse_existing(config.skip_existing, &fai_path) {
             eprintln!("  Skipping index {} (exists)", fai_path.display());
         } else {
             index_fasta(&fasta_path)?;
@@ -944,7 +944,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
     })?;
 
     let genbank_fasta = supplemental_dir.join("legacy_genbank.fna");
-    if config.skip_existing && genbank_fasta.exists() {
+    if reuse_existing(config.skip_existing, &genbank_fasta) {
         eprintln!("  Skipping (exists): {}", genbank_fasta.display());
         manifest.legacy_genbank_fasta = Some(genbank_fasta.clone());
         let metadata_path = genbank_fasta.with_extension("metadata.json");
@@ -1010,7 +1010,7 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         } else {
             let out_path = config.output_dir.join("derived_refseqgene_placements.json");
             let hosted_out_path = config.output_dir.join("ng_hosted_transcripts.json");
-            if config.skip_existing && out_path.exists() {
+            if reuse_existing(config.skip_existing, &out_path) {
                 // Caveat: if this is a pre-#792 reference (derived_refseqgene_placements.json
                 // exists but ng_hosted_transcripts.json does not), manifest.ng_hosted_transcripts
                 // will remain unset. Re-run with --force to regenerate both artifacts.
@@ -1536,11 +1536,11 @@ fn download_cdot(url: &str, cdot_dir: &Path, skip_existing: bool) -> Result<Path
     let gz_path = cdot_dir.join(gz_filename);
     let json_path = gz_path.with_extension("");
 
-    let json_is_fresh = if skip_existing && json_path.exists() {
+    let json_is_fresh = if reuse_existing(skip_existing, &json_path) {
         eprintln!("  Skipping cdot download (exists)");
         false
     } else {
-        if skip_existing && gz_path.exists() {
+        if reuse_existing(skip_existing, &gz_path) {
             eprintln!(
                 "  Reusing existing {}...",
                 gz_path.file_name().unwrap_or_default().to_string_lossy()
@@ -1599,7 +1599,7 @@ fn record_assembly_report(
     skip_existing: bool,
 ) -> Result<Option<PathBuf>, FerroError> {
     let dest = genome_dir.join(filename);
-    if skip_existing && dest.exists() {
+    if reuse_existing(skip_existing, &dest) {
         return Ok(Some(dest));
     }
     match download_file(url, &dest) {
@@ -1614,8 +1614,134 @@ fn record_assembly_report(
     }
 }
 
-/// Download a file from a URL.
+/// Suffix of the scratch path a download is written to before being renamed
+/// into place. Anything carrying it is a torn or in-flight fetch, never input.
+const PARTIAL_DOWNLOAD_SUFFIX: &str = ".partial";
+
+/// The scratch path `output` is downloaded to before being renamed into place.
+///
+/// Deliberately a sibling of `output`: a rename within one directory is atomic,
+/// while a rename across filesystems degrades to a copy and reintroduces
+/// exactly the torn write this exists to prevent.
+fn partial_download_path(output: &Path) -> PathBuf {
+    let mut scratch = output.as_os_str().to_os_string();
+    scratch.push(PARTIAL_DOWNLOAD_SUFFIX);
+    PathBuf::from(scratch)
+}
+
+/// Whether `path` holds an artifact a previous run finished writing.
+///
+/// `Path::exists` cannot answer this, and reading it as though it could is
+/// issue #1954. `wget -O <path>` truncates its output file *before* it issues
+/// the request, so the end-of-series probe for `human.17.rna.fna.gz` — a 404 by
+/// design, and how prepare discovers where the RefSeq series ends — leaves a
+/// zero-byte file behind on any host where curl is absent or fails. A later run
+/// sees it, skips it as "exists", and hands it to the decompressor, which dies
+/// with `unexpected end of file`. The same shape covers any interrupted fetch:
+/// presence-as-completeness means the corrupt file is skipped forever, so
+/// re-running prepare cannot repair a directory it half-populated.
+///
+/// The check is deliberately cheap, and therefore partial: it rejects a
+/// non-file, an empty file, and a `.gz` whose first two bytes are not the gzip
+/// magic (which also catches an error page saved under a `.gz` name). It does
+/// **not** decompress, so a gzip truncated after its header still passes —
+/// validating a 200 MB member on every skip would cost more than re-fetching
+/// it. Callers that need certainty must decompress, which is what the steps
+/// downstream of a skip already do.
+fn artifact_is_complete(path: &Path) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {}
+        _ => return false,
+    }
+
+    if path.extension().is_some_and(|extension| extension == "gz") {
+        return starts_with_gzip_magic(path);
+    }
+    true
+}
+
+/// Whether `path`'s first two bytes are the gzip magic number (`1f 8b`).
+fn starts_with_gzip_magic(path: &Path) -> bool {
+    let mut magic = [0u8; 2];
+    let read = File::open(path).and_then(|mut file| file.read_exact(&mut magic));
+    read.is_ok() && magic == [0x1f, 0x8b]
+}
+
+/// Whether an existing artifact may be reused instead of produced again.
+///
+/// Replaces `skip_existing && path.exists()` at every site deciding "this is
+/// already here, do not produce it again": presence is not completeness, see
+/// [`artifact_is_complete`]. Sites that merely *record* an optional companion
+/// file in the manifest are left on `exists()` — they produce nothing, so a
+/// stricter predicate there would only drop a path a consumer can still read.
+fn reuse_existing(skip_existing: bool, path: &Path) -> bool {
+    skip_existing && artifact_is_complete(path)
+}
+
+/// Download a file from a URL, atomically.
+///
+/// The bytes land on a [`partial_download_path`] sibling and are renamed into
+/// place only once the fetch has succeeded and produced a non-empty file, so a
+/// failed, empty or interrupted download never leaves an artifact a later run
+/// would trust (#1954). An empty body is a failure for the same reason: prepare
+/// discovers the end of the RefSeq transcript series by fetching until a fetch
+/// fails, and a zero-byte "success" is not something the decompressor can use.
 fn download_file(url: &str, output: &Path) -> Result<(), FerroError> {
+    let partial = partial_download_path(output);
+    // A `.partial` left behind by a killed run is scratch, never input.
+    let _ = fs::remove_file(&partial);
+
+    if let Err(e) = fetch_to_path(url, &partial) {
+        let _ = fs::remove_file(&partial);
+        return Err(e);
+    }
+
+    promote_completed_download(&partial, output, url)
+}
+
+/// Move a fetched file from its scratch path into place, refusing anything that
+/// is not a usable artifact and discarding the scratch file either way.
+///
+/// An empty file is refused rather than promoted: a fetch tool can report
+/// success having written nothing, and a zero-byte artifact is precisely what
+/// [`artifact_is_complete`] exists to keep a later run from trusting.
+fn promote_completed_download(partial: &Path, output: &Path, url: &str) -> Result<(), FerroError> {
+    let fetched = match fs::metadata(partial) {
+        Ok(metadata) if metadata.len() > 0 => Ok(()),
+        Ok(_) => Err(FerroError::Io {
+            msg: format!("Downloaded 0 bytes from {}", url),
+        }),
+        Err(e) => Err(FerroError::Io {
+            msg: format!("Failed to stat {}: {}", partial.display(), e),
+        }),
+    };
+
+    if let Err(e) = fetched {
+        let _ = fs::remove_file(partial);
+        return Err(e);
+    }
+
+    if let Err(e) = fs::rename(partial, output) {
+        let _ = fs::remove_file(partial);
+        return Err(FerroError::Io {
+            msg: format!(
+                "Failed to move {} into {}: {}",
+                partial.display(),
+                output.display(),
+                e
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Fetch `url` into `output`, trying curl, then wget, then reqwest.
+///
+/// Writes directly to the path it is given, so callers must hand it a scratch
+/// path rather than the destination — `wget -O` truncates its output file
+/// before the request is issued, and curl can leave a partial file on a
+/// mid-transfer failure. [`download_file`] is the wrapper that makes that safe.
+fn fetch_to_path(url: &str, output: &Path) -> Result<(), FerroError> {
     // Convert path to string, handling non-UTF-8 paths gracefully
     let output_str = output.to_str().ok_or_else(|| FerroError::Io {
         msg: format!("Path contains invalid UTF-8: {:?}", output),
@@ -2610,6 +2736,163 @@ mod tests {
                 "cdot URL basename {basename} does not embed the CDOT_DATA_VERSION tail {numeric}"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // #1954: `ferro prepare` must be re-runnable into a directory it has
+    // already prepared. The end-of-series probe for `human.17.rna.fna.gz`
+    // (a 404 by design) left a zero-byte file behind, `skip_existing` read
+    // its presence as completeness, and the decompress step then died with
+    // `unexpected end of file` on the second run.
+    // ------------------------------------------------------------------
+
+    /// Write a genuine gzip member holding `contents` at `path`.
+    ///
+    /// Built here rather than committed, so the fixture cannot drift from what
+    /// the decompressor accepts.
+    fn write_gzip(path: &Path, contents: &str) {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let mut encoder = GzEncoder::new(File::create(path).unwrap(), Compression::default());
+        encoder.write_all(contents.as_bytes()).unwrap();
+        encoder.finish().unwrap();
+    }
+
+    #[test]
+    fn a_zero_byte_probe_sentinel_is_never_reused_as_a_prepared_artifact() {
+        let dir = TempDir::new().unwrap();
+
+        // What the end-of-series probe leaves behind: present, and empty.
+        let sentinel = dir.path().join("human.17.rna.fna.gz");
+        File::create(&sentinel).unwrap();
+        assert!(
+            sentinel.exists(),
+            "the sentinel must be present — that is the whole trap"
+        );
+        assert!(
+            !artifact_is_complete(&sentinel),
+            "a zero-byte file is not a prepared artifact"
+        );
+        assert!(
+            !reuse_existing(true, &sentinel),
+            "a second prepare must not skip the sentinel as though it were done"
+        );
+
+        // The guard is load-bearing: skipping this file is what fails the run.
+        let decompressed = dir.path().join("human.17.rna.fna");
+        let err = decompress_gzip(&sentinel, &decompressed)
+            .expect_err("an empty gzip member cannot be decompressed");
+        assert!(
+            err.to_string().contains("Failed to decompress"),
+            "unexpected error from the empty member: {err}"
+        );
+
+        // A real member from the same series is reused, so the completeness
+        // check cannot pass by refusing everything.
+        let good = dir.path().join("human.16.rna.fna.gz");
+        write_gzip(&good, ">NM_000000.1\nACGT\n");
+        assert!(artifact_is_complete(&good));
+        assert!(reuse_existing(true, &good));
+        decompress_gzip(&good, &dir.path().join("human.16.rna.fna"))
+            .expect("a real member decompresses");
+    }
+
+    #[test]
+    fn a_gz_holding_something_other_than_gzip_is_not_a_prepared_artifact() {
+        let dir = TempDir::new().unwrap();
+
+        // A proxy or portal serving an error page under a `.gz` name: non-empty,
+        // so a length check alone would trust it, and undecompressable.
+        let error_page = dir.path().join("human.17.rna.fna.gz");
+        fs::write(&error_page, b"<html>404 Not Found</html>").unwrap();
+        assert!(!artifact_is_complete(&error_page));
+
+        // The magic check is scoped to `.gz`: a plain text artifact of the same
+        // bytes is complete, since nothing will try to inflate it.
+        let plain = dir.path().join("LRG_RefSeqGene");
+        fs::write(&plain, b"<html>404 Not Found</html>").unwrap();
+        assert!(artifact_is_complete(&plain));
+    }
+
+    #[test]
+    fn a_failed_fetch_leaves_no_artifact_and_no_scratch_file() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("human.17.rna.fna.gz");
+        let partial = partial_download_path(&output);
+
+        // Stand in for the zero-byte file `wget -O` truncates into place before
+        // it has issued its request — the mechanism that poisons the directory.
+        File::create(&partial).unwrap();
+
+        // A URL with no scheme fails in curl, in wget and in reqwest without
+        // touching the network, so this stays hermetic.
+        let err = download_file("ferro-not-a-url", &output)
+            .expect_err("an unfetchable URL must not report success");
+        assert!(!err.to_string().is_empty());
+
+        assert!(
+            !output.exists(),
+            "a failed fetch must not leave an artifact a later run would skip"
+        );
+        assert!(
+            !partial.exists(),
+            "the scratch file must be discarded, not left to be mistaken for one"
+        );
+    }
+
+    #[test]
+    fn a_download_is_promoted_into_place_only_once_it_is_whole() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("human.1.rna.fna.gz");
+        let partial = partial_download_path(&output);
+
+        write_gzip(&partial, ">NM_000000.1\nACGT\n");
+        let promoted_bytes = fs::read(&partial).unwrap();
+        promote_completed_download(
+            &partial,
+            &output,
+            "https://example.invalid/human.1.rna.fna.gz",
+        )
+        .expect("a whole download is promoted");
+
+        assert!(
+            !partial.exists(),
+            "the scratch path is consumed by the move"
+        );
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            promoted_bytes,
+            "the promoted artifact must be the bytes that were fetched"
+        );
+        assert!(artifact_is_complete(&output));
+    }
+
+    #[test]
+    fn an_empty_body_is_refused_rather_than_promoted() {
+        let dir = TempDir::new().unwrap();
+        let output = dir.path().join("human.17.rna.fna.gz");
+        let partial = partial_download_path(&output);
+
+        // A fetch tool reporting success having written nothing: the shape that
+        // ends the RefSeq series, and one no downstream step can consume.
+        File::create(&partial).unwrap();
+        let url = "https://example.invalid/human.17.rna.fna.gz";
+        let err = promote_completed_download(&partial, &output, url)
+            .expect_err("an empty body is not a prepared artifact");
+
+        assert!(
+            err.to_string().contains("Downloaded 0 bytes"),
+            "unexpected error for an empty body: {err}"
+        );
+        assert!(
+            !output.exists(),
+            "an empty body must not be promoted into place"
+        );
+        assert!(
+            !partial.exists(),
+            "the empty scratch file must be discarded"
+        );
     }
 
     #[test]
