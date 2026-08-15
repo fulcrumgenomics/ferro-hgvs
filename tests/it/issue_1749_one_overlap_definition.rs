@@ -62,6 +62,16 @@ fn strict_accepts(input: &str) -> bool {
         .is_ok()
 }
 
+/// What strict mode settles `input` on. Panics if it refuses, so a caller that
+/// means to pin a *form* cannot silently degrade into pinning a refusal.
+fn strict_settles_on(input: &str) -> String {
+    let variant = parse_hgvs(input).expect("input must parse");
+    Normalizer::with_config(provider(), NormalizeConfig::strict())
+        .normalize(&variant)
+        .expect("strict must accept this input")
+        .to_string()
+}
+
 /// Two `dup`s over overlapping read spans compose, because they write at two
 /// different junctions — the row Mutalyzer refuses ("Variants overlap;
 /// overlapping variant locations are not allowed") and ferro accepts on purpose.
@@ -124,6 +134,32 @@ mod a_repeat_is_decided_by_its_own_arithmetic {
     /// unchanged and lands one extra copy at the junction 3' of 25 — a `dup`'s
     /// geometry, which is what keeps the two spellings of one shape in
     /// agreement (#1437).
+    ///
+    /// The second row asserted a **refusal** until the dup-plus-insertion
+    /// ruling, on the ground that "both write at junction 25, with nothing in
+    /// the description saying which goes first". The spec says otherwise, and
+    /// this is the clause that settles it — `duplication.md:90` publishes a
+    /// pair at one junction and orders it in prose:
+    ///
+    /// ```text
+    /// NC_000001.11(NM_206933.2):c.[675-542_1211-703dup;1211-703_1211-702insGTAAA]
+    ///   a duplication of the sequence from c.675-542 to c.1211-703,
+    ///   followed by the insertion of the sequence GTAAA.
+    /// ```
+    ///
+    /// The insertion's junction *is* the duplication's own write junction, and
+    /// "followed by" supplies the composition order — which is also the genomic
+    /// order `alleles.md:118` already requires members to be listed in. So the
+    /// pair is ordered, not ambiguous.
+    ///
+    /// Keeping the refusal here while the `dup` spelling of the same shape is
+    /// accepted would be precisely the #1437 disagreement this file exists to
+    /// close, so the row is flipped rather than carved out.
+    ///
+    /// It pins the **composed form**, not merely acceptance: ordering was the
+    /// whole of the original objection, so a test that only checked the input
+    /// were accepted would no longer be about anything. `insGTA` is the extra
+    /// `GT` followed by the `A`; the other order would spell `insAGT`.
     #[test]
     fn a_growing_repeat_writes_only_at_its_junction() {
         assert!(
@@ -131,10 +167,12 @@ mod a_repeat_is_decided_by_its_own_arithmetic {
             "the repeat grows, so it writes at junction 25 and the insertion at \
              21 collides with nothing"
         );
-        assert!(
-            !strict_accepts("NC_TEST.1:g.[20_25GT[4];25_26insA]"),
-            "both write at junction 25, with nothing in the description saying \
-             which goes first"
+        assert_eq!(
+            strict_settles_on("NC_TEST.1:g.[20_25GT[4];25_26insA]"),
+            "NC_TEST.1:g.25_26insGTA",
+            "both write at junction 25, and `duplication.md:90` orders that pair \
+             by the members' genomic order — the repeat's extra copy first, then \
+             the insertion"
         );
     }
 
@@ -164,15 +202,21 @@ mod a_repeat_is_decided_by_its_own_arithmetic {
     /// The two spellings of one shape get one verdict, whichever the per-member
     /// pipeline picked. This is #1437's argument and the reason the unification
     /// could not simply give `repeat` its whole span.
+    ///
+    /// **The pairs must denote the same edit, or the test is about nothing.**
+    /// They read `A[4]` against `10_11dup` because the tract at 10-11 is `AA`,
+    /// so a fourth `A`-unit is exactly the copy the `dup` adds. An earlier
+    /// version paired `A[3]`, which adds one base where the `dup` adds two —
+    /// invisible while the assertion compared only verdicts.
     #[test]
     fn the_dup_and_repeat_spellings_of_one_shape_agree() {
         for (repeat, dup) in [
             (
-                "NC_TEST.1:g.[10_11A[3];10_11insT]",
+                "NC_TEST.1:g.[10_11A[4];10_11insT]",
                 "NC_TEST.1:g.[10_11dup;10_11insT]",
             ),
             (
-                "NC_TEST.1:g.[10_11A[3];11_12insT]",
+                "NC_TEST.1:g.[10_11A[4];11_12insT]",
                 "NC_TEST.1:g.[10_11dup;11_12insT]",
             ),
         ] {
@@ -185,6 +229,52 @@ mod a_repeat_is_decided_by_its_own_arithmetic {
                  author never made"
             );
         }
+    }
+
+    /// Agreeing on the *verdict* is not the whole contract once the verdict is
+    /// ACCEPT — two spellings that both refuse agree trivially, and two that
+    /// both accept can still settle on different forms. So the shared-junction
+    /// pair is pinned on the form as well.
+    ///
+    /// `insAAT` is the duplicated `AA` followed by the inserted `T`, which is
+    /// `duplication.md:90`'s "followed by" order. Both spellings reach it.
+    #[test]
+    fn the_two_spellings_settle_on_one_form_at_a_shared_junction() {
+        assert_eq!(
+            strict_settles_on("NC_TEST.1:g.[10_11A[4];11_12insT]"),
+            strict_settles_on("NC_TEST.1:g.[10_11dup;11_12insT]"),
+            "one shape, two spellings, one junction — the forms must agree"
+        );
+        assert_eq!(
+            strict_settles_on("NC_TEST.1:g.[10_11dup;11_12insT]"),
+            "NC_TEST.1:g.11_12insAAT",
+            "the duplicated `AA` followed by the inserted `T`"
+        );
+    }
+
+    /// **Known divergence, #1996.** When the sibling insertion is *interior* to
+    /// the duplicated span rather than at its write junction, the two spellings
+    /// are both accepted and settle on different forms: the `dup` merges into
+    /// one member, the `repeat` stays as two.
+    ///
+    /// Pinned as measured rather than left to the agreement test above, which
+    /// compares verdicts and so cannot see it. This divergence is **older than
+    /// the dup-plus-insertion ruling** — it reproduces byte-for-byte on
+    /// `origin/main` at `de8532ee`, where both rows are likewise accepted.
+    /// Recorded here so that fixing #1996 has a place to land, and so that the
+    /// difference is not mistaken for fallout of the junction ruling.
+    #[test]
+    fn an_interior_insertion_still_splits_the_two_spellings() {
+        assert_eq!(
+            strict_settles_on("NC_TEST.1:g.[10_11A[4];10_11insT]"),
+            "NC_TEST.1:g.[10_11insT;10_11A[4]]",
+            "#1996: the repeat spelling stays as two members"
+        );
+        assert_eq!(
+            strict_settles_on("NC_TEST.1:g.[10_11dup;10_11insT]"),
+            "NC_TEST.1:g.10_11insTAA",
+            "#1996: the dup spelling merges into one"
+        );
     }
 }
 

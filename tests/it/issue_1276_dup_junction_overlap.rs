@@ -101,11 +101,41 @@ fn strict_rejects_a_duplication_interior_to_a_delins() {
     ));
 }
 
-/// A duplication and an insertion competing for one junction are ambiguous in
-/// exactly the way two insertions at one junction are: nothing orders them.
+/// A duplication and an insertion at one junction are **accepted**.
+///
+/// This test asserted the opposite until the dup-plus-insertion ruling, and its
+/// old rationale — "ambiguous in exactly the way two insertions at one junction
+/// are: nothing orders them" — is the conflation that ruling removed. Two
+/// insertions at one junction genuinely have nothing to order them, because both
+/// write at the same interbase point. A duplication and an insertion do not
+/// compete: the insertion consumes no reference base, so only one member claims
+/// a base and the pair has a defined resulting sequence.
+///
+/// Ruled in `delins-adjacent-members-when-both-consume-reference`, whose
+/// duplication half decides the *accept* question (yes — `duplication.md:90`
+/// publishes this geometry, `:91` glosses the member order).
+///
+/// The **form** question that ruling leaves open is deliberately not blessed
+/// here. The settled string below is recorded as measured behaviour, not as a
+/// verdict: the pair currently coalesces into a single member, and whether that
+/// or the split spelling is canonical cannot be decided until the choice is made
+/// after the member set is final (#1946). If a change moves this string, that is
+/// a fact to weigh against that open question — not automatically a regression.
 #[test]
-fn strict_rejects_a_duplication_and_an_insertion_at_one_junction() {
-    assert!(strict_rejects_as_overlap("NM_TEST.1:c.[5_6dup;6_7insA]"));
+fn strict_accepts_a_duplication_and_an_insertion_at_one_junction() {
+    const INPUT: &str = "NM_TEST.1:c.[5_6dup;6_7insA]";
+    assert!(
+        !strict_rejects_as_overlap(INPUT),
+        "the pair writes disjoint content and must be accepted"
+    );
+    // Measured, not blessed. The duplication is absorbed into the insertion:
+    // its two copied bases and the inserted `A` become one three-base payload
+    // at the shared junction, and the `dup` label does not survive.
+    assert_eq!(
+        normalize_lenient(INPUT),
+        "NM_TEST.1:c.6_7insAAA",
+        "records the coalesced form; the form question is open, see the doc comment"
+    );
 }
 
 /// The regression proper: lenient normalization must not emit a form that its
@@ -191,9 +221,20 @@ fn non_overlapping_duplications_are_still_accepted() {
 /// The warning names each conflicting member by its real edit kind. Before
 /// #1243 a same-junction group was assumed to be all insertions and hardcoded
 /// `"ins"`, which would now mislabel the duplication.
+///
+/// The input moved when the dup-plus-insertion ruling made the original
+/// `[5_6dup;6_7insA]` a **non**-conflict — it now coalesces and emits no
+/// `OverlapConflict` at all, so it can no longer witness a labelling contract
+/// about conflicting members. #1243's contract is untouched and is asserted
+/// here on a shape that still conflicts: a duplication interior to an
+/// inversion, which the sibling test above pins as rejected under strict.
+///
+/// Keeping the dup in the input is the point. A hardcoded `"ins"` is exactly
+/// what this test exists to catch, and only a conflicting group *containing a
+/// duplication* can catch it.
 #[test]
 fn the_warning_names_the_duplication_as_a_dup() {
-    let variant = parse_hgvs("NM_TEST.1:c.[5_6dup;6_7insA]").expect("parse");
+    let variant = parse_hgvs("NM_TEST.1:c.[4_10inv;5_6dup]").expect("parse");
     let result = Normalizer::new(provider())
         .normalize_with_diagnostics(&variant)
         .expect("lenient mode must not reject");
@@ -216,13 +257,13 @@ fn the_warning_names_the_duplication_as_a_dup() {
     );
     // The contract is that *each* member is named by its real edit kind, so
     // pin both labels: asserting only `dup` would still pass if the sibling
-    // insertion were mislabelled.
+    // were mislabelled.
     assert!(
         overlap_kinds.iter().any(|kinds| {
             let mut sorted: Vec<&str> = kinds.iter().map(String::as_str).collect();
             sorted.sort_unstable();
-            sorted == ["dup", "ins"]
+            sorted == ["dup", "inv"]
         }),
-        "the overlap warning must name its members as `dup` and `ins`; got {overlap_kinds:?}"
+        "the overlap warning must name its members by their real kinds; got {overlap_kinds:?}"
     );
 }
