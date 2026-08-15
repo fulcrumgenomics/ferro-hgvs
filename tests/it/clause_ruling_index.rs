@@ -110,10 +110,9 @@
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
-//! ```text
 //! CLAUSE -> RECORD INDEX
 //! 32 records, 29 decided / 3 undecided
-//! 114 clause lines, of which 36 are named by more than one record
+//! 114 clause lines, of which 39 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -286,7 +285,8 @@
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:5
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
-//! docs/recommendations/DNA/duplication.md:17
+//! docs/recommendations/DNA/duplication.md:17  [MULTI]
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -298,9 +298,11 @@
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:60
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
-//! docs/recommendations/DNA/duplication.md:90
+//! docs/recommendations/DNA/duplication.md:90  [MULTI]
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//! docs/recommendations/DNA/duplication.md:91
+//! docs/recommendations/DNA/duplication.md:91  [MULTI]
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:92
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -520,12 +522,21 @@
 //! docs/recommendations/DNA/delins.md:89
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:17
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:90
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:91
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:148
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
@@ -593,7 +604,6 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! ```
 //! <!-- END GENERATED INDEX -->
 //!
 //! # Reading the mixed-verdict block
@@ -1074,7 +1084,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        36,
+        39,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
