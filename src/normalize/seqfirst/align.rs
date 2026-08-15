@@ -48,12 +48,29 @@
 //! exceeds its own band, which costs at most twice the final pass. The **DP** is
 //! then `Θ((n + m) · k)` rather than `Θ(n · m)`.
 //!
-//! # `build` as a whole is not, and the measurement says so (#1928)
+//! # Storage is banded too (#1988)
 //!
-//! **Storage is unchanged** — the grids keep their full `(n + 1) x (m + 1)`
-//! shape and their `i * width + j` addressing. So `build` still *allocates and
-//! zeroes* `Θ(n · m)` even though it now *fills* `Θ((n + m) · k)`, and past a
-//! certain width that allocation is the whole cost.
+//! Every grid is band-major: `(n + 1)` rows of `min(hi - lo, m) + 1` cells
+//! (`hi - lo` is `k` up to a parity adjustment — see [`BandLayout`]), addressed
+//! by [`BandLayout`], so `build` allocates and zeroes `Θ((n + m) · k)` rather
+//! than `Θ(n · m)`. The stride's `min` is what makes that a narrowing in every
+//! shape rather than only in the low-divergence one — see [`BandLayout`] for
+//! why a diagonal-count stride would be a 500x *pessimisation* on a `1000 x 1`
+//! block.
+//!
+//! This is a **storage** change and not a semantic one, on the same argument as
+//! the band itself: a cell outside the band lies on no minimal alignment, so
+//! declining to reserve a slot for it removes nothing that was ever `true`. It
+//! is not left to the argument either — the five
+//! `the_band_agrees_with_the_full_grid_*` tests diff the banded build against
+//! the pre-band one over **every cell of the full grid**, so a narrowed cell
+//! that should have been retained shows up as a disagreement at that cell.
+//!
+//! # Why it was worth doing: the shortfall the band left (#1928)
+//!
+//! Before #1988, storage kept its full `(n + 1) x (m + 1)` shape while the fill
+//! was banded, so `build` still allocated and zeroed `Θ(n · m)`, and past a
+//! certain width that allocation was the whole cost.
 //!
 //! Measured on a quiet dedicated c7i.4xlarge (x86_64, 4 kB pages), criterion
 //! against the immediately preceding commit, so banding is the only variable.
@@ -83,12 +100,23 @@
 //!   because the latter runs after the `n = 4096` cases have already faulted in a
 //!   large arena. Banded timings are sensitive to allocator state in a way the
 //!   unbanded ones were not (their baselines differ by only 15%).
-//! - **Narrowing the storage to the band is now the lever**, not a tidy-up. It is
-//!   a separate change with a real refactor behind it; see [`AlignmentDag::build`].
+//! - **Narrowing the storage to the band was the lever that remained**, and it
+//!   is what the section above does (#1988). At `n = 4096, k = 2` the two grids
+//!   `build` retains go from `2 * 4097^2 = 33,570,818` cells to
+//!   `2 * 4097 * 3 = 24,582`, and the two cost grids with them.
 //!
-//! Whether that unfilled allocation costs resident *memory* is **not measured
-//! here** — criterion has no memory axis, and the peak-RSS harness was not run
-//! against this commit. Do not read the time win as a memory win.
+//! **No speedup is claimed here for #1988, and the two figures above must not be
+//! read as one.** The 7.9x is #1928's, measured on that host with criterion; no
+//! equivalent run has been made for the storage change, and this file's own
+//! first bullet is the reason not to guess one from a local timing.
+//!
+//! What *was* measured for #1988 is **peak RSS, on 16 kB pages only**:
+//! **101.8 MiB -> 5.73 MiB** for one `build` at `n = m = 4096, k = 2`. So on
+//! that platform the old allocation really was resident in full, and the win is
+//! real. The 4 kB-page host is **still unmeasured** and is where the geometry
+//! predicts the least to reclaim — see [`AlignmentDag::build`] for both, and do
+//! not carry either figure onto the other platform, or read a memory win as a
+//! time win.
 //!
 //! At high divergence the band is the whole grid and the doubling search is
 //! overhead paid for nothing: at `n = 1024`, `k = 614` (~0.6n, the uniform-random
@@ -129,18 +157,16 @@ pub struct AlignmentDag {
     /// ever the only thing keeping it alive under `dev` too.
     #[cfg_attr(not(feature = "dev"), allow(dead_code))]
     total: u32,
-    /// Lower bound (inclusive) on `i - j` for the diagonals [`AlignmentDag::build`]
-    /// examined. Every on-path cell lies inside `band_lo ..= band_hi`; a cell
-    /// outside was never written and so reads `false` from `on_optimal_path`,
-    /// which is what makes [`AlignmentDag::cells`] safe to clip to the same
-    /// range.
-    band_lo: i64,
-    /// Upper bound (inclusive) on `i - j`; see [`AlignmentDag::band_lo`].
-    band_hi: i64,
-    /// Row-major `(ref_len + 1) x (alt_len + 1)`; `true` when the cell lies on
-    /// at least one minimal alignment.
+    /// The diagonals [`AlignmentDag::build`] examined, and how their cells are
+    /// addressed. Every on-path cell lies inside the band; a cell outside it has
+    /// no slot, which is why every read goes through
+    /// [`BandLayout::contains`] first and what makes [`AlignmentDag::cells`]
+    /// safe to clip to the same range.
+    band: BandLayout,
+    /// Band-major, `band.len()` cells; `true` when the cell lies on at least one
+    /// minimal alignment.
     on_optimal_path: Vec<bool>,
-    /// Row-major, parallel to `on_optimal_path`. One bit per possible out-edge:
+    /// Band-major, parallel to `on_optimal_path`. One bit per possible out-edge:
     /// [`OUT_MATCH`], [`OUT_SUB`], [`OUT_DEL`], [`OUT_INS`].
     ///
     /// A flat bitmask rather than a `Vec<Vec<_>>`. A cell has at most three
@@ -149,8 +175,9 @@ pub struct AlignmentDag {
     /// The nested form cost 24 bytes of `Vec` header per grid cell whether or
     /// not the cell was on-path — about 400 MB before a single edge was stored
     /// for the 4096 x 4096 block `benches/seqfirst_align.rs` measures — plus one
-    /// allocator call per on-path cell. This keeps the same `Θ(n·m)` space with
-    /// one allocation and an order-of-magnitude smaller constant.
+    /// allocator call per on-path cell. This keeps one allocation and an
+    /// order-of-magnitude smaller constant, over `Θ((n + m) · k)` cells since
+    /// #1988.
     out: Vec<u8>,
 }
 
@@ -240,38 +267,163 @@ fn band_for(ref_len: usize, alt_len: usize, k: usize) -> (i64, i64) {
     (lo, hi)
 }
 
-/// The columns row `i` occupies inside the band `lo ..= hi`, clamped to the
-/// grid. Never empty for a `k >= |delta|` band.
-fn row_span(i: usize, lo: i64, hi: i64, alt_len: usize) -> (usize, usize) {
-    debug_assert!(lo <= 0 && hi >= 0, "the band must contain diagonal 0");
-    let row = i as i64;
-    let first = (row - hi).max(0) as usize;
-    let last = (row - lo).min(alt_len as i64) as usize;
-    debug_assert!(first <= last, "row {i} has an empty band span");
-    (first, last)
+/// Where a band's cells live in memory (#1988).
+///
+/// Every grid this module allocates — the two cost grids, `on_optimal_path`,
+/// `out`, `dominators`'s in-degree table and `CanonicalAlignment`'s `to_go`
+/// planes — is addressed through one of these, so a change here narrows all of
+/// them at once.
+///
+/// **That coupling is structural, not tested, and the distinction matters.** All
+/// six read `band.len()` today, and a seventh consumer written the same way
+/// inherits the narrowing for free — but nothing *enforces* it. The guard,
+/// `the_storage_is_narrow_at_low_divergence_so_a_no_op_regression_is_caught`,
+/// pins an exact size on the two grids the DAG **retains** (`on_optimal_path`,
+/// `out`) and on the layout itself: **three** of the six. A regression that put
+/// `dominators`'s `in_degree` back to `(ref_len + 1) * (alt_len + 1)`, or sized
+/// `of`'s `to_go` planes from the grid, passes it untouched — and those are the
+/// two largest transients in the pipeline, `to_go` being `2 x size`. They are
+/// unguarded because both are locals of methods that drop them before returning,
+/// so asserting on them needs a test hook this change does not add. Read the
+/// guard as covering the retained grids only; the other three are carried by
+/// review.
+///
+/// # The addressing
+///
+/// Row `i` occupies columns `first(i) ..= last(i)`, with
+/// `first(i) = max(i - hi, 0)` and `last(i) = min(i - lo, m)`. Storing the rows
+/// back to back at a fixed `stride` gives
+///
+/// ```text
+/// index(i, j) = i * stride + (j - first(i))
+/// ```
+///
+/// which is the full grid's `i * (m + 1) + j` with the out-of-band prefix of
+/// each row squeezed out.
+///
+/// # Why the stride is `min(hi - lo, m) + 1` and not `hi - lo + 1`
+///
+/// A band's diagonal count is `hi - lo + 1`, which is `k + 1` only when
+/// `delta + k` is **even**: [`band_for`] rounds the two ends toward each other,
+/// so `hi - lo` is `k` on even parity and `k - 1` on odd, i.e.
+/// `hi - lo ∈ {k - 1, k}`. That is not a nicety — `delta = 0, k = 1` gives
+/// `lo = hi = 0`, a **one**-diagonal band, which is exactly the first rung of
+/// the doubling ladder `the_storage_is_narrow_at_low_divergence_…` pins.
+///
+/// Using the diagonal count as the stride is a **pessimisation** whenever it
+/// exceeds `m`: a `1000 x 1` block has `delta = 999` and so `k >= 999`, and a
+/// diagonal-count stride would store ~1000 columns per row where the grid itself
+/// has 2. Each row's span is clipped to the grid, and that clip
+/// bounds it by `min(hi - lo, m) + 1` (proved by cases on which of the two
+/// clamps bind — see the `debug_assert` in `row_span`). Taking the
+/// minimum therefore makes this layout **never larger than the full grid**, and
+/// exactly the full grid when the band covers it.
+///
+/// The rows are stored at a fixed stride rather than packed at their exact
+/// spans: a packed layout needs a per-row prefix-sum table to address, which is
+/// another `Θ(n)` allocation and a dependent load on every access, to save at
+/// most `k` cells per row near the two corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BandLayout {
+    ref_len: usize,
+    alt_len: usize,
+    /// Lower bound (inclusive) on `i - j`.
+    lo: i64,
+    /// Upper bound (inclusive) on `i - j`.
+    hi: i64,
+    /// Cells reserved per row.
+    stride: usize,
 }
 
-/// Levenshtein cost grid restricted to diagonals `lo ..= hi`, written into
-/// `grid` (row-major, `alt.len() + 1` columns — the *full* grid's shape).
+impl BandLayout {
+    /// The layout for the `(ref_len + 1) x (alt_len + 1)` grid restricted to
+    /// diagonals `lo ..= hi`.
+    ///
+    /// The band must contain diagonal 0 — every band [`band_for`] produces for a
+    /// `k >= |delta|` does, which is the only `k` the doubling search ever uses.
+    fn new(ref_len: usize, alt_len: usize, lo: i64, hi: i64) -> Self {
+        debug_assert!(lo <= 0 && hi >= 0, "the band must contain diagonal 0");
+        let stride = ((hi - lo) as usize).min(alt_len) + 1;
+        Self {
+            ref_len,
+            alt_len,
+            lo,
+            hi,
+            stride,
+        }
+    }
+
+    /// Cells to allocate for one grid under this layout.
+    pub(crate) fn len(&self) -> usize {
+        (self.ref_len + 1) * self.stride
+    }
+
+    /// The columns row `i` occupies inside the band, clamped to the grid. Never
+    /// empty for a `k >= |delta|` band.
+    fn row_span(&self, i: usize) -> (usize, usize) {
+        let row = i as i64;
+        let first = (row - self.hi).max(0) as usize;
+        let last = (row - self.lo).min(self.alt_len as i64) as usize;
+        debug_assert!(first <= last, "row {i} has an empty band span");
+        debug_assert!(
+            last - first < self.stride,
+            "row {i} spans {} cells but the stride is {}",
+            last - first + 1,
+            self.stride
+        );
+        (first, last)
+    }
+
+    /// `index(i, j) - j`, hoisted out of a row's inner loop.
+    fn row_base(&self, i: usize) -> usize {
+        // `first(i) <= i <= i * stride` because `stride >= 1`, so this cannot
+        // underflow.
+        i * self.stride - (i as i64 - self.hi).max(0) as usize
+    }
+
+    /// Whether `(i, j)` is on the grid **and** inside the band. A cell outside
+    /// the band has no slot at all under this layout, so this is the guard every
+    /// read must pass first.
+    pub(crate) fn contains(&self, i: usize, j: usize) -> bool {
+        let d = i as i64 - j as i64;
+        i <= self.ref_len && j <= self.alt_len && self.lo <= d && d <= self.hi
+    }
+
+    /// Slot of `(i, j)`. The caller must have established
+    /// [`contains`](Self::contains); there is no in-range answer otherwise.
+    pub(crate) fn index(&self, i: usize, j: usize) -> usize {
+        debug_assert!(
+            self.contains(i, j),
+            "({i}, {j}) is outside the band {}..={} of a {} x {} grid",
+            self.lo,
+            self.hi,
+            self.ref_len,
+            self.alt_len
+        );
+        self.row_base(i) + j
+    }
+}
+
+/// Levenshtein cost grid restricted to `band`'s diagonals, written into `grid`
+/// (band-major, `band.len()` cells — see [`BandLayout`]).
 ///
-/// Cells outside the band are **left untouched**, which is the whole point and
-/// is why nothing may read them. Each predecessor is guarded by an explicit
-/// in-band test rather than by pre-filling the grid with a sentinel: that
-/// pre-fill would put back the `Θ(n·m)` pass the band exists to remove.
+/// Cells outside the band are not merely unwritten, they are **unallocated**, so
+/// nothing may read one. Each predecessor is guarded by an explicit in-band test
+/// rather than by pre-filling the grid with a sentinel: that pre-fill would put
+/// back the `Θ(n·m)` pass the band exists to remove.
 ///
-/// Safe to call repeatedly on one buffer with a widening band, which is what the
-/// doubling search in [`AlignmentDag::build`] does — a wider band is a superset,
-/// and every cell of it is recomputed here in dependency order.
-fn fill_edit_grid_banded(reference: &[u8], alt: &[u8], lo: i64, hi: i64, grid: &mut [u16]) {
+/// Every cell of `band` is written here in dependency order, so the buffer's
+/// prior contents are irrelevant — which is what lets [`AlignmentDag::build`]
+/// hand it a freshly sized buffer on each round of the doubling search.
+fn fill_edit_grid_banded(reference: &[u8], alt: &[u8], band: &BandLayout, grid: &mut [u16]) {
     let n = reference.len();
-    let m = alt.len();
-    let width = m + 1;
     for i in 0..=n {
-        let (first, last) = row_span(i, lo, hi, m);
+        let (first, last) = band.row_span(i);
+        let base = band.row_base(i);
         let row = i as i64;
         for j in first..=last {
             if i == 0 && j == 0 {
-                grid[0] = 0;
+                grid[base] = 0;
                 continue;
             }
             let col = j as i64;
@@ -279,19 +431,19 @@ fn fill_edit_grid_banded(reference: &[u8], alt: &[u8], lo: i64, hi: i64, grid: &
             // Diagonal: same `d`, so in band whenever this cell is.
             if i > 0 && j > 0 {
                 let cost = u16::from(reference[i - 1] != alt[j - 1]);
-                best = best.min(grid[(i - 1) * width + (j - 1)].saturating_add(cost));
+                best = best.min(grid[band.index(i - 1, j - 1)].saturating_add(cost));
             }
             // Up (a reference base deleted). Its diagonal is `(i - 1) - j`,
             // one below this cell's, so it is in band iff `row - col > lo`.
-            if i > 0 && row - col > lo {
-                best = best.min(grid[(i - 1) * width + j].saturating_add(1));
+            if i > 0 && row - col > band.lo {
+                best = best.min(grid[band.index(i - 1, j)].saturating_add(1));
             }
             // Left (an alternate base inserted). Its diagonal is `i - (j - 1)`,
             // one above this cell's, so it is in band iff `row - col < hi`.
-            if j > 0 && row - col < hi {
-                best = best.min(grid[i * width + (j - 1)].saturating_add(1));
+            if j > 0 && row - col < band.hi {
+                best = best.min(grid[band.index(i, j - 1)].saturating_add(1));
             }
-            grid[i * width + j] = best;
+            grid[base + j] = best;
         }
     }
 }
@@ -330,121 +482,162 @@ impl AlignmentDag {
     /// constant — measured at `n = 1024`, that is 1.56x *faster* still at
     /// `k = 512` and 11.2% *slower* at `k = 614`.
     ///
-    /// **`build` as a whole is not `Θ((n + m) · k)`, because space is still
-    /// `Θ(n · m)`** — deliberately, at this step: the grids keep their full
-    /// `(n + 1) x (m + 1)` shape and their `i * width + j` addressing, so
-    /// `index`, `contains_cell`, `out_edges` and `dominators`'s in-degree table
-    /// are untouched. So the allocation is unnarrowed while the fill is narrowed,
-    /// and past a certain width the allocation is the entire cost: the measured
-    /// speedup at `n = 4096, k = 2` is **7.9x against a ~1171x cell-count
-    /// ratio**. Narrowing the *storage* to the band is a separate change with a
-    /// real refactor behind it, and the module header's table is the argument for
-    /// doing it.
+    /// **Storage is banded too, since #1988.** Every grid is `Θ((n + m) · k)`
+    /// rather than `Θ(n · m)`, addressed through [`BandLayout`] — see there for
+    /// the index arithmetic and for why the stride is `min(hi - lo, m) + 1`
+    /// (`hi - lo` being `k` up to a parity adjustment, never simply `k`), which
+    /// is what keeps this layout from ever being *larger* than the full grid. The
+    /// doubling search reallocates as the band widens; the strides double, so
+    /// the whole ladder costs less than twice its final allocation.
     ///
-    /// # What this does to resident memory is UNMEASURED — do not infer it
+    /// Before that, the fill was banded and the allocation was not, and past a
+    /// certain width the allocation was the entire cost: the speedup measured at
+    /// `n = 4096, k = 2` was **7.9x against a ~1171x cell-count ratio**, i.e.
+    /// ~101 MB of zeroing at ~5 GB/s and almost no DP. The module header carries
+    /// that table and the argument it made.
     ///
-    /// The untouched part of a zero-initialised `Vec` is never resident, so a
-    /// banded write pattern could in principle shrink peak RSS by itself. Whether
-    /// it does **depends on the page size**, and the answer differs across the
-    /// two platforms this project builds on:
+    /// # Resident memory: MEASURED on 16 kB pages, still unmeasured on 4 kB
     ///
-    /// - **16 kB pages** (Apple silicon): a grid row is 7.7 kB at the canonical
-    ///   window, so a row is *under* one page and consecutive rows share pages.
-    ///   The band crosses every row, so every page is faulted in regardless and
-    ///   banding the computation should save nothing.
-    /// - **4 kB pages** (the Linux host the timings above come from): a row spans
-    ///   ~2 pages, and the band is diagonal — row `i` touches columns near `i`,
-    ///   hence only *one* of that row's pages. So a substantial fraction of each
-    ///   grid may never be faulted.
+    /// Narrowing the *allocation* is not the same claim as lowering peak RSS —
+    /// the untouched part of a zero-initialised `Vec` is never resident, so how
+    /// much of the old full-size allocation was ever faulted in **depends on the
+    /// page size**, and the geometry predicts opposite answers on the two
+    /// platforms this project builds on. Only one of the two has been measured,
+    /// so read the two bullets differently:
     ///
-    /// Both are predictions from geometry. **Neither has been measured**:
-    /// criterion has no memory axis, and the peak-RSS harness was not run against
-    /// this commit on either page size. Do not cite the time win as a memory win,
-    /// and do not carry the 16 kB conclusion onto a 4 kB host.
+    /// - **16 kB pages** (Apple silicon) — **measured, and the prediction
+    ///   held**. A grid row is 7.7 kB at the canonical window, so a row sits
+    ///   *under* one page and consecutive rows share pages; the band crosses
+    ///   every row, so every page was faulted in regardless and the whole
+    ///   allocation was resident. Peak RSS for one `build` at
+    ///   `n = m = 4096, k = 2`, release profile, four reps either side:
+    ///   **106,758,144 B (101.8 MiB) before, 6,012,928 B (5.73 MiB) after** — a
+    ///   17.8x reduction, ~96 MiB. Rep spread was 0.015% / 0.14%, and the
+    ///   "before" figure is within 1% of the ~101 MB of grids the arithmetic
+    ///   above predicts, which is what says they really were all resident. The
+    ///   5.73 MiB that remains is the process floor — binary, runtime, the two
+    ///   4 KiB blocks — not the DAG. **Say which grids, because the two answers
+    ///   differ by 3x:** at this shape the layout is `4097 × 3 = 12,291` cells,
+    ///   so the two grids the DAG *retains* (`on_optimal_path` and `out`, one
+    ///   byte per cell each) are **24 KiB** together, while the four live
+    ///   simultaneously inside `build` — those two plus `prefix` and
+    ///   `suffix_grid` at two bytes per cell — are **72 KiB**. Both are noise
+    ///   beside 5.73 MiB, which is the point being made; neither is 36 KiB,
+    ///   which is what this sentence used to say and is not either quantity.
+    /// - **4 kB pages** (the Linux host the timings above come from) — **still
+    ///   unmeasured, and the win is expected to be smaller**. A row spans ~2
+    ///   pages and the band is diagonal, so row `i` touches only *one* of them
+    ///   and much of each grid may never have been faulted in the first place.
+    ///   Do **not** carry the 16 kB figure onto that host: it is the platform
+    ///   where the geometry predicts the least to reclaim.
+    ///
+    /// The measurement is peak RSS of a process doing one `build` and nothing
+    /// else, so it isolates these grids and does not describe a normalizer run.
+    /// It says nothing about **time**: no criterion run has been made for this
+    /// change, and the module header's first bullet is the reason not to guess
+    /// one from a local timing.
     pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Option<Self> {
         let n = ref_block.len();
         let m = alt_block.len();
         if n.checked_add(m)? > MAX_ALIGNMENT_SPAN {
             return None;
         }
-        let width = m + 1;
-        let cell_count = (n + 1) * width;
         let delta = (n as i64 - m as i64).unsigned_abs() as usize;
         // The band at which every diagonal is in play. Reaching it terminates
         // the loop on an exact answer whatever the doubling does, so the
         // convergence test below is an optimisation and not the only exit.
         let widest = (n + m).max(1);
 
-        let mut prefix = vec![0u16; cell_count];
         // No alignment costs less than the length difference, so that is the
         // narrowest band worth trying; `max(1)` keeps a diagonal of width one
         // for the equal-length case.
         let mut k = delta.max(1).min(widest);
-        let (mut lo, mut hi) = band_for(n, m, k);
+        let (lo, hi) = band_for(n, m, k);
+        let mut band = BandLayout::new(n, m, lo, hi);
+        let mut prefix = vec![0u16; band.len()];
         loop {
-            fill_edit_grid_banded(ref_block, alt_block, lo, hi, &mut prefix);
+            fill_edit_grid_banded(ref_block, alt_block, &band, &mut prefix);
             // Confining the DP can only overestimate, so a distance the band
             // itself admits is the true one: every cell of every minimal
-            // alignment then lies inside `lo ..= hi`, and the band-confined
-            // value at each of them is its true value.
-            if prefix[n * width + m] as usize <= k || k >= widest {
+            // alignment then lies inside the band, and the band-confined value
+            // at each of them is its true value.
+            if prefix[band.index(n, m)] as usize <= k || k >= widest {
                 break;
             }
             k = (2 * k).min(widest);
-            (lo, hi) = band_for(n, m, k);
+            let (lo, hi) = band_for(n, m, k);
+            band = BandLayout::new(n, m, lo, hi);
+            // The band widened, so the buffer must too. Reallocated rather than
+            // resized: the next fill writes every cell of the wider band in
+            // dependency order, so nothing carried over would be read.
+            prefix = vec![0u16; band.len()];
         }
-        let total: u16 = prefix[n * width + m];
+        let total: u16 = prefix[band.index(n, m)];
 
         // Suffix distances, computed as prefix distances of the reversed
         // blocks: `suffix(i, j)` is the cost of aligning `ref[i..]` to
         // `alt[j..]`. Reversal maps diagonal `d` to `delta - d`, and the band is
-        // symmetric about `delta / 2`, so it carries over unchanged.
+        // symmetric about `delta / 2`, so both the band and its layout carry
+        // over unchanged — `(n - i, m - j)` sits on diagonal `delta - d`, which
+        // is in band exactly when `d` is.
         let ref_rev: Vec<u8> = ref_block.iter().rev().copied().collect();
         let alt_rev: Vec<u8> = alt_block.iter().rev().copied().collect();
-        let mut suffix_grid = vec![0u16; cell_count];
-        fill_edit_grid_banded(&ref_rev, &alt_rev, lo, hi, &mut suffix_grid);
-        let suffix = |i: usize, j: usize| suffix_grid[(n - i) * width + (m - j)];
+        let mut suffix_grid = vec![0u16; band.len()];
+        fill_edit_grid_banded(&ref_rev, &alt_rev, &band, &mut suffix_grid);
+        let suffix = |i: usize, j: usize| suffix_grid[band.index(n - i, m - j)];
 
-        let mut on_optimal_path = vec![false; cell_count];
+        let mut on_optimal_path = vec![false; band.len()];
         for i in 0..=n {
-            let (first, last) = row_span(i, lo, hi, m);
+            let (first, last) = band.row_span(i);
+            let base = band.row_base(i);
             for j in first..=last {
-                on_optimal_path[i * width + j] =
-                    prefix[i * width + j].saturating_add(suffix(i, j)) == total;
+                on_optimal_path[base + j] = prefix[base + j].saturating_add(suffix(i, j)) == total;
             }
         }
 
-        let mut out = vec![0u8; cell_count];
+        let mut out = vec![0u8; band.len()];
+        // `needless_range_loop` fires on `ref_block[i]` below and its suggestion
+        // is wrong: the loop runs `0..=n` over the grid's `n + 1` rows while
+        // `ref_block` holds `n` bases, so the offered
+        // `ref_block.iter().enumerate().take(n + 1)` silently drops the last row
+        // — the one holding the sink. `i` indexes three things of two different
+        // lengths here and is a grid coordinate, not a slice cursor.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..=n {
-            let (first, last) = row_span(i, lo, hi, m);
+            let (first, last) = band.row_span(i);
+            let base = band.row_base(i);
             for j in first..=last {
-                if !on_optimal_path[i * width + j] {
+                if !on_optimal_path[base + j] {
                     continue;
                 }
-                let here = prefix[i * width + j];
-                // `on_optimal_path` is tested *first* in each pair below. A
-                // neighbour outside the band holds an unwritten `prefix` cell,
-                // and its `false` flag is what keeps that cell from being read.
-                // Diagonal: match or substitution.
+                let here = prefix[base + j];
+                // Each neighbour is tested for band membership *first*. A cell
+                // outside the band has no slot at all under this layout, so —
+                // unlike the full-size grids this replaced, where an out-of-band
+                // neighbour was merely an unwritten cell holding `false` — the
+                // check is what keeps the index in range, not merely what keeps
+                // an unwritten value from being read.
+                // Diagonal: match or substitution. Same diagonal as this cell,
+                // so in band whenever it is on the grid.
                 if i < n && j < m {
                     let cost = u16::from(ref_block[i] != alt_block[j]);
-                    let next = (i + 1) * width + (j + 1);
+                    let next = band.index(i + 1, j + 1);
                     if on_optimal_path[next] && here + cost == prefix[next] {
-                        out[i * width + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
+                        out[base + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
                     }
                 }
-                // Down: deletion of a reference base.
-                if i < n {
-                    let next = (i + 1) * width + j;
+                // Down: deletion of a reference base. One diagonal above.
+                if i < n && band.contains(i + 1, j) {
+                    let next = band.index(i + 1, j);
                     if on_optimal_path[next] && here + 1 == prefix[next] {
-                        out[i * width + j] |= OUT_DEL;
+                        out[base + j] |= OUT_DEL;
                     }
                 }
-                // Right: insertion of an alternate base.
-                if j < m {
-                    let next = i * width + (j + 1);
+                // Right: insertion of an alternate base. One diagonal below.
+                if j < m && band.contains(i, j + 1) {
+                    let next = band.index(i, j + 1);
                     if on_optimal_path[next] && here + 1 == prefix[next] {
-                        out[i * width + j] |= OUT_INS;
+                        out[base + j] |= OUT_INS;
                     }
                 }
             }
@@ -454,8 +647,7 @@ impl AlignmentDag {
             ref_len: n as u32,
             alt_len: m as u32,
             total: u32::from(total),
-            band_lo: lo,
-            band_hi: hi,
+            band,
             on_optimal_path,
             out,
         })
@@ -481,13 +673,25 @@ impl AlignmentDag {
         self.alt_len
     }
 
+    /// How this DAG's cells are addressed, so a caller allocating a plane over
+    /// the same cells can be narrowed by the same band rather than sized to the
+    /// full grid. `CanonicalAlignment::of`'s `to_go` planes are the one such
+    /// caller.
+    pub(crate) fn band(&self) -> BandLayout {
+        self.band
+    }
+
     fn index(&self, i: u32, j: u32) -> usize {
-        i as usize * (self.alt_len as usize + 1) + j as usize
+        self.band.index(i as usize, j as usize)
     }
 
     /// Whether the cell lies on at least one minimal alignment.
+    ///
+    /// A cell outside the band is not on any minimal alignment (module header),
+    /// and has no slot under this DAG's layout — so the band test is both the
+    /// answer and the bounds check.
     pub(crate) fn contains_cell(&self, i: u32, j: u32) -> bool {
-        i <= self.ref_len && j <= self.alt_len && self.on_optimal_path[self.index(i, j)]
+        self.band.contains(i as usize, j as usize) && self.on_optimal_path[self.index(i, j)]
     }
 
     /// Every cell on a minimal alignment, in topological order (`i + j`
@@ -506,7 +710,7 @@ impl AlignmentDag {
     /// `on_optimal_path` — the clip removes scanning, not cells. That is what
     /// takes this walk from `Θ(n·m)` to `Θ((n + m) · k)`.
     pub(crate) fn cells(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        let (lo, hi) = (self.band_lo, self.band_hi);
+        let (lo, hi) = (self.band.lo, self.band.hi);
         (0..=self.ref_len + self.alt_len)
             .flat_map(move |d| {
                 let diag = i64::from(d);
@@ -519,23 +723,27 @@ impl AlignmentDag {
 
     /// Out-edges of a cell, as `(next_i, next_j, step)`.
     ///
-    /// `(i, j)` must be within the grid (`i <= ref_len`, `j <= alt_len`).
-    /// Off-grid is not uniformly caught in release: with `i < ref_len` an
-    /// out-of-range `j` wraps into a later row and silently returns another
-    /// cell's edges; in the last row (`i == ref_len`), or for any
-    /// `i > ref_len`, the flat index runs past the backing `Vec` and panics.
-    /// The `debug_assert` below catches both in debug builds.
+    /// `(i, j)` should be within the grid (`i <= ref_len`, `j <= alt_len`); the
+    /// `debug_assert` below catches a caller that strays. Off-grid and
+    /// out-of-band both yield **no edges** in release rather than aliasing
+    /// another cell — under the banded layout (#1988) every read is gated on
+    /// [`BandLayout::contains`], and a cell outside the band is on no minimal
+    /// alignment and so genuinely has no out-edges.
     pub(crate) fn out_edges(&self, i: u32, j: u32) -> impl Iterator<Item = (u32, u32, Step)> + '_ {
         debug_assert!(
             i <= self.ref_len && j <= self.alt_len,
-            "out_edges({i}, {j}) is off-grid ({} x {}) and would alias another cell",
+            "out_edges({i}, {j}) is off-grid ({} x {})",
             self.ref_len,
             self.alt_len
         );
         // Reconstructed from the mask and `(i, j)`. The order matches what the
         // nested-`Vec` form pushed — diagonal, then down, then right — so any
         // caller that depended on edge order is unaffected.
-        let mask = self.out[self.index(i, j)];
+        let mask = if self.band.contains(i as usize, j as usize) {
+            self.out[self.index(i, j)]
+        } else {
+            0
+        };
         [
             (mask & OUT_MATCH != 0).then_some((i + 1, j + 1, Step::Match)),
             (mask & OUT_SUB != 0).then_some((i + 1, j + 1, Step::Sub)),
@@ -607,13 +815,12 @@ impl AlignmentDag {
     /// path.
     ///
     /// The sweep is `O(V + E)`, and since #1928 `cells()` walks only the band —
-    /// `Θ((n + m) · k)` — rather than filtering the whole grid. What is still
-    /// `Θ(n·m)` here is the `in_degree` table, which is sized to the full grid
-    /// because `index` addresses the full grid; it is a zeroed allocation of
-    /// which only band cells are ever touched. Deliberately not the per-edge
-    /// reachability probe the calibration prototype used — that is `O(E)` per
-    /// edge, which is fine for a 52 nt block and not for production. The probe
-    /// survives as the test oracle.
+    /// `Θ((n + m) · k)` — rather than filtering the whole grid. The `in_degree`
+    /// table is banded too since #1988: it is sized from `on_optimal_path`
+    /// rather than from the grid, so it cannot regress to `Θ(n·m)` on its own.
+    /// Deliberately not the per-edge reachability probe the calibration
+    /// prototype used — that is `O(E)` per edge, which is fine for a 52 nt block
+    /// and not for production. The probe survives as the test oracle.
     pub(crate) fn dominators(&self) -> Dominators {
         let mut result = Dominators::default();
         let sink = (self.ref_len, self.alt_len);
@@ -621,7 +828,7 @@ impl AlignmentDag {
 
         // In-degree within the DAG, needed to know when a node's incoming edges
         // stop crossing the frontier.
-        let mut in_degree = vec![0u32; (self.ref_len as usize + 1) * (self.alt_len as usize + 1)];
+        let mut in_degree = vec![0u32; self.on_optimal_path.len()];
         for &(i, j) in &order {
             for (ni, nj, _) in self.out_edges(i, j) {
                 in_degree[self.index(ni, nj)] += 1;
@@ -992,9 +1199,12 @@ mod tests {
             alt_len: m as u32,
             total: u32::from(total),
             // The whole grid, expressed as a band, so `cells()` scans all of it
-            // and the two walks are compared like for like.
-            band_lo: -(m as i64),
-            band_hi: n as i64,
+            // and the two walks are compared like for like. `BandLayout`'s
+            // stride collapses to `m + 1` for a band this wide, so the flat
+            // `i * width + j` vectors built above are addressed unchanged —
+            // which is what keeps this oracle the *pre-band* implementation
+            // rather than a re-expression of the banded one.
+            band: BandLayout::new(n, m, -(m as i64), n as i64),
             on_optimal_path,
             out,
         }
@@ -1004,6 +1214,15 @@ mod tests {
     /// DAG exposes: the distance, the retained cell set, every out-edge mask,
     /// the topological walk, and `dominators()`. Returns the edit distance so a
     /// caller can assert which `k` it actually exercised.
+    ///
+    /// The cell set and the edge masks are compared **over every cell of the
+    /// full `(n + 1) x (m + 1)` grid**, through the public accessors, rather
+    /// than by diffing the backing `Vec`s. Since #1988 the two builds do not
+    /// share a layout — that is the change — so a `Vec` diff would compare
+    /// storage rather than content and would report a difference for a
+    /// narrowing that lost nothing. Reading every grid cell is the stronger
+    /// question anyway: it additionally pins that a cell the band excludes
+    /// answers `false` and yields no edges, which a `Vec` diff never asked.
     fn assert_band_matches_full_grid(r: &[u8], a: &[u8]) -> u32 {
         // `build` refuses past `MAX_ALIGNMENT_SPAN` (#1970); every fixture here is
         // far below it, so a `None` is a bug in the fixture, not a decline to test.
@@ -1016,11 +1235,20 @@ mod tests {
             String::from_utf8_lossy(a)
         );
         assert_eq!(banded.total, full.total, "edit distance differs on {label}");
-        assert_eq!(
-            banded.on_optimal_path, full.on_optimal_path,
-            "retained cell set differs on {label}"
-        );
-        assert_eq!(banded.out, full.out, "out-edge masks differ on {label}");
+        for i in 0..=banded.ref_len() {
+            for j in 0..=banded.alt_len() {
+                assert_eq!(
+                    banded.contains_cell(i, j),
+                    full.contains_cell(i, j),
+                    "retained cell set differs at ({i}, {j}) on {label}"
+                );
+                assert_eq!(
+                    banded.out_edges(i, j).collect::<Vec<_>>(),
+                    full.out_edges(i, j).collect::<Vec<_>>(),
+                    "out-edges differ at ({i}, {j}) on {label}"
+                );
+            }
+        }
         assert_eq!(
             banded.cells().collect::<Vec<_>>(),
             full.cells().collect::<Vec<_>>(),
@@ -1293,5 +1521,96 @@ mod tests {
             "cells() visited {visited} of {grid} cells — that is grid-scale, so \
              the band is not narrowing the walk"
         );
+    }
+
+    /// The **storage** must be narrow, not merely the fill (#1988).
+    ///
+    /// This is the storage analogue of the guard directly above, and it exists
+    /// for the same reason: every `the_band_agrees_with_the_full_grid_*` test
+    /// asserts that the banded build *agrees* with the pre-band one, and a build
+    /// that allocated full-size grids and addressed them at
+    /// `i * (m + 1) + j` satisfies all of them trivially — that is exactly what
+    /// this module did before #1988, and it was correct then. So a regression to
+    /// full-size storage is invisible to the entire correctness suite, and the
+    /// only other signal is a criterion run, which CI does not do.
+    ///
+    /// Checked against a deliberate sabotage rather than assumed: pinning
+    /// `BandLayout::new`'s stride to `alt_len + 1` — which is behaviour-
+    /// preserving, since a wider stride only leaves unused gaps between rows —
+    /// leaves the `seqfirst` modules at **42 passed, 1 failed**, this test being
+    /// the one failure (`on_optimal_path holds 1050625 cells ... expected
+    /// 3075`), with all five differential tests, the brute-force dominator
+    /// oracle and the band-narrowness guard above still green.
+    #[test]
+    fn the_storage_is_narrow_at_low_divergence_so_a_no_op_regression_is_caught() {
+        // Two substitutions, spaced far apart, so the edit distance is exactly 2
+        // and no cheaper indel-bearing alignment exists. That fixes the whole
+        // doubling ladder — `delta = 0` seeds `k = 1`, whose one-diagonal band
+        // reports distance 2, so `k` doubles once to 2 and converges — and hence
+        // fixes the final band at three diagonals. The expected size is
+        // therefore an exact figure rather than a bound.
+        let mut state = 0x1988_u64 | 1;
+        let reference: Vec<u8> = (0..1024)
+            .map(|_| b"ACGT"[(next(&mut state) as usize) % 4])
+            .collect();
+        let mut alt = reference.clone();
+        for at in [3usize, 700] {
+            alt[at] = match alt[at] {
+                b'A' => b'C',
+                b'C' => b'G',
+                b'G' => b'T',
+                _ => b'A',
+            };
+        }
+        let dag = AlignmentDag::build(&reference, &alt)
+            .expect("1024 + 1024 is far below MAX_ALIGNMENT_SPAN");
+        assert_eq!(dag.edit_distance(), 2, "the fixture no longer has k = 2");
+
+        let rows = reference.len() + 1;
+        let grid = rows * (alt.len() + 1);
+        let expected = rows * 3;
+        for (what, stored) in [
+            ("on_optimal_path", dag.on_optimal_path.len()),
+            ("out", dag.out.len()),
+            ("the layout the sweeps allocate from", dag.band().len()),
+        ] {
+            assert_eq!(
+                stored, expected,
+                "{what} holds {stored} cells for a 3-diagonal band over {rows} rows; \
+                 expected {expected}, and the full grid would be {grid}"
+            );
+        }
+
+        // The same property stated as the one the issue is about, so a future
+        // change to the exact stride cannot quietly restore grid-scale storage
+        // while keeping the equalities above passing by moving `expected`.
+        assert!(
+            expected * 100 < grid,
+            "storage is {expected} of {grid} cells — that is grid-scale"
+        );
+    }
+
+    /// Storage must never exceed the full grid either — the direction a
+    /// diagonal-count stride gets wrong.
+    ///
+    /// `hi - lo + 1` is the obvious stride and is a **pessimisation** wherever
+    /// `k > m`: a `1000 x 1` block has `delta = 999`, so the band is 1000
+    /// diagonals wide while the grid has 2 columns, and storing one row per
+    /// diagonal would be ~500x *larger* than the thing it replaces. Degenerate
+    /// shapes are not hypothetical here — `MAX_ALIGNMENT_SPAN` exists because a
+    /// long literal `ins` payload arrives as exactly this (#1970).
+    #[test]
+    fn storage_never_exceeds_the_full_grid_on_a_degenerate_shape() {
+        for (n, m) in [(1000usize, 1usize), (1, 1000), (512, 0), (0, 512), (0, 0)] {
+            let reference = vec![b'A'; n];
+            let alt = vec![b'C'; m];
+            let dag = AlignmentDag::build(&reference, &alt).expect("far below MAX_ALIGNMENT_SPAN");
+            let grid = (n + 1) * (m + 1);
+            assert!(
+                dag.band().len() <= grid,
+                "a {n} x {m} block stores {} cells, more than the full grid's {grid}",
+                dag.band().len()
+            );
+        }
     }
 }

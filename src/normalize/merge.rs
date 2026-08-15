@@ -2181,10 +2181,9 @@ const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
 
 /// Largest alignment grid the sequence-first splitter will build, in cells.
 ///
-/// Every pass over the DAG is `Θ(n·m)` in **space** as well as time. Only the
-/// reference side is bounded upstream ([`MAX_CANONICAL_WINDOW`]); the alternate
-/// side is whatever the members produce, and a duplication over the whole window
-/// doubles it.
+/// Only the reference side is bounded upstream ([`MAX_CANONICAL_WINDOW`]); the
+/// alternate side is whatever the members produce, and a duplication over the
+/// whole window doubles it.
 ///
 /// # What the budget actually pays for
 ///
@@ -2211,11 +2210,28 @@ const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
 /// `canonical` arms — not the ~10 the old figure implied, and not the sum of the
 /// two columns either.
 ///
+/// **Read "cell" as a BANDED cell since #1988, and the budget as a worst case
+/// rather than a typical one.** Every row of that table is now sized to the band
+/// of diagonals a minimal alignment can occupy — `Θ((n + m) · k)` for `k` the
+/// edit distance — and not to `(n + 1) x (m + 1)`; the `Vec<(u32, u32)>` rows
+/// already were, via `cells()`. A maximally divergent pair (`k ≈ 0.6 n`, a
+/// uniform-random block) still allocates the whole grid — and so does **any**
+/// shape with `k >= m`, where the stride's `min` saturates at the grid width and
+/// `len` is `(n + 1)(m + 1)` exactly. A `1000 x 1` block is one; so are all five
+/// fixtures of `align::tests::storage_never_exceeds_the_full_grid_on_a_degenerate_shape`.
+/// That clamp is deliberate and is the *point* — a diagonal-count stride would
+/// make those shapes ~500x worse, not better — so the figures below still bound
+/// the budget rather than describe a real variant, which sits at
+/// single-digit `k`. This bound is what the cap is set against, deliberately:
+/// `k` is discovered inside `build` and is not available to a gate in front of
+/// it.
+///
 /// At the accepted boundary (a 4096 x 4096 block, `cells == MAX_SEQFIRST_GRID_CELLS`)
 /// ~18 bytes/cell over 16,785,409 cells is 302 MB, which is what the measured
-/// peak RSS of **~310 MB and 5–9 s** in a debug build says it is; adding the
-/// columns instead would predict 369 MB and disagree with the measurement. A
-/// release build cuts the time and not the memory.
+/// peak RSS of **~310 MB and 5–9 s** in a debug build said it was **before the
+/// storage narrowed** — that measurement predates #1988 and has not been
+/// retaken. Adding the columns instead would predict 369 MB and disagree with
+/// it. A release build cuts the time and not the memory.
 ///
 /// # Is the bound itself defensible?
 ///
@@ -15391,7 +15407,9 @@ mod tests {
     ///
     /// The reference side is bounded upstream by `MAX_CANONICAL_WINDOW` (4096),
     /// but the alternate side is not: a duplication over the window doubles it,
-    /// and `AlignmentDag::build` allocates four `Θ(n·m)` grids. The shape
+    /// and `AlignmentDag::build` allocates four grids whose worst case is
+    /// `Θ(n·m)` (banded to `Θ((n + m) · k)` since #1988, but `k` is discovered
+    /// inside `build` and so cannot be a term in a gate ahead of it). The shape
     /// `4096 -> 8192` is 33.5 M cells, past the bound, and must come back `None`
     /// so the caller keeps the per-member result.
     ///
