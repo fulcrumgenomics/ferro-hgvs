@@ -1343,12 +1343,30 @@ fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<Sel
 ///   is the exact order-dependence #1098 is about.
 ///
 /// **This function is the positional part of that key** — everything before the
-/// descriptor. [`cis_member_order_cmp`] adds the descriptor tie-break on top,
+/// descriptor. `cis_member_order_cmp` adds the descriptor tie-break on top,
 /// and only when it is going to decide.
+/// **Test-only, and deliberately so.** Nothing ships this form: both sorts run
+/// behind a single-accession gate, so the accession component is constant across
+/// every comparison they make and `cis_member_order_cmp_within_accession` is what
+/// they call. This is retained as the *reference* the shipped comparator is
+/// checked against — see
+/// `dropping_the_accession_is_the_same_order_within_one_accession` — because a
+/// claim that two orders agree needs both orders to exist.
+#[cfg(test)]
 pub(crate) fn cis_member_order_prefix(
     v: &HgvsVariant,
 ) -> (SmolStr, SelfCancellingPoint, SelfCancellingPoint, u8) {
     let accession = v.accession().map(Accession::full_smol).unwrap_or_default();
+    let (start, end, rank) = cis_member_position_key(v);
+    (accession, start, end, rank)
+}
+
+/// `cis_member_order_prefix` without the accession.
+///
+/// Both callers of the order gate on every member sharing one accession before
+/// they sort, so within a sort that component is the same value for every key
+/// and can decide no comparison — see [`cis_member_order_cmp_within_accession`].
+fn cis_member_position_key(v: &HgvsVariant) -> (SelfCancellingPoint, SelfCancellingPoint, u8) {
     // `SelfCancellingPoint` derives `Ord` over `(region, base, offset)` in that
     // field order, which is exactly the comparison this key wants, so the points
     // go in whole rather than flattened into six scalars.
@@ -1358,11 +1376,11 @@ pub(crate) fn cis_member_order_prefix(
     // because that is what "sorts last" spells.
     let sentinel = SelfCancellingPoint::new(true, i64::MAX, i64::MAX);
     let (start, end) = cis_member_range(v).unwrap_or((sentinel, sentinel));
-    (accession, start, end, junction_rank(v))
+    (start, end, junction_rank(v))
 }
 
 /// Compare two cis members by the total order described on
-/// [`cis_member_order_prefix`].
+/// `cis_member_order_prefix`.
 ///
 /// Exactly the lexicographic comparison of
 /// `(cis_member_order_prefix(v), format!("{v}"))`: a tuple consults its last
@@ -1370,16 +1388,41 @@ pub(crate) fn cis_member_order_prefix(
 /// `then_with` cannot change the order. It changes the cost — the descriptor is
 /// the whole member rendered, and the sort used to derive it for every member on
 /// every comparison, once per pass of the allele fixed-point loop.
+#[cfg(test)]
 pub(crate) fn cis_member_order_cmp(a: &HgvsVariant, b: &HgvsVariant) -> std::cmp::Ordering {
     cis_member_order_prefix(a)
         .cmp(&cis_member_order_prefix(b))
         .then_with(|| a.to_string().cmp(&b.to_string()))
 }
 
+/// `cis_member_order_cmp` for a member list already known to share a single
+/// accession.
+///
+/// **Identical ordering at such a call site, by construction.** The accession is
+/// the key's first component, and if every member renders the same accession
+/// then that component is equal in every comparison the sort makes, so it can
+/// decide none of them; dropping it leaves the remaining components — and the
+/// descriptor tie-break — to give exactly the order the full key gives.
+///
+/// The point is the cost. `sort_cis_members_by_genomic_order` establishes the
+/// single-accession precondition and then sorts, so the full key rendered both
+/// members' accessions on **every comparison** — `O(n log n)` renders of a value
+/// that was constant across the whole sort, once per pass of the allele
+/// fixed-point loop. On a 100-member allele that is thousands of renders per
+/// normalization; on the two-member alleles the sweep draws it is four.
+pub(crate) fn cis_member_order_cmp_within_accession(
+    a: &HgvsVariant,
+    b: &HgvsVariant,
+) -> std::cmp::Ordering {
+    cis_member_position_key(a)
+        .cmp(&cis_member_position_key(b))
+        .then_with(|| a.to_string().cmp(&b.to_string()))
+}
+
 /// Where within its own span a member adds sequence: `0` at the span's start,
 /// `1` at its end.
 ///
-/// Breaks a tie that [`cis_member_order_cmp`]'s `end` cannot (#1301). An
+/// Breaks a tie that `cis_member_order_cmp`'s `end` cannot (#1301). An
 /// insertion's span *is* the gap it fills, so `264_265insCA` adds at interbase
 /// 264; a duplication places its copy after its last base, so `264_265dup` adds
 /// at 265. The two share both endpoints, and without this the order fell to the
@@ -1433,7 +1476,7 @@ fn junction_rank(v: &HgvsVariant) -> u8 {
 /// positions, or a non-positional arm such as a null/unknown-allele marker).
 /// Reuses the per-axis range extractors that back the self-cancelling detector.
 ///
-/// The end is what breaks a start tie in [`cis_member_order_cmp`]; see that
+/// The end is what breaks a start tie in `cis_member_order_cmp`; see that
 /// function's docs for why the start alone is not a sufficient discriminator.
 fn cis_member_range(v: &HgvsVariant) -> Option<SelfCancellingRange> {
     match v {

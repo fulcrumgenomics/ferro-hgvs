@@ -2023,7 +2023,10 @@ fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
             .iter()
             .all(|m| m.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
-        members.sort_by(crate::hgvs::variant::cis_member_order_cmp);
+        // The single-accession gate just above is exactly the precondition the
+        // accession-free comparator needs, so this is the same order for less
+        // work — see `cis_member_order_cmp_within_accession`.
+        members.sort_by(crate::hgvs::variant::cis_member_order_cmp_within_accession);
     }
 }
 
@@ -15938,6 +15941,48 @@ mod tests {
             cis_member_order_cmp(&sub, &del),
             std::cmp::Ordering::Equal,
             "members sharing a start must still compare as distinct (total order)"
+        );
+    }
+
+    /// `sort_cis_members_by_genomic_order` drops the accession from the
+    /// comparison because it has just established that every member has the same
+    /// one. Pin both halves of that: identical to the full comparator when the
+    /// accessions agree, and — the reason it is not the default — genuinely
+    /// different when they do not, so the substitution stays tied to the gate.
+    #[test]
+    fn dropping_the_accession_is_the_same_order_within_one_accession() {
+        use crate::hgvs::variant::{cis_member_order_cmp, cis_member_order_cmp_within_accession};
+
+        let same: Vec<_> = [
+            "NC_000001.11:g.10A>G",
+            "NC_000001.11:g.10del",
+            "NC_000001.11:g.5_7del",
+            "NC_000001.11:g.20_21insAA",
+            "NC_000001.11:g.20dup",
+        ]
+        .iter()
+        .map(|s| parse_hgvs(s).unwrap())
+        .collect();
+        for a in &same {
+            for b in &same {
+                assert_eq!(
+                    cis_member_order_cmp(a, b),
+                    cis_member_order_cmp_within_accession(a, b),
+                    "`{a}` vs `{b}` ordered differently with and without the accession, \
+                     though both members carry the same one"
+                );
+            }
+        }
+
+        // Across accessions the two disagree, which is why the accession-free
+        // form is reachable only from behind the single-accession gate: a member
+        // on the later molecule at an earlier position sorts *after* by the full
+        // key and *before* without it.
+        let later_molecule = parse_hgvs("NC_000002.12:g.5A>G").unwrap();
+        assert_ne!(
+            cis_member_order_cmp(&later_molecule, &same[0]),
+            cis_member_order_cmp_within_accession(&later_molecule, &same[0]),
+            "the accession must still be what separates two molecules"
         );
     }
 

@@ -919,7 +919,7 @@ fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// fires every valid merge regardless of input order.
 ///
 /// The primary axis is the merge **anchor**'s `(end, start)` (not the display
-/// start point [`crate::hgvs::variant::cis_member_order_cmp`] uses): an edit
+/// start point `cis_member_order_cmp` uses): an edit
 /// ending at `X` must precede one starting at `X + 1`, and — crucially for a
 /// co-located ins/del — a span edit *at* a locus `p` must precede an insertion
 /// in the gap 3' of it. Insertions anchor as `[p + 1, p]`, so their `end = p`
