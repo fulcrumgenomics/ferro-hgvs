@@ -361,6 +361,99 @@ jobs:
             --changed-files changed-files.txt \
             --declaration-file pr-body.txt
 
+  # The queue's own commit has to be a commit `main` will accept, and `main`'s ruleset
+  # carries `required_signatures`. Nothing in CI looks at that, and when it is violated the
+  # queue reports it NOWHERE: every required context goes green, the merge-group run
+  # concludes `success`, and ~25 seconds later the entry is removed without merging. The
+  # pull request stays open, still reads fully green, and can be re-queued forever. That is
+  # #1978 — one PR ejected three times before the cause could be named, because the
+  # ejection leaves no failure anywhere to read.
+  #
+  # This is the same family as the `paths:`/`merge_group:` notes in `lint-workflows.yml`
+  # and above, one step further along: those are about a check that never REPORTS, this is
+  # about a merge that never HAPPENS. In all three the symptom is silence, and silence is
+  # what a required-status-check rule cannot distinguish from anything else.
+  #
+  # What produced it, measured rather than reasoned: GitHub composes the squash body from
+  # the pull request description, hard-wraps it, and writes its own `gpgsig` header into
+  # the commit object after the LAST line matching `^committer `. #1965's description
+  # contained "...only the committer differs.", and the wrap put `committer` at the start
+  # of a line — so the signature header landed inside the message instead of in the header
+  # block and the commit came back `verified: false`, `reason: "invalid"`. Over the 40
+  # merge-group commits built in the surrounding fourteen hours: 3 invalid, all three that
+  # one pull request's, 37 valid.
+  #
+  # DELIBERATELY NOT A REQUIRED CONTEXT, and not because that would be tidier to add.
+  # Requiring it would buy nothing: in every case this fires the entry is already
+  # unmergeable, so the queue drops it either way. The whole value here is putting a named
+  # red row where there was silence. (Making it required is also a ruleset change, which is
+  # a separate decision from a workflow edit.)
+  #
+  # There is deliberately no pull-request-side twin, and the reason is NOT that the wrap
+  # cannot be predicted. It largely can: a 72-column wrap that does not split long tokens
+  # reproduces #1965's affected paragraph line-for-line, and the 84/100/96-column maxima
+  # measured on three other merged squashes are that same wrap meeting an unbreakable URL
+  # or code span. What stops it being a guard is the false-positive side. The hazard is a
+  # header keyword landing at the START of a wrapped line, and `tree`, `author` and
+  # `parent` are ordinary words in this repository's PR prose ("working tree", "the author
+  # of"), so any line break that happens to fall before one produces a red on a
+  # description that is in fact fine — on undocumented wrap behaviour that GitHub can
+  # change under us. A check that is wrong sometimes becomes a check nobody reads, which
+  # this file argues against by name a few jobs down. So the question is asked in the one
+  # place it can be answered exactly rather than predicted: against the commit the queue
+  # actually built.
+  merge-commit-signature:
+    name: Merge commit signature
+    runs-on: ubuntu-latest
+    # `merge_group` only. This is a question about the commit the QUEUE built: a pull
+    # request head is a different object that never reaches `main`, and by `push: main` the
+    # commit has already been accepted, so the answer there is always yes.
+    if: github.event_name == 'merge_group'
+    steps:
+      - name: The merge group's commit must satisfy required_signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Retried, because a transient API failure would otherwise post a red row that
+          # says nothing about signatures at all. A genuinely invalid signature is stored
+          # on the object when it is created and does not become valid on a second read,
+          # so the retry cannot mask the condition this job exists to catch.
+          verification=""
+          for _ in 1 2 3; do
+            if verification=$(gh api "repos/${REPO}/commits/${MERGE_SHA}" \
+                 --jq '.commit.verification | "\(.verified)|\(.reason)"'); then
+              break
+            fi
+            verification=""
+            sleep 10
+          done
+          if [ -z "$verification" ]; then
+            echo "::error::could not read signature verification for ${MERGE_SHA}"
+            exit 1
+          fi
+          verified=${verification%%|*}
+          reason=${verification#*|}
+          echo "merge group commit ${MERGE_SHA}: verified=${verified} reason=${reason}"
+          if [ "$verified" = "true" ]; then
+            exit 0
+          fi
+          # Name the known cause, not only the symptom. A line of the MESSAGE beginning
+          # with a git header keyword is what misplaces the signature header, and the
+          # message is the wrapped pull request description.
+          gh api "repos/${REPO}/git/commits/${MERGE_SHA}" --jq '.message' > merge-message.txt
+          echo "message lines that read as git commit headers:"
+          grep -nE '^(tree|parent|author|committer|gpgsig|encoding|mergetag) ' \
+            merge-message.txt || echo "  (none)"
+          echo "::error::merge group commit ${MERGE_SHA} is not verified (${reason}). The"
+          echo "::error::ruleset on main requires signatures, so this entry will be dropped"
+          echo "::error::from the queue once every check passes, reporting no other failure."
+          echo "::error::If a line is listed above, reword the pull request description so"
+          echo "::error::that no line of the wrapped squash body starts with that word."
+          exit 1
+
   # Audit what the changelog's **Representation changes** section actually contains, by
   # rendering it with the real `release-plz.toml` and checking the result against the
   # trailers on the commits.
