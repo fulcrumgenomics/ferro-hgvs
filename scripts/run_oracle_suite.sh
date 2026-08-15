@@ -158,6 +158,7 @@ oracle_flags() {
 
 EXCLUDE="$(folded_scalar ORACLE_EXCLUDE)"
 SWEEPS="$(folded_scalar SWEEP_FILTER)"
+CENSUSES="$(folded_scalar CENSUS_FILTER)"
 TEMPLATE="$(oracle_selection_template)"
 # A read loop rather than `mapfile`, which is bash 4+: stock macOS still ships
 # bash 3.2 as /bin/bash, and a script that dies on `mapfile: command not found`
@@ -186,6 +187,16 @@ if [[ -z "$SWEEPS" ]]; then
     echo "  Its formatting changed; fix the awk in this script rather than inlining a copy." >&2
     exit 1
 fi
+# `CENSUS_FILTER`'s modules moved to the `censuses` job, which runs them on the
+# optimized archive; `test-oracle` negates them. An empty read here would put
+# them back into a local armed run -- not a known-red wall like an empty
+# `ORACLE_EXCLUDE`, but ~9 minutes of debug-profile census this script is not
+# meant to run, which reads as a hang rather than as a misconfiguration.
+if [[ -z "$CENSUSES" ]]; then
+    echo "error: could not read CENSUS_FILTER from $CI_YML." >&2
+    echo "  Its formatting changed; fix the awk in this script rather than inlining a copy." >&2
+    exit 1
+fi
 if [[ -z "$TEMPLATE" ]]; then
     echo "error: could not read test-oracle's -E selection from $CI_YML." >&2
     echo "  Its formatting changed; fix the awk in this script rather than inlining a copy." >&2
@@ -196,6 +207,7 @@ fi
 # `eval`, so nothing in `ci.yml` can execute here.
 SELECTION="${TEMPLATE//\$SWEEP_FILTER/$SWEEPS}"
 SELECTION="${SELECTION//\$ORACLE_EXCLUDE/$EXCLUDE}"
+SELECTION="${SELECTION//\$CENSUS_FILTER/$CENSUSES}"
 
 # Refuse a selection still naming a variable. A new `$FOO` in that expression
 # would otherwise reach nextest literally -- which either errors obscurely or,
@@ -210,6 +222,7 @@ fi
 if [[ "${1:-}" == "--print-selection" ]]; then
     printf 'ORACLE_EXCLUDE=%s\n' "$EXCLUDE"
     printf 'SWEEP_FILTER=%s\n' "$SWEEPS"
+    printf 'CENSUS_FILTER=%s\n' "$CENSUSES"
     printf 'SELECTION=%s\n' "$SELECTION"
     for flag in "${FLAGS[@]}"; do printf 'FLAG=%s\n' "$flag"; done
     exit 0
