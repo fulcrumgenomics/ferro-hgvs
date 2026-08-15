@@ -10,8 +10,7 @@
 //! `src/convert/` does **not** expose a dedicated `c. → r. variant-level
 //! conversion function**. The module contains:
 //!
-//! - `convert::coding`  — `validate_cds_pos` / `cds_to_transcript_pos`
-//!   (CDS → 0-based tx index helpers).
+//! - `convert::coding`  — `validate_cds_pos`.
 //! - `convert::genomic` — `validate_genome_pos` and basis conversions.
 //! - `convert::mapper::CoordinateMapper` — `cds_to_tx`, `tx_to_cds`,
 //!   `cds_to_protein`, `genomic_to_tx`, `tx_to_genomic`, plus intronic
