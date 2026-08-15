@@ -508,6 +508,7 @@ mod ruling_citation_currency;
 mod ruling_guard_field;
 mod sequence_normalize;
 mod service_tools_tests;
+mod soak_package_membership;
 mod spdi_dup_recovery;
 mod spdi_tests;
 mod spec_canonical_locks;

@@ -45,7 +45,7 @@ fn load_fixture_bytes() -> Option<Vec<u8>> {
     let path = "tests/fixtures/validation/cmrg_genes_exhaustive.json.gz";
     // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
     // which CI sets — see `common::bulk_fixtures`.
-    crate::common::bulk_fixtures::present_or_skip(path)?;
+    let path = crate::common::bulk_fixtures::present_or_skip(path)?;
     // Decompress to an in-memory Vec, then deser via `from_slice` rather
     // than `from_reader` over a streaming gzip pipeline. Empirically ~5x
     // faster on this fixture (34s -> 7s in debug mode) — `from_slice`

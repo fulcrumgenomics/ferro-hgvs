@@ -29,7 +29,7 @@
 //! fetches the fixtures, so absence can no longer masquerade as a pass; it stays
 //! unset locally, where skipping is the useful default.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 /// The environment variable that promotes a fixture-absence skip to a failure.
 pub const REQUIRE_ENV: &str = "FERRO_REQUIRE_BULK_FIXTURES";
@@ -85,11 +85,27 @@ fn missing_fixture_message(path: &str) -> String {
 
 /// Read a gzip-compressed bulk fixture's presence, applying the policy above.
 ///
-/// `Some(())` when the file exists; `None` after recording the skip (or after
-/// panicking, under `FERRO_REQUIRE_BULK_FIXTURES`).
-pub fn present_or_skip(path: &str) -> Option<()> {
-    if Path::new(path).exists() {
-        return Some(());
+/// `path` is relative to the WORKSPACE ROOT, and the resolved absolute path is
+/// what comes back — so the caller opens the file this function tested for,
+/// rather than re-resolving the same string against its own working directory.
+///
+/// **That is the whole reason it returns a path.** It used to answer `Some(())`
+/// and leave each caller to `File::open(path)`, which agreed only while every
+/// caller's process ran with the workspace root as its cwd. `#[cfg(test)]`
+/// callers no longer all do: nextest sets a test binary's cwd to its own
+/// PACKAGE root, and `normalize_axis_preserving` is compiled into
+/// `ferro-hgvs-soak-tests` as well as into `it` (see
+/// `tests-soak/tests/soak/main.rs`), where the same relative string would name
+/// `tests-soak/tests/fixtures/…`. Under `FERRO_REQUIRE_BULK_FIXTURES` that is a
+/// loud failure; without it, it is the silent one this module exists to
+/// prevent — three corpora reported absent and skipped green.
+///
+/// `None` after recording the skip (or after panicking, under
+/// `FERRO_REQUIRE_BULK_FIXTURES`).
+pub fn present_or_skip(path: &str) -> Option<PathBuf> {
+    let resolved = crate::common::fixture_gen::fixture_path(path);
+    if resolved.exists() {
+        return Some(resolved);
     }
     absent(path);
     None
@@ -116,9 +132,18 @@ fn the_missing_fixture_message_names_the_path_and_the_remedy() {
 }
 
 /// A fixture that exists is never a skip, whatever the variable says.
+///
+/// It also pins the resolution: the answer must be the workspace-root copy,
+/// which is what makes this test meaningful in `ferro-hgvs-soak-tests`, whose
+/// working directory is `tests-soak/` rather than the workspace root. Before
+/// `present_or_skip` resolved the path itself, this assertion failed there —
+/// which is how the silent-skip hazard on the bulk corpora was found.
 #[test]
 fn an_existing_bulk_fixture_path_is_present() {
-    assert_eq!(present_or_skip("tests/fixtures/README.md"), Some(()));
+    let resolved = present_or_skip("tests/fixtures/README.md")
+        .expect("tests/fixtures/README.md is committed and must resolve");
+    assert!(resolved.is_absolute(), "{resolved:?} is not absolute");
+    assert!(resolved.is_file(), "{resolved:?} is not a file");
 }
 
 /// The predicate's contract, pinned against the spellings CI and a developer

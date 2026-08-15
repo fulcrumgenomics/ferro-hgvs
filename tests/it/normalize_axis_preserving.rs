@@ -107,8 +107,8 @@ struct SpecRow {
 fn load_gzipped(path: &str) -> Option<Vec<u8>> {
     // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
     // which CI sets — see `common::bulk_fixtures`.
-    crate::common::bulk_fixtures::present_or_skip(path)?;
-    let file = File::open(path).unwrap_or_else(|e| panic!("failed to open {path}: {e}"));
+    let resolved = crate::common::bulk_fixtures::present_or_skip(path)?;
+    let file = File::open(&resolved).unwrap_or_else(|e| panic!("failed to open {path}: {e}"));
     let mut buf = Vec::new();
     GzDecoder::new(file)
         .read_to_end(&mut buf)

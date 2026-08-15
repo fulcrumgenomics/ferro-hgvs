@@ -1056,6 +1056,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferro-hgvs-soak-tests"
+version = "0.0.0"
+dependencies = [
+ "ferro-hgvs",
+ "flate2",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

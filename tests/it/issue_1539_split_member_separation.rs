@@ -35,7 +35,6 @@
 //! sees real reference bases, needs no `FERRO_MANIFEST`, and cannot skip.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ferro_hgvs::conformance::reference_window::{WindowFixture, WindowProvider};
@@ -47,6 +46,14 @@ use ferro_hgvs::reference::transcript::Transcript;
 use ferro_hgvs::spdi::convert::hgvs_to_spdi;
 use ferro_hgvs::{parse_hgvs, FerroError, HgvsVariant, Normalizer, ReferenceProvider};
 
+// Workspace-root-relative, and resolved through
+// `common::fixture_gen::fixture_path` rather than opened as written. nextest
+// sets a test binary's working directory to its own PACKAGE root, and this
+// module is compiled into two packages — `ferro-hgvs`'s `it` target and the
+// `ferro-hgvs-soak-tests` driver, which reaches
+// `forced_unchanged_columns` for `minimal_alignment_enumeration_proptest`'s
+// cross-check. In the second the cwd is `tests-soak/`, where these paths name
+// nothing.
 const INPUTS_TXT: &str = "tests/fixtures/split-member-separation/inputs.txt";
 const WINDOWS_JSON: &str = "tests/fixtures/split-member-separation/reference-windows.json";
 const REGENERATE: &str =
@@ -417,8 +424,9 @@ fn codon_resolver<P: ReferenceProvider>(
 /// lines ignored. `examples/extract_split_member_separation_windows.rs` applies
 /// the identical rule when capturing the windows.
 fn inputs() -> Vec<String> {
+    let path = crate::common::fixture_gen::fixture_path(INPUTS_TXT);
     let content =
-        std::fs::read_to_string(INPUTS_TXT).unwrap_or_else(|e| panic!("read {INPUTS_TXT}: {e}"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {INPUTS_TXT}: {e}"));
     content
         .lines()
         .map(str::trim)
@@ -428,7 +436,7 @@ fn inputs() -> Vec<String> {
 }
 
 fn window_fixture() -> WindowFixture {
-    WindowFixture::from_json_path(Path::new(WINDOWS_JSON))
+    WindowFixture::from_json_path(&crate::common::fixture_gen::fixture_path(WINDOWS_JSON))
         .unwrap_or_else(|e| panic!("load {WINDOWS_JSON}: {e}"))
 }
 
