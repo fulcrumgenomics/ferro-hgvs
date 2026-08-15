@@ -4836,12 +4836,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // input-order-independent, but a narrowing of the #395 verbatim
         // contract for that shift-emergent case.) Same-junction insertions are
         // already returned verbatim above (#1004), so they never reach here.
+        //
+        // The coincident-bounds half is read out of `all_warnings` rather than
+        // re-derived. `raw_conflicts` above is `detect_overlap_conflicts` on
+        // these same two arguments, `allele` is borrowed immutably and nothing
+        // between the two points can touch it, and a non-empty result returned
+        // before reaching here — so a second call is a pure function on
+        // unchanged inputs whose answer is already known to be the empty vector.
+        // It is not free: that pass is quadratic in the member count and renders
+        // an accession per member per pair.
+        debug_assert!(
+            raw_conflicts.is_empty(),
+            "a conflicting allele returns above, so the coincident-bounds pass \
+             cannot have anything left to report here"
+        );
         let input_has_overlap_conflict = all_warnings
             .iter()
-            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
-            || crate::normalize::overlap::detect_overlap_conflicts(&allele.variants, allele.phase)
-                .iter()
-                .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
+            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
         let reorder_before_merge = is_cis && !allele.uncertain && !input_has_overlap_conflict;
 
         let mut current = allele.variants.clone();
