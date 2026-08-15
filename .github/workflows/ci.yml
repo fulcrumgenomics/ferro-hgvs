@@ -443,10 +443,27 @@ jobs:
           # Name the known cause, not only the symptom. A line of the MESSAGE beginning
           # with a git header keyword is what misplaces the signature header, and the
           # message is the wrapped pull request description.
-          gh api "repos/${REPO}/git/commits/${MERGE_SHA}" --jq '.message' > merge-message.txt
-          echo "message lines that read as git commit headers:"
-          grep -nE '^(tree|parent|author|committer|gpgsig|encoding|mergetag) ' \
-            merge-message.txt || echo "  (none)"
+          # The diagnostic is best-effort and MUST NOT be able to suppress the
+          # explanation below it.  Under `set -e` an unguarded `gh api` aborts
+          # the step on any transient failure, printing the bare HTTP error and
+          # none of the `::error::` text — i.e. exactly the job's whole purpose
+          # is lost to a 404.  `|| true` on the fetch, and `|| :` on the grep so
+          # a real grep error (exit 2) is not laundered into the same "(none)"
+          # as a legitimate no-match (exit 1).
+          if gh api "repos/${REPO}/git/commits/${MERGE_SHA}" --jq '.message' \
+               > merge-message.txt 2> merge-message.err; then
+            echo "message lines that read as git commit headers:"
+            status=0
+            grep -nE '^(tree|parent|author|committer|gpgsig|encoding|mergetag) ' \
+              merge-message.txt || status=$?
+            if [ "$status" = 1 ]; then
+              echo "  (none)"
+            elif [ "$status" != 0 ]; then
+              echo "  (could not scan the message: grep exited ${status})"
+            fi
+          else
+            echo "  (could not read the commit message: $(head -1 merge-message.err))"
+          fi
           echo "::error::merge group commit ${MERGE_SHA} is not verified (${reason}). The"
           echo "::error::ruleset on main requires signatures, so this entry will be dropped"
           echo "::error::from the queue once every check passes, reporting no other failure."
