@@ -15,7 +15,8 @@
 //!   identical. Insertions are excluded here (they anchor at a boundary, not a
 //!   single-base span).
 //! - [`detect_insertion_overlaps`] — *pre-merge* junction overlaps: two
-//!   junction-anchored edits at one junction, or one interior to a span edit
+//!   junction-anchored edits at one junction *whose order nothing determines*,
+//!   or one interior to a span edit
 //!   (mutalyzer `EOVERLAP`, #486). Must run before the normalizer's merge step
 //!   collapses overlapping cis edits into one combined edit. "Junction-
 //!   anchored" covers a true `ins` plus the `dup` and `repeat` spellings (which
@@ -433,11 +434,20 @@ fn member_kind(variant: &HgvsVariant) -> Option<&'static str> {
 /// An insertion `a_(a+1)ins…` occupies the zero-width junction between
 /// reference positions `a` and `a+1`. It overlaps:
 ///
-/// - **another insertion** at the *same* junction (`[4_5insT;4_5insA]`); and
+/// - **another insertion** at the *same* junction (`[4_5insT;4_5insA]`) — two
+///   payloads into one slot with nothing to order them, for which
+///   `general.md:78` supplies the designated spelling `ins[A;B]`; and
 /// - **a span edit** (`del`/`delins`/`dup`/`inv`/`sub`/`repeat`) whose
 ///   reference range *strictly encloses* the junction, i.e.
 ///   `range.start <= a` and `a + 1 <= range.end`
 ///   (`[274_275delinsT;274_275insA]`).
+///
+/// It does **not** overlap a `dup`/`repeat` that writes into the same junction,
+/// when that is the only other occupant. `DNA/duplication.md:90` publishes such
+/// a pair as a correct description and glosses its order — the duplication
+/// "**followed by** the insertion" — so the composition is determined rather
+/// than ambiguous. Two `dup`s at one junction (`[3_6dup;5_6dup]`) carry no such
+/// gloss and remain a conflict.
 ///
 /// An insertion abutting a span's edge — e.g. `100_101ins` next to a single-
 /// base `100` substitution — is *not* interior, so it does not overlap. This
@@ -607,6 +617,46 @@ fn junction_overlaps(
     }
     for ((accession, coord_system, _gap), occupants) in &by_junction {
         if !include_same_junction || occupants.len() < 2 {
+            continue;
+        }
+        // …but a `dup`/`repeat` sharing a junction with ONE true `ins` is
+        // ordered by the spec, not undetermined.
+        //
+        // `DNA/duplication.md:90` publishes exactly this pair as a correct
+        // description — `NC_000001.11(NM_206933.2):c.[675-542_1211-703dup;
+        // 1211-703_1211-702insGTAAA]`, whose insertion sits at the junction the
+        // duplication writes its copy into — and glosses it "a duplication of
+        // the sequence from … **followed by** the insertion of the sequence
+        // `GTAAA`". That gloss supplies the very thing this branch's refusal
+        // says is missing, and the only thing the attached NOTE rejects is the
+        // `dupins` spelling.
+        //
+        // Keeping it split is also the reading that satisfies the *other*
+        // clause in play. `duplication.md:18` requires a variant describable as
+        // a duplication to be described as one, which is why the ledger's
+        // `delins-adjacent-members-when-both-consume-reference` left its `dup`
+        // half open rather than merging such a pair into one `delins` — merging
+        // destroys the `dup`. Accepting the split pair is the only answer that
+        // neither destroys the duplication nor refuses a shape the spec
+        // publishes.
+        //
+        // **Narrow deliberately.** Two true insertions at one junction stay a
+        // conflict: their order really is undetermined, and `general.md:78`
+        // supplies a different designated spelling for that content
+        // (`ins[A;B]`). Two junction-writing span edits stay a conflict too —
+        // `[3_6dup;5_6dup]` writes both copies into one slot with nothing to
+        // order them, and no clause glosses that pair. Only the mixed
+        // one-of-each case is ordered.
+        //
+        // Branch (b) is untouched: `dup`/`repeat` remain registered as junction
+        // occupants there, which is what #1446 is actually protecting — an
+        // interior `ins` that the per-member pipeline respells as a `dup` (CDS
+        // axis) or a `repeat` (genomic axis) must stay visible to the interior
+        // test, or the detector becomes spelling-sensitive and normalization
+        // stops being idempotent on a conflicting allele (#395).
+        let insertions_here = occupants.iter().filter(|(_, k)| *k == "ins").count();
+        let junction_writers_here = occupants.len() - insertions_here;
+        if insertions_here <= 1 && junction_writers_here <= 1 {
             continue;
         }
         // Render the junction via the occupant's HGVS Display (like branch (b)
