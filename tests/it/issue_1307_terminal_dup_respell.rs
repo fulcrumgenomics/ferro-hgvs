@@ -424,6 +424,16 @@ fn the_merged_output_denotes_the_inputs_bases() {
     // where the wrapped spelling would have been tempting, so it is the axis
     // where a wrong composition is most plausible — checking only `g.` would
     // leave the riskier half to a string comparison.
+    //
+    // Each row normalizes under **its own** accession. That is not cosmetic: the
+    // loop used to normalize every row under a hardcoded `NC_TEST.1` while
+    // verifying under the row's accession, so the two `m.` rows were served a
+    // provider holding no sequence for the accession they name, and the merge
+    // that this test exists to check never ran on them. Measured on #1987 —
+    // `m.[24dup;24C>G]` came back as `m.[24C>G;24dup]`, a reorder, where
+    // normalizing under `NC_012920.1` reaches the merged `m.23_24insG` that
+    // `the_circular_axis_gets_the_same_answer` pins. A reorder is
+    // sequence-preserving, so the check passed while asking nothing.
     for (accession, input) in [
         ("NC_TEST.1", "NC_TEST.1:g.[24dup;24C>G]"),
         ("NC_TEST.1", "NC_TEST.1:g.[24C>G;24dup]"),
@@ -431,7 +441,7 @@ fn the_merged_output_denotes_the_inputs_bases() {
         ("NC_012920.1", "NC_012920.1:m.[24dup;24C>G]"),
         ("NC_012920.1", "NC_012920.1:m.[24dup;24delinsGG]"),
     ] {
-        let output = normalize("NC_TEST.1", SEQUENCE, input);
+        let output = normalize(accession, SEQUENCE, input);
         assert_denotes_the_same_bases(accession, SEQUENCE, input, &output);
     }
 }
