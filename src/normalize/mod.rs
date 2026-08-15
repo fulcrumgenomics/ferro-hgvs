@@ -2002,7 +2002,7 @@ fn resolve_special_cds_pos(
 }
 
 /// Sort cis-allele members into genomic (coordinate) order using the total
-/// order `cis_member_order_key` (#1098). A no-op unless every member shares a
+/// order `cis_member_order_cmp` (#1098). A no-op unless every member shares a
 /// single accession — a mixed-accession bracketed allele (`[NC_…;NM_…]`,
 /// #218/#219) has no cross-molecule genomic order to canonicalize to, so those
 /// are left in authored order. The key is total (the rendered descriptor is the
@@ -2017,16 +2017,16 @@ fn resolve_special_cds_pos(
 fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
     let first_accession = members
         .first()
-        .and_then(|m| m.accession().map(|a| a.full()));
+        .and_then(|m| m.accession().map(|a| a.full_smol()));
     let single_accession = first_accession.is_some()
         && members
             .iter()
-            .all(|m| m.accession().map(|a| a.full()) == first_accession);
+            .all(|m| m.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
-        members.sort_by(|a, b| {
-            crate::hgvs::variant::cis_member_order_key(a)
-                .cmp(&crate::hgvs::variant::cis_member_order_key(b))
-        });
+        // The single-accession gate just above is exactly the precondition the
+        // accession-free comparator needs, so this is the same order for less
+        // work — see `cis_member_order_cmp_within_accession`.
+        members.sort_by(crate::hgvs::variant::cis_member_order_cmp_within_accession);
     }
 }
 
@@ -4839,12 +4839,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // input-order-independent, but a narrowing of the #395 verbatim
         // contract for that shift-emergent case.) Same-junction insertions are
         // already returned verbatim above (#1004), so they never reach here.
+        //
+        // The coincident-bounds half is read out of `all_warnings` rather than
+        // re-derived. `raw_conflicts` above is `detect_overlap_conflicts` on
+        // these same two arguments, `allele` is borrowed immutably and nothing
+        // between the two points can touch it, and a non-empty result returned
+        // before reaching here — so a second call is a pure function on
+        // unchanged inputs whose answer is already known to be the empty vector.
+        // It is not free: that pass is quadratic in the member count and renders
+        // an accession per member per pair.
+        debug_assert!(
+            raw_conflicts.is_empty(),
+            "a conflicting allele returns above, so the coincident-bounds pass \
+             cannot have anything left to report here"
+        );
         let input_has_overlap_conflict = all_warnings
             .iter()
-            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
-            || crate::normalize::overlap::detect_overlap_conflicts(&allele.variants, allele.phase)
-                .iter()
-                .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
+            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
         let reorder_before_merge = is_cis && !allele.uncertain && !input_has_overlap_conflict;
 
         let mut current = allele.variants.clone();
@@ -5102,7 +5113,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // leaving members in input order meant two inputs for the same allele
         // (`[a;b]` vs `[b;a]`) normalized to two different strings, breaking use
         // of the normalized descriptor as a stable key. Sort by a *total* order
-        // (`cis_member_order_key`) so the result is deterministic even when two
+        // (`cis_member_order_cmp`) so the result is deterministic even when two
         // members share a start.
         //
         // Basis: for DNA the spec discusses listing haplotype members "in
@@ -15909,26 +15920,69 @@ mod tests {
         // rendered descriptor), so member order never falls back to input
         // order. This is why a total order beats a stable sort keyed on start
         // alone.
-        use crate::hgvs::variant::cis_member_order_key;
+        use crate::hgvs::variant::{cis_member_order_cmp, cis_member_order_prefix};
 
         let sub = parse_hgvs("NC_000001.11:g.10A>G").unwrap();
         let del = parse_hgvs("NC_000001.11:g.10del").unwrap();
 
-        let key_sub = cis_member_order_key(&sub);
-        let key_del = cis_member_order_key(&del);
-
         // Same accession, same start point, and — since both are one base wide
-        // — the same end point too, so every positional field of the key ties
-        // and only the descriptor can separate them (#1261 added the end).
+        // — the same end point too, so every positional field ties and only the
+        // descriptor can separate them (#1261 added the end).
         assert_eq!(
-            (&key_sub.0, key_sub.1, key_sub.2),
-            (&key_del.0, key_del.1, key_del.2),
+            cis_member_order_prefix(&sub),
+            cis_member_order_prefix(&del),
             "the two members must share the whole positional portion of the key"
         );
-        // ...but distinct keys overall, via the rendered-descriptor tie-break.
+        // ...but they still compare as distinct, via the rendered-descriptor
+        // tie-break — which is also what pins that the deferred render actually
+        // runs when the prefix ties, rather than the comparison stopping at
+        // `Equal` and letting the sort fall back to input order.
         assert_ne!(
-            key_sub, key_del,
-            "members sharing a start must still get distinct keys (total order)"
+            cis_member_order_cmp(&sub, &del),
+            std::cmp::Ordering::Equal,
+            "members sharing a start must still compare as distinct (total order)"
+        );
+    }
+
+    /// `sort_cis_members_by_genomic_order` drops the accession from the
+    /// comparison because it has just established that every member has the same
+    /// one. Pin both halves of that: identical to the full comparator when the
+    /// accessions agree, and — the reason it is not the default — genuinely
+    /// different when they do not, so the substitution stays tied to the gate.
+    #[test]
+    fn dropping_the_accession_is_the_same_order_within_one_accession() {
+        use crate::hgvs::variant::{cis_member_order_cmp, cis_member_order_cmp_within_accession};
+
+        let same: Vec<_> = [
+            "NC_000001.11:g.10A>G",
+            "NC_000001.11:g.10del",
+            "NC_000001.11:g.5_7del",
+            "NC_000001.11:g.20_21insAA",
+            "NC_000001.11:g.20dup",
+        ]
+        .iter()
+        .map(|s| parse_hgvs(s).unwrap())
+        .collect();
+        for a in &same {
+            for b in &same {
+                assert_eq!(
+                    cis_member_order_cmp(a, b),
+                    cis_member_order_cmp_within_accession(a, b),
+                    "`{a}` vs `{b}` ordered differently with and without the accession, \
+                     though both members carry the same one"
+                );
+            }
+        }
+
+        // Across accessions the two disagree, which is why the accession-free
+        // form is reachable only from behind the single-accession gate: a member
+        // on the later molecule at an earlier position sorts *after* by the full
+        // key and *before* without it.
+        let later_molecule = parse_hgvs("NC_000002.12:g.5A>G").unwrap();
+        assert_ne!(
+            cis_member_order_cmp(&later_molecule, &same[0]),
+            cis_member_order_cmp_within_accession(&later_molecule, &same[0]),
+            "the accession must still be what separates two molecules"
         );
     }
 

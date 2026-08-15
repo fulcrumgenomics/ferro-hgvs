@@ -16,6 +16,7 @@ use crate::normalize::shuffle::shuffle;
 use crate::normalize::{boundary_delins_bases, BoundarySide, SequenceEnds};
 use crate::reference::ReferenceProvider;
 use crate::sequence::complement_base;
+use smol_str::SmolStr;
 
 /// Coordinate-system region used as the merge-eligibility key.
 ///
@@ -558,7 +559,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     //     1-based position `N` maps to transcript position `cds_start + N - 1`
     //     (delta = `cds_start - 1`) — the same mapping `lookup_codon_middle_ref`
     //     uses. Both regions have been restricted to the positive body above.
-    let accession = template_accession.transcript_accession();
+    let accession = template_accession.transcript_accession_smol();
     // Only the offset matters here — this collapse has no codon exception to
     // gate, so the frame's `reading_frame` half is not consulted.
     let Some(delta) = axis_frame(kind, &template_accession, provider).map(|frame| frame.delta)
@@ -784,7 +785,7 @@ fn merged_anchor_restates_reference<P: ReferenceProvider>(
     // runs before any comparison — or the bases fetched below are simply the
     // wrong ones, and a member that merely *looks* like a cancellation against
     // them would be dropped.
-    let provider_key = accession.transcript_accession();
+    let provider_key = accession.transcript_accession_smol();
     let Some(delta) = region_sequence_delta(region, &provider_key, provider) else {
         return false;
     };
@@ -899,7 +900,7 @@ fn simple_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// Raw location `(region, start, end)` for a sub-variant, regardless of edit
 /// kind. Unlike [`simple_range_for_variant`] it does not filter by edit kind or
 /// swap insertion endpoints — it is the positional fallback used by
-/// [`cis_merge_order_key`] to place non-merge-eligible members (`dup` / `inv` /
+/// [`cis_merge_order_cmp`] to place non-merge-eligible members (`dup` / `inv` /
 /// `repeat` / …) into genomic order too, so a merge barrier lands at its own
 /// coordinate instead of wherever it was authored.
 fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
@@ -918,7 +919,7 @@ fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// fires every valid merge regardless of input order.
 ///
 /// The primary axis is the merge **anchor**'s `(end, start)` (not the display
-/// start point [`crate::hgvs::variant::cis_member_order_key`] uses): an edit
+/// start point `cis_member_order_cmp` uses): an edit
 /// ending at `X` must precede one starting at `X + 1`, and — crucially for a
 /// co-located ins/del — a span edit *at* a locus `p` must precede an insertion
 /// in the gap 3' of it. Insertions anchor as `[p + 1, p]`, so their `end = p`
@@ -931,22 +932,41 @@ fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// order total so it never falls back to input order. Members with no simple
 /// location (special/uncertain/offset-only positions this pass cannot place)
 /// get a `no_position` sentinel and sort last, still deterministically.
-fn cis_merge_order_key(v: &HgvsVariant) -> (bool, Region, i64, i64, String) {
-    let descriptor = format!("{v}");
+///
+/// **This function is the positional part of that order — everything before the
+/// descriptor.** [`cis_merge_order_cmp`] applies the descriptor tie-break on top
+/// of it, and only when it is going to decide; this half reads no strings at
+/// all.
+fn cis_merge_order_prefix(v: &HgvsVariant) -> (bool, Region, i64, i64) {
     // Prefer the merge anchor (insertion endpoints swapped to `[p + 1, p]`);
     // fall back to the raw location for non-merge-eligible kinds.
     match simple_range_for_variant(v).or_else(|| location_range_for_variant(v)) {
-        Some((region, anchor_start, anchor_end)) => {
-            (false, region, anchor_end, anchor_start, descriptor)
-        }
+        Some((region, anchor_start, anchor_end)) => (false, region, anchor_end, anchor_start),
         // `Region::Genome` is an unused placeholder here — `no_position == true`
         // already segregates these, and the `i64::MAX` ties defer to the
         // descriptor tie-break.
-        None => (true, Region::Genome, i64::MAX, i64::MAX, descriptor),
+        None => (true, Region::Genome, i64::MAX, i64::MAX),
     }
 }
 
-/// Sort cis members into the canonical merge order (see [`cis_merge_order_key`])
+/// Compare two cis members by the canonical merge order.
+///
+/// Exactly the lexicographic comparison of
+/// `(cis_merge_order_prefix(v), format!("{v}"))` — a tuple's ordering consults
+/// its last component only when every earlier one ties, so deferring the render
+/// to `then_with` cannot change the order. What it changes is the cost: the
+/// descriptor is the *whole member*, rendered, and `sort_by_key` re-derives its
+/// key on every comparison, so the previous form rendered every member of every
+/// allele at least twice per sort — and this sort runs once per pass of the
+/// allele fixed-point loop, beside a second one on the same members
+/// (`sort_cis_members_by_genomic_order`).
+fn cis_merge_order_cmp(a: &HgvsVariant, b: &HgvsVariant) -> std::cmp::Ordering {
+    cis_merge_order_prefix(a)
+        .cmp(&cis_merge_order_prefix(b))
+        .then_with(|| a.to_string().cmp(&b.to_string()))
+}
+
+/// Sort cis members into the canonical merge order (see [`cis_merge_order_cmp`])
 /// so `merge_consecutive_edits` is input-order-independent (#1103).
 ///
 /// A no-op unless every member shares a single accession: `merge_consecutive_edits`
@@ -958,13 +978,13 @@ fn cis_merge_order_key(v: &HgvsVariant) -> (bool, Region, i64, i64, String) {
 pub(crate) fn sort_cis_members_for_merge(variants: &mut [HgvsVariant]) {
     let first_accession = variants
         .first()
-        .and_then(|v| v.accession().map(|a| a.full()));
+        .and_then(|v| v.accession().map(|a| a.full_smol()));
     let single_accession = first_accession.is_some()
         && variants
             .iter()
-            .all(|v| v.accession().map(|a| a.full()) == first_accession);
+            .all(|v| v.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
-        variants.sort_by_key(cis_merge_order_key);
+        variants.sort_by(cis_merge_order_cmp);
     }
 }
 
@@ -1445,7 +1465,7 @@ fn lookup_codon_middle_ref<P: ReferenceProvider>(
         return None;
     }
     let tx = provider
-        .get_transcript(&accession.transcript_accession())
+        .get_transcript(&accession.transcript_accession_smol())
         .ok()?;
     let cds_start = tx.cds_start?;
     let tx_idx_1based = cds_start.checked_add(cds_axis as u64)?.checked_sub(1)?;
@@ -3210,7 +3230,7 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     }
 
     let frame = axis_frame(kind, &template_accession, provider)?;
-    let accession = template_accession.transcript_accession();
+    let accession = template_accession.transcript_accession_smol();
 
     // `general.md:44` exempts deletions and duplications around an exon/exon
     // junction from the 3' rule on the transcript axes, and the per-member
@@ -4366,7 +4386,7 @@ fn authored_reference_mismatch<P: ReferenceProvider>(
         .flatten();
     let edit = rewritten.as_ref().unwrap_or(edit);
 
-    let provider_key = accession.transcript_accession();
+    let provider_key = accession.transcript_accession_smol();
     let delta = region_sequence_delta(region, &provider_key, provider)?;
     // Checked, like every other coordinate conversion in this file: `s`/`e`
     // come off a parsed description and `delta` off the record's CDS bounds, so
@@ -4662,7 +4682,7 @@ fn axis_frame<P: ReferenceProvider>(
         }),
         CisKind::Cds => {
             let tx = provider
-                .get_transcript(&accession.transcript_accession())
+                .get_transcript(&accession.transcript_accession_smol())
                 .ok()?;
             Some(AxisFrame {
                 delta: i64::try_from(tx.cds_start?).ok()? - 1,
@@ -4677,7 +4697,7 @@ fn axis_frame<P: ReferenceProvider>(
         // `fetch_ref_for_canonical_split` does for the same case.
         CisKind::Rna => {
             let cds_start = provider
-                .get_transcript(&accession.transcript_accession())
+                .get_transcript(&accession.transcript_accession_smol())
                 .ok()
                 .and_then(|tx| tx.cds_start);
             match cds_start {
@@ -10110,13 +10130,21 @@ struct MemberSpan {
     /// The member's accession as written, used to decide whether two members
     /// sit on the same reference. Keeps any genomic-context wrapper, so
     /// members differing only in that wrapper are not treated as siblings.
-    accession: String,
+    ///
+    /// A [`SmolStr`] rather than a `String`: this is only ever compared, and
+    /// every real accession is short enough to live inline, so the ten passes
+    /// that each read every member's span no longer allocate to do it. See
+    /// [`Accession::full_smol`].
+    accession: SmolStr,
     /// The same accession reduced to the bare form a provider is keyed by, per
     /// `Accession::transcript_accession`. `accession` itself may carry a
     /// wrapper (`NC_000013.11(BRCA2)`) that no provider has an entry for, so a
     /// lookup through it would silently fail and skip the rewrite; every other
     /// provider lookup in this module already reduces first.
-    provider_key: String,
+    ///
+    /// [`SmolStr`] for the same reason as `accession` above; it is handed to the
+    /// provider as a `&str` and never mutated.
+    provider_key: SmolStr,
     /// The region the span **starts** in. For a member wholly inside one region
     /// this is its region; for one crossing a boundary it is where the span
     /// begins, which is the axis its written coordinates are numbered on.
@@ -10222,7 +10250,7 @@ fn member_span<P: ReferenceProvider>(
 ) -> Option<MemberSpan> {
     let (accession, (start_region, axis_start), (end_region, axis_end), edit) =
         member_axis_endpoints(v, kind)?;
-    let provider_key = accession.transcript_accession();
+    let provider_key = accession.transcript_accession_smol();
     // One delta per *distinct* region, not one per endpoint. `region_span_delta`
     // resolves the transcript through the provider, so asking twice for the
     // region both endpoints almost always share is a duplicated hash lookup on
@@ -10258,7 +10286,7 @@ fn member_span<P: ReferenceProvider>(
     let start = start_delta.checked_add(axis_start)?;
     let end = end_delta.checked_add(axis_end)?;
     Some(MemberSpan {
-        accession: accession.full(),
+        accession: accession.full_smol(),
         provider_key,
         region: start_region,
         start,
@@ -10494,7 +10522,7 @@ fn repeat_would_land_off_its_unit<P: ReferenceProvider>(
         })
         .collect();
 
-    let provider_key = accession.transcript_accession();
+    let provider_key = accession.transcript_accession_smol();
     // `region_sequence_delta`, not the `region_span_delta` behind `MemberSpan`:
     // the span reader widens to regions with *virtual* positions so a member
     // there is still visible to its siblings, and no bases can be read through
@@ -13006,7 +13034,7 @@ fn member_out_of_bounds_coordinate<P: ReferenceProvider>(
     member: &HgvsVariant,
     provider: &P,
 ) -> Option<OutOfBoundsCoordinate> {
-    let accession = member.accession()?.transcript_accession();
+    let accession = member.accession()?.transcript_accession_smol();
     let length = provider.get_sequence_length(&accession).ok()?;
     let ceiling = i64::try_from(length).ok()?;
     readable_endpoints(member)
@@ -13020,7 +13048,7 @@ fn member_out_of_bounds_coordinate<P: ReferenceProvider>(
             // `g.0_1` (#1282) are the same family as the ones that produce
             // `g.24_25`.
             (position < 1 || position > ceiling).then(|| OutOfBoundsCoordinate {
-                accession: accession.clone(),
+                accession: accession.to_string(),
                 position,
                 length,
                 member: member.to_string(),

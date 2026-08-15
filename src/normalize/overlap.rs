@@ -32,6 +32,7 @@ use crate::hgvs::variant::{AllelePhase, HgvsVariant, LocEdit};
 use crate::normalize::footprint::WriteFootprint;
 use crate::normalize::merge::Region;
 use crate::normalize::NormalizationWarning;
+use smol_str::SmolStr;
 
 /// One position on a transcript-relative axis, ordered the way the axis reads.
 ///
@@ -175,7 +176,7 @@ pub(crate) fn detect_overlap_conflicts(
             .expect("group_key established a renderable location");
 
         warnings.push(NormalizationWarning::OverlapConflict {
-            accession: key.accession.clone(),
+            accession: key.accession.to_string(),
             coordinate_system: key.coord_system.to_string(),
             location: location_str,
             edit_kinds,
@@ -255,7 +256,7 @@ pub(crate) fn detect_overlap_conflicts(
                 .filter_map(|&idx| member_kind(&variants[idx]).map(|s| s.to_string()))
                 .collect();
             warnings.push(NormalizationWarning::OverlapConflict {
-                accession: first_accession.clone(),
+                accession: first_accession.to_string(),
                 coordinate_system: coord_system.to_string(),
                 location: location_for_variant(first)
                     .expect("member_footprint established a renderable location"),
@@ -281,9 +282,17 @@ pub(crate) fn detect_overlap_conflicts(
 /// an N-padded deletion over an uncertain range, …).
 fn member_footprint(
     variant: &HgvsVariant,
-) -> Option<(&'static str, String, WriteFootprint<AxisPos>)> {
+) -> Option<(&'static str, SmolStr, WriteFootprint<AxisPos>)> {
     let (coord_system, start, end) = simple_span(variant)?;
-    let accession = variant.accession()?.to_string();
+    // Rendered into a `SmolStr`, which is inline for every real accession, and
+    // identical bytes: `full_smol` drives the same writer `Display` does.
+    //
+    // This is the one place the accession is rendered for this whole module —
+    // #1749 collapsed four call sites into this one — and the *inner* loop of
+    // `detect_overlap_conflicts` calls it, so a `String` here is an allocation
+    // per **pair** of members. It is only ever compared; the owned form is built
+    // where a warning is actually emitted.
+    let accession = variant.accession()?.full_smol();
     let edit = inner_edit(variant)?;
     let footprint = match edit {
         // Rewrite the span they name, and leave bases standing there.
@@ -502,14 +511,14 @@ fn junction_overlaps(
     /// `repeat` lands there. `kind` is the label the emitted warning reports.
     struct Insertion {
         idx: usize,
-        accession: String,
+        accession: SmolStr,
         coord_system: &'static str,
         gap: AxisPos,
         kind: &'static str,
     }
     struct Span {
         idx: usize,
-        accession: String,
+        accession: SmolStr,
         coord_system: &'static str,
         start: AxisPos,
         end: AxisPos,
@@ -585,7 +594,7 @@ fn junction_overlaps(
     // its own spelling rather than labelling the whole group `ins`.
     /// `(accession, coordinate system, gap)` — one zero-width junction on one
     /// molecule. The ranked gap carries its own region (#1508).
-    type JunctionKey = (String, &'static str, AxisPos);
+    type JunctionKey = (SmolStr, &'static str, AxisPos);
     /// The members writing at a junction, as `(index into `variants`, kind)`.
     type Occupants = Vec<(usize, &'static str)>;
 
@@ -606,7 +615,7 @@ fn junction_overlaps(
         let location = location_for_variant(&variants[occupants[0].0])
             .expect("same-junction occupant has a renderable location");
         warnings.push(NormalizationWarning::OverlapConflict {
-            accession: accession.clone(),
+            accession: accession.to_string(),
             coordinate_system: coord_system.to_string(),
             location,
             edit_kinds: occupants.iter().map(|(_, k)| k.to_string()).collect(),
@@ -664,7 +673,7 @@ fn junction_overlaps(
             continue;
         }
         warnings.push(NormalizationWarning::OverlapConflict {
-            accession: span.accession.clone(),
+            accession: span.accession.to_string(),
             coordinate_system: span.coord_system.to_string(),
             location: location_for_variant(&variants[span.idx])
                 .expect("span edit has a renderable location"),
@@ -685,7 +694,12 @@ fn junction_overlaps(
 /// rather than collapsing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct GroupKey {
-    accession: String,
+    /// A [`SmolStr`], not a `String`: this is a map key and a comparand, never
+    /// mutated, and every real accession fits the inline capacity — so grouping
+    /// an allele's members no longer allocates one string per member. `SmolStr`
+    /// orders as the `str` does, so the `BTreeMap` iteration order this pass's
+    /// determinism rests on is unchanged.
+    accession: SmolStr,
     coord_system: &'static str,
     /// Ranked endpoints, which subsume the old separate `region` field: two
     /// members coincide only if both ends agree, and a ranked position already
