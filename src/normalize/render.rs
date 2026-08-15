@@ -12,8 +12,11 @@
 //! codebase pays to undo them afterwards: `lower_repeat_edits`,
 //! `demote_repeats_spanning_siblings`, `demote_coincident_tract_repeats` and
 //! `respell_colliding_duplications` exist for that and nothing else. Measured by
-//! ablation over the 86,170-row synthetic corpus, those four move **1,279**,
-//! **1,011**, **0** and **505** rows respectively, for a union of **2,761 (3.2%)**
+//! ablation over an earlier **86,170-row** revision of the synthetic corpus — the
+//! proportion is the argument, and the corpus is 96,182 rows on this branch at base
+//! `5567412f`, so read these as a share rather than as current counts — those four
+//! move **1,279**, **1,011**, **0** and **505** rows respectively, a union of
+//! **2,761 (3.2%)**
 //! — the three live ones are near-disjoint, overlapping on 34 rows in one pair.
 //! (`demote_coincident_tract_repeats`'s zero is structural, not safety: it builds a
 //! candidate group 7,413 times and every one is of size 1.)
@@ -112,8 +115,10 @@ use crate::reference::ReferenceProvider;
 ///
 /// And whatever constant the floor ends up with **must read the corpus size or be
 /// stated as an order of magnitude, never hardcode a row count.** The synthetic
-/// corpus has moved twice in this campaign alone — 85,642 to 85,930 to 86,170 — so a
-/// literal pinned to one of those is stale by the next family. That is the failure
+/// corpus has moved four times in this campaign alone — 85,642 to 85,930 to 86,170,
+/// and then to 96,182 when a rebase brought in the families other branches had been
+/// adding the whole time — so a literal pinned to one of those is stale by the next
+/// family, and this comment has had to be re-pointed once already. That is the failure
 /// `the_corpus_emits_a_block_past_the_split_cap` already shipped once, where a guard
 /// restating `MAX_SPLIT_BLOCK` as `1024` stayed green after the constant moved to
 /// 4096.
@@ -185,8 +190,11 @@ mod tests {
     ///
     /// So the multi-member half of the invariant is **not** asserted here. It is
     /// covered where the comparison does run over real alleles: the corpus harness's
-    /// `--verify-spdi` pass, which compared 86,170 rows and reported the seam moving
-    /// none. Saying that plainly is the point — listing a case the oracle cannot
+    /// `--verify-spdi` pass, which compared 86,170 rows at the time and reported the
+    /// seam moving none. The seam's no-op-ness is re-established at each base rather
+    /// than carried: at `5567412f` the branch's dump with its three added families
+    /// stripped is `diff`-identical to the base's own, over all 95,614 shared rows.
+    /// Saying that plainly is the point — listing a case the oracle cannot
     /// answer would put the silence straight back.
     #[test]
     fn the_stage_preserves_the_bases_its_members_denote() {

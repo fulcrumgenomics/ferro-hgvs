@@ -157,7 +157,7 @@
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never
-//! whether an output is *right*. Sixteen of the eighteen families cannot be asked:
+//! whether an output is *right*. Seventeen of the twenty-one families cannot be asked:
 //! they are sets of descriptions with no record of what the description was meant
 //! to denote. `separated_revcomp_runs` is built the other way round, choosing the
 //! alternate first and deriving the reference around it, so `(reference,
@@ -349,7 +349,7 @@ enum SpdiVerdict {
 /// one panicking row must not take the whole dump with it.
 ///
 /// The provider is built from [`Row::core`] and **not** from `Row::reference`
-/// (#1624). Those two are the same string for sixteen of the eighteen families,
+/// (#1624). Those two are the same string for seventeen of the twenty-one families,
 /// which is what made reading the wrong one survive review: the two families
 /// whose `reference` column is a *label* — `long_block_inversion` and
 /// `separated_revcomp_runs` — were verified against the label itself. On the
@@ -519,7 +519,7 @@ fn report_partition_declines() {
 /// re-running the old code.
 struct Row {
     /// The dump's `reference` column, and part of the row's identity. For
-    /// sixteen of the eighteen families this **is** the reference sequence; for
+    /// seventeen of the twenty-one families this **is** the reference sequence; for
     /// the two that bring their own designed references it is a label, because a
     /// kilobase core repeated on every row is not a column anyone can read.
     reference: String,
@@ -716,7 +716,7 @@ const PROTEIN_FAMILIES: &[(&str, &str)] = &[
 /// The family drawn against the **long** cores, and the one shape in this file
 /// whose point is its size rather than its geometry (#1460).
 ///
-/// Kept out of `FAMILIES` on purpose. The sixteen families there are crossed with
+/// Kept out of `FAMILIES` on purpose. The seventeen families there are crossed with
 /// every short core, and crossing a kilobase core with all of them would multiply
 /// the dump cost while adding no coverage: `MAX_SPLIT_BLOCK` gates on the *length*
 /// of the block being partitioned, not on how its members are arranged.
@@ -1055,12 +1055,23 @@ fn revcomp_inputs_for(axis: &str, design: &RevcompDesign) -> Vec<String> {
 /// separates an **authored** repeat from a **ferro-minted** one, which is the
 /// distinction a change to *where* the mint happens moves.
 ///
-/// # The measured zero this closes
+/// # The zero this was written to close, and what closed it first
 ///
-/// On `f7d177b5`, over the full 85,642-row corpus: **2,098 rows carry a repeat beside
-/// a sibling in the OUTPUT and 0 carry one in the INPUT.** The minted half was
-/// covered and the authored half was structural — `the_corpus_feeds_a_repeat_beside_a_sibling`
-/// is that zero as a live guard.
+/// On `f7d177b5`, over the then-85,642-row corpus: **2,098 rows carry a repeat beside
+/// a sibling in the OUTPUT and 0 carry one in the INPUT.** The minted half was covered
+/// and the authored half was structural.
+///
+/// **That zero is no longer the base's, and quoting it as though it were would repeat
+/// the mistake this family exists to prevent.** Re-measured on `5567412f`, over the
+/// 95,614-row corpus of 23 shape families: the input side reads **756**, every one of
+/// them from `repeat_beside_a_sibling`, which #1752 added independently while this
+/// branch was open. So the structural zero was closed before this branch's base, and
+/// what this family adds beside it is a sibling placed *outside* the tract rather than
+/// intersecting it — the two are measured against each other in `inputs_for`'s note on
+/// this family, which is why both earn a place.
+///
+/// `the_corpus_feeds_a_repeat_beside_a_sibling` is the guard, and it asserts the
+/// property — that some row feeds one in — rather than either figure.
 const TRACT_FAMILY: (&str, &str) = (
     "repeat_beside_a_sequence_sibling",
     "#1946 — a repeat or duplication over a tandem tract, sharing its allele with a \
@@ -2293,6 +2304,33 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
             // actually serves, and the one `repeat_beside_a_sequence_sibling` does not
             // reach.
             //
+            // # Why this exists alongside `repeat_beside_a_sibling`, measured
+            //
+            // #1752 added `repeat_beside_a_sibling` (#1749) independently and in this
+            // same slot, citing the same structural zero. The two look redundant and
+            // are not, and the difference is the sibling's **placement**: that family
+            // puts a sibling that *intersects* the tract or its junction, this one puts
+            // a substitution two bases **outside** it.
+            //
+            // Both reach `lower_repeat_edits` — ablating it moves 34 of that family's
+            // 756 rows and 24 of this one's 240 — so reach alone does not separate
+            // them. What separates them is what `--verify-spdi` reports:
+            //
+            // ```text
+            // repeat_beside_a_sibling   c.[8_13ATA[3];12_15del] -> c.[12_15del;14_*1dup]
+            // this family               g.[257_262TTT[1];264T>A] -> g.[256_265T[7];264T>A]
+            // ```
+            //
+            // The first input is **already overlapping** — the deletion at `12_15`
+            // intersects the tract at `8_13` — so it is malformed in and malformed out.
+            // The second input is **disjoint**: the tract is `257_262` and the
+            // substitution is at `264`, two bases clear of it. Normalization *creates*
+            // the overlap, emitting a repeat whose span contains the sibling's base.
+            //
+            // Clean in, malformed out is a different and worse defect than malformed in,
+            // malformed out, and it is the one #1983 records. This family is the only
+            // one that builds it. Delete it and the reproducer goes with it.
+            //
             // # This family found a live defect, and `--verify-spdi` is how
             //
             // Five of its rows report `SPDI-MISMATCH`: the normalized output denotes
@@ -2753,7 +2791,7 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A row of one of the sixteen sequence-keyed families, where the
+    /// A row of one of the seventeen sequence-keyed families, where the
     /// `reference` column and the sequence are the same string.
     fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
         Row {
@@ -2851,7 +2889,7 @@ mod tests {
     /// Every row carries the reference **sequence** it was drawn against, which
     /// for two families is not what its `reference` column says (#1624).
     ///
-    /// The two views agree on sixteen of the eighteen families, and that is
+    /// The two views agree on seventeen of the twenty-one families, and that is
     /// precisely what made the verify pass's confusion of them survive review —
     /// a bug that only manifests on `long_block_inversion` and
     /// `separated_revcomp_runs` is a bug in 286 rows out of 78,298. So this pins
@@ -3586,11 +3624,30 @@ mod tests {
     /// `demote_repeats_spanning_siblings`, `demote_coincident_tract_repeats` and
     /// `respell_colliding_duplications` — and every one of them is reached only when
     /// a repeat and a sibling are in the same allele. Measured on `f7d177b5` over
-    /// the full 85,642-row corpus: **2,098 rows carry a repeat beside a sibling in
+    /// the then-85,642-row corpus: **2,098 rows carry a repeat beside a sibling in
     /// the OUTPUT and 0 carry one in the INPUT.** So the minted half was covered and
     /// the authored half was a structural zero — a change to where the mint happens
     /// could report `0 moved` for the authored path and mean only that the corpus
     /// could not build it.
+    ///
+    /// **Re-measured on `5567412f`, the input side reads 756 and the output side
+    /// 2,410**, over 95,614 rows and 23 shape families. The zero was closed by
+    /// #1752's `repeat_beside_a_sibling`, which supplies all 756. Both figures are
+    /// recorded with the revision they were taken on precisely because neither is
+    /// what this test checks.
+    ///
+    /// # Why this asserts a property and pins neither number
+    ///
+    /// Pinning either would make the count *be* the property, and this guard's whole
+    /// subject is a count that was true and then silently stopped being so. What is
+    /// asserted is that the corpus mints one **and** feeds one, with the minted side
+    /// asserted non-zero first so `0 of 0` cannot pass as a result.
+    ///
+    /// The predicate is deliberately `contains(';')` plus a repeat token, and not a
+    /// parse of the allele body. A regex bounded by the first `]` reads
+    /// `g.[257_262TTT[3];261_264del]` as ending at the `]` that closes `TTT[3]`,
+    /// finds no `;` in what it captured, and reports **0** on all 756 rows — the
+    /// stale figure above, reproduced by an instrument rather than by the corpus.
     #[test]
     fn the_corpus_feeds_a_repeat_beside_a_sibling() {
         let beside_a_sibling = |s: &str| s.contains(';') && holds_repeat_notation(s);
@@ -4371,7 +4428,7 @@ mod tests {
     //
     // Everything above measures *movement*: two dumps, one diff, "did this change
     // the output". Nothing above ever asks whether an output is **right**, and for
-    // sixteen of the eighteen families it cannot — they are sets of descriptions,
+    // seventeen of the twenty-one families it cannot — they are sets of descriptions,
     // with no record of what the description was meant to denote.
     //
     // `separated_revcomp_runs` is built the other way round: the generator picks
@@ -5427,11 +5484,20 @@ mod tests {
         );
     }
 
-    /// English for the family counts this file quotes. Deliberately narrow: a
-    /// count outside the range is a signal that the corpus grew past what the
-    /// prose was written for, so failing loudly beats rendering a digit.
+    /// English for the family counts this file quotes.
+    ///
+    /// **Composed rather than tabulated, and that is the point.** This used to be a
+    /// flat table ending at `twenty`, so the run that took `FAMILIES` past twenty
+    /// families died with `no word for 21; extend WORDS in number_word` — a panic
+    /// naming a helper, from a test whose job is to name *stale prose sites*. The
+    /// table's end was a second, invisible boundary sitting beside the real one, and
+    /// extending it by four entries would only have moved the cliff to twenty-five.
+    ///
+    /// Composing tens and units removes the boundary for any count this corpus can
+    /// plausibly reach, so the only thing that can now fail here is the thing the
+    /// caller is actually testing.
     fn number_word(n: usize) -> String {
-        const WORDS: &[&str] = &[
+        const UNITS: &[&str] = &[
             "zero",
             "one",
             "two",
@@ -5452,12 +5518,18 @@ mod tests {
             "seventeen",
             "eighteen",
             "nineteen",
-            "twenty",
         ];
-        WORDS
-            .get(n)
-            .map(|w| (*w).to_string())
-            .unwrap_or_else(|| panic!("no word for {n}; extend WORDS in number_word"))
+        const TENS: &[&str] = &[
+            "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+        ];
+        match n {
+            0..=19 => UNITS[n].to_string(),
+            20..=99 => match (n / 10, n % 10) {
+                (t, 0) => TENS[t].to_string(),
+                (t, u) => format!("{}-{}", TENS[t], UNITS[u]),
+            },
+            _ => panic!("no word for {n}; number_word covers 0..=99"),
+        }
     }
 
     /// Strip Markdown and punctuation so a word inside `**bold**` or before a
