@@ -139,6 +139,44 @@ fn a_run_at_the_contig_start_settles_at_position_one_under_five_prime() {
     );
 }
 
+/// A multi-substitution allele whose leftmost edit sits at position 1 normalizes
+/// rather than being dropped at the contig-start boundary. This is the real-run
+/// shape (`1A>C`/`1A>T`-anchored primer/adapter reads): `to_sequences` pads the
+/// window, but the 5' side already begins at the accession's first base, so it
+/// cannot widen. The derivation can decompose a base-1-overwriting change into a
+/// leading insertion at interbase 0 — which has no HGVS anchor — so that leading
+/// piece is folded rightward into a span anchored at base 1 rather than refused.
+///
+/// This is the class Mutalyzer emits as a single `g.1_3inv` / `g.1_5delinsCAAGA`.
+/// ferro reaches the same span form (its member separation may split a tail, but
+/// nothing is dropped), and a reverse-complement span is retyped to `inv`.
+#[test]
+fn a_multi_substitution_anchored_at_position_one_normalizes() {
+    // 1-based:  123456789
+    //           ATGCTAGCT   (first three bases ATG; 1A>C;2T>A;3G>T rewrites base 1)
+    // ATG -> CAT is a reverse complement, so it types as `inv` — Mutalyzer's form.
+    let inv_seq = "ATGCTAGCT";
+    let inv_nz = Normalizer::new(provider(inv_seq));
+
+    // 1-based:  123456789
+    //           GTGCTAGCT   (GTG -> CAT is not a reverse complement: a span delins)
+    let delins_seq = "GTGCTAGCT";
+    let delins_nz = Normalizer::new(provider(delins_seq));
+
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            seqnorm(&inv_nz, "NC_TEST.1:g.[1A>C;2T>A;3G>T]", direction, false),
+            "NC_TEST.1:g.1_3inv",
+            "a base-1 reverse-complement stack must type as inv, not drop ({direction:?})",
+        );
+        assert_eq!(
+            seqnorm(&delins_nz, "NC_TEST.1:g.[1G>C;2T>A;3G>T]", direction, false),
+            "NC_TEST.1:g.1_3delinsCAT",
+            "a base-1 substitution stack must keep the span form, not drop ({direction:?})",
+        );
+    }
+}
+
 /// `normalize = true` routes the derived description through `normalize`. For a
 /// placement already at its 3'-most, reference-anchored base that is a no-op, so
 /// the result matches the `normalize = false` derivation — what this pins is

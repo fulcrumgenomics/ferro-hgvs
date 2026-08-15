@@ -1109,6 +1109,80 @@ mod tests {
         assert!(d.placement_bounded_by_window(), "OR must hold");
     }
 
+    /// **Contig-start escape.** An insertion in an ambiguous run reaching the
+    /// accession's first base has no 5'-most HGVS anchor — the 5'-shuffle rolls
+    /// it to interbase 0, which is spelled `0_1ins…` and names a position that
+    /// does not exist. Because `w_lo == 1` here, that interbase *is* the contig
+    /// start, so widening cannot rescue it. It is instead re-presented at the
+    /// leftmost nameable interbase (offset 1), the terminal analogue of the
+    /// 3'-most rule: inserting `AT` before base 1 equals inserting `TA` before
+    /// base 2, and only the latter can be written. This is the shape the real
+    /// run's `1A>C`/`1A>T`-anchored multi-substitution alleles hit.
+    #[test]
+    fn a_contig_start_insertion_escapes_to_the_leftmost_nameable_interbase() {
+        let derived = from_sequences(
+            "NC_TEST.1",
+            1,
+            "ATATATG",
+            "ATATATATG",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect("the ambiguous-run insertion escapes to interbase 1 rather than refusing");
+        assert_eq!(derived.to_string(), "NC_TEST.1:g.1_2insTA");
+    }
+
+    /// **Case (1) with a neighbour**, which every other contig-start fixture
+    /// here lacks: they all drive a *lone* insertion, so none of them can
+    /// observe what the escape does to the piece list beside it.
+    ///
+    /// `ACG` -> `AACT` is the tightest reachable shape. The partition is one
+    /// inserted `A` plus a substitution at base 3; the 5'-shuffle rolls the
+    /// insertion off interbase 1 onto interbase 0 (legal, `alt[0] ==
+    /// reference[0]`), so case (1) fires and re-presents it at interbase 1 —
+    /// where it renders as `1dup`, the payload being a copy of base 1 — with
+    /// `3G>T` still standing beside it.
+    ///
+    /// What this pins is that the escape leaves the piece list in the shape
+    /// `coalesce_adjacent_pieces` and `shrink_pieces_to_differences` had put it
+    /// in. `verify_round_trip` cannot: it re-applies the members and compares
+    /// *bases*, and an un-coalesced pair re-applies to `AACT` exactly as a
+    /// coalesced one does. Shape is not a question it asks.
+    #[test]
+    fn a_contig_start_escape_keeps_its_neighbour_separate() {
+        let derived = from_sequences(
+            "NC_TEST.1",
+            1,
+            "ACG",
+            "AACT",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect("the run insertion escapes to interbase 1 rather than refusing");
+        assert_eq!(derived.to_string(), "NC_TEST.1:g.[1dup;3G>T]");
+    }
+
+    /// A pure insertion before base 1 with **no piece to fold into** is a
+    /// genuine insertion at a non-existent anchor and still refuses. Here the
+    /// whole block is a single inserted `G` (`CATATG` -> `GCATATG` share the
+    /// suffix `CATATG`), so there is no following delins to absorb it, and the
+    /// leading base is not itself rewritten — the span-form escape does not
+    /// apply. The base-1-rewriting span form is covered in the
+    /// `sequence_normalize` integration suite, which drives this same path.
+    #[test]
+    fn a_lone_contig_start_insertion_still_refuses() {
+        let err = from_sequences(
+            "NC_TEST.1",
+            1,
+            "CATATG",
+            "GCATATG",
+            &FromSequencesOptions::default().with_direction(ShuffleDirection::FivePrime),
+        )
+        .expect_err("an insertion genuinely before base 1 has no HGVS anchor");
+        assert!(
+            err.to_string().contains("5' of the window's first base"),
+            "{err}"
+        );
+    }
+
     /// A change spanning the whole window rests on both edges at once, so both
     /// per-side flags fire. Neither side can be dismissed as settled, which is
     /// what makes a two-sided widen the right response.
