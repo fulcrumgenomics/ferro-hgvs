@@ -5578,10 +5578,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// # Returns
     ///
-    /// `Ok(None)` when the caller should fall back to minimal notation: **any**
-    /// fetch failed — the first one or a grown one (a grown failure is not
-    /// allowed to fall back to the truncated attempt that preceded it, which
-    /// would reinstate the walk) — or the growth cap was reached by an edit
+    /// `Ok(None)` when the caller should fall back to minimal notation: the
+    /// range is **reversed**, so it names a wraparound this linear window
+    /// cannot express (#1917, see the guard below); **any** fetch failed — the
+    /// first one or a grown one (a grown failure is not allowed to fall back to
+    /// the truncated attempt that preceded it, which would reinstate the walk);
+    /// or the growth cap was reached by an edit
     /// [`Self::canonicalize_without_shifting`] declines to re-type.
     ///
     /// **Refusing to shift is the only capped answer that is still a fixed
@@ -5612,6 +5614,54 @@ impl<P: ReferenceProvider> Normalizer<P> {
         edit: &NaEdit,
         fetch_end_of: impl Fn(u64) -> u64,
     ) -> Result<Option<WindowedNormalization>, FerroError> {
+        // A reversed range names a wraparound, and this window is linear
+        // (#1917). Refuse it here, where the arithmetic that cannot express it
+        // lives, so the caller takes its minimal-notation fallback.
+        //
+        // `normalize_mito` already gates this at its own axis, for #129, and
+        // states the reason to gate rather than lean on a downstream
+        // fail-safe: the fail-safes hold only for some window sizes. The `g.`
+        // axis never got the same gate, and the ways it failed are all
+        // functions of `start - end` against `window_size`:
+        //
+        // | `start - end`      | before this guard                            |
+        // |--------------------|----------------------------------------------|
+        // | `<= window`        | the fetch succeeds and the subtraction is     |
+        // |                    | fine, so it fails DEEPER, and how depends on  |
+        // |                    | the edit: `dup` slices `ref_seq[start-1..end]` |
+        // |                    | backwards and panics, while `inv` returns `=` |
+        // |                    | — a WRONG ANSWER, not a panic                 |
+        // | `(w, 2w]`          | panic — `end - window_start` underflows below |
+        // | `> 2 * window`     | this fallback, reached by accident: the fetch |
+        // |                    | is `[start-w, end+w)`, which inverts, and the |
+        // |                    | provider rejects it                           |
+        //
+        // So the widest reversed ranges — including both real-corpus rows in
+        // #1917, at 16,885 and 13,685 bases — already took this exit, and the
+        // guard makes the rest agree with them. **The top band is why this is
+        // an output change and not only a crash fix**: censused over every
+        // parseable reversed form against twelve spans, 6 of 24 answered rows
+        // came back wrong rather than panicking — five `inv` claiming `=` for
+        // an inversion, and one `dup` claiming a coordinate past its own
+        // contig's end. `FERRO_ASSERT_SEQUENCE` and `FERRO_ASSERT_IN_BOUNDS`
+        // are the oracles for exactly those two, and neither fires, because no
+        // corpus in either selection feeds a reversed range.
+        //
+        // The guard also relies on no provider rejecting an inverted read,
+        // which the bottom row shows is not a property of the code.
+        //
+        // **Declining is not clamping.** `min(start, end)` would fix the
+        // underflow and nothing else: `normalize_na_edit` would then receive
+        // `rel_start > rel_end` for *every* reversed range and slice backwards,
+        // turning the top row's panic from a narrow band into the whole class.
+        // Anchoring the window is only half a fix because the shuffle, the
+        // alignment and SPDI are each linear-contiguous — `src/spdi/convert.rs`
+        // refuses wraparound by name in four places for exactly this reason.
+        // Circular-aware shuffle modulo contig length remains #129's follow-up.
+        if start > end {
+            return Ok(None);
+        }
+
         // Whether the contig continues past a window is a question about the
         // contig, so the length is read once rather than per attempt.
         let contig_len = self.provider.get_sequence_length(accession).ok();
