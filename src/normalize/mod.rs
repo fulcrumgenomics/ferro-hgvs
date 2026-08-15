@@ -2002,7 +2002,7 @@ fn resolve_special_cds_pos(
 }
 
 /// Sort cis-allele members into genomic (coordinate) order using the total
-/// order `cis_member_order_key` (#1098). A no-op unless every member shares a
+/// order `cis_member_order_cmp` (#1098). A no-op unless every member shares a
 /// single accession — a mixed-accession bracketed allele (`[NC_…;NM_…]`,
 /// #218/#219) has no cross-molecule genomic order to canonicalize to, so those
 /// are left in authored order. The key is total (the rendered descriptor is the
@@ -2023,10 +2023,7 @@ fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
             .iter()
             .all(|m| m.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
-        members.sort_by(|a, b| {
-            crate::hgvs::variant::cis_member_order_key(a)
-                .cmp(&crate::hgvs::variant::cis_member_order_key(b))
-        });
+        members.sort_by(crate::hgvs::variant::cis_member_order_cmp);
     }
 }
 
@@ -5102,7 +5099,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // leaving members in input order meant two inputs for the same allele
         // (`[a;b]` vs `[b;a]`) normalized to two different strings, breaking use
         // of the normalized descriptor as a stable key. Sort by a *total* order
-        // (`cis_member_order_key`) so the result is deterministic even when two
+        // (`cis_member_order_cmp`) so the result is deterministic even when two
         // members share a start.
         //
         // Basis: for DNA the spec discusses listing haplotype members "in
@@ -15909,26 +15906,27 @@ mod tests {
         // rendered descriptor), so member order never falls back to input
         // order. This is why a total order beats a stable sort keyed on start
         // alone.
-        use crate::hgvs::variant::cis_member_order_key;
+        use crate::hgvs::variant::{cis_member_order_cmp, cis_member_order_prefix};
 
         let sub = parse_hgvs("NC_000001.11:g.10A>G").unwrap();
         let del = parse_hgvs("NC_000001.11:g.10del").unwrap();
 
-        let key_sub = cis_member_order_key(&sub);
-        let key_del = cis_member_order_key(&del);
-
         // Same accession, same start point, and — since both are one base wide
-        // — the same end point too, so every positional field of the key ties
-        // and only the descriptor can separate them (#1261 added the end).
+        // — the same end point too, so every positional field ties and only the
+        // descriptor can separate them (#1261 added the end).
         assert_eq!(
-            (&key_sub.0, key_sub.1, key_sub.2),
-            (&key_del.0, key_del.1, key_del.2),
+            cis_member_order_prefix(&sub),
+            cis_member_order_prefix(&del),
             "the two members must share the whole positional portion of the key"
         );
-        // ...but distinct keys overall, via the rendered-descriptor tie-break.
+        // ...but they still compare as distinct, via the rendered-descriptor
+        // tie-break — which is also what pins that the deferred render actually
+        // runs when the prefix ties, rather than the comparison stopping at
+        // `Equal` and letting the sort fall back to input order.
         assert_ne!(
-            key_sub, key_del,
-            "members sharing a start must still get distinct keys (total order)"
+            cis_member_order_cmp(&sub, &del),
+            std::cmp::Ordering::Equal,
+            "members sharing a start must still compare as distinct (total order)"
         );
     }
 

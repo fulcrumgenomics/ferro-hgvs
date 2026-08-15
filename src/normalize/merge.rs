@@ -900,7 +900,7 @@ fn simple_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// Raw location `(region, start, end)` for a sub-variant, regardless of edit
 /// kind. Unlike [`simple_range_for_variant`] it does not filter by edit kind or
 /// swap insertion endpoints — it is the positional fallback used by
-/// [`cis_merge_order_key`] to place non-merge-eligible members (`dup` / `inv` /
+/// [`cis_merge_order_cmp`] to place non-merge-eligible members (`dup` / `inv` /
 /// `repeat` / …) into genomic order too, so a merge barrier lands at its own
 /// coordinate instead of wherever it was authored.
 fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
@@ -919,7 +919,7 @@ fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// fires every valid merge regardless of input order.
 ///
 /// The primary axis is the merge **anchor**'s `(end, start)` (not the display
-/// start point [`crate::hgvs::variant::cis_member_order_key`] uses): an edit
+/// start point [`crate::hgvs::variant::cis_member_order_cmp`] uses): an edit
 /// ending at `X` must precede one starting at `X + 1`, and — crucially for a
 /// co-located ins/del — a span edit *at* a locus `p` must precede an insertion
 /// in the gap 3' of it. Insertions anchor as `[p + 1, p]`, so their `end = p`
@@ -932,22 +932,41 @@ fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
 /// order total so it never falls back to input order. Members with no simple
 /// location (special/uncertain/offset-only positions this pass cannot place)
 /// get a `no_position` sentinel and sort last, still deterministically.
-fn cis_merge_order_key(v: &HgvsVariant) -> (bool, Region, i64, i64, String) {
-    let descriptor = format!("{v}");
+///
+/// **This function is the positional part of that order — everything before the
+/// descriptor.** [`cis_merge_order_cmp`] applies the descriptor tie-break on top
+/// of it, and only when it is going to decide; this half reads no strings at
+/// all.
+fn cis_merge_order_prefix(v: &HgvsVariant) -> (bool, Region, i64, i64) {
     // Prefer the merge anchor (insertion endpoints swapped to `[p + 1, p]`);
     // fall back to the raw location for non-merge-eligible kinds.
     match simple_range_for_variant(v).or_else(|| location_range_for_variant(v)) {
-        Some((region, anchor_start, anchor_end)) => {
-            (false, region, anchor_end, anchor_start, descriptor)
-        }
+        Some((region, anchor_start, anchor_end)) => (false, region, anchor_end, anchor_start),
         // `Region::Genome` is an unused placeholder here — `no_position == true`
         // already segregates these, and the `i64::MAX` ties defer to the
         // descriptor tie-break.
-        None => (true, Region::Genome, i64::MAX, i64::MAX, descriptor),
+        None => (true, Region::Genome, i64::MAX, i64::MAX),
     }
 }
 
-/// Sort cis members into the canonical merge order (see [`cis_merge_order_key`])
+/// Compare two cis members by the canonical merge order.
+///
+/// Exactly the lexicographic comparison of
+/// `(cis_merge_order_prefix(v), format!("{v}"))` — a tuple's ordering consults
+/// its last component only when every earlier one ties, so deferring the render
+/// to `then_with` cannot change the order. What it changes is the cost: the
+/// descriptor is the *whole member*, rendered, and `sort_by_key` re-derives its
+/// key on every comparison, so the previous form rendered every member of every
+/// allele at least twice per sort — and this sort runs once per pass of the
+/// allele fixed-point loop, beside a second one on the same members
+/// (`sort_cis_members_by_genomic_order`).
+fn cis_merge_order_cmp(a: &HgvsVariant, b: &HgvsVariant) -> std::cmp::Ordering {
+    cis_merge_order_prefix(a)
+        .cmp(&cis_merge_order_prefix(b))
+        .then_with(|| a.to_string().cmp(&b.to_string()))
+}
+
+/// Sort cis members into the canonical merge order (see [`cis_merge_order_cmp`])
 /// so `merge_consecutive_edits` is input-order-independent (#1103).
 ///
 /// A no-op unless every member shares a single accession: `merge_consecutive_edits`
@@ -965,7 +984,7 @@ pub(crate) fn sort_cis_members_for_merge(variants: &mut [HgvsVariant]) {
             .iter()
             .all(|v| v.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
-        variants.sort_by_key(cis_merge_order_key);
+        variants.sort_by(cis_merge_order_cmp);
     }
 }
 
