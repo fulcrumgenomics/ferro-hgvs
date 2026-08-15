@@ -745,7 +745,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
 /// region (issue #920). Every kind rebuilds to a distinct variant kind, and a
 /// mixed-kind group is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CisKind {
+pub(crate) enum CisKind {
     Genome,
     Mt,
     Cds,
@@ -781,7 +781,7 @@ fn body_region(kind: CisKind) -> Region {
 /// drifting apart. The single-region requirement is the whole of the difference
 /// between them (#1482) — which is worth being able to see in one place, since
 /// it is also the whole of the defect that motivated the other reader.
-fn cis_axis_parts(
+pub(crate) fn cis_axis_parts(
     v: &HgvsVariant,
     kind: CisKind,
 ) -> Option<(&Accession, Region, i64, i64, &NaEdit)> {
@@ -3949,7 +3949,7 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
 }
 /// The `CisKind` a variant belongs to, or `None` for an axis the sequence-first
 /// path does not serve (protein has no apply-to-reference; `o.` is circular).
-fn cis_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
+pub(crate) fn cis_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
     match variant {
         HgvsVariant::Genome(_) => Some(CisKind::Genome),
         HgvsVariant::Mt(_) => Some(CisKind::Mt),
@@ -4560,7 +4560,7 @@ fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
 /// The repair passes are not so restricted and must use
 /// [`region_sequence_delta`], which answers per *region* — see its doc comment
 /// for why a per-axis offset cannot be right in the UTRs.
-struct AxisFrame {
+pub(crate) struct AxisFrame {
     /// Offset between the member axis and the fetched sequence: 0 for
     /// `g.`/`m.`/`n.`, `cds_start - 1` for the CDS-relative `c.`/`r.` axes.
     ///
@@ -4756,7 +4756,7 @@ fn crosses_exon_junction<P: ReferenceProvider>(
 }
 
 /// Resolve the group's [`AxisFrame`], or refuse the group.
-fn axis_frame<P: ReferenceProvider>(
+pub(crate) fn axis_frame<P: ReferenceProvider>(
     kind: CisKind,
     accession: &Accession,
     provider: &P,
@@ -4845,7 +4845,7 @@ fn axis_frame<P: ReferenceProvider>(
 /// `TxUpstream` / `TxDownstream` (`n.-N` / `n.*N`) are refused: those positions
 /// lie outside the transcript the provider serves, so there are no bases to
 /// read at all. That is a genuine refusal, not a missing conversion.
-fn region_sequence_delta<P: ReferenceProvider>(
+pub(crate) fn region_sequence_delta<P: ReferenceProvider>(
     region: Region,
     provider_key: &str,
     provider: &P,
@@ -5031,7 +5031,7 @@ fn cds_axis_position(tx: i64, cds_start: i64, cds_end: i64, body: Region) -> Opt
 /// rebuilt members must carry anyway — `Base::from_char` does not accept a
 /// lower-case byte, so a lower-case base reaching `rebuild_members` refused the
 /// canonicalization outright.
-fn fetch_canonical_window<P: ReferenceProvider>(
+pub(crate) fn fetch_canonical_window<P: ReferenceProvider>(
     provider: &P,
     accession: &str,
     start0: i64,
@@ -10482,7 +10482,7 @@ fn reverse_complement_bytes(bases: &[u8]) -> Option<Vec<u8>> {
 
 /// A cis member's span on the shared coordinate axis, copied out of the
 /// variant so the caller can mutate the member afterwards.
-struct MemberSpan {
+pub(crate) struct MemberSpan {
     /// The member's accession as written, used to decide whether two members
     /// sit on the same reference. Keeps any genomic-context wrapper, so
     /// members differing only in that wrapper are not treated as siblings.
@@ -10599,7 +10599,7 @@ struct MemberSpan {
 /// What it does still decline — `Cds` on a record with no CDS, an inverted CDS —
 /// every pass that compares members already declined for itself, so moving the
 /// conversion here only stops each pass repeating it.
-fn member_span<P: ReferenceProvider>(
+pub(crate) fn member_span<P: ReferenceProvider>(
     v: &HgvsVariant,
     kind: CisKind,
     provider: &P,

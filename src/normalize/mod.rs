@@ -665,7 +665,7 @@ fn exon_junction_anchor(
 ///
 /// Now an axis either has a frame — and therefore has bounds — or it does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CodonGate {
+pub(crate) enum CodonGate {
     /// The axis has no reading frame, so the multiple-of-3 rule never applies:
     /// `g.`, `m.`/`o.` (genomic-style), `n.`, and every intronic / boundary-
     /// spanning context that the spec's own carve-out exempts.
