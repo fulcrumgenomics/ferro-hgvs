@@ -27,6 +27,7 @@
 
 pub mod boundary;
 pub mod config;
+pub(crate) mod footprint;
 pub(crate) mod merge;
 mod overlap;
 pub mod rules;

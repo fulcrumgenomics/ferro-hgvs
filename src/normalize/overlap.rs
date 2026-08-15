@@ -29,6 +29,7 @@ use crate::hgvs::interval::{Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{AllelePhase, HgvsVariant, LocEdit};
+use crate::normalize::footprint::WriteFootprint;
 use crate::normalize::merge::Region;
 use crate::normalize::NormalizationWarning;
 
@@ -181,7 +182,7 @@ pub(crate) fn detect_overlap_conflicts(
         });
     }
 
-    // Spans that *intersect* without coinciding (#1448).
+    // Footprints that *collide* without coinciding (#1448).
     //
     // The grouping above keys on exact `(accession, coord_system, start, end)`
     // equality, so two members that overlap only partially — or that nest —
@@ -196,29 +197,35 @@ pub(crate) fn detect_overlap_conflicts(
     // Measured over two-member span-edit alleles on four sequences: 10,499 of
     // the 25,848 strict mode accepted — 41% — denoted nothing.
     //
-    // **Restricted to edits whose write footprint *is* their span**, which is
-    // the #1411 principle and what makes the `dup` behaviour fall out rather
-    // than need a special case: a `dup`/`repeat` reads its span and writes at
-    // the junction 3' of it, so two overlapping `dup` spans genuinely do
-    // compose, and none appeared in the measured families.
-    // `detect_insertion_overlaps` owns the junction geometry.
+    // **The geometry is [`WriteFootprint`]'s, not this loop's** (#1749). This
+    // pass used to carry its own `span_writer_footprint`, hard-restricted to
+    // `sub`/`del`/`delins`/`inv`, which silently dropped `repeat` — so a repeat
+    // whose tract intersected a sibling deletion was reported by nothing at
+    // all. That was one of three answers this file gave for `repeat`; there is
+    // now one, and it is stated in exactly one place.
     //
     // Pairwise rather than grouped, and skipping pairs whose keys are equal, so
     // an exactly-coincident pair is reported once — by the loop above, which
     // names every member of its group — rather than twice.
     for (i, first) in variants.iter().enumerate() {
-        let Some((coord_system, first_start, first_end)) = span_writer_footprint(first) else {
+        let Some((coord_system, first_accession, first_footprint)) = member_footprint(first) else {
             continue;
         };
-        let Some(first_accession) = first.accession().map(|a| a.to_string()) else {
+        // Junction geometry belongs to [`detect_insertion_overlaps`], which runs
+        // *pre-merge*, where a junction-anchored sibling is still observable as
+        // its own member. By the time this pass runs the merge step has
+        // collapsed them, so a junction test here would report a collision
+        // whose other half has left the list.
+        let Some(first_bases) = first_footprint.bases else {
             continue;
         };
         for (j, second) in variants.iter().enumerate().skip(i + 1) {
-            let Some((second_system, second_start, second_end)) = span_writer_footprint(second)
+            let Some((second_system, second_accession, second_footprint)) =
+                member_footprint(second)
             else {
                 continue;
             };
-            let Some(second_accession) = second.accession().map(|a| a.to_string()) else {
+            let Some(second_bases) = second_footprint.bases else {
                 continue;
             };
             // No region-equality gate (#1508). It was never a molecule test —
@@ -229,34 +236,29 @@ pub(crate) fn detect_overlap_conflicts(
                 continue;
             }
             // Coincident pairs belong to the grouped loop above.
-            if first_start == second_start && first_end == second_end {
+            if first_bases == second_bases {
                 continue;
             }
-            // A reversed span is not an interval, so do not test it as one.
-            // SVD-WG006 admits `<high>_<low>` for a circular deletion or
-            // duplication, and `genome_range` passes those through with
-            // `start > end` — nothing upstream reorders them. Read as an
-            // ordinary interval, `m.16569_5del` claims to end before it begins,
-            // so the test below would decide the pair by accident rather than
-            // by geometry. Declining to judge it is the conservative answer and
-            // the same one #1423 reached for the containment test next door: a
-            // missed report is a verdict this pass simply does not make, while a
-            // wrong one is a rejection the caller cannot explain.
-            let reversed = first_start > first_end || second_start > second_end;
-            // Closed intervals: they intersect when neither ends before the
-            // other begins.
-            if reversed || first_end < second_start || second_end < first_start {
+            // Base ranges only, for the reason given above — so the comparison
+            // is made on span-only views of the two footprints. A reversed
+            // range is declined rather than judged, inside `conflicts_with`.
+            let bases_only = |bases: (AxisPos, AxisPos), preserves: bool| {
+                WriteFootprint::spanning(bases.0, bases.1, preserves)
+            };
+            if !bases_only(first_bases, first_footprint.preserves_bases)
+                .conflicts_with(&bases_only(second_bases, second_footprint.preserves_bases))
+            {
                 continue;
             }
             let kinds: Vec<String> = [i, j]
                 .iter()
-                .filter_map(|&idx| edit_kind(&variants[idx]).map(|s| s.to_string()))
+                .filter_map(|&idx| member_kind(&variants[idx]).map(|s| s.to_string()))
                 .collect();
             warnings.push(NormalizationWarning::OverlapConflict {
                 accession: first_accession.clone(),
                 coordinate_system: coord_system.to_string(),
                 location: location_for_variant(first)
-                    .expect("span_writer_footprint established a renderable location"),
+                    .expect("member_footprint established a renderable location"),
                 edit_kinds: kinds,
             });
         }
@@ -264,32 +266,156 @@ pub(crate) fn detect_overlap_conflicts(
     warnings
 }
 
-/// The reference span an edit **writes over**, for the edits whose write
-/// footprint is their own span.
+/// Where a member writes, on this module's ranked axis — the single definition
+/// every pass in this file shares (#1749).
 ///
-/// `None` for anything else, which is what keeps the intersection test above
-/// narrow:
+/// Returns the accession and coordinate system alongside it, because a
+/// footprint means nothing except against another footprint on the same
+/// molecule and the same axis.
 ///
-/// - an **insertion** writes at a zero-width junction, not over a span;
-/// - a **`dup`/`repeat`** reads its span and writes at the junction 3' of it
-///   (`duplication.md:5`), so two overlapping `dup` spans compose uniquely —
-///   the #1411 principle, and the reason no `dup` family appears in #1448's
-///   measured census.
-///
-/// Both of those geometries belong to [`detect_insertion_overlaps`].
-fn span_writer_footprint(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)> {
+/// The per-edit mapping, and the argument for each entry, is documented on
+/// [`crate::normalize::footprint`]. `None` for anything with no definite
+/// footprint: a non-`NaEdit` variant, an uncertain edit, a position this module
+/// declines to read (intronic offset, `?` sentinel, `pter`/`qter`), or an edit
+/// kind with no reference geometry (`conversion`, `methylation`, `copy number`,
+/// an N-padded deletion over an uncertain range, …).
+fn member_footprint(
+    variant: &HgvsVariant,
+) -> Option<(&'static str, String, WriteFootprint<AxisPos>)> {
+    let (coord_system, start, end) = simple_span(variant)?;
+    let accession = variant.accession()?.to_string();
     let edit = inner_edit(variant)?;
-    if !matches!(
-        edit,
+    let footprint = match edit {
+        // Rewrite the span they name, and leave bases standing there.
         NaEdit::Substitution { .. }
-            | NaEdit::SubstitutionNoRef { .. }
-            | NaEdit::Deletion { .. }
-            | NaEdit::Delins { .. }
-            | NaEdit::Inversion { .. }
-    ) {
+        | NaEdit::SubstitutionNoRef { .. }
+        | NaEdit::Delins { .. }
+        | NaEdit::Inversion { .. } => WriteFootprint::spanning(start, end, true),
+        // Rewrites its span and leaves nothing, which is what makes an interior
+        // junction meaningless against it (#1406).
+        NaEdit::Deletion { .. } => WriteFootprint::spanning(start, end, false),
+        // Reads its span and writes the copy directly 3' of it
+        // (`duplication.md:5`) — but only when the extent is certain. An
+        // uncertain-extent `dup` is not known to write at that junction, so it
+        // is not entitled to the narrow footprint and keeps its span.
+        NaEdit::Duplication {
+            uncertain_extent: None,
+            ..
+        } => WriteFootprint::at_junction(end),
+        NaEdit::Duplication { .. } => WriteFootprint::spanning(start, end, true),
+        // A canonical insertion anchors at two adjacent positions; anything
+        // else (e.g. a malformed single-position insertion) has no junction.
+        //
+        // Adjacency, not `end == start + 1` (#1508): at a region boundary the
+        // two flanking positions are adjacent without being consecutive
+        // integers, so the integer test silently declined to register
+        // `c.15_*1insCC` as occupying a junction at all — and two of those at
+        // one junction were accepted where the in-region pair is rejected.
+        NaEdit::Insertion { .. } => {
+            if !start.is_immediately_followed_by(end) {
+                return None;
+            }
+            WriteFootprint::at_junction(start)
+        }
+        // A repeat states both the tract it replaces and what it becomes, so
+        // which of the two it does is derivable from the description alone.
+        NaEdit::Repeat {
+            sequence,
+            count,
+            additional_counts,
+            ..
+        } => repeat_footprint(sequence.as_ref(), count, additional_counts, start, end)?,
+        _ => return None,
+    };
+    Some((coord_system, accession, footprint))
+}
+
+/// Where a `repeat` writes, from the description alone.
+///
+/// A repeat states the tract it replaces (its span) *and* what that tract
+/// becomes (`unit x count`), so whether it grows or shrinks is arithmetic on
+/// the description — no provider needed, which is what makes this better than
+/// either answer the three passes used to give:
+///
+/// - **grows, or stays the same length** (`unit x count >= tract`): the tract's
+///   own bases are asserted unchanged and the extra copies land at the junction
+///   3' of it. That is exactly a `dup`'s geometry, which is what
+///   `issue_1437_dup_read_span_interior_sibling` requires: the per-member
+///   pipeline picks between the `dup` and `repeat` spellings **by axis** (the
+///   CDS axis rewrites `c.5_6insAA` to `c.5_6dup`, the genomic axis rewrites the
+///   same shape to `g.1005_1006A[4]`), so a detector that answered differently
+///   for the two would be sensitive to a choice the author never made.
+/// - **shrinks** (`unit x count < tract`): the trailing `tract - unit x count`
+///   bases are removed and the leading ones are untouched reference. The
+///   footprint is that trailing range, and its bases do **not** survive — so an
+///   interior junction is meaningless against it for the #1406 reason, while a
+///   junction among the *kept* prefix bases has a well-defined position and is
+///   likewise no conflict.
+///
+/// This supersedes the note that used to sit on `writes_only_at_a_junction`,
+/// which held that `A[8]`, `G[6]` and `TA[3]` are "indistinguishable at this
+/// layer" and so a repeat must conservatively keep its whole span. They are
+/// indistinguishable in *content*, which is what a `REFSEQ_MISMATCH` check is
+/// for — `g.4_9G[6]` against a `TTTTTT` reference is a mismatched description,
+/// not an overlap — but they are perfectly distinguishable in *length*, and
+/// length is all this geometry needs.
+///
+/// `None` when the arithmetic is not available: no stated unit
+/// (`g.262_263[6]`), an inexact count (`[10_15]`, `[(10_15)]`, `[10_?]`),
+/// genotype notation carrying more than one count, or endpoints in different
+/// regions, where a tract length is not a subtraction. Declining leaves the
+/// member out of the analysis entirely, which is the same conservative choice
+/// every other undecidable shape in this module makes.
+fn repeat_footprint(
+    sequence: Option<&crate::hgvs::edit::Sequence>,
+    count: &crate::hgvs::edit::RepeatCount,
+    additional_counts: &[crate::hgvs::edit::RepeatCount],
+    start: AxisPos,
+    end: AxisPos,
+) -> Option<WriteFootprint<AxisPos>> {
+    use crate::hgvs::edit::RepeatCount;
+
+    if !additional_counts.is_empty() {
         return None;
     }
-    simple_span(variant)
+    let RepeatCount::Exact(copies) = count else {
+        return None;
+    };
+    let unit_len = u64::try_from(sequence?.0.len()).ok()?;
+    // A tract length is a subtraction, so both endpoints must be numbered by
+    // the same sequence — the one thing a ranked `AxisPos` deliberately does
+    // *not* let you do across a region boundary (#1482).
+    if start.rank != end.rank || start.coord > end.coord {
+        return None;
+    }
+    let tract = end.coord.checked_sub(start.coord)?.checked_add(1)?;
+    let resulting = i64::try_from(unit_len.checked_mul(*copies)?).ok()?;
+
+    if resulting >= tract {
+        // Grows (or is length-neutral): the write is the junction 3' of the
+        // tract, exactly as for a `dup`.
+        return Some(WriteFootprint::at_junction(end));
+    }
+    // Shrinks: the trailing `tract - resulting` bases go, the leading
+    // `resulting` are untouched reference.
+    let removed_from = AxisPos {
+        rank: start.rank,
+        coord: start.coord.checked_add(resulting)?,
+    };
+    Some(WriteFootprint::spanning(removed_from, end, false))
+}
+
+/// The label the emitted warning reports for a member (`"ins"` / `"dup"` /
+/// `"repeat"` / `"del"` / …).
+///
+/// [`edit_kind`] predates insertions participating in these detectors and still
+/// declines them, so the insertion label is supplied here rather than widening
+/// a function several other call sites use as an "is this a span edit" filter.
+fn member_kind(variant: &HgvsVariant) -> Option<&'static str> {
+    if matches!(inner_edit(variant), Some(NaEdit::Insertion { .. })) {
+        return Some("ins");
+    }
+    edit_kind(variant)
 }
 
 /// Detect overlaps that involve at least one junction-anchored edit within a
@@ -371,9 +497,9 @@ fn junction_overlaps(
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return Vec::new();
     }
-    /// An edit that anchors at a zero-width junction: a true `ins`, or the
-    /// copies a `dup`/`repeat` lands 3' of its own span. `kind` is the label the
-    /// emitted warning reports for this member (`"ins"` / `"dup"` / `"repeat"`).
+    /// A member writing at a zero-width junction: a true `ins`, the copy a
+    /// certain-extent `dup` lands 3' of its own span, or the expansion a
+    /// `repeat` lands there. `kind` is the label the emitted warning reports.
     struct Insertion {
         idx: usize,
         accession: String,
@@ -387,101 +513,60 @@ fn junction_overlaps(
         coord_system: &'static str,
         start: AxisPos,
         end: AxisPos,
-        /// Whether the edit **removes** every base it spans, leaving nothing
-        /// for an interior junction to be positioned against. See branch (b).
-        removes_its_bases: bool,
+        /// Whether the bases this member spans are still there afterwards.
+        /// See branch (b).
+        preserves_bases: bool,
     }
 
+    // One pass, one definition (#1749). A member is registered wherever its
+    // footprint says it writes, and the two registrations are independent: the
+    // footprint carries `bases` and `junction` as separate `Option`s, and each
+    // is consulted on its own rather than through a ladder that picks one.
+    //
+    // **No constructor produces both today**, and that is worth stating so the
+    // `ins.idx != span.idx` self-exclusion in branch (b) is not read as
+    // protection against a shape that exists. `repeat_footprint` answers
+    // `at_junction(end)` when the repeat grows or is length-neutral and
+    // `spanning(removed_from, end, false)` when it shrinks — a `repeat` writes
+    // at a junction **or** over a span, never both — and `WriteFootprint` has
+    // only those two constructors, with no call site building one by struct
+    // literal. The independence is the model's, kept because it is the honest
+    // geometry and because a future edit type could need it; it is not a live
+    // capability, so the self-exclusion is defence-in-depth.
+    //
+    // That is the correction. This loop used to decide with its own
+    // `junction_writing_kind` ladder and `continue` after a junction
+    // registration, which made a `repeat` junction-*only* — so an insertion
+    // strictly interior to a repeat tract was reported by nothing, while the
+    // very same shape against a `delins` was rejected. The `continue` was right
+    // for `dup`, whose write footprint genuinely *is* only that junction
+    // (#1437), and was silently inherited by `repeat`, whose is not.
     let mut insertions: Vec<Insertion> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
     for (idx, variant) in variants.iter().enumerate() {
-        let Some((coord_system, start, end)) = simple_span(variant) else {
+        let Some((coord_system, accession, footprint)) = member_footprint(variant) else {
             continue;
         };
-        let Some(accession) = variant.accession().map(|a| a.to_string()) else {
+        let Some(kind) = member_kind(variant) else {
             continue;
         };
-        let Some(edit) = inner_edit(variant) else {
-            continue;
-        };
-        if matches!(edit, NaEdit::Insertion { .. }) {
-            // A canonical insertion anchors at two adjacent positions; anything
-            // else (e.g. a malformed single-position insertion) has no junction.
-            //
-            // Adjacency, not `end == start + 1` (#1508): at a region boundary
-            // the two flanking positions are adjacent without being consecutive
-            // integers, so the integer test silently declined to register
-            // `c.15_*1insCC` as occupying a junction at all — and two of those
-            // at one junction were accepted where the in-region pair is
-            // rejected.
-            if start.is_immediately_followed_by(end) {
-                insertions.push(Insertion {
-                    idx,
-                    accession,
-                    coord_system,
-                    gap: start,
-                    kind: "ins",
-                });
-            }
-        } else if is_overlap_edit(edit) {
-            // A `dup` and a `repeat` are each both a span (the run they read)
-            // and a junction occupant (the copies they write, landing
-            // immediately 3' of that run). Registering only the span would miss
-            // the conflict whenever the per-member pipeline has respelled an
-            // interior `ins` as one of these — which it does routinely, and
-            // which axis it picks decides *which* spelling: the CDS axis
-            // rewrites `c.5_6insAA` to `c.5_6dup`, the genomic axis rewrites
-            // the same shape to `g.1005_1006A[4]`.
-            if let Some(kind) = junction_writing_kind(edit) {
-                insertions.push(Insertion {
-                    idx,
-                    accession: accession.clone(),
-                    coord_system,
-                    gap: end,
-                    kind,
-                });
-                // …and *only* as a junction occupant (#1437). A `dup`/`repeat`
-                // **reads** its span and **writes** at the junction 3' of it
-                // (`duplication.md:5`), so registering the read span here would
-                // report a sibling that collides with nothing.
-                //
-                // That is the reading #1411 corrected in `detect_overlap_conflicts`
-                // — key on what a member writes, not on what it reads — and
-                // leaving branch (b) on the old reading made the two detectors
-                // disagree. Measured on the 24 bp `NC_TEST.1` fixture, strict
-                // mode, every sibling strictly interior to the `dup`'s read span
-                // and disjoint from its write at `9|10`:
-                //
-                //     g.[4_9dup;6T>C]     ACCEPTED   g.5_6insCTTTTT
-                //     g.[4_9dup;8T>C]     ACCEPTED   g.7_8insCTTTTT
-                //     g.[4_9dup;9T>C]     ACCEPTED   g.8_9insCTTTTT
-                //     g.[4_9dup;6_7insT]  REJECTED   W5002 (dup, ins)
-                //
-                // The verdict turned on the sibling's edit *kind*, not on whether
-                // anything collided: a substitution is not an `NaEdit::Insertion`,
-                // so branch (b) never examined it.
-                //
-                // Accepting is also the cheap direction for representation
-                // stability, in #1411's sense: the rejected shapes have no shipped
-                // normalized form, while the three accepted ones do
-                // (`g.5_6insCTTTTT` and friends), so resolving the other way would
-                // move output that consumers already hold.
-                //
-                // `repeat` goes with `dup`, not just `dup` alone: the per-member
-                // pipeline picks between the two spellings by axis (CDS gives
-                // `c.5_6dup`, genomic gives `g.1005_1006A[4]`), so exempting one
-                // and not the other would make this detector spelling-sensitive —
-                // the very defect the junction registration above exists to
-                // prevent.
-                continue;
-            }
+        if let Some(gap) = footprint.junction {
+            insertions.push(Insertion {
+                idx,
+                accession: accession.clone(),
+                coord_system,
+                gap,
+                kind,
+            });
+        }
+        if let Some((start, end)) = footprint.bases {
             spans.push(Span {
                 idx,
                 accession,
                 coord_system,
                 start,
                 end,
-                removes_its_bases: matches!(edit, NaEdit::Deletion { .. }),
+                preserves_bases: footprint.preserves_bases,
             });
         }
     }
@@ -552,15 +637,18 @@ fn junction_overlaps(
     // each of which keeps the spanned bases and so keeps the interior junction
     // meaningful. Those remain conflicts.
     for span in &spans {
-        if span.removes_its_bases {
+        if !span.preserves_bases {
             continue;
         }
         let interior = insertions.iter().filter(|ins| {
-            // A `dup`/`repeat` is registered as both span and occupant, so it
-            // meets itself here. The interior test already excludes it — its
-            // junction is its own `end`, and `gap < end` is strict — but state
-            // the invariant locally rather than leave it resting on that
-            // coincidence.
+            // Defence-in-depth, not protection against a shape the model can
+            // build: no member is registered in both lists today, because
+            // every `WriteFootprint` comes from `at_junction` or `spanning`
+            // and neither sets both fields (see the registration loop above).
+            // If one ever were, the interior test would already exclude it —
+            // a `repeat`'s junction is its own `end` and `gap < end` is strict
+            // — so this conjunct costs nothing and states the pairing rule
+            // where it is relied on.
             ins.idx != span.idx
                 && ins.accession == span.accession
                 && ins.coord_system == span.coord_system
@@ -568,7 +656,7 @@ fn junction_overlaps(
                 // `gap + 1 <= end` (junction interior); `gap < end` for ints.
                 && ins.gap < span.end
         });
-        let mut edit_kinds = vec![edit_kind(&variants[span.idx])
+        let mut edit_kinds = vec![member_kind(&variants[span.idx])
             .expect("span edit has a known kind")
             .to_string()];
         edit_kinds.extend(interior.map(|ins| ins.kind.to_string()));
@@ -619,91 +707,21 @@ struct GroupKey {
 /// - positions with intronic offsets, `?` sentinels, or special anchors
 ///   (`pter`/`qter`/`cen`)
 fn group_key(variant: &HgvsVariant) -> Option<GroupKey> {
-    let (coord_system, start, end) = simple_range(variant)?;
+    // The span is the shared definition's `bases` (#1749). A member whose write
+    // is a junction rather than a span — a certain-extent `dup` — therefore has
+    // no coincident-bounds key at all, and cannot be grouped with a sibling
+    // that merely *reads* the same range. That is the #1411 reading, now taken
+    // from one place instead of restated as a local `writes_only_at_a_junction`
+    // ladder that had already drifted from its two neighbours.
+    let (coord_system, accession, footprint) = member_footprint(variant)?;
+    let (start, end) = footprint.bases?;
     edit_kind(variant)?;
-    let accession = variant.accession()?.to_string();
     Some(GroupKey {
         accession,
         coord_system,
         start,
         end,
     })
-}
-
-/// Extract `(coord_system, ranked start, ranked end)` for an overlap-eligible
-/// sub-variant. Mirrors [`super::merge::simple_range_for_variant`] but is
-/// more permissive on edit kind: `Duplication`, `Inversion`, and
-/// (single-base or range) `Repeat` all have a definite reference span and
-/// can collide with other edits, so they're included here. `Insertion` is
-/// excluded — its anchor is `[end, start]` (zero-width at a boundary) and
-/// the spec excludes insertions from this rule.
-fn simple_range(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)> {
-    match variant {
-        HgvsVariant::Genome(g) => na_range(&g.loc_edit, genome_range).map(|(s, e)| ("g", s, e)),
-        HgvsVariant::Cds(c) => na_range(&c.loc_edit, cds_range).map(|(s, e)| ("c", s, e)),
-        HgvsVariant::Tx(t) => na_range(&t.loc_edit, tx_range).map(|(s, e)| ("n", s, e)),
-        HgvsVariant::Rna(r) => na_range(&r.loc_edit, rna_range).map(|(s, e)| ("r", s, e)),
-        HgvsVariant::Mt(m) => na_range(&m.loc_edit, genome_range).map(|(s, e)| ("m", s, e)),
-        _ => None,
-    }
-}
-
-fn na_range<L>(
-    loc_edit: &LocEdit<Interval<L>, NaEdit>,
-    range_fn: impl Fn(&Interval<L>) -> Option<(AxisPos, AxisPos)>,
-) -> Option<(AxisPos, AxisPos)> {
-    if !loc_edit.edit.is_certain() {
-        return None;
-    }
-    let edit = loc_edit.edit.inner()?;
-    if !is_overlap_edit(edit) {
-        return None;
-    }
-    if writes_only_at_a_junction(edit) {
-        return None;
-    }
-    range_fn(&loc_edit.location)
-}
-
-/// Whether this edit's *write* lands at a junction rather than over the span it
-/// names — in which case coincident bounds are not a conflict.
-///
-/// Coincident-bounds detection asks whether two members claim the same bases.
-/// That is a question about what they **write**, and for most edit kinds the
-/// two coincide: a substitution, deletion, delins or inversion replaces the span
-/// it names. A `dup` does not. `duplication.md:5` places the copy "directly 3'
-/// of the original copy", so `g.23dup` *reads* base 23 and *writes* at the
-/// junction 23|24. Against `g.23A>G`, which writes base 23, the two write
-/// footprints are disjoint and the composition is unique — `g.22_23insG` — with
-/// no ordering to choose. Grouping them by the read span reported a conflict
-/// that is not one, and made the verdict depend on the spelling: the same
-/// variant written `g.[23A>G;23_24insA]` was accepted.
-///
-/// The spec says merge rather than reject for this shape. `delins.md:86-89`
-/// marks `NM_007294.3:c.[2077G>A;2077_2078insTA]` invalid and gives
-/// `c.2077delinsATA` as the correct description, and `general.md:56`
-/// prioritisation then requires that form be spelled as a `dup` where it is one.
-///
-/// **`Repeat` is deliberately not here**, though it also writes at a junction
-/// when it grows. Whether it *only* does so depends on whether its unit tiles
-/// the reference tract — `A[8]`, `G[6]` and `TA[3]` are indistinguishable at
-/// this layer, and `g.[4_9G[6];4_9inv]` rewrites all six bases while satisfying
-/// any purely syntactic "does not shorten" test. This function has no reference
-/// provider and cannot tell them apart, so a repeat keeps its span. That is the
-/// principled line: a `dup`'s write footprint is reference-*independent*, a
-/// repeat's is not, which is also why a repeat is registered in *both* detectors
-/// and a `dup` in only one.
-///
-/// An uncertain-extent `dup` keeps its span too — its footprint is not known to
-/// be that junction. Same condition `merge::has_same_gap_insertions` uses.
-fn writes_only_at_a_junction(edit: &NaEdit) -> bool {
-    matches!(
-        edit,
-        NaEdit::Duplication {
-            uncertain_extent: None,
-            ..
-        }
-    )
 }
 
 /// The certain inner [`NaEdit`] of an NaEdit-bearing variant, or `None` for
@@ -744,53 +762,6 @@ fn simple_span(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)
         HgvsVariant::Rna(r) => na_span(&r.loc_edit, rna_range).map(|(s, e)| ("r", s, e)),
         HgvsVariant::Mt(m) => na_span(&m.loc_edit, genome_range).map(|(s, e)| ("m", s, e)),
         _ => None,
-    }
-}
-
-/// The occupant label for a span edit that also *writes* at the junction 3' of
-/// its own span, or `None` for one that only rewrites the span in place.
-///
-/// A `dup` copies its run to the slot after its last base; a `repeat` rewrites
-/// a tract to a different copy count, and any expansion lands at that same
-/// slot. Both are therefore junction occupants as well as spans, which is what
-/// lets the detector recognise an interior insertion after the per-member
-/// pipeline has respelled it as one of them. Everything else
-/// (`sub`/`del`/`delins`/`inv`) edits its span in place and writes no junction.
-fn junction_writing_kind(edit: &NaEdit) -> Option<&'static str> {
-    match edit {
-        NaEdit::Duplication { .. } => Some("dup"),
-        NaEdit::Repeat { .. } => Some("repeat"),
-        _ => None,
-    }
-}
-
-/// Edit kinds that have a single, definite reference span. Insertions are
-/// deliberately excluded: their anchor is between two bases, so the
-/// "coincident bounds" notion does not apply.
-fn is_overlap_edit(edit: &NaEdit) -> bool {
-    match edit {
-        NaEdit::Substitution { .. }
-        | NaEdit::SubstitutionNoRef { .. }
-        | NaEdit::Deletion { .. }
-        | NaEdit::Delins { .. }
-        | NaEdit::Duplication { .. }
-        | NaEdit::Inversion { .. }
-        | NaEdit::Repeat { .. } => true,
-        NaEdit::Insertion { .. }
-        | NaEdit::BreakpointInsertion { .. }
-        | NaEdit::DupIns { .. }
-        | NaEdit::MultiRepeat { .. }
-        | NaEdit::Identity { .. }
-        | NaEdit::Conversion { .. }
-        | NaEdit::Unknown { .. }
-        | NaEdit::Methylation { .. }
-        | NaEdit::CopyNumber { .. }
-        | NaEdit::Splice { .. }
-        // N-padded deletions sit over an uncertain `(start_end)` range with no
-        // definite reference span, so they are not overlap edits.
-        | NaEdit::NPaddedDeletion { .. }
-        | NaEdit::NoProduct
-        | NaEdit::PositionOnly => false,
     }
 }
 
@@ -846,7 +817,7 @@ fn format_interval<P: std::fmt::Display + PartialEq>(interval: &Interval<P>) -> 
     }
 }
 
-/// Render a single side of an interval. `simple_range` rejects any
+/// Render a single side of an interval. `member_footprint` rejects any
 /// variant whose boundary isn't `Single(Certain(_))`, so render_boundary
 /// is only ever called on certain boundaries — the other arms exist to
 /// document the invariant and panic loudly if it's ever violated.
@@ -1119,9 +1090,19 @@ mod tests {
     /// mean colliding writes — and keying the test on the read span instead,
     /// the reading #1411 corrected, would report these.
     ///
-    /// Asserted here rather than end to end because
+    /// Asserted here rather than end to end so it pins what *this* detector
+    /// decides rather than the pipeline's net verdict.
+    ///
+    /// **The reason given here used to be wrong** (#1749). It read "because
     /// `detect_insertion_overlaps` reports an overlapping `dup` pair for its own
-    /// separate reasons (#1437); this pins only what *this* detector decides.
+    /// separate reasons (#1437)". It does not, and #1437 is why: that change
+    /// made `junction_overlaps` register a `dup` as a junction occupant and then
+    /// stop, so it never becomes a span, and two `dup`s at different junctions
+    /// match neither branch. Measured end to end on real hg38 in both strict and
+    /// lenient, the only warning `g.[43045721dup;43045721_43045722dup]` raises is
+    /// `MEMBERS_COALESCED_FROM_REPORTED_FORM`. The sibling test
+    /// `overlapping_duplication_spans_are_silent_in_the_junction_detector_too`
+    /// pins that, so the correction cannot drift back.
     #[test]
     fn overlapping_duplication_spans_are_not_a_coincident_conflict() {
         for input in [
@@ -1350,5 +1331,225 @@ mod tests {
             out.contains("100G>A") && out.contains("100A>C"),
             "expected pass-through, got {out}"
         );
+    }
+
+    // --- #1749: one overlap definition, on write footprints ---------------
+    //
+    // The matrix below is the guard that stops a third opinion coming back.
+    // Its `conflict` column is NOT a recording of what ferro does today: it is
+    // derived independently, from the write-footprint principle #1411/#1437/#1448
+    // established but never centralised —
+    //
+    //   * `sub`/`delins`/`inv`  write over the span they name, and keep bases there;
+    //   * `del`                 writes over its span and keeps nothing;
+    //   * `dup` (certain)       reads its span and writes at the junction 3' of it
+    //                           (`duplication.md:5`);
+    //   * `ins`                 writes at the junction between its two flanks;
+    //   * `repeat`              may rewrite its whole span AND lands any expansion
+    //                           at the junction 3' of it — its footprint is
+    //                           reference-dependent, so it must be read as both.
+    //
+    // Two members conflict when those footprints collide: base ranges that
+    // intersect, one junction claimed twice, or a junction strictly interior to a
+    // span whose bases SURVIVE (a pure `del` leaves nothing for an interior
+    // junction to be positioned against — #1406).
+    //
+    // Every row is a pair, so exactly one verdict is well defined for it, and the
+    // union of the two detectors must equal that verdict. Where a detector is
+    // silent on a shape by design, the OTHER must speak: that is what makes this
+    // a test of the definition rather than of either pass's internal division of
+    // labour.
+    const FOOTPRINT_MATRIX: &[(&str, bool, &str)] = &[
+        // --- span x span: footprints are the spans, so plain intersection -----
+        ("NC_TEST.1:g.[10_14del;12_16del]", true, "partial overlap"),
+        ("NC_TEST.1:g.[10_14del;10_16del]", true, "nested"),
+        ("NC_TEST.1:g.[10_14del;10_14del]", true, "coincident"),
+        ("NC_TEST.1:g.[10_14del;15_19del]", false, "flush, disjoint"),
+        ("NC_TEST.1:g.[10_14inv;12_16inv]", true, "partial overlap"),
+        (
+            "NC_TEST.1:g.[10_14delinsAA;12_16del]",
+            true,
+            "partial overlap",
+        ),
+        ("NC_TEST.1:g.[12G>A;12G>C]", true, "coincident single base"),
+        ("NC_TEST.1:g.[12G>A;13G>C]", false, "adjacent single bases"),
+        // --- dup: writes at a junction, so its READ span is not its footprint --
+        (
+            "NC_TEST.1:g.[10_14dup;12_16dup]",
+            false,
+            "junctions 14 and 16 differ (#1448)",
+        ),
+        (
+            "NC_TEST.1:g.[10_14dup;10_16dup]",
+            false,
+            "nested reads, junctions 14 and 16 differ",
+        ),
+        (
+            "NC_TEST.1:g.[10_14dup;12_14dup]",
+            true,
+            "one junction, two writers",
+        ),
+        (
+            "NC_TEST.1:g.[10_14dup;12G>A]",
+            false,
+            "sub inside the READ span, not the write (#1411)",
+        ),
+        (
+            "NC_TEST.1:g.[10_14dup;14G>A]",
+            false,
+            "sub at the dup's last base; junction is 3' of it",
+        ),
+        (
+            "NC_TEST.1:g.[10_20inv;14_15dup]",
+            true,
+            "dup junction interior to a span that keeps its bases",
+        ),
+        // --- ins: writes at the junction between its flanks --------------------
+        (
+            "NC_TEST.1:g.[14_15insA;14_15insT]",
+            true,
+            "one junction, two writers",
+        ),
+        (
+            "NC_TEST.1:g.[14_15insA;15_16insT]",
+            false,
+            "different junctions",
+        ),
+        (
+            "NC_TEST.1:g.[10_20delinsAA;14_15insT]",
+            true,
+            "interior junction, bases survive",
+        ),
+        (
+            "NC_TEST.1:g.[10_20del;14_15insT]",
+            false,
+            "interior junction, del keeps nothing (#1406)",
+        ),
+        (
+            "NC_TEST.1:g.[10_14del;14_15insT]",
+            false,
+            "junction flush against the 3' edge",
+        ),
+        (
+            "NC_TEST.1:g.[10_14del;9_10insT]",
+            false,
+            "junction flush against the 5' edge",
+        ),
+        // --- repeat: whether it writes a span or a junction is arithmetic on the
+        // description (`unit x count` against the tract), not a coin toss. Both
+        // branches are exercised, because a rule that only ever took one of them
+        // would pass a matrix that only ever asked for one.
+        //
+        // SHRINKING — `A[3]` over a 5-base tract keeps 10-12 and removes 13-14,
+        // so the footprint is that trailing range and its bases do not survive.
+        (
+            "NC_TEST.1:g.[10_14A[3];12_16del]",
+            true,
+            "removed range 13-14 intersects the deletion",
+        ),
+        (
+            "NC_TEST.1:g.[10_14A[3];13_17del]",
+            true,
+            "removed range 13-14 intersects the deletion",
+        ),
+        (
+            "NC_TEST.1:g.[10_14A[3];10_11del]",
+            false,
+            "the deletion sits in the KEPT prefix, untouched reference",
+        ),
+        // `A[3]` over an 11-base tract removes 13-20. A junction inside a range
+        // that is going away has nothing left to be positioned against (#1406) —
+        // the same reason a pure `del` exempts one.
+        (
+            "NC_TEST.1:g.[10_20A[3];14_15insT]",
+            false,
+            "interior to the REMOVED range, which keeps nothing",
+        ),
+        // Its junction is not interior to the removed range 13-14 (`gap < end`
+        // is strict), so the two writes are disjoint.
+        (
+            "NC_TEST.1:g.[10_14A[3];12_14dup]",
+            false,
+            "dup junction 14 sits at the 3' edge, not inside",
+        ),
+        // GROWING — `A[3]` over a 2-base tract asserts 10-11 unchanged and lands
+        // one extra copy at the junction 3' of 11. That is a `dup`'s geometry,
+        // which is what makes the two spellings of one shape agree (#1437).
+        (
+            "NC_TEST.1:g.[10_11A[3];10_11insT]",
+            false,
+            "repeat writes at junction 11, insertion at 10",
+        ),
+        (
+            "NC_TEST.1:g.[10_11A[3];11_12insT]",
+            true,
+            "both write at junction 11",
+        ),
+        (
+            "NC_TEST.1:g.[10_11A[3];10_11dup]",
+            true,
+            "the two spellings of one shape collide identically",
+        ),
+    ];
+
+    /// The union of the two detectors must equal the write-footprint verdict, on
+    /// every row of [`FOOTPRINT_MATRIX`].
+    ///
+    /// Phrased on observable detector output rather than on the shared predicate
+    /// so that it keeps judging behaviour across any later refactor of how the
+    /// definition is spelled.
+    #[test]
+    fn the_detectors_agree_with_the_write_footprint_definition() {
+        let mut wrong = Vec::new();
+        for (input, expected, why) in FOOTPRINT_MATRIX {
+            let (variants, phase) = parse_allele(input);
+            let coincident = detect_overlap_conflicts(&variants, phase);
+            let junction = detect_insertion_overlaps(&variants, phase);
+            let got = !coincident.is_empty() || !junction.is_empty();
+            if got != *expected {
+                wrong.push(format!(
+                    "  {input}\n      expected conflict={expected} ({why}), got {got} \
+                     [coincident={}, junction={}]",
+                    coincident.len(),
+                    junction.len()
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {} rows disagree with the write-footprint definition:\n{}",
+            wrong.len(),
+            FOOTPRINT_MATRIX.len(),
+            wrong.join("\n")
+        );
+    }
+
+    /// The #1448 unit test above says it is asserted at unit level rather than
+    /// end to end "because `detect_insertion_overlaps` reports an overlapping
+    /// `dup` pair for its own separate reasons (#1437)".
+    ///
+    /// It does not, and #1437 is the reason it does not: that change made
+    /// [`junction_overlaps`] register a `dup`/`repeat` as a junction occupant
+    /// and then `continue`, so it is never pushed into `spans`. Two `dup`s at
+    /// different junctions therefore match neither branch (a) (the junctions
+    /// differ) nor branch (b) (there are no spans). The comment describes
+    /// pre-#1437 behaviour and cites #1437 as its cause.
+    ///
+    /// Pinned so the corrected comment cannot drift back.
+    #[test]
+    fn overlapping_duplication_spans_are_silent_in_the_junction_detector_too() {
+        for input in [
+            "NG_012337.1:g.[10_14dup;12_16dup]",
+            "NG_012337.1:g.[10_14dup;10_16dup]",
+        ] {
+            let (variants, phase) = parse_allele(input);
+            let warnings = detect_insertion_overlaps(&variants, phase);
+            assert!(
+                warnings.is_empty(),
+                "`{input}`: since #1437 a `dup` is a junction occupant and not a \
+                 span, so two `dup`s at different junctions collide in neither \
+                 branch; got {warnings:?}"
+            );
+        }
     }
 }

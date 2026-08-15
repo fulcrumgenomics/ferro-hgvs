@@ -587,6 +587,23 @@ const FAMILIES: &[(&str, &str)] = &[
         "repeat_expansion",
         "a ranged repeat as an input — emitted on 1,558 rows, consumed on none",
     ),
+    // **The fifth instance of the corpus-blindness class** (#1749), after member
+    // geometry (#1456), scale (#1460), transcript geometry (#1478) and molecule
+    // type (#1606). `repeat_expansion` above feeds a repeat, but always a *lone*
+    // one — so no row in this corpus has ever placed a `repeat` beside a sibling
+    // it could collide with, and every question about a repeat's write footprint
+    // was structurally unaskable here.
+    //
+    // That is exactly the geometry #1749 changes: a `repeat` may rewrite the
+    // tract it spans *and* lands any expansion at the junction 3' of it, and the
+    // three passes in `normalize::overlap` previously gave three different
+    // answers for it. Reporting `0 moved` off a corpus that cannot build the
+    // shape would have been a claim about the corpus.
+    (
+        "repeat_beside_a_sibling",
+        "#1749 — a ranged repeat, GROWING and SHRINKING, paired with a sibling that intersects \
+         its tract or its junction",
+    ),
 ];
 
 /// The shape families drawn against the **protein** cores (#1606).
@@ -1664,6 +1681,57 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                     let unit = &core[t..t + 3];
                     out.push(format!("{prefix}{}_{}{unit}[3]", p(t), p(t + 5)));
                     out.push(format!("{prefix}{}_{}{unit}[1]", p(t), p(t + 5)));
+                }
+            }
+            // A ranged repeat paired with a sibling, in the three geometries the
+            // unified write footprint distinguishes: a deletion intersecting the
+            // tract, an insertion at a junction strictly interior to it, and a
+            // `dup` writing at the same junction the repeat's expansion lands on.
+            // Emits nothing for a core with no tandem triplet — see
+            // `first_tandem_triplet`.
+            //
+            // **Both directions of the repeat, which is the property the
+            // footprint keys on.** `repeat_footprint` answers `at_junction(end)`
+            // when the repeat grows and `spanning(removed_from, end, false)`
+            // when it shrinks, and those are different branches with different
+            // collision rules — so a family emitting only one of them would make
+            // any `0 moved` over the other a structural zero. The tract is
+            // **6** bases with a **3**-base unit, so `[3]` (9 bases) always
+            // grows and `[1]` (3 bases) always shrinks: the count is chosen to
+            // straddle the tract length rather than to look plausible. Each
+            // sibling geometry is therefore emitted twice, once per direction.
+            "repeat_beside_a_sibling" => {
+                if s != 0 {
+                    continue;
+                }
+                if let Some(t) = first_tandem_triplet(core) {
+                    let unit = &core[t..t + 3];
+                    // The repeat's tract is `t ..= t + 5`. Growing, its junction
+                    // is `t + 5`; shrinking, it rewrites `t + 3 ..= t + 5` and
+                    // leaves `t ..= t + 2` as untouched reference.
+                    for count in [3, 1] {
+                        out.push(format!(
+                            "{prefix}[{}_{}{unit}[{count}];{}_{}del]",
+                            p(t),
+                            p(t + 5),
+                            p(t + 4),
+                            p(t + 7)
+                        ));
+                        out.push(format!(
+                            "{prefix}[{}_{}{unit}[{count}];{}_{}insCC]",
+                            p(t),
+                            p(t + 5),
+                            p(t + 2),
+                            p(t + 3)
+                        ));
+                        out.push(format!(
+                            "{prefix}[{}_{}{unit}[{count}];{}_{}dup]",
+                            p(t),
+                            p(t + 5),
+                            p(t + 4),
+                            p(t + 5)
+                        ));
+                    }
                 }
             }
             _ => unreachable!("unknown family {family}"),
@@ -2884,6 +2952,65 @@ mod tests {
                     );
                 }
             }
+        }
+        assert_eq!(
+            covered, 21,
+            "tandem-triplet coverage moved; the generator or seed count changed"
+        );
+    }
+
+    /// `repeat_beside_a_sibling` varies the property `repeat_footprint` keys on:
+    /// the repeat must both **grow** and **shrink**.
+    ///
+    /// # Why this needs a test rather than a comment
+    ///
+    /// The family was added (#1749) to close a corpus blindness, and shipped
+    /// closing half of it: every row was `{unit}[3]` over a 6-base tract with a
+    /// 3-base unit, so `3 x 3 = 9 >= 6` and the repeat could only ever grow.
+    /// `repeat_footprint`'s **shrinking** branch — `spanning(removed_from, end,
+    /// false)`, the one the change is proudest of — was structurally unreachable
+    /// from the corpus, so any `0 moved` over it was a claim about the corpus.
+    /// That is exactly the failure the family exists to prevent, one level in.
+    ///
+    /// The check is arithmetic against the tract, not a count of spellings: it
+    /// asserts `unit.len() * count` lands on **both** sides of the tract length,
+    /// so widening the tract or the unit without re-picking the counts fails
+    /// here rather than silently collapsing to one direction again.
+    #[test]
+    fn the_repeat_sibling_family_varies_the_repeat_direction() {
+        let mut covered = 0;
+        for core in corpus_sequences(24) {
+            let rows = inputs_for("repeat_beside_a_sibling", "g", &core);
+            let Some(t) = first_tandem_triplet(&core) else {
+                assert!(rows.is_empty(), "emitted a repeat sibling row for {core}");
+                continue;
+            };
+            covered += 1;
+            let unit = &core[t..t + 3];
+            // The tract the family anchors on is `t ..= t + 5`, six bases.
+            const TRACT: usize = 6;
+            let mut grows = 0;
+            let mut shrinks = 0;
+            for row in &rows {
+                let count: usize = row
+                    .split(&format!("{unit}["))
+                    .nth(1)
+                    .and_then(|rest| rest.split(']').next())
+                    .expect("every row spells the repeat as `<unit>[<count>]`")
+                    .parse()
+                    .expect("the count is an integer");
+                if unit.len() * count >= TRACT {
+                    grows += 1;
+                } else {
+                    shrinks += 1;
+                }
+            }
+            assert!(
+                grows > 0 && shrinks > 0,
+                "{core}: the family emitted {grows} growing and {shrinks} shrinking \
+                 repeats — one direction of `repeat_footprint` is unreachable from \
+                 the corpus, so a zero over it would be structural"
+            );
         }
         assert_eq!(
             covered, 21,
