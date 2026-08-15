@@ -88,8 +88,9 @@ env:
   # WHY THEY MOVED. `--partition hash:K/N` assigns a test by a hash of its NAME,
   # so it balances shard *counts* and is blind to cost — the property already
   # recorded on `sweeps`, where all three exhaustive sweeps hashed into one
-  # shard. These four hashed into the two slowest jobs and made the workflow's
-  # critical path a single test. Measured on run 31845625298 (`044f085a`):
+  # shard. The three below hashed into the two slowest jobs and made the
+  # workflow's critical path a single test. Measured on run 31845625298
+  # (`044f085a`):
   #
   #                                             Test (K/6)   Test oracle (K/4)
   #   issue_1542_direction_symmetry               155.7s (3)         240.3s (1)
@@ -102,6 +103,20 @@ env:
   # test, so re-sharding cannot fix it — which is why `test-oracle`'s own
   # comment below, having chosen N=4 to separate the two bulk corpora, names
   # exactly this carve-out as the robust alternative. This is that alternative.
+  #
+  # The fourth member joined later and its figures are from a DIFFERENT run,
+  # 31909112992 — not comparable row-for-row with the three above, and subject
+  # to the same cross-run spread recorded on `ORACLE_ONLY_FILTER` below:
+  #
+  #   clinvar_hgvs_tests (2 tests)                 37.2s (2,6)         62.3s (2,4)
+  #
+  # Its two tests hash into FOUR different shards between the two matrices, so
+  # ~99s of work leaves them — but only the 54.9s copy in `Test oracle (2/4)`
+  # was on the critical path, which is why the wall-clock saving is much smaller
+  # than the work removed. It is also the only member that is a PARSER
+  # benchmark rather than a normalization census: it never reaches
+  # `canonicalize_from_sequence`, so the optimized archive's gains land on its
+  # gzip decode, JSON deserialization and `parse_hgvs` instead.
   #
   # AND WHY THE JOB, NOT THE JOB BOUNDARY, IS THE WIN. `censuses` consumes the
   # OPTIMIZED archive `test-build-soak` produces, which is where `sweeps`
@@ -125,7 +140,39 @@ env:
   # other does not cover.
   CENSUS_FILTER: >-
     test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
-    + test(spec_conformance_axis)
+    + test(spec_conformance_axis) + test(clinvar_hgvs_tests)
+
+  # Negated from `test` ONLY. These run in `test-oracle` with the three seam
+  # oracles armed, and an armed run strictly subsumes an un-armed one — the
+  # oracles add assertions at `normalize_core_checked`'s exit and change no
+  # behaviour. That is the same argument `censuses` makes for dropping the
+  # plain-`test` copy of the modules it took, and `sweeps` before it; the only
+  # difference here is that the destination is an existing job rather than a
+  # new one.
+  #
+  # WHY NOT `CENSUS_FILTER`: that filter is negated from BOTH shards and the
+  # `censuses` job selects it off the SOAK archive, which is built
+  # `-p ferro-hgvs-soak-tests` and therefore contains no `src/` unit tests at
+  # all. `merge::tests::direction_symmetry` is a `#[cfg(test)]` module inside
+  # `src/normalize/merge.rs`, so naming it in `CENSUS_FILTER` would negate it
+  # from both shards and then select nothing — deleting the census outright.
+  # `--no-tests=fail` would not catch that, because the step's other terms
+  # still match. This variable exists precisely because that trap is silent.
+  #
+  # It is the unit half of #1840's pair. #1955 moved the integration half
+  # (`issue_1542_direction_symmetry`) to `censuses` and left this one running in
+  # BOTH shards.
+  #
+  # NO PER-TEST COST IS PINNED HERE, deliberately. That test measured 93.8s
+  # (`Test (3/6)`, un-armed) and 85.2s (`Test oracle (3/4)`, armed) on run
+  # 31909112992, and 46.8s in the same armed shard on run 31911822856 an hour
+  # later — a 2x spread on one test, so any single figure in a committed comment
+  # is one the next reader cannot reproduce, and pinning one invites a carve-out
+  # decision to be made from noise. What is stable is the SHAPE: `Test (3/6)`
+  # was a shard wearing one test, its whole nextest summary within ~1s of that
+  # single test's time. That, not a number, is why the carve-out exists.
+  ORACLE_ONLY_FILTER: >-
+    test(merge::tests::direction_symmetry)
   # The spec-corpus modules, excluded from `test-oracle` ONLY. They run in full
   # in the plain `test` job; this is not a coverage exemption, it is a statement
   # about which instrument may be armed while another is measuring.
@@ -1429,7 +1476,7 @@ jobs:
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/6 \
-            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER) and not ($ORACLE_ONLY_FILTER)"
 
   # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
   # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
@@ -1975,7 +2022,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
-            -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)"
+            -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving) + test(clinvar_hgvs_tests)"
       - name: Run the census that may not be measured with an oracle armed
         # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: this
         # module builds its corpus in code (`conformance::spec_corpus`) and

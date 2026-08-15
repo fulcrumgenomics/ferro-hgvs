@@ -32,5 +32,7 @@ ferro-hgvs = { path = ".." }
 flate2 = "1.0"
 proptest = "1.0"
 rayon = "1.10"
+# `clinvar_hgvs_tests` only; it classifies parse failures by pattern.
+regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
