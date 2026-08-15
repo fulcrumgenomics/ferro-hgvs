@@ -959,31 +959,114 @@ pub struct IntronPosition {
 // `splice_site_type` is not reachable from a string entry point today; it is
 // reachable by a library caller, because every field of this struct is `pub`.
 impl IntronPosition {
-    // These four predicates spell their thresholds inline rather than deriving
-    // from [`SpliceSiteType::from_distance_on_side`], because three of the four
-    // do not correspond to a single rung of it — `is_near_splice_site`'s 10 is
-    // on neither ladder at all. They take the magnitude with `unsigned_abs` for
-    // the reason recorded on `from_distance_on_side`: `abs()` panics on
-    // `i64::MIN`, the `-?` unknown-offset sentinel.
+    // The predicates below are cumulative *bands* ("within n bases of the
+    // exon"), while `SpliceSiteType` is a *partition* into bins. The two are
+    // different shapes of the same ladder, and a band is not a rung — but it is
+    // a *union of bins*, so it can still be spelled over the ladder rather than
+    // as its own threshold, and the rungs live once, on
+    // `SpliceSiteType::from_distance_on_side`.
+    //
+    // That correction matters for more than tidiness. These predicates take the
+    // magnitude with `unsigned_abs` because `abs()` panics on `i64::MIN`, the
+    // `-?` unknown-offset sentinel, and wraps to a *canonical splice site* in
+    // release — see the note on `from_distance_on_side`. Deriving inherits that
+    // totality from the one place it is written, instead of depending on four
+    // copies of `unsigned_abs` all staying correct.
+    //
+    // `is_near_splice_site` is the exception: its 10 is on neither ladder, so
+    // there is no union of bins to spell it as, and it keeps both its own
+    // literal and its own `unsigned_abs`. See its documentation and #1766.
 
     /// Check if this is a deep intronic position (>50bp from nearest exon)
+    ///
+    /// Derived from [`IntronPosition::splice_site_type`] rather than restating
+    /// the 50-rung. Answer-preserving against the former
+    /// `offset.unsigned_abs() > 50`: that rung is the same on the donor and
+    /// acceptor sides, so reading the side from `boundary` cannot change the
+    /// verdict. Verified exhaustively by
+    /// `the_intron_position_band_predicates_derive_from_the_one_shape_a_ladder`
+    /// over every offset in `-300..=300` **plus both unknown-offset sentinels**,
+    /// against both `boundary` values. The sentinels are the case that matters:
+    /// the ladder's own `unsigned_abs` lands them in
+    /// [`SpliceSiteType::DeepIntronic`], so this reports `true` for them exactly
+    /// as the literal did — which is also what
+    /// `the_unknown_offset_sentinels_do_not_panic_or_read_as_canonical` pins.
     pub fn is_deep_intronic(&self) -> bool {
-        self.offset.unsigned_abs() > 50
+        matches!(self.splice_site_type(), SpliceSiteType::DeepIntronic)
     }
 
     /// Check if this is at a canonical splice site (within 2bp of exon)
+    ///
+    /// Derived from [`IntronPosition::splice_site_type`]; see
+    /// [`IntronPosition::is_deep_intronic`] for why that is answer-preserving.
     pub fn is_canonical_splice_site(&self) -> bool {
-        self.offset.unsigned_abs() <= 2
+        matches!(
+            self.splice_site_type(),
+            SpliceSiteType::DonorCanonical | SpliceSiteType::AcceptorCanonical
+        )
     }
 
-    /// Check if this is near a splice site (within 10bp of exon)
+    /// Check if this is within 10bp of an exon boundary
+    ///
+    /// # This is NOT [`SpliceSiteType::NearSplice`], and the 10 is UNSETTLED
+    ///
+    /// The `10` here appears on neither of ferro's splice ladders — shape A is
+    /// donor 2/6/20/50 and acceptor 2/12/20/50, shape B is 2/8 — so unlike the
+    /// three predicates beside it, this one cannot be re-expressed as a set of
+    /// [`SpliceSiteType`] bins. It therefore still carries its own threshold.
+    ///
+    /// It **contradicts** [`SpliceSiteType::NearSplice`] in both directions:
+    ///
+    /// | offset | `is_near_splice_site()` | `splice_site_type()` |
+    /// |---|---|---|
+    /// | 5 | `true` | `DonorExtended` — not `NearSplice` |
+    /// | 30 | `false` | `NearSplice` |
+    ///
+    /// Measured: the two disagree at **80 of the 120** non-zero offsets in
+    /// `-60..=60`. They agree only where both are false (`11..=20` and `>50`).
+    ///
+    /// **The question is open (#1766) and is deliberately not answered here.**
+    /// Either the 10 is a third, intentional band that must be renamed and
+    /// documented as such, or it is a stale literal and this should become
+    /// `matches!(self.splice_site_type(), SpliceSiteType::NearSplice)` — which
+    /// would move the answers of a public predicate. Neither the HGVS spec nor
+    /// the project's ruling ledger determines it: the spec defines splice donor
+    /// and acceptor sites qualitatively (`background/glossary.md:250-256`) and
+    /// states no distance threshold anywhere, so the whole ladder is ferro's
+    /// house policy and picking a rung here would be a decision, not a
+    /// refactor. The disagreement is pinned as undecided by two guards in
+    /// `tests/it/splice_ladder_shapes.rs`, so that changing either side without
+    /// recording a ruling fails the build:
+    /// `is_near_splice_site_contradicts_the_near_splice_bin` pins the
+    /// disagreement with that one bin and its 80/120 census, and
+    /// `only_is_near_splice_site_splits_a_ladder_bin` pins the more general
+    /// fact that 10 cuts the interiors of `DonorRegion` (7..=20) and
+    /// `AcceptorExtended` (3..=12), so no union of bins can express it.
     pub fn is_near_splice_site(&self) -> bool {
         self.offset.unsigned_abs() <= 10
     }
 
     /// Check if this is in the extended splice region (within 20bp of exon)
+    ///
+    /// A cumulative band, so it is `true` for the canonical bins too — the
+    /// canonical site is *within* 20 bases of the exon. That is why this is not
+    /// simply the `*Extended`/`*Region` bins: it is every bin inside the
+    /// 20-rung, which is the same set the former `offset.unsigned_abs() <= 20`
+    /// selected.
+    ///
+    /// Written as an exhaustive `match` rather than a `matches!` on purpose: a
+    /// new [`SpliceSiteType`] bin must not silently default to one side of this
+    /// band, it must fail to compile until someone decides.
     pub fn is_extended_splice_region(&self) -> bool {
-        self.offset.unsigned_abs() <= 20
+        match self.splice_site_type() {
+            SpliceSiteType::DonorCanonical
+            | SpliceSiteType::AcceptorCanonical
+            | SpliceSiteType::DonorExtended
+            | SpliceSiteType::AcceptorExtended
+            | SpliceSiteType::DonorRegion
+            | SpliceSiteType::AcceptorRegion => true,
+            SpliceSiteType::NearSplice | SpliceSiteType::DeepIntronic => false,
+        }
     }
 
     /// Get the splice site type based on position
