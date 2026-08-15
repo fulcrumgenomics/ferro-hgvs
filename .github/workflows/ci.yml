@@ -1504,7 +1504,8 @@ jobs:
         #     reaches `cds_to_tx`'s unchecked `cds_start as i64 + pos.base - 1`
         #     on an `i64::MAX`-adjacent `c.` coordinate. That module already
         #     records the measurement and names the site; the open issue is
-        #     **#1690**. The three are
+        #     **#1690**, since CLOSED — see the re-measurement below. The three
+        #     are
         #     `a_lone_member_at_an_extreme_coordinate_…`,
         #     `an_extreme_coordinate_…` and
         #     `two_adjacent_members_at_the_top_of_the_range_…`.
@@ -1522,19 +1523,42 @@ jobs:
         #   Two further notes from the same measurement, so it is not re-run to
         #   rediscover them. With `FERRO_MANIFEST` also set — which this job does
         #   NOT set, so CI does not see these — six `mutalyzer_normalize_tests`
-        #   axis tests fail too, on real `NG_` geometry, e.g.
+        #   axis tests failed too, on real `NG_` geometry, e.g.
         #   `NG_012337.1(NM_012459.2):c.4_5insGTA` -> `c.5_6insTAG`, where the
         #   input applies `GTAA` and the output `ATAG` over `[34, 35)`: an
         #   insertion shifted 3' past a base its first payload base does not
         #   match. Those axes early-return without the manifest, which is why
-        #   they read as 11 failures with it and 5 without. And the proof the
+        #   they read as 11 failures with it and 5 without.
+        #
+        #   THAT HALF IS ALSO STALE as of #1990. Re-run at `c9207d7e` with the
+        #   manifest armed: `10901 passed, 3 failed`. All six
+        #   `mutalyzer_normalize_tests` axes now PASS. The extra row over the
+        #   manifest-less run is `multi_member_cis_axis::axis_normalized`, which
+        #   is NOT an oracle fire — it fails identically with
+        #   `FERRO_ASSERT_SEQUENCE` UNSET (measured), on a census pin that reads
+        #   `unwindowed: 89` against a pinned 90 while `sequence_changed` stays
+        #   0. That is the HEAD-drift this repo already documents for that pin,
+        #   and it is orthogonal to arming this flag.
+        #
+        #   And the proof the
         #   flag is not a no-op over this selection is
         #   `issue_1615_denoted_sequence_oracle::the_seam_compares_when_the_flag_is_set`,
         #   which is IN this selection and asserts the oracle's `compared`
         #   counter is non-zero; it skips by design when the flag is unset.
         #
-        #   So arming this is blocked on #1690 and on a home for
-        #   `stranded_identity_member` — NOT on another measurement.
+        #   RE-MEASURED once #1690 closed (#1990), same selection and flags, no
+        #   `--partition` and no `FERRO_MANIFEST`, on `c9207d7e`:
+        #
+        #     Summary [179.827s] 10904 tests run: 10902 passed, 2 failed, 306 skipped
+        #
+        #   The three `issue_1487_canonical_window_overflow` rows are GONE — all
+        #   8 tests in that module pass — and NOTHING NEW fired. The 2 survivors
+        #   are both `stranded_identity_member`, on the row quoted above:
+        #   `every_stranded_identity_is_non_confluent_with_its_surviving_member`
+        #   and `the_wider_multi_member_census_is_what_the_header_says`.
+        #
+        #   So arming this is blocked on a home for `stranded_identity_member`,
+        #   and on that alone — #1690 is closed and is no longer a blocker.
         #
         #     This row replaced an earlier one on the same issue
         #     (`NM_000492.4:c.1520_1522del` -> `c.1521_1523del`), and the swap is
