@@ -2043,17 +2043,23 @@ fn the_corpus_has_the_shape_its_censuses_are_measured_over() {
 /// A **positive control** for the coding-axis merge counter: it must be able to
 /// observe a merge.
 ///
-/// # Why a zero pin needs one, and why nothing else supplies it
+/// # Why a zero pin needed one, and why nothing else supplied it
 ///
-/// `coding_axis_separation_two_or_more_merges` is pinned at **0**, so every
-/// other test that mentions it is satisfied by a numerator that can never
-/// increment. Measured as a mutation matrix over the four tests that claim to
-/// cover the counter — the two censuses, the corpus-shape test and
-/// `spec_corpus`'s population test — hard-wiring
-/// [`coding_axis_merge_observed`] to `false` leaves **all four green**. "Pinned
+/// Written when `coding_axis_separation_two_or_more_merges` was pinned at
+/// **0**, so every other test that mentioned it was satisfied by a numerator
+/// that could never increment. Measured as a mutation matrix over the four
+/// tests that claim to cover the counter — the two censuses, the corpus-shape
+/// test and `spec_corpus`'s population test — hard-wiring
+/// [`coding_axis_merge_observed`] to `false` left **all four green**. "Pinned
 /// at 0" and "wired to 0" were the same observation, which is exactly what this
 /// module's own thesis says an instrument must not be: *a counter nobody has
 /// seen move is not an instrument*.
+///
+/// **The pin is now 3** (#1835), which closes that particular blindness on its
+/// own — a counter wired to `false` would read 0 against a pin of 3 and fail
+/// both censuses' `assert_eq!`. This control is kept regardless: it is the only
+/// test that exercises the predicate *directly* rather than through a census
+/// total, and the blindness returns the moment the pin returns to 0.
 ///
 /// The other five mutations in that matrix are caught: predicate always-true,
 /// predicate always-false (as VACUOUS), the separation floor weakened to one,
