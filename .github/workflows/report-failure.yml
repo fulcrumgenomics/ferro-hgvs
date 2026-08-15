@@ -73,6 +73,7 @@ jobs:
   report:
     name: Open or update the tracking issue
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       issues: write
