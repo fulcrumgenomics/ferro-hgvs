@@ -667,6 +667,11 @@ const FAMILIES: &[(&str, &str)] = &[
         "lone_net_deletion_delins",
         "#1610 — a lone minimal net-deletion delins whose payload partly coincides with the reference",
     ),
+    (
+        "authored_repeat_beside_a_sibling",
+        "#1946 — an authored repeat that survives as one member of a two-member allele, \
+         which is the only shape that reaches `lower_repeat_edits`",
+    ),
 ];
 
 /// The shape families drawn against the **protein** cores (#1606).
@@ -2108,6 +2113,60 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                     p(s + 1),
                     p(s + 3)
                 ));
+            }
+            // An authored repeat that keeps its sibling — the shape `lower_repeat_edits`
+            // actually serves, and the one `repeat_beside_a_sequence_sibling` does not
+            // reach.
+            //
+            // # Why this is on the random cores and not on the designed ones
+            //
+            // Measured, by instrumenting `merge::canonicalize_from_sequence`. Of the 288
+            // rows the designed tract family builds, **144 author a repeat inside a cis
+            // allele and not one reaches `lower_repeat_edits`.** Fifty-two of them get as
+            // far as `merge::canonicalize_from_sequence`, and **every one arrives with
+            // `variants.len() == 1`** — the allele has already collapsed to a single
+            // member, so the lone-repeat lockout (`merge.rs:3186`) refuses it. That
+            // lockout is deliberate and load-bearing: ablating it moves 7 of 85,930 rows,
+            // all `repeat_expansion`, in exactly the direction its comment predicts
+            // (`g.257_262AAA[1]` goes from `g.257_263A[4]` to `g.257_259del`).
+            //
+            // So the gating property is neither unit length nor sibling placement, both
+            // of which were tested and ruled out — a two-copy tract on a designed core
+            // still reaches zero. It is **member survival**: the repeat has to still have
+            // a sibling at the moment the sequence-first pass runs. The designed tracts
+            // are 9 and 12 bases growing by 3, and the derived block swallows the
+            // sibling; a six-base tract on a random core does not.
+            //
+            // This shape keeps two members and does reach the pass — measured at 19
+            // firings of `lower_repeat_edits` over the 120 `g.`-shape rows it adds. It is
+            // the geometry #1946's own reproducer used.
+            //
+            // Emitted once per core (`s != 0`), like `repeat_expansion`, and only where
+            // the core has a tandem triplet with two bases to spare 3' of it — 20 of the
+            // 48 cores, one fewer than `repeat_expansion`'s 21, and
+            // `the_authored_repeat_family_covers_the_cores_with_room` accounts for the
+            // one it drops rather than leaving it silent.
+            "authored_repeat_beside_a_sibling" => {
+                if s != 0 {
+                    continue;
+                }
+                if let Some(t) = first_tandem_triplet(core) {
+                    if t + 8 >= bytes.len() {
+                        continue;
+                    }
+                    let unit = &core[t..t + 3];
+                    let sibling = format!("{}{}>{}", p(t + 7), base(t + 7), other(t + 7));
+                    out.push(format!(
+                        "{prefix}[{}_{}{unit}[3];{sibling}]",
+                        p(t),
+                        p(t + 5)
+                    ));
+                    out.push(format!(
+                        "{prefix}[{}_{}{unit}[1];{sibling}]",
+                        p(t),
+                        p(t + 5)
+                    ));
+                }
             }
             _ => unreachable!("unknown family {family}"),
         }
@@ -3595,6 +3654,50 @@ mod tests {
         assert_eq!(
             covered, 21,
             "tandem-triplet coverage moved; the generator or seed count changed"
+        );
+    }
+
+    /// `authored_repeat_beside_a_sibling` accounts for the cores it drops.
+    ///
+    /// It needs a tandem triplet **and** two bases 3' of it to put the sibling on, so
+    /// it covers one fewer core than `repeat_expansion`. Naming both numbers is the
+    /// point: a family that silently covered fewer cores than its neighbour would
+    /// look like the same population while measuring a smaller one, and the
+    /// difference — a single core whose tract starts at offset 14 — is exactly the
+    /// kind of drop the generator doctrine says must be counted rather than absorbed.
+    #[test]
+    fn the_authored_repeat_family_covers_the_cores_with_room() {
+        let (mut with_tract, mut covered) = (0, 0);
+        for core in corpus_sequences(24) {
+            let rows = inputs_for("authored_repeat_beside_a_sibling", "g", &core);
+            let Some(t) = first_tandem_triplet(&core) else {
+                assert!(
+                    rows.is_empty(),
+                    "emitted for {core}, which has no tandem triplet"
+                );
+                continue;
+            };
+            with_tract += 1;
+            if t + 8 >= core.len() {
+                assert!(
+                    rows.is_empty(),
+                    "emitted for {core}, whose tract at {t} leaves no room for a sibling"
+                );
+                continue;
+            }
+            covered += 1;
+            assert_eq!(rows.len(), 2, "expected both counts for {core}");
+            for row in &rows {
+                assert!(
+                    row.contains(';'),
+                    "the whole point is that the repeat keeps a sibling: {row}"
+                );
+            }
+        }
+        assert_eq!(with_tract, 21, "tandem-triplet coverage moved");
+        assert_eq!(
+            covered, 20,
+            "coverage moved; exactly one core has a tract too close to the 3' end"
         );
     }
 
