@@ -7,7 +7,7 @@ use super::edit::{NaEdit, ProteinEdit};
 use super::interval::{CdsInterval, GenomeInterval, ProtInterval, RnaInterval, TxInterval};
 use super::uncertainty::Mu;
 use serde::{Deserialize, Serialize};
-use smol_str::SmolStr;
+use smol_str::{SmolStr, SmolStrBuilder};
 use std::fmt;
 use std::sync::Arc;
 
@@ -541,6 +541,19 @@ impl Accession {
         collect_written(|out| self.write_full(out))
     }
 
+    /// [`Self::full`] as a [`SmolStr`], for the callers that only *hold* the
+    /// rendered accession to compare it.
+    ///
+    /// `SmolStr` inlines up to 23 bytes, and every real accession fits —
+    /// `NM_000088.3` is 11, `ENST00000357033.8` is 17 — so this renders without
+    /// touching the heap where `full()` allocates a `String` every time. Only a
+    /// compound `genomic(transcript)` reference spills, and that falls back to
+    /// exactly what `full()` would have done. Equality and ordering are the
+    /// str's, so a `SmolStr` key compares identically to the `String` it replaces.
+    pub(crate) fn full_smol(&self) -> SmolStr {
+        collect_written_smol(|out| self.write_full(out))
+    }
+
     /// [`Self::base`], written straight into `out` rather than through a
     /// temporary `String`.
     ///
@@ -634,11 +647,30 @@ impl Accession {
     /// stripping any genomic context wrapper. For compound references like
     /// `NC_000013.11(NM_004119.3)`, this returns just `"NM_004119.3"`.
     pub fn transcript_accession(&self) -> String {
+        collect_written(|out| self.write_transcript_accession(out))
+    }
+
+    /// [`Self::transcript_accession`] as a [`SmolStr`], for the provider lookups
+    /// on the normalization hot path.
+    ///
+    /// Same reasoning as [`Self::full_smol`]: a provider key is used as a `&str`
+    /// and never mutated, so the inline form serves every caller while skipping
+    /// the allocation. Both spellings share
+    /// [`Self::write_transcript_accession`], so they cannot drift.
+    pub(crate) fn transcript_accession_smol(&self) -> SmolStr {
+        collect_written_smol(|out| self.write_transcript_accession(out))
+    }
+
+    /// [`Self::transcript_accession`], written straight into `out`.
+    ///
+    /// The single source of truth for both the `String` and the [`SmolStr`]
+    /// spelling, in the same style as [`Self::write_full`].
+    fn write_transcript_accession(&self, out: &mut impl fmt::Write) -> fmt::Result {
         // Assembly/chromosome notation (e.g. GRCh38(chr1)) uses base() directly
         if self.is_assembly_ref() {
-            return self.base();
+            return self.write_base(out);
         }
-        collect_written(|out| self.write_versioned(out))
+        self.write_versioned(out)
     }
 }
 
@@ -663,6 +695,19 @@ fn collect_written(produce: impl FnOnce(&mut String) -> fmt::Result) -> String {
     let mut out = String::with_capacity(TYPICAL_ACCESSION_LEN);
     produce(&mut out).expect("writing into a String is infallible");
     out
+}
+
+/// [`collect_written`]'s counterpart for the callers that want a [`SmolStr`].
+///
+/// `SmolStrBuilder` accumulates into a stack buffer and only spills to a
+/// `String` if the total exceeds the inline capacity, so an accession that fits
+/// — every real one — is rendered with no allocation at all. Writing into it
+/// cannot fail, so the `Result` is asserted rather than propagated, exactly as
+/// above.
+fn collect_written_smol(produce: impl FnOnce(&mut SmolStrBuilder) -> fmt::Result) -> SmolStr {
+    let mut out = SmolStrBuilder::new();
+    produce(&mut out).expect("writing into a SmolStrBuilder is infallible");
+    out.finish()
 }
 
 impl fmt::Display for Accession {

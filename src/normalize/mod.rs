@@ -2017,11 +2017,11 @@ fn resolve_special_cds_pos(
 fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
     let first_accession = members
         .first()
-        .and_then(|m| m.accession().map(|a| a.full()));
+        .and_then(|m| m.accession().map(|a| a.full_smol()));
     let single_accession = first_accession.is_some()
         && members
             .iter()
-            .all(|m| m.accession().map(|a| a.full()) == first_accession);
+            .all(|m| m.accession().map(|a| a.full_smol()) == first_accession);
     if single_accession {
         members.sort_by(|a, b| {
             crate::hgvs::variant::cis_member_order_key(a)
