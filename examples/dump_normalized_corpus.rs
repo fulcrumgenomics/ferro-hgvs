@@ -1145,7 +1145,7 @@ fn tract_designs() -> Vec<TractDesign> {
                 );
                 designs.push(TractDesign {
                     label: format!("tract_{unit}x{copies}_at{start}"),
-                    core: tract_core(unit, copies, start),
+                    core: tract_core(unit, copies, start, TRACT_CORE_LEN),
                     unit,
                     copies,
                     start,
@@ -1171,8 +1171,8 @@ fn tract_designs() -> Vec<TractDesign> {
 /// therefore forced away from the tract's periodic extension —
 /// `the_designed_tracts_are_exactly_as_long_as_they_claim` re-derives that from the
 /// finished string rather than trusting this construction.
-fn tract_core(unit: &str, copies: usize, start: usize) -> String {
-    let mut core: Vec<u8> = (0..TRACT_CORE_LEN).map(|i| b"GCTA"[i % 4]).collect();
+fn tract_core(unit: &str, copies: usize, start: usize, core_len: usize) -> String {
+    let mut core: Vec<u8> = (0..core_len).map(|i| b"GCTA"[i % 4]).collect();
     let tract = unit.repeat(copies);
     core[start..start + tract.len()].copy_from_slice(tract.as_bytes());
     let unit_bytes = unit.as_bytes();
@@ -1180,7 +1180,7 @@ fn tract_core(unit: &str, copies: usize, start: usize) -> String {
     core[start - 1] = flank_base(&core, start - 1, unit_bytes[unit_bytes.len() - 1]);
     // 3' boundary: its forward extension is the unit's first base.
     let after = start + tract.len();
-    if after < TRACT_CORE_LEN {
+    if after < core_len {
         core[after] = flank_base(&core, after, unit_bytes[0]);
     }
     String::from_utf8(core).expect("GCTA and the designed units are valid UTF-8")
@@ -1202,7 +1202,7 @@ fn flank_base(core: &[u8], at: usize, forbidden: u8) -> u8 {
             candidate != forbidden
                 && Some(candidate) != neighbour
                 && !(at == 0 && candidate == b'A')
-                && !(at == TRACT_CORE_LEN - 1 && candidate == b'T')
+                && !(at == core.len() - 1 && candidate == b'T')
         })
         .expect("four candidates cannot all be excluded by three constraints")
 }
@@ -1284,6 +1284,156 @@ fn tract_inputs_for(axis: &str, design: &TractDesign) -> Vec<String> {
         // sibling's base. A `dup` claims no bases but does name a span, which is
         // the discrepancy that pass repairs.
         format!("{prefix}[{span}dup;{inside}]"),
+    ]
+}
+
+/// The family drawn against a **long transcript with a long tandem tract** (#1946).
+///
+/// Every other family in this file is drawn on a 20-base core, and that turns out to
+/// hide the one question a render-stage relocation of the repeat mint has to answer.
+///
+/// # The blindness this closes, measured
+///
+/// The three repeat-minting rules are handed a `ref_seq` whose provenance differs by
+/// axis: on `c.`/`r.`/`n.` it is the **entire spliced transcript**, with no window and
+/// therefore no edge, while on `g.` it is a window (`NormalizeConfig::window_size`,
+/// 100 each side) that *grows* when a shuffle runs to its edge. Tract discovery walks
+/// outward bounded only by `ref_seq.len()`, so a stage that substituted one fixed
+/// padded window would find different tract extents near an edge on the transcript
+/// axes. That is a behavioural difference, not plumbing.
+///
+/// Instrumented over the corpus **as it stood before this family**, the question was
+/// unanswerable in both directions and neither was visible from the numbers:
+///
+/// - **Transcript axes: `ref_seq.len()` was 20, always** — the whole synthetic
+///   transcript. Any window a relocation would substitute (100, or `CANONICAL_PAD`'s
+///   128) is 5-13x *larger* than the entire reference, so the window is the transcript
+///   and the two strategies are the same thing by construction.
+/// - **Genomic axis: 0 of 3,361 insertion firings had a tract touching the window
+///   edge.** The growing-window loop — the entire reason the genomic path differs —
+///   never fired for a tract.
+///
+/// And the reassuring half was equally corpus-shaped: the largest distance any tract
+/// walk reached from its anchor was **11 bases**, which is a property of 20-base cores
+/// and 12-base designed tracts, not of the algorithm. Real references carry
+/// homopolymers and STRs of hundreds of bases.
+///
+/// # The design decisions, made rather than defaulted
+///
+/// **Tract lengths straddle both window constants, and the family asserts it.**
+/// `the_long_tracts_bracket_the_normalizer_window` requires the set to hold a tract
+/// shorter than `window_size` and one longer than twice it, so a change to either the
+/// copy counts or the constant fails rather than silently producing a family whose
+/// tracts all sit on one side. The five lengths are 96, 102, 126, 129 and 300 bases —
+/// two either side of 100, two either side of 128, and one far beyond both.
+///
+/// **The `c.` axis is not optional here; it is the axis the question is about.** It
+/// is where `ref_seq` is the whole transcript, so a long *core* is what makes a long
+/// *transcript*. `cx` is skipped for the same reason [`long_corpus_sequences`] skips
+/// it: `EXON_SPANS` is a fixed 7/7/6 split of a 20-base core and means nothing here.
+///
+/// **These sit well below `MAX_CANONICAL_WINDOW` (4096), deliberately.** The longest
+/// tract is 300 bases in an 800-base core, so the canonical-window cap and
+/// `MAX_SPLIT_BLOCK` never engage and cannot confound the reading. Block-size
+/// behaviour at the cap is `long_block_inversion`'s question and is measured there;
+/// this family must not answer two questions at once.
+const LONG_TRACT_FAMILY: (&str, &str) = (
+    "long_tract_window_provenance",
+    "#1946 — a tandem tract longer than a normalizer window, on a transcript served whole",
+);
+
+/// The repeated unit. Three bases, for [`TRACT_UNITS`]' reason: `repeated.md:21`
+/// admits a repeat on a `c.` reference only for units whose length is a multiple of
+/// three, and `c.` is the axis this family exists to reach.
+const LONG_TRACT_UNIT: &str = "ACG";
+
+/// Copies of the unit in the reference, chosen so the tract lengths bracket both
+/// window constants — 96, 102, 126, 129 and 300 bases.
+const LONG_TRACT_COPIES: &[usize] = &[32, 34, 42, 43, 100];
+
+/// Length of a `long_tract_window_provenance` core.
+///
+/// Comfortably more than twice the longest tract, so every design has real flank on
+/// both sides and no tract is bounded by the core rather than by its own periodicity.
+const LONG_TRACT_CORE_LEN: usize = 800;
+
+/// Offset of the tract within the core. Far enough in that the 5' flank alone exceeds
+/// both window constants, so a window centred on the tract's 5' junction is bounded by
+/// the window and not by the start of the reference.
+const LONG_TRACT_START: usize = 200;
+
+/// The design set: one per copy count.
+fn long_tract_designs() -> Vec<TractDesign> {
+    LONG_TRACT_COPIES
+        .iter()
+        .map(|&copies| {
+            let end = LONG_TRACT_START + LONG_TRACT_UNIT.len() * copies - 1;
+            assert!(
+                end + 2 < LONG_TRACT_CORE_LEN,
+                "a {copies}-copy tract leaves no 3' flank"
+            );
+            TractDesign {
+                label: format!("longtract_{}x{copies}", LONG_TRACT_UNIT),
+                core: tract_core(
+                    LONG_TRACT_UNIT,
+                    copies,
+                    LONG_TRACT_START,
+                    LONG_TRACT_CORE_LEN,
+                ),
+                unit: LONG_TRACT_UNIT,
+                copies,
+                start: LONG_TRACT_START,
+                end,
+            }
+        })
+        .collect()
+}
+
+/// The two spellings one long-tract design contributes on `axis`.
+///
+/// Both are insertions at a tract junction of a payload holding **two** copies of the
+/// unit, which is the shape whose mint (`rules::insertion_to_repeat`) walks the tract
+/// to discover its extent — the walk this family exists to make longer than a window.
+/// One at each junction, so the walk is exercised in both directions: an insertion at
+/// the 3' junction reaches the full tract length 5'-wards, and vice versa.
+///
+/// # Two copies, not one, and that is a hard requirement rather than a preference
+///
+/// `insertion_to_repeat` opens with
+///
+/// ```text
+/// let added_copies = (inserted_seq.len() / base_unit.len()) as u64;
+/// if added_copies < 2 {
+///     // Single-copy addition is a duplication, not repeat notation.
+///     return None;
+/// }
+/// ```
+///
+/// so a payload of one unit can never mint a repeat however long the tract is — it
+/// takes the `ins`->`dup` path instead. The first cut of this family inserted a single
+/// unit and was measured **declining on every one of its 40 rows**, producing a
+/// populated family that exercised none of the machinery it was built for. It read as
+/// a result (`g.550_552dup`, a perfectly reasonable output) rather than as a miss,
+/// which is the failure this file exists to prevent one level up.
+///
+/// Deliberately lone members rather than cis alleles. The question is about what
+/// reference a *per-member* mint is handed, and a sibling would add cis machinery that
+/// has nothing to do with it.
+fn long_tract_inputs_for(axis: &str, design: &TractDesign) -> Vec<String> {
+    let prefix = prefix_for(axis);
+    let p = |i: usize| hgvs_pos(axis, i);
+    let payload = design.unit.repeat(2);
+    vec![
+        format!(
+            "{prefix}{}_{}ins{payload}",
+            p(design.end),
+            p(design.end + 1)
+        ),
+        format!(
+            "{prefix}{}_{}ins{payload}",
+            p(design.start - 1),
+            p(design.start)
+        ),
     ]
 }
 
@@ -1444,6 +1594,31 @@ fn dump(seeds: u32) -> Vec<Row> {
                     axis,
                     direction: dir_label,
                     family: REVCOMP_FAMILY.0,
+                    was_fixed_point: output == input,
+                    input,
+                    output,
+                });
+            }
+        }
+    }
+    // The long-tract designs. `cx` is skipped for the reason `long_corpus_sequences`
+    // skips it — `EXON_SPANS` is a fixed 7/7/6 split of a 20-base core — and the `c.`
+    // axis is the point of the family rather than an extra: it is where `ref_seq` is
+    // the whole transcript rather than a window (#1946).
+    for design in long_tract_designs() {
+        for (axis, direction, dir_label) in axes_and_directions() {
+            if axis == "cx" {
+                continue;
+            }
+            let normalizer = normalizer_for(axis, &design.core, direction);
+            for input in long_tract_inputs_for(axis, &design) {
+                let output = normalize_through(&normalizer, &input);
+                rows.push(Row {
+                    reference: design.label.clone(),
+                    core: design.core.clone(),
+                    axis,
+                    direction: dir_label,
+                    family: LONG_TRACT_FAMILY.0,
                     was_fixed_point: output == input,
                     input,
                     output,
@@ -2118,6 +2293,35 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
             // actually serves, and the one `repeat_beside_a_sequence_sibling` does not
             // reach.
             //
+            // # This family found a live defect, and `--verify-spdi` is how
+            //
+            // Five of its rows report `SPDI-MISMATCH`: the normalized output denotes
+            // different bases from the input. Four are `g.` and one `c.`, and the `g.`
+            // ones are legible by eye —
+            //
+            // ```text
+            // g.[257_262TTT[1];264T>A]  ->  g.[256_265T[7];264T>A]
+            // g.[257_262CCC[1];264C>A]  ->  g.[257_264C[5];264C>A]
+            // ```
+            //
+            // In both, the emitted repeat's tract span **contains the sibling's base**
+            // (264 is inside 256_265, and inside 257_264), so the allele is
+            // overlapping and malformed. That is exactly the shape
+            // `demote_repeats_spanning_siblings` exists to prevent.
+            //
+            // It cannot prevent this one. That pass decides what to demote by matching
+            // on the member's **pre-normalization** edit kind, and its arms are
+            // `Deletion | Duplication | Insertion | Delins`, with `_ => None` and a
+            // `continue`. An **authored** repeat was already a `NaEdit::Repeat` before
+            // normalization, so it falls through and is skipped — the pass covers only
+            // the repeats ferro itself mints. That is #1946's thesis as a measurement
+            // rather than an argument: a per-shape undo cannot cover a shape it did
+            // not create.
+            //
+            // Kept as a red row rather than removed. The family's value is that it
+            // reaches this, and deleting the shape would restore the silence it was
+            // added to break.
+            //
             // # Why this is on the random cores and not on the designed ones
             //
             // Measured, by instrumenting `merge::canonicalize_from_sequence`. Of the 288
@@ -2659,6 +2863,7 @@ mod tests {
             .into_iter()
             .chain(revcomp_designs().into_iter().map(|d| (d.label, d.core)))
             .chain(tract_designs().into_iter().map(|d| (d.label, d.core)))
+            .chain(long_tract_designs().into_iter().map(|d| (d.label, d.core)))
             .collect();
         let mut label_keyed = 0usize;
         for row in dump(2) {
@@ -3489,6 +3694,127 @@ mod tests {
                 design.label
             );
         }
+    }
+
+    /// The long tracts bracket the normalizer's own window, on both sides.
+    ///
+    /// **This is the property the family exists for, so it is asserted rather than
+    /// assumed.** A set of tracts that all sat on one side of the window would produce
+    /// a populated-looking family that could not answer the question — the same shape
+    /// as every corpus blindness this file records, one level down.
+    ///
+    /// `window_size` is read from `NormalizeConfig::default()` rather than restated,
+    /// per #1925: a guard that hardcodes the value it guards cannot observe that value
+    /// changing. The *other* constant in play, `merge::CANONICAL_PAD` (128), is
+    /// `pub(crate)` and an example is a separate crate, so it cannot be imported at
+    /// all. Rather than restate `128` — which is exactly the antipattern #1925 names —
+    /// the upper bound is expressed as **twice** `window_size`, which exceeds 128 for
+    /// any window at or above 64 and so brackets both constants without naming the
+    /// unreachable one.
+    #[test]
+    fn the_long_tracts_bracket_the_normalizer_window() {
+        let window = NormalizeConfig::default().window_size as usize;
+        let lengths: Vec<usize> = long_tract_designs()
+            .iter()
+            .map(|d| d.end - d.start + 1)
+            .collect();
+        assert_eq!(lengths.len(), LONG_TRACT_COPIES.len());
+        assert!(
+            lengths.iter().any(|&l| l < window),
+            "no tract is shorter than the {window}-base window, so the family cannot \
+             show a walk that stays inside one: {lengths:?}"
+        );
+        assert!(
+            lengths.iter().any(|&l| l > 2 * window),
+            "no tract exceeds twice the {window}-base window, so the family cannot \
+             show a walk that leaves one: {lengths:?}"
+        );
+        // Both sides of the pad as well, without naming it: a tract between the window
+        // and twice it, and one beyond.
+        assert!(
+            lengths.iter().any(|&l| l > window && l < 2 * window),
+            "no tract lands between the window and twice it: {lengths:?}"
+        );
+    }
+
+    /// The long-tract designs are maximal and well formed, like their short siblings.
+    ///
+    /// Separate from `the_designed_tracts_are_exactly_as_long_as_they_claim` because
+    /// that one pins the eight short designs' own count and offsets; this checks the
+    /// same *invariants* on a different design set. The boundary repair in
+    /// `tract_core` is shared, so a regression in it must fail on both.
+    #[test]
+    fn the_long_tract_designs_are_maximal() {
+        let designs = long_tract_designs();
+        assert_eq!(designs.len(), LONG_TRACT_COPIES.len());
+        for design in &designs {
+            let core = design.core.as_bytes();
+            assert_eq!(core.len(), LONG_TRACT_CORE_LEN, "[{}]", design.label);
+            assert!(
+                core.iter().all(|b| b"ACGT".contains(b)),
+                "[{}] not over ACGT",
+                design.label
+            );
+            assert_eq!(
+                &design.core[design.start..=design.end],
+                design.unit.repeat(design.copies),
+                "[{}] the tract is not what the design says",
+                design.label
+            );
+            let unit = design.unit.as_bytes();
+            assert_ne!(
+                core[design.start - 1],
+                unit[unit.len() - 1],
+                "[{}] the tract extends 5' of its stated start",
+                design.label
+            );
+            assert_ne!(
+                core[design.end + 1],
+                unit[0],
+                "[{}] the tract extends 3' of its stated end",
+                design.label
+            );
+            assert_ne!(core[0], b'A', "[{}] extends the pad 5'", design.label);
+            assert_ne!(
+                core[LONG_TRACT_CORE_LEN - 1],
+                b'T',
+                "[{}] extends the pad 3'",
+                design.label
+            );
+        }
+    }
+
+    /// The long-tract family emits both junctions on both DNA axes it runs on.
+    ///
+    /// `cx` is deliberately absent — asserted, so that wiring it in later has to be a
+    /// decision rather than an accident that would draw a 20-base exon table over an
+    /// 800-base core.
+    #[test]
+    fn the_long_tract_family_emits_both_junctions() {
+        for design in long_tract_designs() {
+            for axis in ["g", "c"] {
+                let inputs = long_tract_inputs_for(axis, &design);
+                assert_eq!(inputs.len(), 2, "[{} {axis}]", design.label);
+                let payload = design.unit.repeat(2);
+                assert!(
+                    inputs
+                        .iter()
+                        .all(|i| i.ends_with(&payload) && !i.contains(';')),
+                    "[{} {axis}] both shapes are lone insertions of TWO units — one \
+                     unit can never mint a repeat: {inputs:?}",
+                    design.label
+                );
+                assert_ne!(inputs[0], inputs[1], "[{} {axis}]", design.label);
+            }
+        }
+        let cx_rows = dump(0)
+            .into_iter()
+            .filter(|r| r.family == LONG_TRACT_FAMILY.0 && r.axis == "cx")
+            .count();
+        assert_eq!(
+            cx_rows, 0,
+            "the long tracts must not be drawn on the cx axis"
+        );
     }
 
     /// The tract family emits all six shapes, on every axis, for every design.
