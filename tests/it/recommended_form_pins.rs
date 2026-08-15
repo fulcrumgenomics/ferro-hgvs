@@ -110,9 +110,11 @@ fn a_tandem_copy_renders_as_a_duplication_not_an_insertion() {
 /// `inversion.md`'s own definition of an inversion requires "**more than one
 /// nucleotide**" without licensing every longer match.
 ///
-/// This guard is what stops the rule firing on noise. It passes trivially while
-/// the rule is unimplemented; its value is entirely as a ceiling on the rule
-/// once it exists.
+/// This guard is what stops the rule firing on noise. It is a **ceiling** on
+/// the derivation, and the derivation now exists — so it is a live assertion
+/// rather than the trivially-passing placeholder it was written as.
+/// `the_coincidence_floor_sits_between_eight_and_nine_bases` pins the other
+/// side, where the rule must fire.
 #[test]
 fn a_short_reverse_complement_match_is_not_treated_as_an_inverted_duplication() {
     assert_eq!(
@@ -373,5 +375,189 @@ fn a_short_tandem_prefix_is_not_promoted_to_a_duplication() {
     assert!(
         !out.contains("dup"),
         "a short prefix match is coincidence, not evidence of a duplication; got {out}"
+    );
+}
+
+/// An insertion whose payload is the reverse complement of the **adjacent**
+/// span is spelled `ins<range>inv`, naming where the copy came from.
+///
+/// `DNA/inversion.md:69`: "the recommendation is to describe inverted
+/// duplication using the format `g.122_123ins123_234inv` or
+/// `g.234_235ins123_234inv` depending on whether the inverted copy is 5' or 3'
+/// of the original copy (reference sequence)." Restated as a Note in five more
+/// places, each rejecting the `dupinv` shorthand.
+///
+/// This is the mirror of a rule ferro already applies: a payload equal to the
+/// adjacent span *uninverted* is re-spelled `dup` (`insertion.md:17`, pinned
+/// above).
+///
+/// # Why the span must abut the junction
+///
+/// `:69` answers a question about an inverted **duplication**, and both of its
+/// forms place the source immediately beside the insertion point. Restricting
+/// the derivation to an abutting span is what the clause describes, and it
+/// avoids a tie-break the spec does not supply.
+///
+/// # Why this payload is ten bases and not three
+///
+/// A match between a payload and the reverse complement of its neighbour is
+/// only evidence of an inverted duplication when it is unlikely to have happened
+/// by chance. `g.212_221` is `GGGAGTCGGC`, so the payload is its reverse
+/// complement `GCCGACTCCC`; at that length the match is far below the
+/// coincidence floor. `g.222` is `T` and the payload opens with `G`, so the
+/// insertion cannot 3'-shift and the assertion is about spelling rather than
+/// about where the edit settled.
+#[test]
+fn an_inverted_copy_of_the_adjacent_span_renders_as_ins_range_inv() {
+    let span: String = (212..=221).map(|p| base_at(p) as char).collect();
+    assert_eq!(span, "GGGAGTCGGC", "case assumes the reference span");
+    assert_eq!(base_at(222), b'T', "payload opens with G, so no 3'-shift");
+    assert_recommended(
+        "221_222insGCCGACTCCC",
+        "221_222ins212_221inv",
+        "DNA/inversion.md:69 - an inverted duplication is described ins<range>inv",
+    );
+}
+
+/// The literal and copy-range spellings of one inverted duplication converge.
+///
+/// The derivation is from the **reference**, not from the input's spelling, so
+/// both authors reach the same string - which is what
+/// `canonical-form-choice-when-both-legal` requires and what a
+/// preserve-the-input implementation would not give.
+#[test]
+fn both_spellings_of_an_inverted_duplication_converge_on_the_range_form() {
+    let from_literal = normalize_g("221_222insGCCGACTCCC");
+    let from_range = normalize_g("221_222ins212_221inv");
+    assert_eq!(
+        from_literal, from_range,
+        "the two spellings of one inverted duplication settled apart"
+    );
+    assert_eq!(from_literal, "221_222ins212_221inv");
+}
+
+/// The **other** form in `inversion.md:69` — the source span starting at the
+/// junction, when the inverted copy lands 5' of its original.
+///
+/// `:69` gives two spellings, "depending on whether the inverted copy is 5' or
+/// 3' of the original copy": `g.234_235ins123_234inv`, where the source *ends*
+/// at the junction (pinned above), and `g.122_123ins123_234inv`, where the
+/// source *starts* at it. Implementing one and not the other would make the
+/// spelling depend on which side of the original the copy happened to land, for
+/// no reason the clause gives.
+///
+/// `g.201_210` is `TTTCTGAGCC`, so the payload is `GGCTCAGAAA`; `g.201` is `T`
+/// and the payload opens with `G`, so it cannot 3'-shift. The 5'-abutting span
+/// does not also match, so this case is unambiguous.
+#[test]
+fn an_inverted_copy_of_the_span_starting_at_the_junction_renders_as_ins_range_inv() {
+    let span: String = (201..=210).map(|p| base_at(p) as char).collect();
+    assert_eq!(span, "TTTCTGAGCC", "case assumes the reference span");
+    assert_eq!(base_at(201), b'T', "payload opens with G, so no 3'-shift");
+    assert_recommended(
+        "200_201insGGCTCAGAAA",
+        "200_201ins201_210inv",
+        "DNA/inversion.md:69 - the inverted copy 5' of its original",
+    );
+}
+
+/// The derived range form and the literal it replaces resolve to the **same
+/// SPDI**, so the re-spelling is a change of notation and not of denotation.
+///
+/// This is the guard behind the ruling record's downstream-consequence
+/// paragraph. That paragraph originally named `hgvs_to_spdi` as a blocker, on
+/// the strength of the function not yet understanding a range payload; #1966
+/// ("allow ref span insertions when converting to SPDI") taught it the shape,
+/// and `src/spdi/convert.rs` now decomposes
+/// `InsertedSequence::PositionRangeInv` and reads the span through
+/// `read_reference_span`. A record that states a downstream fact with nothing
+/// checking it is how that paragraph came to outlive the thing it described, so
+/// the fact is pinned here rather than only asserted in prose.
+///
+/// The provider-bearing entry point is the one pinned: `hgvs_to_spdi_simple`
+/// and `hgvs_to_spdi(_, None)` decline any payload that must be read from the
+/// reference, exactly as they decline the `del`/`dup`/`delins` short forms, and
+/// the normalizer that mints this shape holds a provider by construction.
+#[test]
+fn the_derived_range_form_and_its_literal_resolve_to_the_same_spdi() {
+    use ferro_hgvs::spdi::hgvs_to_spdi;
+
+    let spdi_of = |body: &str| -> String {
+        let input = format!("{LOCAL_CONTIG}:g.{body}");
+        let variant: HgvsVariant = parse_hgvs(&input).expect("parse");
+        hgvs_to_spdi(&variant, &provider())
+            .unwrap_or_else(|e| panic!("{body}: {e}"))
+            .to_string()
+    };
+
+    for (literal, range) in [
+        ("221_222insGCCGACTCCC", "221_222ins212_221inv"),
+        ("200_201insGGCTCAGAAA", "200_201ins201_210inv"),
+    ] {
+        // The range form is what the normalizer now emits for the literal.
+        assert_eq!(normalize_g(literal), range, "derivation moved");
+        assert_eq!(
+            spdi_of(range),
+            spdi_of(literal),
+            "the derived form `{range}` must denote what `{literal}` denotes; \
+             a divergence here means the re-spelling changed the sequence"
+        );
+    }
+}
+
+/// **POLICY, not recommended form.** Where `MAX_CHANCE_MATCH_PROBABILITY`
+/// actually sits: an eight-base inverted copy is left literal, a nine-base one
+/// is derived.
+///
+/// The spec ranks the *forms* — that is what the rest of this module is for —
+/// but it supplies no minimum length for an inverted duplication, so the
+/// coincidence floor is a house choice. The record says so in capitals, and
+/// warns against re-tuning the constant "to whatever makes a test pass". Nothing
+/// enforced that: **weakening the threshold 85x, from `1/85_642` to `1/1_000`,
+/// left all 41 tests in the three dedicated corpora green.** The existing
+/// negatives are one and three bases, and at three bases in this window the
+/// chance-match probability is about `1.5e-2` — so anything up to roughly `1/70`
+/// still passed them. The suite pinned the threshold only from *above*, via the
+/// ten-base positives, and not at all from *below*, which is the side that mints
+/// spurious inverted duplications and the whole reason the floor exists.
+///
+/// So this pins the **boundary itself**, which is the constant's only observable
+/// content. Both halves are load-bearing and neither may be relaxed alone:
+/// loosening the constant moves `len = 8` into the range form, tightening it
+/// moves `len = 9` out.
+///
+/// The spans are contiguous 5' of the junction at `g.221`, so this walks one
+/// length step across the floor with everything else held fixed:
+///
+/// ```text
+/// len=8  span=GAGTCGGC   payload=GCCGACTC   -> 221_222insGCCGACTC   (literal)
+/// len=9  span=GGAGTCGGC  payload=GCCGACTCC  -> 221_222ins213_221inv (derived)
+/// ```
+#[test]
+fn the_coincidence_floor_sits_between_eight_and_nine_bases() {
+    let span_of =
+        |len: u64| -> String { ((222 - len)..=221).map(|p| base_at(p) as char).collect() };
+    let payload_of =
+        |len: u64| -> String { ferro_hgvs::sequence::reverse_complement(&span_of(len)) };
+
+    assert_eq!(span_of(8), "GAGTCGGC", "case assumes the reference span");
+    assert_eq!(span_of(9), "GGAGTCGGC", "case assumes the reference span");
+
+    // Below the floor: the match is coincidence, and the literal stands.
+    let eight = payload_of(8);
+    assert_eq!(
+        normalize_g(&format!("221_222ins{eight}")),
+        format!("221_222ins{eight}"),
+        "an eight-base reverse-complement match is below the coincidence floor \
+         and must stay literal; if this now derives, the floor was loosened"
+    );
+
+    // At the floor: the match is evidence, and the range form is derived.
+    let nine = payload_of(9);
+    assert_eq!(
+        normalize_g(&format!("221_222ins{nine}")),
+        "221_222ins213_221inv",
+        "a nine-base reverse-complement match must clear the coincidence floor; \
+         if this now stays literal, the floor was tightened"
     );
 }

@@ -96,6 +96,215 @@ pub fn is_uncertain_real_substitution(edit: &NaEdit, edit_mu: &crate::hgvs::Mu<N
     is_real_substitution(edit) && edit_mu.is_uncertain()
 }
 
+/// The largest chance-match probability at which an inverted-copy match is
+/// taken as evidence rather than coincidence.
+///
+/// Derived rather than chosen: at `1/N` over a representation-stability corpus
+/// of `N` rows, the *expected number of false positives over that corpus* is
+/// below one. A bare length cutoff would be a number with no such account behind
+/// it, and the spec supplies none — `DNA/insertion.md:22` scopes the copy-range
+/// form to "larger insert sequences" and defines "larger" nowhere.
+///
+/// **Read it as an order of magnitude — about `1e-5` — not as a row count.**
+/// The literal denominator is a *retired* figure:
+/// `examples/dump_normalized_corpus.rs` records 85,642 as one entry in a
+/// history, superseded by 86,398, and says in terms that it deliberately does
+/// not name a current entry because "the current total is whatever the generator
+/// prints today". Two more reasons the denominator will not bear close reading:
+/// it counts the protein axis, while only nucleotide rows can carry an inserted
+/// revcomp payload and only `g.` rows reach this code; and the account treats
+/// the corpus as `N` independent trials while **two** candidate spans are tested
+/// per insertion junction, so the budget is optimistic by at least 2×. None of
+/// that moves the order of magnitude, which is all this constant claims.
+///
+/// Under even base composition this behaves like a floor of nine bases
+/// (`0.25^9 = 3.8e-6`, `0.25^8 = 1.5e-5`), but it is deliberately not written as
+/// one: in a skewed or homopolymeric window a short match is much likelier than
+/// `4^-n`, and a flat length rule would wave exactly those through.
+///
+/// The **effect** is what is guarded, not the derivation — see
+/// `tests/it/recommended_form_pins.rs::the_coincidence_floor_sits_between_eight_and_nine_bases`.
+/// Before that pin existed, weakening this constant 85× left all 41 tests in the
+/// three dedicated corpora green.
+const MAX_CHANCE_MATCH_PROBABILITY: f64 = 1.0 / 85_642.0;
+
+/// Half the width of the window whose base composition
+/// [`chance_match_probability`] keys on, in bases either side of the insertion
+/// junction.
+///
+/// The composition estimate must be a property of the **reference**, not of the
+/// caller. `ref_seq` is the normalization window — `[start − w, end + w)` for
+/// `NormalizeConfig::window_size`, a public field, then grown by
+/// `normalize_in_grown_window` until the 3'-shift settles — so keying on the
+/// composition of the whole slice made the emitted description depend on a knob
+/// that exists to bound the shuffle and has no statistical meaning. On a contig
+/// with an AT→GC boundary, one variant rendered `ins<literal>` at
+/// `window_size = 80` and `ins<range>inv` at `window_size = 120`.
+///
+/// 50 rather than the default `window_size` of 100 so that the fixed window sits
+/// comfortably *inside* the supplied slice at the default setting and at every
+/// larger one, including after the growth loop enlarges it. Near a contig end
+/// the window still clamps, but it clamps to where the reference ends rather
+/// than to how the caller was configured.
+const COMPOSITION_HALF_WIDTH: usize = 50;
+
+/// Probability that an unrelated payload would reverse-complement-match `span`
+/// by chance, under the base composition of `window`.
+///
+/// For each base of the span, an unrelated payload matches at that position if
+/// it happens to carry that base's complement, which it does with the frequency
+/// of that complement in the surrounding sequence. Positions are treated as
+/// independent, which is the conservative direction here: real sequence is
+/// correlated, so the true chance of a match is *higher* than this product and
+/// the test is if anything too permissive rather than too strict.
+///
+/// Counts are Laplace-smoothed so a base absent from the window yields a small
+/// probability rather than zero — without it, a match on a base the window never
+/// shows would read as infinitely significant.
+fn chance_match_probability(window: &[u8], span: &[u8]) -> f64 {
+    fn index(base: u8) -> Option<usize> {
+        match base.to_ascii_uppercase() {
+            b'A' => Some(0),
+            b'C' => Some(1),
+            b'G' => Some(2),
+            b'T' => Some(3),
+            _ => None,
+        }
+    }
+    fn complement(base: u8) -> u8 {
+        match base.to_ascii_uppercase() {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            other => other,
+        }
+    }
+
+    let mut counts = [0usize; 4];
+    let mut total = 0usize;
+    for &base in window {
+        if let Some(i) = index(base) {
+            counts[i] += 1;
+            total += 1;
+        }
+    }
+    if total == 0 {
+        return 1.0;
+    }
+
+    let mut probability = 1.0f64;
+    for &base in span {
+        let Some(i) = index(complement(base)) else {
+            return 1.0;
+        };
+        probability *= (counts[i] as f64 + 1.0) / (total as f64 + 4.0);
+    }
+    probability
+}
+
+/// The reference span whose reverse complement is `payload`, when that span
+/// immediately abuts the insertion junction on its **5' side** and the match is
+/// unlikely enough to be evidence of an inverted duplication.
+///
+/// The inverted sibling of [`insertion_is_duplication`]. `DNA/inversion.md:69`
+/// gives the spelling — `g.234_235ins123_234inv` — and five Notes restate it,
+/// each rejecting `dupinv`.
+///
+/// Three conditions, only the last of which is ours:
+///
+/// 1. **More than one nucleotide.** `DNA/inversion.md` defines an inversion as a
+///    change where "**more than one nucleotide** replacing the original sequence
+///    are the reverse complement of the original sequence", so a single base is
+///    outside the concept entirely.
+/// 2. **Not a plain duplication.** A payload that equals its neighbour *and* its
+///    neighbour's reverse complement is self-complementary, which makes it a
+///    duplication — and `general.md:55` ranks duplication (4) above insertion
+///    (5), so it belongs to [`insertion_is_duplication`], not here. Declining
+///    keeps `#179`'s self-complementary cases unchanged.
+/// 3. **Unlikely by chance**, per [`MAX_CHANCE_MATCH_PROBABILITY`].
+///
+/// `gap` is the 1-based position 5' of the junction, in the same frame `ref_seq`
+/// is indexed in; the returned span is 1-based inclusive in that same frame, and
+/// the caller converts it to axis coordinates exactly as it does the anchor.
+/// Keeping that conversion in one place is deliberate — a payload that travelled
+/// a different path from its own anchor is how a range insert ends up naming
+/// bases far from the ones it means.
+pub(crate) fn inverted_adjacent_copy_span(
+    ref_seq: &[u8],
+    gap: u64,
+    payload: &[u8],
+) -> Option<(u64, u64)> {
+    let len = payload.len();
+    // `DNA/inversion.md`: an inversion is a change where "more than one
+    // nucleotide" replacing the original are its reverse complement, so a single
+    // base is outside the concept.
+    if len < 2 {
+        return None;
+    }
+    let gap_idx = usize::try_from(gap).ok()?;
+    if gap_idx > ref_seq.len() {
+        return None;
+    }
+
+    // `:69` gives two spellings, "depending on whether the inverted copy is 5'
+    // or 3' of the original copy". The 5'-abutting source (`g.234_235ins
+    // 123_234inv`, the span ENDING at the junction) is tried first, and a match
+    // there wins, because the spec supplies no tie-break and preferring one
+    // deterministically is what keeps the answer independent of which side was
+    // examined first.
+    //
+    // Both sides match exactly when the `2 * len` bases straddling the junction
+    // are a TANDEM REPEAT of period `len` — candidate 0 is `A = ref[gap-len..gap]`
+    // and candidate 1 is `B = ref[gap..gap+len]`, and both reverse-complement-
+    // match one payload iff `revcomp(A) == revcomp(B)` iff `A == B`. Nothing
+    // palindromic is required, and the difference is operational: tandem repeats
+    // of 9–30 bases are ubiquitous in real sequence while palindromes of that
+    // length are not, so this tie-break is exercised far more often than a
+    // self-complementarity reading would suggest. Pinned by
+    // `a_tandem_repeat_makes_both_candidates_match_and_the_five_prime_span_wins`.
+    let candidates = [
+        gap_idx.checked_sub(len).map(|start| (start, gap_idx)),
+        gap_idx
+            .checked_add(len)
+            .filter(|end| *end <= ref_seq.len())
+            .map(|end| (gap_idx, end)),
+    ];
+
+    for (start_idx, end_idx) in candidates.into_iter().flatten() {
+        let span_bytes = &ref_seq[start_idx..end_idx];
+        let Ok(span) = std::str::from_utf8(span_bytes) else {
+            continue;
+        };
+        if !crate::sequence::reverse_complement(span)
+            .as_bytes()
+            .eq_ignore_ascii_case(payload)
+        {
+            continue;
+        }
+        // A payload equal to its neighbour AND to that neighbour's reverse
+        // complement is self-complementary, which makes this a duplication —
+        // `general.md:55` ranks duplication (4) above insertion (5), so it
+        // belongs to `insertion_is_duplication`. Declining keeps #179's
+        // self-complementary cases unchanged.
+        if payload.eq_ignore_ascii_case(span_bytes) {
+            continue;
+        }
+        // Key the coincidence floor on a fixed window centred on the junction,
+        // not on `ref_seq` — see `COMPOSITION_HALF_WIDTH`.
+        let composition_start = gap_idx.saturating_sub(COMPOSITION_HALF_WIDTH);
+        let composition_end = gap_idx
+            .saturating_add(COMPOSITION_HALF_WIDTH)
+            .min(ref_seq.len());
+        let composition = &ref_seq[composition_start..composition_end];
+        if chance_match_probability(composition, span_bytes) > MAX_CHANCE_MATCH_PROBABILITY {
+            continue;
+        }
+        return Some((start_idx as u64 + 1, end_idx as u64));
+    }
+    None
+}
+
 /// Check if an insertion should be represented as a duplication
 ///
 /// In HGVS, if an inserted sequence is identical to the sequence
@@ -6662,5 +6871,157 @@ mod tests {
             alternative: Base::G,
         })
         .is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // `inverted_adjacent_copy_span` and its coincidence floor.
+    // -----------------------------------------------------------------
+
+    mod inverted_adjacent_copy {
+        use super::*;
+
+        fn revcomp(s: &str) -> String {
+            crate::sequence::reverse_complement(s)
+        }
+
+        /// A contig with a sharp AT→GC composition boundary, the junction
+        /// 30 bases into the GC half. Both halves are non-repetitive enough
+        /// that the 10-base span ending at the junction is neither
+        /// self-complementary nor half of a tandem repeat.
+        fn composition_boundary_contig() -> (String, usize) {
+            let at = "ATTAATAAT".repeat(50);
+            let gc = "GGCCGCGGC".repeat(50);
+            let gap_idx = at.len() + 30;
+            (format!("{at}{gc}"), gap_idx)
+        }
+
+        /// The verdict must not depend on how much reference the caller
+        /// happened to hand in.
+        ///
+        /// `ref_seq` is the **normalization window**, whose extent is
+        /// `NormalizeConfig::window_size` (a public field, default 100) grown
+        /// by `normalize_in_grown_window` until the 3'-shift settles. None of
+        /// that is a property of the variant or the reference, so keying the
+        /// coincidence floor on the composition of the whole slice made the
+        /// emitted description a function of a caller-set knob. Measured on
+        /// this contig before the fix, one variant, one reference, one input:
+        ///
+        /// ```text
+        /// len=10 payload=GCCGCCGCGG  w10..w80 = lit    w120..w300 = INV
+        /// ```
+        ///
+        /// [`COMPOSITION_HALF_WIDTH`] makes the floor key on a fixed window
+        /// centred on the junction, so every supplied extent that *contains*
+        /// that window agrees. Extents narrower than it still clamp — there is
+        /// no more sequence to read — which is why the assertion starts at the
+        /// half-width and why the half-width is set well inside the default
+        /// `window_size`.
+        #[test]
+        fn the_verdict_is_independent_of_how_much_reference_is_supplied() {
+            let (contig, gap_idx) = composition_boundary_contig();
+            let span = &contig[gap_idx - 10..gap_idx];
+            let payload = revcomp(span);
+            assert_ne!(payload, span, "case must not be self-complementary");
+
+            // Slice the same contig to a series of extents around the
+            // junction, exactly as a different `window_size` would.
+            let mut verdicts = Vec::new();
+            for half in [COMPOSITION_HALF_WIDTH, 80, 100, 120, 200, 300] {
+                let start = gap_idx.saturating_sub(half);
+                let end = (gap_idx + half).min(contig.len());
+                let sliced = &contig.as_bytes()[start..end];
+                // `gap` is expressed in the frame the slice is indexed in.
+                let local_gap = (gap_idx - start) as u64;
+                verdicts.push((
+                    half,
+                    inverted_adjacent_copy_span(sliced, local_gap, payload.as_bytes()).is_some(),
+                ));
+            }
+
+            let first = verdicts[0].1;
+            assert!(
+                verdicts.iter().all(|(_, v)| *v == first),
+                "the emitted form depends on the supplied window extent: {verdicts:?}"
+            );
+        }
+
+        /// Both candidate spans match exactly when the `2 * len` bases
+        /// straddling the junction are a **tandem repeat of period `len`** —
+        /// not when the neighbourhood is palindromic.
+        ///
+        /// Candidate 0 is `A = ref[gap-len..gap]`, candidate 1 is
+        /// `B = ref[gap..gap+len]`; both reverse-complement-match one payload
+        /// iff `revcomp(A) == revcomp(B)` iff `A == B`. Nothing about that
+        /// requires self-complementarity, and tandem repeats of this length
+        /// are common in real sequence while palindromes of it are not — so
+        /// this tie-break is exercised far more often than a palindrome-only
+        /// reading would suggest. The 5'-abutting span wins, deterministically.
+        #[test]
+        fn a_tandem_repeat_makes_both_candidates_match_and_the_five_prime_span_wins() {
+            // A 12-mer that is NOT self-complementary, laid down twice.
+            let unit = "GGCTAACGTTCA";
+            assert_ne!(revcomp(unit), unit, "the unit must not be palindromic");
+            // Pad either side so the coincidence floor sees a normal window.
+            let filler = "ACGTTGCAACGT".repeat(20);
+            let contig = format!("{filler}{unit}{unit}{filler}");
+            let gap_idx = filler.len() + unit.len();
+            let payload = revcomp(unit);
+
+            let span =
+                inverted_adjacent_copy_span(contig.as_bytes(), gap_idx as u64, payload.as_bytes())
+                    .expect("a 12-base inverted copy beside its source must be derived");
+
+            // 1-based inclusive, the span ENDING at the junction.
+            assert_eq!(
+                span,
+                ((gap_idx - unit.len() + 1) as u64, gap_idx as u64),
+                "with both candidates matching, the 5'-abutting span must win"
+            );
+        }
+
+        /// A single base is outside the concept of an inversion
+        /// (`DNA/inversion.md` requires "more than one nucleotide").
+        #[test]
+        fn a_single_base_payload_is_declined() {
+            let contig = "ACGTTGCAACGT".repeat(30);
+            let gap_idx = 120usize;
+            let span = &contig[gap_idx - 1..gap_idx];
+            let payload = revcomp(span);
+            assert!(inverted_adjacent_copy_span(
+                contig.as_bytes(),
+                gap_idx as u64,
+                payload.as_bytes()
+            )
+            .is_none());
+        }
+
+        /// A self-complementary payload is a duplication, and
+        /// `general.md:55` ranks duplication above insertion — so this
+        /// declines and leaves the case to `insertion_is_duplication`.
+        /// The guard `continue`s rather than returning, so the 3' candidate
+        /// still gets its turn.
+        #[test]
+        fn a_self_complementary_payload_is_left_to_the_duplication_rule() {
+            let contig = "ACGTTGCAACGT".repeat(30);
+            let gap_idx = 120usize;
+            let span = &contig[gap_idx - 2..gap_idx];
+            // `GC`/`AT`-style two-mers are their own reverse complement.
+            if revcomp(span) == span {
+                assert!(inverted_adjacent_copy_span(
+                    contig.as_bytes(),
+                    gap_idx as u64,
+                    span.as_bytes()
+                )
+                .is_none());
+            }
+        }
+
+        /// Fail-safes: a window with no ACGT, and a payload carrying a
+        /// non-ACGT base, both yield probability `1.0` and therefore decline.
+        #[test]
+        fn non_acgt_input_fails_safe_to_declining() {
+            assert_eq!(chance_match_probability(b"NNNNNNNN", b"ACGT"), 1.0);
+            assert_eq!(chance_match_probability(b"ACGTACGT", b"ACNT"), 1.0);
+        }
     }
 }

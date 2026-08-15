@@ -138,6 +138,72 @@ fn anchor_position_before(start: u64, hgvs_string: &str) -> Result<u64, FerroErr
         })
 }
 
+/// The nucleotides an inserted payload contributes to a VCF ALT allele.
+///
+/// A VCF allele field holds bases. `Display for InsertedSequence` renders the
+/// *HGVS spelling*, which coincides with the bases for exactly one shape —
+/// [`InsertedSequence::Literal`] — and for a single-part
+/// [`InsertedSequence::Complex`] wrapping one. Every other shape renders as a
+/// description: `212_221inv` for a range, `10` for a count, `(?)` for an
+/// uncertainty. Formatting one straight into an allele produced records like
+/// `ALT=C212_221inv`, which is not a VCF record at all.
+///
+/// So this is an **allowlist**: it spells the shapes that are already bases and
+/// declines the rest. The alternative — resolving a range against the reference
+/// — cannot be done safely here. [`HgvsToVcfConverter::build_vcf_record`] is the
+/// shared trunk for `convert_cds`, `convert_tx`, `convert_rna` and
+/// `convert_genome`, and it receives the edit in the *description's own*
+/// coordinate frame while
+/// [`HgvsToVcfConverter::get_reference_sequence`] reads the genomic contig by
+/// chromosome name. A `c.`-frame range resolved against genomic coordinates
+/// would return the wrong bases with nothing to show for it — trading a visibly
+/// malformed record for a silently wrong one. Doing it correctly needs the
+/// axis-aware lookup `crate::normalize::rules::fetch_position_range_bases` has
+/// and this converter does not, which is a feature rather than this guard.
+///
+/// Declining is not a loss of reach: the range spellings are alternative
+/// renderings of a payload that is equally legal as a literal, and the literal
+/// converts. The error names the payload so a caller can see which one to
+/// re-spell.
+fn inserted_sequence_bases(
+    sequence: &crate::hgvs::edit::InsertedSequence,
+    hgvs_string: &str,
+) -> Result<String, FerroError> {
+    use crate::hgvs::edit::{InsertedPart, InsertedSequence};
+
+    match sequence {
+        InsertedSequence::Literal(seq) => Ok(seq.to_string()),
+        // A single-part `Complex` renders as its part (HGVS v21 reserves
+        // brackets for two or more), so an all-literal `Complex` already
+        // produced correct bases in the one-part case and a bracketed
+        // `[A;B]` in the rest. Concatenating is right for both.
+        InsertedSequence::Complex(parts)
+            if parts
+                .iter()
+                .all(|part| matches!(part, InsertedPart::Literal(_))) =>
+        {
+            Ok(parts
+                .iter()
+                .map(|part| match part {
+                    InsertedPart::Literal(seq) => seq.to_string(),
+                    _ => unreachable!("guarded by the match arm above"),
+                })
+                .collect())
+        }
+        // `ins` with no payload contributes nothing; the anchor base alone is
+        // already what the surrounding arms emit for it.
+        InsertedSequence::Empty => Ok(String::new()),
+        other => Err(FerroError::UnsupportedVariant {
+            variant_type: format!(
+                "inserted payload `{other}` is an HGVS description, not nucleotides, and a VCF \
+                 allele field holds only bases; ferro does not resolve a payload against the \
+                 reference on this path because the edit arrives in the description's own \
+                 coordinate frame. Re-spell the payload as literal bases. Variant: {hgvs_string}"
+            ),
+        }),
+    }
+}
+
 /// Result of converting an HGVS variant to VCF
 #[derive(Debug, Clone)]
 pub struct VcfConversionResult {
@@ -703,7 +769,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 // Insertion: anchor base at position, ALT includes anchor + inserted sequence
                 let anchor_pos = start;
                 let anchor_base = self.get_reference_base(chrom, anchor_pos)?;
-                let inserted_seq = sequence.to_string();
+                let inserted_seq = inserted_sequence_bases(sequence, hgvs_string)?;
 
                 let ref_allele = anchor_base.to_string();
                 let alt_allele = format!("{}{}", anchor_base, inserted_seq);
@@ -719,7 +785,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
             NaEdit::Delins { sequence, .. } => {
                 // Deletion-insertion: REF is deleted sequence, ALT is replacement
                 let deleted_seq = self.get_reference_sequence(chrom, start, end)?;
-                let alt_seq = sequence.to_string();
+                let alt_seq = inserted_sequence_bases(sequence, hgvs_string)?;
 
                 // If lengths match, no anchor needed
                 // If different lengths, might need anchor for proper VCF normalization
@@ -755,7 +821,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                 // Duplication-insertion: duplication of region followed by insertion
                 // VCF representation: REF is anchor base, ALT is anchor + dup_seq + inserted_seq
                 let dup_seq = self.get_reference_sequence(chrom, start, end)?;
-                let ins_seq = sequence.to_string();
+                let ins_seq = inserted_sequence_bases(sequence, hgvs_string)?;
 
                 let anchor_pos = end;
                 let anchor_base = self.get_reference_base(chrom, anchor_pos)?;
