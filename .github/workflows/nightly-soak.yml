@@ -171,8 +171,16 @@ jobs:
         # `--no-tests=fail` for the reason spelled out on ci.yml's `soak` job,
         # which runs the identical selection against the identical archive. A
         # nightly is the worse place to lose it: nobody watches a green run.
+        #
+        # Through `run_nextest_archive.sh` for the same reason, and the nightly
+        # is the worse place to lose that too: this job carries no
+        # `timeout-minutes`, so an unbounded list-phase stall here would run to
+        # GitHub's 360-minute default with nothing on the run page saying why.
+        # The 25m step bound is ~26x the measured job wall clock (43-57s across
+        # all 8 shards of the last three nightlies), so it cannot fire on a
+        # legitimate run.
         run: |
-          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail -E 'test(proptest)'
       - name: Capture the failing seed
         # proptest writes the shrunk case to its persistence file. Surfacing it
