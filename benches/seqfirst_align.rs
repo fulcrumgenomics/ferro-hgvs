@@ -1,11 +1,20 @@
 //! Sizing the sequence-first DP.
 //!
-//! `AlignmentDag::build` is `O(n*m)` in time **and space**, but Criterion has
-//! no memory axis — this measures wall-clock time only. It shows where that
-//! grows too slow to be acceptable, so the block-size cap in the migration is
-//! chosen on time evidence; the memory dimension is not measured here (the
-//! figures are on #1928: ~18 bytes per grid cell, ~275 MB at the widest
-//! accepted block).
+//! `AlignmentDag::build` **allocates** `O(n*m)` and, since the band landed,
+//! **fills** only `O((n+m)*k)`. Criterion has no memory axis, so this measures
+//! wall-clock time only, and the block-size cap in the migration is chosen on
+//! time evidence.
+//!
+//! The memory dimension is **not** measured here; the figures are on #1928, and
+//! note they moved when the cost grid narrowed to `u16`: **14.60 bytes per grid
+//! cell, 215.4 MB** at the widest accepted block (`W = 3840`), down from 18.67
+//! and 275.4 MB. This header carried the older pair until the banding change.
+//!
+//! Because the allocation is unnarrowed while the fill is narrowed, a timing
+//! here is partly an allocator measurement: at `n = 4096` the banded arm runs at
+//! roughly memory bandwidth, and two groups that compute the *same* thing can
+//! differ several-fold purely on whether a large arena has already been faulted
+//! in. Compare each group against its own baseline, never across groups.
 //!
 //! # Divergence is an AXIS, not a constant (#1928)
 //!
