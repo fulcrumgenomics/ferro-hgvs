@@ -445,6 +445,14 @@ pub(crate) fn partition_members_canonical(dag: &AlignmentDag) -> Vec<MemberBlock
 mod tests {
     use super::*;
 
+    /// [`AlignmentDag::build`] on blocks small enough that its
+    /// `MAX_ALIGNMENT_SPAN` refusal cannot fire. Every block in this module is a
+    /// handful of bases; the refusal itself is pinned in `align.rs`, by
+    /// `the_span_bound_is_enforced_from_both_sides`.
+    fn dag(reference: &[u8], alt: &[u8]) -> AlignmentDag {
+        AlignmentDag::build(reference, alt).expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+    }
+
     /// The calibration corpus. Six cases; 6/6 is the bar this design cleared
     /// and no other candidate did (score-margin and match-density both failed
     /// here — see `separations_are_meaningful` in `merge.rs` for their
@@ -499,7 +507,7 @@ mod tests {
                 2,
             ),
         ] {
-            let dag = AlignmentDag::build(r, a);
+            let dag = dag(r, a);
             let members = partition_members(&dag);
             assert_eq!(members.len(), expected, "{name}: got {members:?}");
         }
@@ -517,7 +525,7 @@ mod tests {
     /// invisible — the other five calibration cases score the same either way.
     #[test]
     fn one_unchanged_base_between_runs_merges() {
-        let dag = AlignmentDag::build(b"GACTGACTGA", b"GAATAACTGA");
+        let dag = dag(b"GACTGACTGA", b"GAATAACTGA");
         assert_eq!(
             partition_members(&dag).len(),
             1,
@@ -540,7 +548,7 @@ mod tests {
     /// merging and splitting.
     #[test]
     fn separation_after_an_insertion_junction_counts_the_base_it_does_not_occupy() {
-        let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
+        let dag = dag(b"AAAAAAA", b"AACACAAAA");
         let dominators = dag.dominators();
         assert_eq!(
             partition_members_with(&dag, &dominators, 1).len(),
@@ -553,19 +561,19 @@ mod tests {
     fn two_unchanged_bases_between_runs_split() {
         // The boundary from the other side: exactly MIN_SEPARATION unchanged
         // bases must NOT merge.
-        let dag = AlignmentDag::build(b"GACTGACTGA", b"GAATGTCTGA");
+        let dag = dag(b"GACTGACTGA", b"GAATGTCTGA");
         assert_eq!(partition_members(&dag).len(), 2);
     }
 
     #[test]
     fn an_unchanged_block_has_no_members() {
-        let dag = AlignmentDag::build(b"ACGTACGT", b"ACGTACGT");
+        let dag = dag(b"ACGTACGT", b"ACGTACGT");
         assert!(partition_members(&dag).is_empty());
     }
 
     #[test]
     fn members_are_disjoint_and_ascending() {
-        let dag = AlignmentDag::build(b"ACGTACGTACGTACGT", b"ATGTACGTACGTACTT");
+        let dag = dag(b"ACGTACGTACGTACGT", b"ATGTACGTACGTACTT");
         let members = partition_members(&dag);
         for pair in members.windows(2) {
             assert!(
@@ -586,7 +594,7 @@ mod tests {
         // still yields one member — the count looks right, and both the wider
         // and narrower spans denote the same sequence, so the round-trip
         // invariant does not catch it either. This exact-span assertion does.
-        let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
+        let dag = dag(b"AAAAAAA", b"AACACAAAA");
         let members = partition_members(&dag);
         assert_eq!(
             members,
@@ -601,7 +609,7 @@ mod tests {
     fn an_insertion_only_member_has_an_empty_reference_span() {
         // Two insertions 5 apart: the second is a pure insertion at junction 8
         // with an empty reference span, which must be reported and not dropped.
-        let dag = AlignmentDag::build(b"ACGTACGTAC", b"ACGTTACGTGAC");
+        let dag = dag(b"ACGTACGTAC", b"ACGTTACGTGAC");
         let members = partition_members(&dag);
         assert_eq!(
             members,
@@ -626,7 +634,7 @@ mod tests {
         // side of it merge across the single unchanged base between them
         // (fewer than `MIN_SEPARATION`), giving one member spanning the whole
         // 52 nt block.
-        let dag = AlignmentDag::build(LRG199_REF, b"TTCCTCGATGCCTG");
+        let dag = dag(LRG199_REF, b"TTCCTCGATGCCTG");
         let members = partition_members(&dag);
         assert_eq!(
             members,
@@ -644,7 +652,7 @@ mod tests {
         // members. Raising `min_separation` to 3 must merge them into one,
         // pinning that the parameter is actually load-bearing rather than
         // dead flexibility.
-        let dag = AlignmentDag::build(b"ACGTACGT", b"ATGTTCGT");
+        let dag = dag(b"ACGTACGT", b"ATGTTCGT");
         let dominators = dag.dominators();
         assert_eq!(
             partition_members_with(&dag, &dominators, 2).len(),
@@ -676,7 +684,7 @@ mod tests {
                 vec![(3u32, 5u32), (9u32, 10u32)],
             ),
         ] {
-            let dag = AlignmentDag::build(r, a);
+            let dag = dag(r, a);
             let dominators = dag.dominators();
             let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
             let spans = member_alt_spans(&dag, &dominators, &members)
@@ -692,7 +700,7 @@ mod tests {
         // `None` for a members list that is not an ascending, non-overlapping
         // partition. Exercise that directly rather than trying to coax an
         // impossible members list out of `partition_members` itself.
-        let dag = AlignmentDag::build(b"ACGT", b"ACGT");
+        let dag = dag(b"ACGT", b"ACGT");
         let dominators = dag.dominators();
         let overlapping = [
             MemberBlock {
@@ -711,7 +719,7 @@ mod tests {
     /// payloads. This is the invariant that makes the partition meaningful: if
     /// it does not hold, the members denote a different sequence.
     fn round_trips(reference: &[u8], alt: &[u8]) -> bool {
-        let dag = AlignmentDag::build(reference, alt);
+        let dag = dag(reference, alt);
         let dominators = dag.dominators();
         let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
         let Some(alt_spans) = member_alt_spans(&dag, &dominators, &members) else {
@@ -821,7 +829,7 @@ mod tests {
         let mut checked = 0usize;
         for r in &all {
             for a in &all {
-                let dag = AlignmentDag::build(r, a);
+                let dag = dag(r, a);
                 let canonical = CanonicalAlignment::of(&dag);
                 assert_eq!(
                     changed_columns(&canonical.members(), &canonical.alt_spans()),
@@ -846,7 +854,7 @@ mod tests {
         let all = small_alphabet_words(6);
         for r in &all {
             for a in &all {
-                let dag = AlignmentDag::build(r, a);
+                let dag = dag(r, a);
                 let canonical = CanonicalAlignment::of(&dag);
                 let members = canonical.members();
                 let spans = canonical.alt_spans();
@@ -883,7 +891,7 @@ mod tests {
     /// side effect of touching the walk order.
     #[test]
     fn canonical_breaks_a_member_count_tie_three_prime_most() {
-        let dag = AlignmentDag::build(b"AAC", b"AC");
+        let dag = dag(b"AAC", b"AC");
         assert_eq!(
             partition_members_canonical(&dag),
             vec![MemberBlock {
@@ -917,7 +925,7 @@ mod tests {
     /// and the spec does not settle which a description should be.
     #[test]
     fn canonical_can_report_more_members_than_the_dominator_rule() {
-        let dag = AlignmentDag::build(b"A", b"CAC");
+        let dag = dag(b"A", b"CAC");
         let dominators = dag.dominators();
         assert_eq!(
             partition_members_with(&dag, &dominators, MIN_SEPARATION),

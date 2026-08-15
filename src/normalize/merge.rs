@@ -5426,9 +5426,17 @@ struct MemberAlignment {
 /// [`AlignmentDag::out_edges`] already yields — and follows on-path edges only,
 /// so it is always *a* minimal alignment. It reads nothing but the two blocks,
 /// so two spellings of one variant reach the same walk.
-fn member_alignment(reference: &[u8], payload: &[u8]) -> MemberAlignment {
+///
+/// `None` when the block is past [`crate::normalize::seqfirst::align::MAX_ALIGNMENT_SPAN`]
+/// and the DAG therefore cannot be built. [`MAX_SEPARATION_AUDIT_WIDTH`] caps
+/// only the *reference* side, and the sibling cells cap admits a payload of
+/// ~262,000 bases against a three-column member, so the refusal is reachable
+/// here and not merely defensive. Declining is the direction this audit already
+/// takes everywhere else: it leaves the member whole, which under-reports and
+/// never corrupts.
+fn member_alignment(reference: &[u8], payload: &[u8]) -> Option<MemberAlignment> {
     use crate::normalize::seqfirst::align::{AlignmentDag, Step};
-    let dag = AlignmentDag::build(reference, payload);
+    let dag = AlignmentDag::build(reference, payload)?;
     let mut forced = vec![true; reference.len()];
     for (i, j) in dag.cells() {
         if (i as usize) < reference.len()
@@ -5456,10 +5464,10 @@ fn member_alignment(reference: &[u8], payload: &[u8]) -> MemberAlignment {
         (i, j) = (next_i, next_j);
     }
 
-    MemberAlignment {
+    Some(MemberAlignment {
         forced,
         matched_alt,
-    }
+    })
 }
 
 /// Maximal runs of forced-unchanged columns that are **strictly interior** to a
@@ -5553,7 +5561,7 @@ fn concealed_separations(
     {
         return None;
     }
-    let alignment = member_alignment(reference, &piece.alt);
+    let alignment = member_alignment(reference, &piece.alt)?;
     let runs: Vec<(usize, usize)> = interior_forced_runs(&alignment.forced)
         .into_iter()
         .filter(|&(offset, len)| {
@@ -7326,7 +7334,7 @@ fn partition_block_sequence_first(
         return None;
     }
 
-    let dag = AlignmentDag::build(reference, result);
+    let dag = AlignmentDag::build(reference, result)?;
     let dominators = dag.dominators();
     let members = partition_members_with(&dag, &dominators, min_separation);
     let spans = member_alt_spans(&dag, &dominators, &members)?;
@@ -7359,7 +7367,11 @@ fn partition_block_sequence_first(
 /// `partition_members_canonical`'s doc works the case through.
 ///
 /// Returns `None` only when the alignment grid would exceed
-/// [`MAX_SEQFIRST_GRID_CELLS`]; the caller falls back to [`partition_block`].
+/// [`MAX_SEQFIRST_GRID_CELLS`], or when the two blocks together exceed
+/// [`crate::normalize::seqfirst::align::MAX_ALIGNMENT_SPAN`] — a **cells** cap
+/// and a **span** cap are independent, and a degenerate `1 x 70,000` block
+/// passes the first while failing the second (#1970). Either way the caller
+/// falls back to [`partition_block`].
 ///
 /// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
 /// example; it does not decide any shipped result.
@@ -7396,7 +7408,7 @@ fn partition_block_canonical_within(
         return None;
     }
 
-    let dag = AlignmentDag::build(reference, result);
+    let dag = AlignmentDag::build(reference, result)?;
     let canonical = CanonicalAlignment::of(&dag);
     Some(
         canonical
@@ -8214,8 +8226,13 @@ pub mod dev_partitioners {
 
     /// The block's unit-cost Levenshtein distance — the floor every arm's
     /// changed-column count is measured against.
-    pub fn edit_distance(reference: &[u8], result: &[u8]) -> u32 {
-        crate::normalize::seqfirst::align::AlignmentDag::build(reference, result).edit_distance()
+    ///
+    /// `None` when the pair exceeds
+    /// [`crate::normalize::seqfirst::align::MAX_ALIGNMENT_SPAN`], the same
+    /// refusal the partitioners take.
+    pub fn edit_distance(reference: &[u8], result: &[u8]) -> Option<u32> {
+        crate::normalize::seqfirst::align::AlignmentDag::build(reference, result)
+            .map(|dag| dag.edit_distance())
     }
 
     /// Changed columns a member set claims, `sum(max(ref_span, alt_len))` — the
@@ -14829,7 +14846,9 @@ mod tests {
         let result = b"ACGTGG";
 
         assert_eq!(
-            member_alignment(reference, result).forced,
+            member_alignment(reference, result)
+                .expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+                .forced,
             vec![false; reference.len()],
             "no column of the block survives every minimal alignment, so the \
              split below rests on coincidence — which is what makes this the \
@@ -14844,7 +14863,9 @@ mod tests {
              proves nothing; got {pieces:?}"
         );
         assert_eq!(
-            member_alignment(&reference[..5], b"AC").forced,
+            member_alignment(&reference[..5], b"AC")
+                .expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+                .forced,
             vec![false, false, false, true, false],
             "`GGTCG -> AC` keeps its `C` in every minimal alignment",
         );
@@ -14912,7 +14933,11 @@ mod tests {
         let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
         let result = b"TTCCTCGATGCCTG";
         assert_eq!(
-            interior_forced_runs(&member_alignment(reference, result).forced),
+            interior_forced_runs(
+                &member_alignment(reference, result)
+                    .expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+                    .forced,
+            ),
             vec![(44, 1), (48, 1)],
             "the spec's recommended form does conceal separations of its own",
         );
@@ -14953,7 +14978,11 @@ mod tests {
         let pieces = partition_block(reference, result, NO_AXIS);
         assert_eq!(pieces.len(), 2, "got {pieces:?}");
         assert_eq!(
-            interior_forced_runs(&member_alignment(b"TATA", b"ATAT").forced),
+            interior_forced_runs(
+                &member_alignment(b"TATA", b"ATAT")
+                    .expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+                    .forced,
+            ),
             vec![(1, 2)],
             "the trailing member does conceal a two-column separation",
         );
@@ -16915,6 +16944,7 @@ mod tests {
             assert_eq!(
                 changed_columns_of_pieces(&pieces),
                 crate::normalize::seqfirst::align::AlignmentDag::build(reference, result)
+                    .expect("test blocks are far below MAX_ALIGNMENT_SPAN")
                     .edit_distance() as usize,
                 "the canonical arm must claim exactly the block's edit distance"
             );

@@ -79,6 +79,35 @@ const OUT_DEL: u8 = 1 << 2;
 /// Right out-edge: an alternate base is inserted (`Step::Ins`).
 const OUT_INS: u8 = 1 << 3;
 
+/// Largest `n + m` (reference length plus alternate length) whose alignment
+/// [`AlignmentDag::build`] will compute.
+///
+/// # Why `n + m`, and why it is exact rather than conservative
+///
+/// The cost grids are `u16`. A prefix cost `prefix[i][j]` is the edit distance
+/// of `ref[..i]` to `alt[..j]`, so it is bounded by `max(i, j) <= i + j`; a
+/// suffix cost `suffix(i, j)` is likewise bounded by `(n - i) + (m - j)`. Every
+/// value the DP writes is one of those, and the largest sum `build` ever forms
+/// is `on_optimal_path`'s `prefix[i][j] + suffix(i, j) <= n + m`. The three
+/// `here + 1` / `here + cost` comparisons are formed only where `i < n` or
+/// `j < m`, so `here <= n + m - 1` there. `n + m <= u16::MAX` therefore covers
+/// every arithmetic site in `build` with nothing left over — the bound is the
+/// exact one, not a margin.
+///
+/// # Why it is a refusal and not a `debug_assert`
+///
+/// `[profile.release]` sets neither `debug-assertions` nor `overflow-checks`,
+/// so in the shipped library and in the Python wheel a `debug_assert` is a
+/// comment: past the bound `edit_grid`'s boundary row would truncate `j as u16`
+/// and the sums would wrap, and `on_optimal_path` would be computed from wrong
+/// costs. That is a silently wrong partition and so a silently wrong emitted
+/// description — strictly worse than declining. Every gate in front of `build`
+/// bounds **cells**, i.e. `(n + 1) * (m + 1)`, and a degenerate `1 x 70,000`
+/// grid clears the widest of those by four orders of magnitude while `n + m` is
+/// past `u16::MAX`; a long literal `ins` payload reaches exactly that shape.
+/// See #1970.
+pub(crate) const MAX_ALIGNMENT_SPAN: usize = u16::MAX as usize;
+
 impl AlignmentDag {
     /// Build the DAG for `ref_block` -> `alt_block`.
     ///
@@ -92,9 +121,18 @@ impl AlignmentDag {
     /// precondition, not a convenience.
     ///
     /// Cost is `O(ref_len * alt_len)` in time and space.
-    pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Self {
+    ///
+    /// `None` when `ref_block.len() + alt_block.len()` exceeds
+    /// [`MAX_ALIGNMENT_SPAN`], which is the width of the `u16` cost grid. Every
+    /// caller in the normalizer already has a decline path, and declining is the
+    /// only safe answer: past the bound the costs wrap rather than panic in the
+    /// shipped profile. See [`MAX_ALIGNMENT_SPAN`].
+    pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Option<Self> {
         let n = ref_block.len();
         let m = alt_block.len();
+        if n.checked_add(m)? > MAX_ALIGNMENT_SPAN {
+            return None;
+        }
         let prefix = edit_grid(ref_block, alt_block);
 
         // Suffix distances, computed as prefix distances of the reversed
@@ -105,7 +143,7 @@ impl AlignmentDag {
         let suffix_grid = edit_grid(&ref_rev, &alt_rev);
         let suffix = |i: usize, j: usize| suffix_grid[(n - i) * (m + 1) + (m - j)];
 
-        let total = prefix[n * (m + 1) + m];
+        let total: u16 = prefix[n * (m + 1) + m];
         let width = m + 1;
 
         let mut on_optimal_path = vec![false; (n + 1) * width];
@@ -124,7 +162,7 @@ impl AlignmentDag {
                 let here = prefix[i * width + j];
                 // Diagonal: match or substitution.
                 if i < n && j < m {
-                    let cost = u32::from(ref_block[i] != alt_block[j]);
+                    let cost = u16::from(ref_block[i] != alt_block[j]);
                     let next = (i + 1) * width + (j + 1);
                     if here + cost == prefix[next] && on_optimal_path[next] {
                         out[i * width + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
@@ -147,13 +185,13 @@ impl AlignmentDag {
             }
         }
 
-        Self {
+        Some(Self {
             ref_len: n as u32,
             alt_len: m as u32,
-            total,
+            total: u32::from(total),
             on_optimal_path,
             out,
-        }
+        })
     }
 
     /// Minimal edit distance between the two blocks.
@@ -354,20 +392,31 @@ impl AlignmentDag {
 }
 
 /// Full Levenshtein distance grid, row-major with `alt.len() + 1` columns.
-fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u32> {
+fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u16> {
     let n = reference.len();
     let m = alt.len();
+    // A cost never exceeds `n + m`, so the `u16` grid holds every value exactly
+    // when `n + m <= MAX_ALIGNMENT_SPAN`. This is a statement of the
+    // precondition `AlignmentDag::build` already enforces by refusing, not a
+    // second gate — `edit_grid` is private and `build` is its only caller. Kept
+    // so a future caller added here is caught in a debug build; the refusal, not
+    // this line, is what makes the narrowing safe in the shipped profile.
+    debug_assert!(
+        n + m <= MAX_ALIGNMENT_SPAN,
+        "edit_grid narrowed to u16: n+m = {} exceeds {MAX_ALIGNMENT_SPAN}",
+        n + m
+    );
     let width = m + 1;
-    let mut d = vec![0u32; (n + 1) * width];
+    let mut d = vec![0u16; (n + 1) * width];
     for (i, x) in d.iter_mut().step_by(width).enumerate() {
-        *x = i as u32;
+        *x = i as u16;
     }
     for (j, x) in d.iter_mut().take(width).enumerate() {
-        *x = j as u32;
+        *x = j as u16;
     }
     for i in 1..=n {
         for j in 1..=m {
-            let cost = u32::from(reference[i - 1] != alt[j - 1]);
+            let cost = u16::from(reference[i - 1] != alt[j - 1]);
             d[i * width + j] = (d[(i - 1) * width + j] + 1)
                 .min(d[i * width + j - 1] + 1)
                 .min(d[(i - 1) * width + j - 1] + cost);
@@ -380,6 +429,14 @@ fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u32> {
 mod tests {
     use super::*;
 
+    /// [`AlignmentDag::build`] on blocks small enough that the refusal cannot
+    /// fire. Every block in this module is a handful of bases, so an `Option`
+    /// here would only be noise — but the refusal is exercised on purpose by
+    /// [`tests::the_span_bound_is_enforced_from_both_sides`].
+    fn dag(reference: &[u8], alt: &[u8]) -> AlignmentDag {
+        AlignmentDag::build(reference, alt).expect("test blocks are far below MAX_ALIGNMENT_SPAN")
+    }
+
     #[test]
     fn edit_distance_matches_known_values() {
         for (r, a, expected) in [
@@ -391,7 +448,7 @@ mod tests {
             (&b"AAAAAAA"[..], &b"AACACAAAA"[..], 2),
             (&b"AAAAAAA"[..], &b"ACAAAA"[..], 2),
         ] {
-            let dag = AlignmentDag::build(r, a);
+            let dag = dag(r, a);
             assert_eq!(
                 dag.edit_distance(),
                 expected,
@@ -406,7 +463,7 @@ mod tests {
     fn every_cell_lies_on_a_minimal_path() {
         // A cell is in the DAG only if some minimal alignment passes through
         // it: prefix(i,j) + suffix(i,j) == total.
-        let dag = AlignmentDag::build(b"ACGTACGT", b"ATGTTCGT");
+        let dag = dag(b"ACGTACGT", b"ATGTTCGT");
         assert!(dag.contains_cell(0, 0), "source must be present");
         assert!(
             dag.contains_cell(dag.ref_len(), dag.alt_len()),
@@ -424,7 +481,7 @@ mod tests {
     fn every_edge_advances_the_topological_key() {
         // i + j strictly increases along every edge, which is what makes
         // sorting cells by i + j a valid topological order.
-        let dag = AlignmentDag::build(b"ACGTACGTAC", b"ACGTTACGTGAC");
+        let dag = dag(b"ACGTACGTAC", b"ACGTTACGTGAC");
         for (i, j) in dag.cells() {
             for (ni, nj, _step) in dag.out_edges(i, j) {
                 assert!(
@@ -485,7 +542,7 @@ mod tests {
         // The spec's own worked example, `delins.md:44` / LRG_199t1:c.850_901.
         // Real sequence, pulled from LRG_199.fasta; CDS offset verified against
         // the spec's own `c.145_147 = CGC = Arg49`.
-        let dag = AlignmentDag::build(
+        let dag = dag(
             b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT",
             b"TTCCTCGATGCCTG",
         );
@@ -507,7 +564,7 @@ mod tests {
         // #1260: two `insC` at adjacent gaps in a poly-A run. A node model
         // reports this as zero members because no reference position changes;
         // the junctions are the whole signal.
-        let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
+        let dag = dag(b"AAAAAAA", b"AACACAAAA");
         let dom = dag.dominators();
         assert_eq!(
             dom.matched_ref().len(),
@@ -544,7 +601,7 @@ mod tests {
         let mut checked = 0usize;
         for r in &all {
             for a in &all {
-                let dag = AlignmentDag::build(r, a);
+                let dag = dag(r, a);
                 let got = dag.dominators();
                 let (want_matched, want_ins) = dominators_by_brute_force(&dag);
                 assert_eq!(
@@ -560,6 +617,48 @@ mod tests {
         assert!(
             checked > 3000,
             "expected a large exhaustive sweep, ran {checked}"
+        );
+    }
+
+    /// #1970. The `u16` narrowing's bound must be a refusal, pinned from **both**
+    /// sides so neither a widened nor a tightened bound passes silently.
+    ///
+    /// The over-limit arm is not a "does it panic" test: it asserts `is_none()`,
+    /// which is a value the shipped profile produces too. A `debug_assert` would
+    /// satisfy a panic-shaped test and still wrap in release, which is the whole
+    /// defect.
+    #[test]
+    fn the_span_bound_is_enforced_from_both_sides() {
+        // Degenerate on purpose: `1 x m` is the shape that clears every cells
+        // gate in front of `build` while `n + m` runs away. A long literal `ins`
+        // payload arrives here as exactly this.
+        let one = vec![b'A'; 1];
+
+        // n + m == MAX_ALIGNMENT_SPAN: the last accepted pair.
+        let just_under = vec![b'C'; MAX_ALIGNMENT_SPAN - 1];
+        let built = AlignmentDag::build(&one, &just_under)
+            .expect("n + m == MAX_ALIGNMENT_SPAN must still be computed");
+        assert_eq!(
+            built.edit_distance(),
+            MAX_ALIGNMENT_SPAN as u32 - 1,
+            "one base against {} differing bases is a substitution plus {} insertions",
+            MAX_ALIGNMENT_SPAN - 1,
+            MAX_ALIGNMENT_SPAN - 2
+        );
+
+        // n + m == MAX_ALIGNMENT_SPAN + 1: the first refused pair. One base
+        // wider than the pair above, so nothing but the bound separates them.
+        let just_over = vec![b'C'; MAX_ALIGNMENT_SPAN];
+        assert!(
+            AlignmentDag::build(&one, &just_over).is_none(),
+            "n + m == {} must be refused, not wrapped",
+            MAX_ALIGNMENT_SPAN + 1
+        );
+
+        // And far past it, which is the size #1970 reported.
+        assert!(
+            AlignmentDag::build(&one, &vec![b'C'; 70_000]).is_none(),
+            "a 70,000-base alternate must be refused"
         );
     }
 }
