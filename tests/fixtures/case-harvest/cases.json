@@ -37,17 +37,17 @@
       "expected": null,
       "confluence_class": "fh-start-codon-triplet",
       "citation": {
-        "clause": "docs/recommendations/general.md:35",
+        "clause": "docs/recommendations/general.md:34",
         "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
       },
-      "note": "c.1_3 reads ATG -- the initiation codon -- and both changes land in it, separated by the unchanged c.2. general.md:35 is exactly on point, so the pair must converge. No string is pinned: which of the two legal spellings ships is a representation choice (canonical-form-choice-when-both-legal is undecided), and asserting agreement is the correctness claim the spec supports. NOTE ON THE INPUT: the widely-quoted spelling of this row is `c.[1G>T;3T>A]`, which carries WRONG reference bases on BOTH members -- c.1 is A and c.3 is G. It must never be used as an input here; #1543 records that ferro currently accepts it in strict mode because reference validation is bypassed for cis members close enough to be merged."
+      "note": "c.1_3 reads ATG -- the initiation codon -- and both changes land in it, separated by the unchanged c.2. general.md:34 is exactly on point, so the pair must converge. No string is pinned: which of the two legal spellings ships is a representation choice (canonical-form-choice-when-both-legal is undecided), and asserting agreement is the correctness claim the spec supports. NOTE ON THE INPUT: the widely-quoted spelling of this row is `c.[1G>T;3T>A]`, which carries WRONG reference bases on BOTH members -- c.1 is A and c.3 is G. It must never be used as an input here; #1543 records that ferro currently accepts it in strict mode because reference validation is bypassed for cis members close enough to be merged."
     },
     {
       "input": "NM_000143.3:c.1_3delinsTTA",
       "expected": null,
       "confluence_class": "fh-start-codon-triplet",
       "citation": {
-        "clause": "docs/recommendations/general.md:35",
+        "clause": "docs/recommendations/general.md:34",
         "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
       },
       "note": "The delins spelling of the same start-codon triplet: ATG becomes TTA. Paired with the two-member spelling above under one confluence class; neither is pinned as the winner."
@@ -56,7 +56,7 @@
       "input": "NM_004006.2:c.5690del",
       "expected": "NM_004006.2:c.5697del",
       "citation": {
-        "clause": "docs/recommendations/general.md:41",
+        "clause": "docs/recommendations/general.md:40",
         "quote": "the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed"
       },
       "note": "A plain 3'rule shift over a homopolymer, and nothing running per-PR asserted its repair target. In the enumeration fixture the row is `requires-reference` and in the normalization fixture it is `false-acceptance`, and BOTH committed guards skip those statuses -- so the spec's own rule had a repair target that no test compared against. That is the single clearest gap this corpus closes."
@@ -122,7 +122,7 @@
         "clause": "docs/recommendations/DNA/delins.md:16",
         "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
       },
-      "note": "A real-accession guard for #1537's left-edge ruling. #1537 added nine test functions and #1535 three, and every one of the twelve runs against the synthetic NM_TEST.1 / TEMPLATE geometry -- no real accession was guarded at all. The shape here is the one the issue names: the run touching the codon triplet on the left declines the general.md:35 exception, and the result does NOT come back as the input's own spelling. Adjudicated by tests/it/issue_1524_adjacent_split_members.rs; not re-argued here."
+      "note": "A real-accession guard for #1537's left-edge ruling. #1537 added nine test functions and #1535 three, and every one of the twelve runs against the synthetic NM_TEST.1 / TEMPLATE geometry -- no real accession was guarded at all. The shape here is the one the issue names: the run touching the codon triplet on the left declines the general.md:34 exception, and the result does NOT come back as the input's own spelling. Adjudicated by tests/it/issue_1524_adjacent_split_members.rs; not re-argued here."
     },
     {
       "input": "NM_000083.3:c.2461_2464delinsCTCC",
@@ -146,10 +146,10 @@
       "input": "NC_000020.11:g.45891619_45891622delinsC",
       "expected": "NC_000020.11:g.[45891619del;45891621_45891622del]",
       "citation": {
-        "clause": "docs/recommendations/general.md:34",
+        "clause": "docs/recommendations/general.md:33",
         "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
       },
-      "note": "MOVED 2026-08-10 by `two_gap_deletion_alignment`, from the spanning `g.45891619_45891622delinsC` to the two-member split. NOT a re-bless of a spec-correctness claim: this row was a STABILITY PIN and stability is a tiebreaker, not a veto — the project bar is confluence plus disclosure. The two members are separated by ONE unchanged nucleotide (g.45891620), so the decided ruling `delins-merge-vs-individual-gap-two-or-more` does not reach it: that ruling is scoped by its own terms to a gap of two or more, and the row is `g.`, where `general.md:35`'s codon exception cannot apply either. What does reach it is `general.md:34` (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"), which asks for exactly this split. The earlier note said the governing ruling was open; it was decided 2026-08-07, and scoped away from this row. The pin now records the split as the form `general.md:34` states, and the citation moves with it."
+      "note": "MOVED 2026-08-10 by `two_gap_deletion_alignment`, from the spanning `g.45891619_45891622delinsC` to the two-member split. NOT a re-bless of a spec-correctness claim: this row was a STABILITY PIN and stability is a tiebreaker, not a veto — the project bar is confluence plus disclosure. The two members are separated by ONE unchanged nucleotide (g.45891620), so the decided ruling `delins-merge-vs-individual-gap-two-or-more` does not reach it: that ruling is scoped by its own terms to a gap of two or more, and the row is `g.`, where `general.md:34`'s codon exception cannot apply either. What does reach it is `general.md:33` (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"), which asks for exactly this split. The earlier note said the governing ruling was open; it was decided 2026-08-07, and scoped away from this row. The pin now records the split as the form `general.md:33` states, and the citation moves with it."
     },
     {
       "input": "NG_008660.1:g.58604_58617delinsC",
@@ -282,10 +282,10 @@
       "expected": null,
       "confluence_class": "cyp21a2-710-713-four-mer-inversion",
       "citation": {
-        "clause": "docs/recommendations/general.md:56",
+        "clause": "docs/recommendations/general.md:55",
         "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
       },
-      "note": "#1541's class, and this spelling is the form the class converges on today. c.710_713 reads TCGT and its reverse complement is ACGA; the interior CG is self-complementary, so the inversion changes only the flanks -- which is exactly what these two substitutions write. VERIFIED EQUIVALENT, and the reference bases at 710 and 713 genuinely are T. NO LONGER A LIVE REPRODUCER: the class did not converge while Normalizer::is_splittable_single_member matched only HV::Genome/HV::Mt, so a lone c. member never reached the sequence-first pass; PR #1484 widened that gate to c./n./r. and merged 2026-08-08, and all three spellings now converge. The `defect` was dropped and the guard case_harvest::the_four_mer_inversion_pair_converges un-ignored in the same change, as the census assertion requires. THE FORM IS STILL NOT ADJUDICATED, WHICH IS WHY THIS ROW PINS NO OUTPUT. #1541 asked for a ruling on which form governs and then convergence on it; convergence arrived as a side effect and no ruling was made, so the issue stays open. This note used to say the target was decided by general.md:56 ranking substitution (1) above inversion (3). THAT GROUNDING IS WITHDRAWN: the decided record adjudication-precedence-order, entry E1, says :56 ranks single-variant type labels for one span and 'cannot settle a merge-versus-split question at all', which is exactly what this class is. The sibling decided record inversion-vs-two-delins-76-83 reads :56 the other way; the two are in tension and that is the operator's call. #1541's 2026-08-12 status also records this locus as a live member of the #1703 family (GTTAA -> TTAAC is the identical shape at 5 nt) and that whichever way that is ruled, this row moves with it. The exact form is held only as a stability tripwire in the guard, on background/basics.md:38."
+      "note": "#1541's class, and this spelling is the form the class converges on today. c.710_713 reads TCGT and its reverse complement is ACGA; the interior CG is self-complementary, so the inversion changes only the flanks -- which is exactly what these two substitutions write. VERIFIED EQUIVALENT, and the reference bases at 710 and 713 genuinely are T. NO LONGER A LIVE REPRODUCER: the class did not converge while Normalizer::is_splittable_single_member matched only HV::Genome/HV::Mt, so a lone c. member never reached the sequence-first pass; PR #1484 widened that gate to c./n./r. and merged 2026-08-08, and all three spellings now converge. The `defect` was dropped and the guard case_harvest::the_four_mer_inversion_pair_converges un-ignored in the same change, as the census assertion requires. THE FORM IS STILL NOT ADJUDICATED, WHICH IS WHY THIS ROW PINS NO OUTPUT. #1541 asked for a ruling on which form governs and then convergence on it; convergence arrived as a side effect and no ruling was made, so the issue stays open. This note used to say the target was decided by general.md:55 ranking substitution (1) above inversion (3). THAT GROUNDING IS WITHDRAWN: the decided record adjudication-precedence-order, entry E1, says :56 ranks single-variant type labels for one span and 'cannot settle a merge-versus-split question at all', which is exactly what this class is. The sibling decided record inversion-vs-two-delins-76-83 reads :56 the other way; the two are in tension and that is the operator's call. #1541's 2026-08-12 status also records this locus as a live member of the #1703 family (GTTAA -> TTAAC is the identical shape at 5 nt) and that whichever way that is ruled, this row moves with it. The exact form is held only as a stability tripwire in the guard, on background/basics.md:38."
     },
     {
       "input": "NM_000500.9:c.710_713inv",
@@ -295,7 +295,7 @@
         "clause": "docs/recommendations/DNA/inversion.md:5",
         "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
       },
-      "note": "#1541's class, the inversion spelling. Held under inversion.md:5, the clause that makes this block an inversion by definition. On main it now converges with the other two spellings on c.[710T>A;713T>A] (PR #1484, merged 2026-08-08, widened the c.-axis gate). That is a measurement, not a ruling: whether the class SHOULD settle on the split or on this inv is open, and Mutalyzer converges the sibling #1703 locus on the inv. See the two-substitution row for why the general.md:56 grounding this corpus used to give was withdrawn, and for the #1703 linkage. No output is pinned here, because the governing ruling is open."
+      "note": "#1541's class, the inversion spelling. Held under inversion.md:5, the clause that makes this block an inversion by definition. On main it now converges with the other two spellings on c.[710T>A;713T>A] (PR #1484, merged 2026-08-08, widened the c.-axis gate). That is a measurement, not a ruling: whether the class SHOULD settle on the split or on this inv is open, and Mutalyzer converges the sibling #1703 locus on the inv. See the two-substitution row for why the general.md:55 grounding this corpus used to give was withdrawn, and for the #1703 linkage. No output is pinned here, because the governing ruling is open."
     },
     {
       "input": "NM_000500.9:c.710_713delinsACGA",

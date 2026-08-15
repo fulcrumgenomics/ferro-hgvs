@@ -1713,16 +1713,16 @@ fn rules_for(
     shape: RefShape,
     members: usize,
 ) -> Vec<&'static str> {
-    let mut rules = vec!["general.md:41-three-prime-rule"];
+    let mut rules = vec!["general.md:40-three-prime-rule"];
     if members > 1 {
-        rules.push("general.md:80-allele-semicolon-separator");
+        rules.push("general.md:79-allele-semicolon-separator");
         match separation {
             0 => rules.push("DNA/delins.md:17-adjacent-members-merge"),
             1 => {
-                rules.push("general.md:34-separation-split");
-                rules.push("general.md:35-codon-exception");
+                rules.push("general.md:33-separation-split");
+                rules.push("general.md:34-codon-exception");
             }
-            _ => rules.push("general.md:34-separation-split"),
+            _ => rules.push("general.md:33-separation-split"),
         }
     }
     // Only geometries that denote NO sequence claim `general.md:58`.
@@ -1741,7 +1741,7 @@ fn rules_for(
     // so its rows reach this branch, and those rows ARE the clause's own
     // example shape (`NM_004006.2:c.[762_768del;767_774dup]`).
     if !geometry.denotes_a_sequence() {
-        rules.push("general.md:58-no-self-replacement");
+        rules.push("general.md:57-no-self-replacement");
         rules.push("checklist.md:6-most-offended");
     }
     for kind in kinds {
@@ -1756,16 +1756,16 @@ fn rules_for(
         });
     }
     if kinds.contains(&Kind::Dup) && kinds.contains(&Kind::Ins) {
-        rules.push("general.md:57-dup-outranks-ins");
+        rules.push("general.md:56-dup-outranks-ins");
     }
     if kinds.contains(&Kind::Inv) {
-        rules.push("general.md:56-type-priority");
+        rules.push("general.md:55-type-priority");
     }
     match region {
         Region::Utr5 | Region::CdsStart => rules.push("checklist.md:17-cds-numbering-from-atg"),
         Region::Utr3 | Region::CdsEnd => rules.push("checklist.md:17-cds-numbering-from-atg"),
         Region::ExonJunction1 | Region::ExonJunction2 => {
-            rules.push("general.md:44-junction-exception");
+            rules.push("general.md:43-junction-exception");
         }
         Region::Intronic => rules.push("checklist.md:24-intronic-positions-not-exon-numbers"),
         Region::Anywhere | Region::MidCds => {}
@@ -3039,7 +3039,7 @@ fn enumerate_conflicts(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                         block_len: payload * 3,
                         mechanism: Mechanism::Cis,
                         prohibition: Some((
-                            "general.md:58-no-self-replacement",
+                            "general.md:57-no-self-replacement",
                             Strength::Absolute,
                         )),
                         negative_guards: Vec::new(),
@@ -3327,7 +3327,7 @@ fn enumerate_mechanisms(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                             "DNA/alleles.md:20-unknown-phase-without-brackets"
                         }
                         Mechanism::Trans => "DNA/alleles.md:17-trans-bracket-pairs",
-                        Mechanism::CompositePayload => "general.md:79-brackets-composite-insertion",
+                        Mechanism::CompositePayload => "general.md:78-brackets-composite-insertion",
                         Mechanism::RepeatCount => "DNA/repeated.md:5-repeat-format",
                         Mechanism::Lone => continue,
                     }];
@@ -3456,7 +3456,7 @@ fn enumerate_prohibited(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
         // `general.md:96`: "spaces are *not* permitted in any HGVS description".
         Prohibition {
             slug: "internal-space",
-            rule: "general.md:96-no-spaces",
+            rule: "general.md:95-no-spaces",
             strength: Strength::Absolute,
             render: |frame| Some(format!("{}_{} del", frame.label(9), frame.label(11))),
             lone_only: false,
@@ -3637,7 +3637,7 @@ fn enumerate_ambiguity(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
 pub const SINGLE_MEMBER_BY_NATURE: &[&str] = &[
     // A composite insertion payload is one member by definition; that is the
     // whole reason it is enumerated as its own mechanism.
-    "general.md:79-brackets-composite-insertion",
+    "general.md:78-brackets-composite-insertion",
 ];
 
 #[cfg(test)]

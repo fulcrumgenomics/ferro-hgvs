@@ -363,11 +363,11 @@
 //!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:45
 //!     `bare-transcript-intronic-position` — decided (cited)
-//! docs/recommendations/general.md:23
+//! docs/recommendations/general.md:22
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:26
+//! docs/recommendations/general.md:25
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:34  [MULTI]
+//! docs/recommendations/general.md:33  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
@@ -379,28 +379,28 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! docs/recommendations/general.md:35  [MULTI]
+//! docs/recommendations/general.md:34  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
-//! docs/recommendations/general.md:39
+//! docs/recommendations/general.md:38
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
-//! docs/recommendations/general.md:41  [MULTI]
+//! docs/recommendations/general.md:40  [MULTI]
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
-//! docs/recommendations/general.md:43  [MULTI]
+//! docs/recommendations/general.md:42  [MULTI]
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:44  [MULTI]
+//! docs/recommendations/general.md:43  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:48  [MULTI]
+//! docs/recommendations/general.md:47  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
-//! docs/recommendations/general.md:50
+//! docs/recommendations/general.md:49
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
-//! docs/recommendations/general.md:56  [MULTI]
+//! docs/recommendations/general.md:55  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
@@ -411,14 +411,14 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! docs/recommendations/general.md:57
+//! docs/recommendations/general.md:56
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
-//! docs/recommendations/general.md:58  [MULTI]
+//! docs/recommendations/general.md:57  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/general.md:157
+//! docs/recommendations/general.md:156
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
 //! docs/recommendations/protein/delins.md:50
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -544,7 +544,7 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! docs/recommendations/general.md:34
+//! docs/recommendations/general.md:33
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
@@ -556,24 +556,24 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! docs/recommendations/general.md:35
+//! docs/recommendations/general.md:34
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (cited)
-//! docs/recommendations/general.md:41
+//! docs/recommendations/general.md:40
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
-//! docs/recommendations/general.md:43
+//! docs/recommendations/general.md:42
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:44
+//! docs/recommendations/general.md:43
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/general.md:48
+//! docs/recommendations/general.md:47
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
-//! docs/recommendations/general.md:56
+//! docs/recommendations/general.md:55
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
@@ -584,7 +584,7 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
-//! docs/recommendations/general.md:58
+//! docs/recommendations/general.md:57
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)

@@ -86,7 +86,7 @@
       ],
       "clauses": [
         {
-          "clause": "docs/recommendations/general.md:56",
+          "clause": "docs/recommendations/general.md:55",
           "quote": "when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
         }
       ],
@@ -100,11 +100,11 @@
       "rulings": ["exon-junction-dup-converge-from-the-far-side"],
       "clauses": [
         {
-          "clause": "docs/recommendations/general.md:41",
+          "clause": "docs/recommendations/general.md:40",
           "quote": "**3'rule**: for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed."
         },
         {
-          "clause": "docs/recommendations/general.md:44",
+          "clause": "docs/recommendations/general.md:43",
           "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
         },
         {
@@ -136,7 +136,7 @@
       ],
       "clauses": [
         {
-          "clause": "docs/recommendations/general.md:34",
+          "clause": "docs/recommendations/general.md:33",
           "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
         },
         {
@@ -162,14 +162,14 @@
   ],
   "axis_scoped_clauses": [
     {
-      "clause": "docs/recommendations/general.md:35",
+      "clause": "docs/recommendations/general.md:34",
       "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\"",
       "scope": "Coding only by construction — the condition names amino acids, which an axis with no reading frame cannot state.",
       "relevance": "modelled",
       "note": "Keyed on the property, not on the axis label: `axis_min_separation(reading_frame: bool)` selects the floor, which correctly groups `n.` — a transcript axis with no frame — with `g.` rather than with `c.`. An axis-name-keyed table would get that pair wrong."
     },
     {
-      "clause": "docs/recommendations/general.md:44",
+      "clause": "docs/recommendations/general.md:43",
       "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences",
       "scope": "`c.`, `r.` and `n.` only — the spec scopes the exception by naming prefixes.",
       "relevance": "modelled",
@@ -183,7 +183,7 @@
       "note": null
     },
     {
-      "clause": "docs/recommendations/general.md:162-167",
+      "clause": "docs/recommendations/general.md:161-166",
       "quote": "Yes, when a gene is on the minus strand of a chromosome (opposite transcriptional orientation) and the change is located in a repeated sequence (mono-, di-, tri-, etc. nucleotide stretches), the 3'rule has this as a consequence.",
       "scope": "The `g.`/`c.` pair, on the minus strand, inside a repeated sequence.",
       "relevance": "modelled",
@@ -194,10 +194,10 @@
       "quote": "descriptions on RNA/protein level should describe the changes observed on that level (RNA/protein) and not try to incorporate any knowledge regarding the change on",
       "scope": "RNA and protein axes.",
       "relevance": "modelled",
-      "note": "The method half of `canonical-form-choice-when-both-legal`, whose governing clause is `general.md:157` — the same statement made for protein and extended here to RNA."
+      "note": "The method half of `canonical-form-choice-when-both-legal`, whose governing clause is `general.md:156` — the same statement made for protein and extended here to RNA."
     },
     {
-      "clause": "docs/recommendations/general.md:136",
+      "clause": "docs/recommendations/general.md:135",
       "quote": "The minus sign should only be used as a minus in the description of variants based on a coding DNA reference sequence.",
       "scope": "`c.` only.",
       "relevance": "not-a-normalization-rule",

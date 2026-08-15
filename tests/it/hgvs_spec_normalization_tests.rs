@@ -353,9 +353,24 @@ const STATUS_CENSUS: &[(&str, usize)] = &[
     // `preserved`. They moved to `preserved` below (697 -> 714); the 934-row total
     // is unchanged, and no ferro behaviour changed — the comparison did.
     ("diverges", 19),
-    ("false-acceptance", 52),
+    // 52 -> 53 at spec pin `6f85311` -> `565b973`, and the arriving row is a REAL
+    // DEFECT the old pin was masking, not a consequence of the bump — issue #1789.
+    // `checklist.md:33`'s example was `c.5439_5430ins6`, whose range is inverted
+    // (5439 > 5430); ferro refuses it for the RANGE, so the row was
+    // `correctly-rejected` and the size-number form was never reached. Upstream
+    // corrected the typo to `c.5439_5440ins6`, which parses — and ferro then
+    // accepts `ins6`, a form that clause marks `class="invalid"` by name. Do NOT
+    // restore 52 by suppressing the row; the 52 was the defect hiding.
+    ("false-acceptance", 53),
     ("needs-reference", 50),
-    ("preserved", 714),
+    // 714 -> 713 at the same pin. Upstream corrected nine harvested worked
+    // examples, so nine rows leave and nine arrive (the 934-row total holds):
+    // seven of the departures were `preserved` and only six of the arrivals are,
+    // because `c.5439_5440ins6` lands in `false-acceptance` above.
+    //
+    // NO ROW COMMON TO BOTH PINS CHANGES STATUS — measured, and it is what says
+    // this is a changed input set rather than changed ferro behaviour.
+    ("preserved", 713),
 ];
 
 /// The committed census must match the generated fixture exactly.

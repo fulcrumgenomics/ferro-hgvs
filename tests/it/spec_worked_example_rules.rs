@@ -439,7 +439,7 @@ const WORKED: &[Worked] = &[
     },
     Worked {
         id: "W46",
-        clause: "recommendations/general.md:35",
+        clause: "recommendations/general.md:34",
         quote: "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\".",
         input: "LRG_199t1:c.[235A>T;237G>T]",
         published: "c.235_237delinsTAT",
@@ -525,7 +525,7 @@ const WORKED: &[Worked] = &[
     },
     Worked {
         id: "W56",
-        clause: "recommendations/general.md:34",
+        clause: "recommendations/general.md:33",
         quote: "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\".",
         input: "LRG_199t1:c.[235A>T;238G>T]",
         published: "LRG_199t1:c.[235A>T;238G>T]",
@@ -904,7 +904,7 @@ const REJECTED: &[Rejected] = &[
     },
     Rejected {
         id: "W50",
-        clause: "recommendations/general.md:58",
+        clause: "recommendations/general.md:57",
         quote: "descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed",
         input: "LRG_199t1:c.[762_768del;767_774dup]",
         why: "the spec's own forbidden example, and the strongest wording in the \
@@ -983,7 +983,7 @@ const PARTITIONS: &[Partition] = &[
     },
     Partition {
         id: "W46",
-        clause: "recommendations/general.md:35",
+        clause: "recommendations/general.md:34",
         quote: "together affecting one amino acid, should be described as a \"delins\"",
         input: "LRG_199t1:c.[235A>T;237G>T]",
         members: &[(235, 237)],
@@ -1045,7 +1045,7 @@ const PARTITIONS: &[Partition] = &[
     },
     Partition {
         id: "W57",
-        clause: "recommendations/general.md:34",
+        clause: "recommendations/general.md:33",
         quote: "should be described individually and **not** as a \"delins\"",
         input: "SPEC_W57.1:g.[3C>G;7dup]",
         members: &[(3, 3), (7, 7)],
@@ -1069,7 +1069,7 @@ const PARTITIONS: &[Partition] = &[
     // would be promoted back into `WORKED` and `PARTITIONS` together, deliberately.
     Partition {
         id: "W59",
-        clause: "recommendations/general.md:34",
+        clause: "recommendations/general.md:33",
         quote: "should be described individually and **not** as a \"delins\"",
         input: "LRG_199t1:c.[2962T>G;2970A>T]",
         members: &[(2962, 2962), (2970, 2970)],
@@ -1158,7 +1158,7 @@ const DIVERGENT: &[Divergence] = &[
     },
     Divergence {
         id: "W58",
-        clause: "recommendations/general.md:34",
+        clause: "recommendations/general.md:33",
         quote: "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\".",
         input: "LRG_199t1:c.[992_1002del;1004T>C]",
         spec_answer: "LRG_199t1:c.[992_1002del;1004T>C]",
