@@ -104,6 +104,83 @@ TRAILER_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+#: Opens or closes a Markdown code fence: three or more backticks or tildes, indented by at
+#: most three spaces (CommonMark's limit before it becomes an indented code block).
+FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+
+
+def fence_match(line: str) -> re.Match[str] | None:
+    """Match a fence line, honouring CommonMark's backtick-info restriction.
+
+    A backtick fence's info string may not itself contain a backtick — otherwise an inline
+    code span could open a block. Tilde fences carry no such restriction. `FENCE_RE` alone
+    accepts both, so ```` ```a`b ```` reads as an opener here while CommonMark (and GitHub,
+    and git-cliff's eventual reader) treat it as ordinary text.
+
+    Getting this wrong fails closed rather than open — a spurious opener blanks the rest of
+    the body, so a real declaration goes unseen and the author is refused rather than
+    credited with a disclosure they did not write. That is the safe direction, and it is
+    still the wrong answer.
+    """
+    match = FENCE_RE.match(line)
+    if match is None:
+        return None
+    if match.group("fence")[0] == "`" and "`" in match.group("info"):
+        return None
+    return match
+
+
+def fenced_line_numbers(text: str) -> set[int]:
+    """Return the 1-based line numbers inside a fenced code block, fences included.
+
+    `TRAILER_RE` anchors at column 0 and knows nothing about Markdown, so a trailer quoted
+    inside a fence reads as a real declaration (#1929). That is the one decoration that
+    reaches column 0 with its text intact — an inline code span, `**bold**`, `> blockquote`
+    and a four-space indent are all caught already, and correctly *fail* with a near-miss
+    hint. This one **passed**, which is worse: the author is recorded as disclosing a
+    migration they explicitly said they had not worked out.
+
+    `CONTRIBUTING.md` publishes three such blocks, so the text that triggers it is
+    copy-pasteable straight out of the contributor documentation — which is exactly how it
+    would be met in practice, by someone quoting the docs to ask what to write.
+
+    The closing fence must use the same character and be at least as long as the opener, so
+    a ```` ```` ```` block may contain ```` ``` ```` lines — the shape the issue reproduced
+    with. An unclosed fence runs to the end of the text, which is CommonMark's rule and the
+    safe direction here: it withholds a declaration rather than inventing one.
+    """
+    inside: set[int] = set()
+    open_fence: str | None = None
+    for number, line in enumerate(text.splitlines(), 1):
+        match = fence_match(line)
+        if open_fence is None:
+            if match is not None:
+                open_fence = match.group("fence")
+                inside.add(number)
+            continue
+        inside.add(number)
+        if (
+            match is not None
+            and match.group("fence")[0] == open_fence[0]
+            and len(match.group("fence")) >= len(open_fence)
+            and not match.group("info").strip()
+        ):
+            open_fence = None
+    return inside
+
+
+def strip_fenced(text: str) -> str:
+    """Blank every fenced line, preserving line count so numbering still lines up.
+
+    Blanking rather than deleting is what lets `find_near_misses` report a fenced trailer at
+    its real line number in the same pass.
+    """
+    fenced = fenced_line_numbers(text)
+    return "\n".join(
+        "" if number in fenced else line for number, line in enumerate(text.splitlines(), 1)
+    )
+
+
 #: Values that declare "this moves nothing". Anything else is read as a description of
 #: what moved, which is what lands in the changelog.
 NONE_VALUES = frozenset({"none", "no", "n/a", "na"})
@@ -218,6 +295,44 @@ def find_declarations(text: str) -> list[str]:
 
     Plural because *how many* there are is itself a verdict — see `check`. One trailer is
     the only shape whose meaning both this checker and `release-plz.toml` agree on.
+
+    Fenced regions are blanked first (#1929), so quoting `CONTRIBUTING.md`'s own example is
+    not read as a declaration. The fenced line is not merely ignored — `find_near_misses`
+    reports it, because someone who pasted the documented form is asking a question rather
+    than staying silent.
+
+    **This is not the set git-cliff sees** — use `find_trailers_as_git_cliff_would` for
+    that. The two must stay separate; see its docstring for why collapsing them re-opens
+    the hole this fix closed.
+    """
+    return [match.group("value") for match in TRAILER_RE.finditer(strip_fenced(text))]
+
+
+def find_trailers_as_git_cliff_would(text: str) -> list[str]:
+    """Return every column-0 trailer, **fenced ones included**.
+
+    `git_conventional` parses footers with no Markdown awareness at all — any `word:` line
+    is a footer token, which is the same property that makes a prose body shred its footer
+    parsing (see `inject_representation_disclosure.py`). So a trailer inside a fence is
+    invisible to a reader and fully visible to the changelog.
+
+    **The sibling scripts are deliberately NOT made fence-aware**, and that is the same
+    reasoning rather than an oversight. `check_changelog_grouping.py` keeps its own copy of
+    the column-0 pattern and `inject_representation_disclosure.py` imports it from there;
+    both read *commit messages* and exist to check or reproduce what git-cliff actually did.
+    Teaching them about fences would make them disagree with the changelog they audit, which
+    is the opposite of their job. Only the PR-body checker chooses a *value*, and only that
+    choice needed narrowing.
+
+    That is why the duplicate refusal in `check` counts *this* set rather than
+    `find_declarations`. Making both fence-aware looks tidier and is a safety regression:
+    a body carrying a quoted example **beside** a real trailer would then pass here while
+    git-cliff still saw two footers, and the quoted 577-row example could land in the
+    changelog under an author who declared `none`. The refusal is what forces the author to
+    indent or remove the quotation, which is the escape hatch `CONTRIBUTING.md` documents.
+
+    So the split is deliberate and the asymmetry is the point: **fenced text may not BE the
+    declaration, but it still COUNTS toward how many the changelog will see.**
     """
     return [match.group("value") for match in TRAILER_RE.finditer(text)]
 
@@ -369,9 +484,23 @@ def find_near_misses(text: str) -> list[tuple[int, str, str]]:
     if find_declarations(text):
         return []
 
+    fenced = fenced_line_numbers(text)
     misses: list[tuple[int, str, str]] = []
     for number, line in enumerate(text.splitlines(), 1):
         if TRAILER_RE.match(line):
+            # Column 0 and well formed, so the only thing keeping it from being a
+            # declaration is the fence around it (#1929). Report it rather than passing over
+            # it: this shape is almost always someone quoting `CONTRIBUTING.md` to ask what
+            # to write, and silence would be indistinguishable from having declared nothing.
+            if number in fenced:
+                misses.append(
+                    (
+                        number,
+                        line.strip(),
+                        "inside a fenced code block, so it is documentation rather than a "
+                        "declaration; move it to column 0 outside any ``` or ~~~ block",
+                    )
+                )
             continue
         match = NEAR_MISS_RE.match(line)
         if match is None:
@@ -397,7 +526,10 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
 
     1. the message carries **more than one** trailer (#1573) — checked first, and ahead of
        the watched-file test, because two trailers are a disagreement with how the
-       *changelog* files the commit, which applies to every commit;
+       *changelog* files the commit, which applies to every commit. Cases 1 and 2 are not
+       exclusive: when every one of those trailers is fenced, case 1's refusal carries
+       case 2's near-miss lines as well, because "delete the superseded trailer" names
+       nothing the author wrote;
     2. the message carries a **near miss** and no readable trailer — a line that looks like
        a declaration but that none of the three consumers can see. Also ahead of the
        watched-file test, and for the same reason as case 1;
@@ -422,10 +554,15 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     # grouping, which applies to every commit, not only to the ones touching a watched
     # directory. This job already runs on every PR.
     declarations = find_declarations(declaration_text)
-    if len(declarations) > 1:
-        listed = "\n".join(f"  Representation-Change: {value}" for value in declarations)
-        return False, (
-            f"{len(declarations)} `Representation-Change:` trailers found:\n{listed}\n\n"
+    # Counted as GIT-CLIFF would count them, fenced examples included: the refusal exists
+    # because this checker reads the first trailer while git-cliff matches every footer, and
+    # git-cliff cannot see a fence. Counting the fence-aware set here would let a quoted
+    # example sit beside a real `none` and still reach the changelog (#1929).
+    as_git_cliff_sees = find_trailers_as_git_cliff_would(declaration_text)
+    if len(as_git_cliff_sees) > 1:
+        listed = "\n".join(f"  Representation-Change: {value}" for value in as_git_cliff_sees)
+        message = (
+            f"{len(as_git_cliff_sees)} `Representation-Change:` trailers found:\n{listed}\n\n"
             "Keep exactly one. Two trailers do not mean anything consistent, because this\n"
             "check and the changelog resolve them differently: this check reads the FIRST\n"
             "trailer, while git-cliff matches its footer rule against EVERY footer and takes\n"
@@ -436,6 +573,38 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "Delete the superseded trailer, or indent it if it is quoted as an example --\n"
             "an indented line is a continuation of the value above it, not a new trailer."
         )
+        # An EMPTY `declarations` here means every trailer git-cliff counted is fenced —
+        # `find_declarations` reads the same pattern over `strip_fenced`, so the two sets
+        # differ by exactly the fenced lines. Without this arm that author is told to
+        # "keep exactly one" and to "delete the superseded trailer" about text they wrote
+        # as *documentation*, and which a Markdown reader renders as code. The advice
+        # happens to work — indenting inside the fence drops the line from `TRAILER_RE` —
+        # but naming the wrong construct is what sends someone hunting for a declaration
+        # they never made. `CONTRIBUTING.md` publishes three such blocks, so quoting two of
+        # them to ask which form applies is the ordinary way into this path.
+        #
+        # `find_near_misses` is the half that holds the right diagnosis and it is
+        # unreachable from here otherwise: the duplicate refusal returns first, and the
+        # near-miss scan below stands down as soon as one readable trailer exists. Append
+        # rather than fall through, because BOTH facts are true and only together do they
+        # explain the refusal — the count is what git-cliff will see, and the fence is why
+        # the author cannot see it.
+        if not declarations:
+            fenced = find_near_misses(declaration_text)
+            if fenced:
+                fenced_lines = "\n".join(
+                    f"  line {number}: {line}\n    -> {reason}" for number, line, reason in fenced
+                )
+                message += (
+                    "\n\nEvery one of them is inside a fenced code block, so none of them is a\n"
+                    "declaration you can see -- but git-cliff has no Markdown awareness and\n"
+                    f"counts all {len(as_git_cliff_sees)}:\n\n"
+                    f"{fenced_lines}\n\n"
+                    "So there is nothing to delete here. Indent the quoted lines inside the\n"
+                    "fence to keep them out of the count, and write your real declaration at\n"
+                    "column 0 outside any block."
+                )
+        return False, message
 
     # Also refused BEFORE the watched-file test, and for the same reason as the case above:
     # the harm is in what the *changelog* renders, which applies to every commit. Putting it
