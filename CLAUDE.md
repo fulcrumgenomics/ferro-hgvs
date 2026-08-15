@@ -468,14 +468,41 @@ two-row check above:
   `attempt to add with overflow` at `src/convert/mapper.rs:114`: arming the flag
   routes the output through `hgvs_to_spdi`, which reaches `cds_to_tx`'s unchecked
   `cds_start as i64 + pos.base - 1` on an `i64::MAX`-adjacent `c.` coordinate.
-  The open issue is **#1690**.
+  The issue was **#1690**, **since CLOSED** — the two arms that can overflow now
+  `checked_add` and return a `ConversionError`.
 - **2x `stranded_identity_member`** — a genuine fire, of #1281's "denotes no
   sequence" shape, on a module that exists to PIN a defect (#1655's stranded
   derived identity). That is the class `ORACLE_EXCLUDE` already documents: a test
   pinning a defect and an oracle aborting on it cannot both run.
 
-So arming it is blocked on **#1690** and on finding a home for
-`stranded_identity_member` — **not** on another measurement. Do not read "both
+**Re-measured after #1690 closed (#1990), and only one of the two classes
+survives.** Same selection, same flags, no `--partition` and no `FERRO_MANIFEST`
+— `c9207d7e`, 94 commits past the run above:
+
+```
+Summary [179.827s] 10904 tests run: 10902 passed, 2 failed, 306 skipped
+```
+
+The three `issue_1487_canonical_window_overflow` rows are **gone** — all 8 tests
+in that module pass — and **nothing new fired**. The 2 survivors are both
+`stranded_identity_member`, still the recorded row:
+
+| test | the row it fires on |
+|---|---|
+| `every_stranded_identity_is_non_confluent_with_its_surviving_member` | input `TEMPLATE:g.[10_11insAT;11_12inv;12_13insA]`, output `g.[11_12insTA;11_12=;12_13insA]` |
+| `the_wider_multi_member_census_is_what_the_header_says` | the same row, reached through the wider census |
+
+**The `FERRO_MANIFEST` half of that measurement is stale too.** The same run with
+the manifest armed reads `10901 passed, 3 failed` — all six
+`mutalyzer_normalize_tests` axes now **pass**, and the one extra row is
+`multi_member_cis_axis::axis_normalized`, which is **not an oracle fire**: it
+fails identically with `FERRO_ASSERT_SEQUENCE` **unset** (measured as a control),
+on a census pin reading `unwindowed: 89` against a pinned `90` while
+`sequence_changed` stays `0`. That is the HEAD-drift this file already documents
+for that pin, and it is orthogonal to arming the flag.
+
+So arming it is blocked on finding a home for `stranded_identity_member`, and on
+that alone — **#1690 is closed and is no longer a blocker.** Do not read "both
 rows are green" as "it can be armed". `ci.yml`'s comment on the `test-oracle`
 job carries the full triage, including what a run with `FERRO_MANIFEST` set adds.
 Suppressing a row would still hollow out the oracle; that has not changed.

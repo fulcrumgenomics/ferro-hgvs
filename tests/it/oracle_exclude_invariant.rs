@@ -310,7 +310,8 @@ const LOCAL_RUNNER: &str = "scripts/run_oracle_suite.sh";
 /// locally and green in CI. Note those rows are no longer #1618/#1619, which are
 /// both closed: a selection-wide run at `674e9c8b` put the count at 5, in
 /// `issue_1487_canonical_window_overflow` (issue #1690) and
-/// `stranded_identity_member`.
+/// `stranded_identity_member`. Re-measured at `c9207d7e` once #1690 closed
+/// (#1990) the count is 2, all of it `stranded_identity_member`.
 fn test_oracle_job_flags() -> Vec<String> {
     test_oracle_job_lines()
         .into_iter()
@@ -536,7 +537,8 @@ fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_
 /// `test-oracle` deliberately withholds it — makes the runner red on rows no PR
 /// caused, which teaches the operator to ignore it. That is not hypothetical:
 /// arming it over this exact selection at `674e9c8b` is red, 5 tests, so a
-/// runner that armed it ahead of the job would be red on every PR.
+/// runner that armed it ahead of the job would be red on every PR. Still red at
+/// `c9207d7e` (#1990), at 2 tests rather than 5 — #1690 closed the other 3.
 #[test]
 fn the_local_oracle_runner_arms_exactly_the_flags_test_oracle_arms() {
     let runner_flags = local_runner_selection().flags;

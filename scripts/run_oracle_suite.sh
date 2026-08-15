@@ -65,6 +65,12 @@
 # `stranded_identity_member` (a real fire on a module that PINS a defect). The
 # blocking rows are no longer #1618/#1619, both of which are closed and green;
 # see `test-oracle`'s own comment in `ci.yml` for the full triage.
+#
+# RE-MEASURED on `c9207d7e` once #1690 closed (#1990), same selection and flags:
+# `10904 tests run: 10902 passed, 2 failed, 306 skipped`. The 3
+# `issue_1487_canonical_window_overflow` rows are GONE and nothing new fired, so
+# the remaining blocker is `stranded_identity_member` alone -- #1690 is closed
+# and is no longer one.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
