@@ -1,0 +1,235 @@
+{
+  "_comment": [
+    "Stage-by-stage inventory of what governs each decision ferro's normalization",
+    "pipeline makes (#1553). Curated, and checked: every `rulings` id must exist in",
+    "hgvs_spec_normalization_overrides.json, and every clause quote must be found at",
+    "the cited lines of the assets/hgvs-nomenclature checkout. Rendered to",
+    "docs/NORMALIZATION_STAGE_AUDIT.md by tests/it/normalization_stage_audit_doc.rs.",
+    "",
+    "NOTHING HERE STATES A RULING. A row cites the record that rules; the record's",
+    "status is read from the ledger at render time and is deliberately not copied",
+    "into this file. What this file adds is the inverse index the ledger does not",
+    "carry: which stage a record governs, and — the point of the exercise — which",
+    "decisions no record governs at all."
+  ],
+  "stages": [
+    {
+      "id": "parse-validate",
+      "title": "Parse / validate",
+      "decision": "Which authored forms are refused, which are repaired, and at which stage the refusal happens.",
+      "rulings": [
+        "absolute-prohibition-enforcement-stage",
+        "alignment-only-symbol-in-a-description",
+        "rna-axis-alignment-only-symbol-reach",
+        "bare-transcript-intronic-position",
+        "conflicting-member-geometry-refusal-scope",
+        "ring-telomere-anchoring",
+        "rna-repeat-range-plus-unit-redundancy"
+      ],
+      "clauses": [],
+      "ungoverned": [],
+      "note": "The stage question itself is settled — `absolute-prohibition-enforcement-stage` rules that enforcement is mode-dependent and uniform: strict fails at parse, lenient fails only when it cannot normalize. What that record leaves open is coverage, clause by clause, and it names the remaining clauses itself. Two further questions at this stage carry open records rather than no record, which is the state this audit is looking for and does not need to add to."
+    },
+    {
+      "id": "axis-projection",
+      "title": "Axis projection",
+      "decision": "How a coordinate maps across axes, and what happens at boundaries.",
+      "rulings": [
+        "projection-codon-exception-is-decided-by-the-rendered-axis",
+        "c-and-n-positions-are-flat-transcript-offsets",
+        "junction-exit-wrapper-scope-in-a-mixed-allele"
+      ],
+      "clauses": [
+        {
+          "clause": "docs/background/numbering.md:52",
+          "quote": "nucleotide numbering is `n.1`, `n.2`, `n.3`, ..., etc., from the first to the last nucleotide of the reference sequence"
+        }
+      ],
+      "ungoverned": [
+        {
+          "decision": "How two `c.` positions in different numbering zones (`-n` upstream of the ATG, plain `n` in the CDS, `*n` downstream of the stop) are ordered against each other.",
+          "verdict": "genuine-gap",
+          "why": "Ferro needs a total order on `c.` endpoints to sort an allele's members, detect overlap between them, and compute the separation that the merge/split stage keys on. `background/numbering.md` defines each zone and states no rule for comparing positions across them; it never speaks about alleles at all. So the ordering is a house rule with no clause behind it — and, unlike every other house rule at this grain, it carries no ruling record either. It is currently written down only as repository prose. This is not theoretical: the sequence-changing and denotes-no-sequence classes the spec corpus found localise to the `c.72`/`c.*1` transition and to nothing else."
+        }
+      ],
+      "note": null
+    },
+    {
+      "id": "sequence-derivation",
+      "title": "Sequence derivation",
+      "decision": "How the resulting sequence is computed from the authored edits, and what may bound that computation.",
+      "rulings": [
+        "canonical-form-choice-when-both-legal",
+        "derivation-may-not-be-bounded-by-the-inputs-spelling",
+        "confluence-gate-is-apply-equality-on-every-determined-axis"
+      ],
+      "clauses": [
+        {
+          "clause": "docs/background/basics.md:38",
+          "quote": "The recommendations for the description of sequence variants are designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**."
+        }
+      ],
+      "ungoverned": [],
+      "note": "The most heavily ruled stage in the pipeline, and the one the rest depend on: `canonical-form-choice-when-both-legal` makes the resulting sequence the thing every other rule is evaluated over, and `derivation-may-not-be-bounded-by-the-inputs-spelling` removes the one comparand that contradicted it. Note what `background/basics.md:38` is cited for here — it lists the design values and minimality is absent from them, so ferro's column-minimal objective is policy and never compliance."
+    },
+    {
+      "id": "partition-and-typing",
+      "title": "Partition + typing",
+      "decision": "Which of several legal descriptions is emitted: how the edit set is cut into members, and what each piece is labelled.",
+      "rulings": [
+        "canonical-form-choice-when-both-legal",
+        "separation-is-a-property-of-the-spelling-not-of-the-variant",
+        "duplication-must-ranks-the-label-not-the-partition",
+        "inversion-vs-two-delins-76-83",
+        "inversion-vs-a-mixed-member-competitor",
+        "contiguous-insertion-split-by-a-blocked-derivation"
+      ],
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:56",
+          "quote": "when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
+        }
+      ],
+      "ungoverned": [],
+      "note": "Settled at the level of principle and in flight at the level of shipped behaviour: several of these rulings are implemented only under a candidate partitioner arm, and the default is being flipped separately. #1553 places this stage out of scope for re-litigation, and this row is an index into the records rather than an invitation to reopen them."
+    },
+    {
+      "id": "shifting",
+      "title": "Shifting",
+      "decision": "Where the 3' rule places a change within a run of equivalent positions, and where that placement is clamped.",
+      "rulings": ["exon-junction-dup-converge-from-the-far-side"],
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:41",
+          "quote": "**3'rule**: for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed."
+        },
+        {
+          "clause": "docs/recommendations/general.md:44",
+          "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:50",
+          "quote": "the general HGVS rule of maintaining the longest unchanged sequence applies (the 3' rule)"
+        }
+      ],
+      "ungoverned": [
+        {
+          "decision": "What the 5' direction does — at an exon/exon junction, in a repeat tract, and at a reference boundary.",
+          "verdict": "genuine-gap",
+          "why": "The recommendations state a 3' rule and only a 3' rule; `5' rule` and `5'-rule` occur nowhere in the checkout. Ferro nevertheless offers a 5' direction, and the direction is not an orthogonal knob — it selects the frame every other rule is evaluated in, which is why the README claims its best-effort rules per direction rather than across the two. So every clause and every ruling at this stage is authority for the 3' arm; the 5' arm's answers are ferro's own, mirrored by construction rather than by a decision anyone recorded. That is defensible and may well be the only possible answer, but it is nowhere adjudicated, and the mirroring is not obviously right at a junction, where the 3' answer is itself an exception."
+        }
+      ],
+      "note": null
+    },
+    {
+      "id": "merge-split",
+      "title": "Merge / split",
+      "decision": "When consecutive or separated changes combine into one description rather than staying individual.",
+      "rulings": [
+        "delins-merge-vs-individual-gap-two-or-more",
+        "delins-codon-carve-out-gap-one",
+        "delins-adjacent-members-when-both-consume-reference",
+        "codon-carve-out-shape-restriction",
+        "separation-rule-force-modal-or-negation",
+        "separation-is-a-property-of-the-spelling-not-of-the-variant",
+        "self-cancelling-across-ring-junctions"
+      ],
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:34",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:32",
+          "quote": "changes involving two or more consecutive nucleotides are described as deletion-insertion (delins)"
+        }
+      ],
+      "ungoverned": [],
+      "note": "Seven records, more than any other stage, and the residue is named inside them rather than missing from them: `delins-adjacent-members-when-both-consume-reference` is explicitly scoped to members that consume reference bases and records the `dup` and repeat-expansion cases as still open. An audit row that reported this stage as fully settled would be reading the ruling and not its scope."
+    },
+    {
+      "id": "re-spelling",
+      "title": "Re-spelling",
+      "decision": "Terminal coalescing and type re-selection, applied to pieces that are already derived.",
+      "rulings": [
+        "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
+        "delins-recommendation-reach-when-the-input-arrives-split"
+      ],
+      "clauses": [],
+      "ungoverned": [],
+      "note": "Both records here are axis- or mechanism-scoped rather than general, and both were decided in the direction of narrowing what the carve-out reaches. Neither is live on the shipped default, so this stage's rulings and this stage's behaviour are currently different questions."
+    }
+  ],
+  "axis_scoped_clauses": [
+    {
+      "clause": "docs/recommendations/general.md:35",
+      "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\"",
+      "scope": "Coding only by construction — the condition names amino acids, which an axis with no reading frame cannot state.",
+      "relevance": "modelled",
+      "note": "Keyed on the property, not on the axis label: `axis_min_separation(reading_frame: bool)` selects the floor, which correctly groups `n.` — a transcript axis with no frame — with `g.` rather than with `c.`. An axis-name-keyed table would get that pair wrong."
+    },
+    {
+      "clause": "docs/recommendations/general.md:44",
+      "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences",
+      "scope": "`c.`, `r.` and `n.` only — the spec scopes the exception by naming prefixes.",
+      "relevance": "modelled",
+      "note": "Also precedent, cited as such by `projection-codon-exception-is-decided-by-the-rendered-axis`: the spec does scope a rule by naming prefixes, so an axis-scoped reading of another clause is not an invention."
+    },
+    {
+      "clause": "docs/recommendations/DNA/repeated.md:21",
+      "quote": "using a coding DNA reference sequence (\"c.\" description), a repeated sequence variant description can be used only for repeat units with a length which is a multiple of 3",
+      "scope": "`c.` only.",
+      "relevance": "modelled",
+      "note": null
+    },
+    {
+      "clause": "docs/recommendations/general.md:162-167",
+      "quote": "Yes, when a gene is on the minus strand of a chromosome (opposite transcriptional orientation) and the change is located in a repeated sequence (mono-, di-, tri-, etc. nucleotide stretches), the 3'rule has this as a consequence.",
+      "scope": "The `g.`/`c.` pair, on the minus strand, inside a repeated sequence.",
+      "relevance": "modelled",
+      "note": "The load-bearing row of this table, and the reason the table exists. The Q&A answers **yes**: `g.` and `c.` descriptions of one variant may legitimately name different nucleotides and different positions. So cross-axis divergence is endorsed by the spec, not a defect — while this repository has historically filed axis disagreement as a bug, correctly in every case so far, because every one of those was an accidental divergence rather than a deliberate axis-scoped rule. Without a table recording which is which, the next deliberate divergence is indistinguishable from the next bug."
+    },
+    {
+      "clause": "docs/recommendations/general.md:13",
+      "quote": "descriptions on RNA/protein level should describe the changes observed on that level (RNA/protein) and not try to incorporate any knowledge regarding the change on",
+      "scope": "RNA and protein axes.",
+      "relevance": "modelled",
+      "note": "The method half of `canonical-form-choice-when-both-legal`, whose governing clause is `general.md:157` — the same statement made for protein and extended here to RNA."
+    },
+    {
+      "clause": "docs/recommendations/general.md:136",
+      "quote": "The minus sign should only be used as a minus in the description of variants based on a coding DNA reference sequence.",
+      "scope": "`c.` only.",
+      "relevance": "not-a-normalization-rule",
+      "note": "A parser constraint. It decides which strings are well formed, not which of several well-formed descriptions is emitted."
+    },
+    {
+      "clause": "docs/recommendations/RNA/adjoined_transcript.md:18",
+      "quote": "This syntax is for RNA sequence only (no use of coding (`c.`) / non-coding DNA (`n.`) reference sequences).",
+      "scope": "`r.` only.",
+      "relevance": "not-a-normalization-rule",
+      "note": "Expressibility. It says a syntax is unavailable on an axis, which is upstream of any choice between forms."
+    },
+    {
+      "clause": "docs/background/refseq.md:47",
+      "quote": "intronic sequences are considered to be **within the boundaries** of a transcript reference sequence and may only be used to describe a variant when a genomic r",
+      "scope": "Intronic positions on transcript axes.",
+      "relevance": "not-a-normalization-rule",
+      "note": "Reference selection rather than form selection — though the sibling clause `checklist.md:20` is what `bare-transcript-intronic-position` rules under, and that ruling does move output."
+    },
+    {
+      "clause": "docs/recommendations/DNA/delins.md:83",
+      "quote": "First, the two variants may have been reported (or might occur) individually.",
+      "scope": "Axis-neutral. Listed here because it is the clearest case of a rule this table must record as unmodellable rather than leave looking unimplemented.",
+      "relevance": "unmodellable",
+      "note": "The discriminator is **provenance** — whether the two variants were reported individually — which is not a function of (reference, observed) and is unrecoverable from any description. `canonical-form-choice-when-both-legal` records this among its counter-evidence and adopts re-derivation over it deliberately; `separation-is-a-property-of-the-spelling-not-of-the-variant` records the departure formally, in its `deviates_from`."
+    },
+    {
+      "clause": "docs/recommendations/RNA/delins.md:41",
+      "quote": "This format is preferred when either of the two variants is known as a frequently occurring variant (\"polymorphism\").",
+      "scope": "`r.`.",
+      "relevance": "unmodellable",
+      "note": "Population frequency, like the row above, is not a function of the sequences a normalizer holds. Recording it as unmodellable is the point: an audit that left it blank would read as a gap someone could close."
+    }
+  ]
+}
