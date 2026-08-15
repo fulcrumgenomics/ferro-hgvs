@@ -86,6 +86,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Default::default()` was the only reachable constructor — the two documented knobs could not be
   set by any downstream caller.
 
+### Fixed
+
+- **Reference-span insertions are now resolved rather than refused.** An insertion whose bases are
+  named by position in the same reference — `g.100_101ins50_57`, and its inverted form
+  `g.100_101ins50_57inv` — was rejected as "insertion sequence is not a literal sequence" whenever
+  a provider-backed path (`sequence_normalize`, `to_spdi`, `canonical_spdi`, apply-to-reference)
+  needed its bases. It now reads those bases from the reference exactly as `del`/`dup`/`delins`
+  read their omitted bases, so `sequence_normalize` re-derives the literal `g.100_101insCGTA…`
+  form. `delins` with a same-reference range insert is resolved on the same path. The payload is
+  read on the **axis the description is written on**: a `c.` (and a coding `r.`) payload gets the
+  same `cds_start + N - 1` shift the location already gets, so `NM_000532.5:c.156_157ins180_188`
+  resolves to `insGCGAGGAAA` — the bases `normalize` names — rather than to the transcript-offset
+  span 36 bases 5' of it. `n.`/`g.`/`m.`/`o.` payloads are transcript/genomic offsets already and
+  are read unshifted.
+
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
 ### Representation changes
