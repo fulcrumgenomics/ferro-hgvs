@@ -969,6 +969,53 @@ class Normalizer:
         """
         ...
 
+    def sequence_normalize(
+        self,
+        description: str,
+        *,
+        max_grid_cells: int | None = None,
+        normalize: bool = False,
+    ) -> str:
+        """Re-derive a description from the bases it denotes.
+
+        The "one canonical description per variant" round trip, as a single
+        call: express the variant as a padded reference/alternate window
+        (``to_sequences``), derive a description from those bases alone
+        (``from_sequences``), and — while a member still rests on a window edge
+        that can still move — double the pad and retry. Two spellings of one
+        variant therefore reach one description, decided by the observed bases
+        rather than by how either was written.
+
+        The loop reads ``DerivedDescription``'s two per-side flags apart, so a
+        placement pinned to the sequence's own start or end is recognised as
+        settled rather than chased.
+
+        Args:
+            description: The HGVS description to re-derive. Its axis must be one
+                ``from_sequences`` emits — genomic ``g.`` (and ``m.`` on the two
+                rCRS mitochondrial accessions); any other is refused.
+            max_grid_cells: As ``from_sequences``.
+            normalize: Route the derived description through ``normalize``
+                before returning it. Defaults to False, which yields the
+                alignment-derived form (conformant + deterministic) rather than
+                ferro's recommended form. Set True for the recommended,
+                reference-anchored form.
+
+        Returns:
+            The canonical HGVS description, as a string.
+
+        Raises:
+            ParseError: ``description`` does not parse.
+            ValueError: for a ``max_grid_cells`` of 0, as ``from_sequences``.
+            NormalizationError: everything else — a variant with no single
+                resulting sequence, a non-genomic axis, a grid over
+                ``max_grid_cells``, or a placement still resting on the edge of
+                the widest window the loop reads (a repeat tract whose shift
+                depends on how much reference is read). Plus any refusal from
+                ``normalize`` when ``normalize=True``.
+        """
+        ...
+
 # ============================================================================
 # SPDI Classes
 # ============================================================================
@@ -1607,6 +1654,29 @@ class DerivedDescription:
         flush with the tract is flagged and still gives the same answer a
         whole-sequence derivation gives. A flagged answer is never wrong — it
         denotes the same bases and carries the same canonical SPDI.
+        """
+        ...
+
+    @property
+    def bounded_at_start(self) -> bool:
+        """Whether a member rests on the window's 5' edge.
+
+        ``placement_bounded_by_window`` is ``bounded_at_start or
+        bounded_at_end``; this says whether the 5' side specifically is the one
+        on an edge. A caller widening a window one side at a time reads it to
+        decide whether widening 5' could move the answer — and, together with
+        the window already starting at base 1, to recognise a placement pinned
+        to the sequence start that no widening can move.
+        """
+        ...
+
+    @property
+    def bounded_at_end(self) -> bool:
+        """Whether a member rests on the window's 3' edge.
+
+        The 3' counterpart of ``bounded_at_start``; see it. A placement on the
+        3' edge of a window that already ends at the sequence's last base is
+        settled by the sequence, not the window.
         """
         ...
 

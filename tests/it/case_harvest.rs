@@ -1423,7 +1423,7 @@ fn the_dup_shaped_split_is_the_partition_of_its_own_resulting_sequence() {
     )
     .expect("the (reference, resulting) pair re-derives");
     assert!(
-        !derived.placement_bounded_by_window,
+        !derived.placement_bounded_by_window(),
         "the re-derivation rested on a window edge, so it describes this window rather than \
          this locus — widen DUP_SHAPED_SPLIT_WINDOW rather than reading the comparison below"
     );
