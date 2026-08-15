@@ -187,6 +187,88 @@ mod overrides {
         Undecided,
     }
 
+    /// The `README.md` rule a clause-free house choice is made under.
+    ///
+    /// Only two rules can carry one, and naming which is the whole point of the
+    /// field: rule 5's *silent* limb says in terms that ferro "decides under
+    /// rule 6 and violates nothing", and rule 6 is where the maintainers choose
+    /// among conformant forms. Neither is a claim about what the recommendations
+    /// require. A free-text field here would let a record write "the spec" into
+    /// the slot reserved for "our own judgement", which is the exact
+    /// substitution [`HouseChoice`] exists to make unrepresentable.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum HouseRule {
+        /// `README.md` rule 5, **silent** limb — the recommendations are merely
+        /// incomplete here, so ferro decides under rule 6 and violates nothing.
+        /// Filing upstream is a feature request, not a bug report.
+        RuleFiveSilent,
+        /// `README.md` rule 6 — among multiple conformant forms, the maintainers
+        /// choose. Use this when every competing form is already conformant and
+        /// no clause ranks them.
+        RuleSix,
+    }
+
+    /// A ruling that is **ours**, not the spec's.
+    ///
+    /// # Why the ledger needed a shape it did not have
+    ///
+    /// Before this field the ledger could record two things: a settled reading
+    /// of a clause (`decided`, with a `governing` clause) and an unsettled
+    /// conflict (`undecided`, with two clauses and no verdict). It could not
+    /// record the third and commonest state — *the recommendations are silent
+    /// here and we picked X* — because [`validate_ruling_shape`] requires a
+    /// `decided` record to name a clause it holds to govern.
+    ///
+    /// The consequence was measured rather than predicted: the rule that a
+    /// reference base is unchanged iff **every** minimum-edit-distance alignment
+    /// matches it had no home here and instead lived as prose in six separate
+    /// places in `src/` and `tests/`, which then drifted apart. An
+    /// HGVS-committee-perspective review of the same rule called it "an
+    /// implementer's choice the recommendations neither require nor forbid" and
+    /// objected specifically to its being presented as *compliance*.
+    ///
+    /// # What it must state, and why each part
+    ///
+    /// * [`Self::under`] — which `README.md` rule the choice is made under. A
+    ///   house choice that cannot name its own authority is not a house choice,
+    ///   it is an unrecorded preference.
+    /// * [`Self::considered_and_rejected`] — what was weighed and put aside.
+    ///   The best quality of the existing records is that they record
+    ///   *refutations*: `MIN_SEPARATION_NO_FRAME`, `apply_coding_codon_exception`
+    ///   and half the ledger's rationales exist because a plausible belief was
+    ///   killed by measurement and the belief would otherwise recur. A house
+    ///   choice with no rejected alternative is a conclusion with its reasoning
+    ///   deleted, and the next reader re-derives the alternative from scratch.
+    ///
+    /// # What it may NOT state
+    ///
+    /// A `governing` clause, or a `deviates_from` clause. Both are refused by
+    /// [`validate_ruling_shape`], symmetrically with the way an `undecided`
+    /// record is refused for naming either. The asymmetry to notice is that the
+    /// `undecided` refusal stops a record claiming *more certainty* than the
+    /// project has, and this one stops a record claiming *more authority* than
+    /// the spec gave it — overclaiming spec authority being the disease this
+    /// field was added to treat. Making it unrepresentable is worth more than
+    /// discouraging it in prose, because the prose is what drifted.
+    ///
+    /// A house choice still cites at least one clause, like every other record.
+    /// That is deliberate and is **not** a contradiction of "clause-free": the
+    /// honest way to assert that the recommendations are silent on a point is to
+    /// name the clauses you read and say why none of them reaches, which is
+    /// exactly what [`Self::considered_and_rejected`] is for. A record allowed
+    /// to assert silence while naming nothing it examined would be an
+    /// unfalsifiable claim about the spec.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct HouseChoice {
+        /// The `README.md` rule the choice is made under.
+        pub under: HouseRule,
+        /// What was considered and rejected in reaching it, in prose. Must not
+        /// be blank.
+        pub considered_and_rejected: String,
+    }
+
     /// A record of how the project reads the spec where the spec conflicts with
     /// itself, and of what it has *not* decided.
     ///
@@ -216,6 +298,15 @@ mod overrides {
         /// that has not chosen a side has not deviated from one either.
         #[serde(default)]
         pub deviates_from: Vec<String>,
+        /// Present when the ruling is **ours** rather than the spec's: the
+        /// recommendations are silent on the point and the project chose under
+        /// `README.md` rule 5's silent limb or rule 6. See [`HouseChoice`].
+        ///
+        /// Mutually exclusive with [`Self::governing`] and
+        /// [`Self::deviates_from`], and refused on an `undecided` record —
+        /// enforced by [`validate_ruling_shape`], not by convention.
+        #[serde(default)]
+        pub house_choice: Option<HouseChoice>,
         /// Why. For an undecided record: what the project has and has not
         /// established, and what would settle it.
         pub rationale: String,
@@ -871,6 +962,12 @@ mod decisions {
         pub governing: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         pub deviates_from: Vec<String>,
+        /// Carried through so the generated fixture states, per record, whether
+        /// its ruling rests on the recommendations or on the project's own
+        /// judgement. Omitted when absent, so no existing record's serialization
+        /// moves.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub house_choice: Option<overrides::HouseChoice>,
         pub rationale: String,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         pub applies_to: Vec<String>,
@@ -958,9 +1055,56 @@ mod decisions {
                 );
             }
         }
+        // A house choice is checked BEFORE the status match, so that a record
+        // which is both `undecided` and a house choice is refused for the reason
+        // that names the contradiction rather than falling through to the
+        // clause-count arm and being told something true but unhelpful.
+        if let Some(house) = &ruling.house_choice {
+            if ruling.status != overrides::RulingStatus::Decided {
+                anyhow::bail!(
+                    "{owner}: a `house_choice` on a non-`decided` record — a choice that has been \
+                     made is decided by definition, and a record that has not chosen has no house \
+                     choice to record"
+                );
+            }
+            // The refusal this field was added for. A house choice asserts that
+            // the recommendations do not reach the point; naming a clause that
+            // governs asserts that one does. Both cannot be true, and the
+            // failure mode that matters is the one where the second is written
+            // down and then cited as compliance.
+            if ruling.governing.is_some() {
+                anyhow::bail!(
+                    "{owner}: a `house_choice` names a governing clause. A house choice is made \
+                     under `README.md` rule 5's silent limb or rule 6, which are what the project \
+                     does where the recommendations do NOT decide — so it cannot also hold a \
+                     clause to govern. Either drop `house_choice` and rule on the clause, or drop \
+                     `governing` and record why no clause reaches"
+                );
+            }
+            if !ruling.deviates_from.is_empty() {
+                anyhow::bail!(
+                    "{owner}: a `house_choice` names a deviated-from clause. There is nothing to \
+                     deviate from where the recommendations are silent; a clause that reaches the \
+                     point far enough to be departed from is a clause that reaches it"
+                );
+            }
+            if house.considered_and_rejected.trim().is_empty() {
+                anyhow::bail!(
+                    "{owner}: a `house_choice` must say what was considered and rejected. A \
+                     conclusion with its alternatives deleted is re-derived from scratch by the \
+                     next reader, which is what these records exist to prevent"
+                );
+            }
+        }
         match ruling.status {
-            overrides::RulingStatus::Decided if ruling.governing.is_none() => {
-                anyhow::bail!("{owner}: a `decided` ruling must name the clause it holds to govern")
+            overrides::RulingStatus::Decided
+                if ruling.governing.is_none() && ruling.house_choice.is_none() =>
+            {
+                anyhow::bail!(
+                    "{owner}: a `decided` ruling must name the clause it holds to govern, or \
+                     declare itself a `house_choice` under `README.md` rule 5's silent limb or \
+                     rule 6"
+                )
             }
             // The whole point of the `undecided` state is that nobody has
             // ruled. A governing clause — or a deviated-from one, which
@@ -1261,6 +1405,7 @@ mod decisions {
                 clauses: ruling.clauses.clone(),
                 governing: ruling.governing.clone(),
                 deviates_from: ruling.deviates_from.clone(),
+                house_choice: ruling.house_choice.clone(),
                 rationale: ruling.rationale.clone(),
                 applies_to: ruling.applies_to.clone(),
                 equivalence_classes: ruling.equivalence_classes.clone(),
@@ -1341,12 +1486,23 @@ mod decisions {
                 clauses: clauses.iter().map(|c| citation(c)).collect(),
                 governing: governing.map(str::to_string),
                 deviates_from: deviates_from.iter().map(|c| c.to_string()).collect(),
+                house_choice: None,
                 rationale: "because".to_string(),
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
                 guard: Some(guard_citing(&[
                     "examples/generate_spec_fixture.rs::a_guard",
                 ])),
+            }
+        }
+
+        /// A well-formed [`overrides::HouseChoice`], for the tests below.
+        fn house(under: overrides::HouseRule) -> overrides::HouseChoice {
+            overrides::HouseChoice {
+                under,
+                considered_and_rejected: "the position-wise reading, rejected because it is \
+                                          not cheaper"
+                    .to_string(),
             }
         }
 
@@ -1399,6 +1555,102 @@ mod decisions {
                     .is_ok()
             );
             assert!(validate_ruling_shape("r", &ruling(Decided, &["a.md:1"], None, &[])).is_err());
+        }
+
+        /// The build must refuse a house choice that claims spec authority.
+        ///
+        /// This is the mirror of [`an_undecided_ruling_must_put_both_sides_on_the_record`]
+        /// and is written the same way — positive control first, then one
+        /// mutation per refusal — because the two arms guard opposite
+        /// overclaims. An `undecided` record naming a governing clause claims
+        /// the project decided something it did not; a `house_choice` naming one
+        /// claims the *spec* decided something it did not. The second is the
+        /// costlier of the two here: a governing clause is quotable, so once one
+        /// is written down the choice starts being cited as compliance.
+        #[test]
+        fn a_house_choice_may_not_claim_spec_authority() {
+            use overrides::HouseRule::{RuleFiveSilent, RuleSix};
+            use overrides::RulingStatus::{Decided, Undecided};
+
+            // Positive control: a decided record with NO governing clause is
+            // legal exactly when it declares itself a house choice. The second
+            // assertion is the one that makes the first mean anything — without
+            // the `house_choice` the same record is refused.
+            let mut choice = ruling(Decided, &["a.md:1"], None, &[]);
+            choice.house_choice = Some(house(RuleSix));
+            assert!(
+                validate_ruling_shape("r", &choice).is_ok(),
+                "positive control"
+            );
+            let mut bare = choice.clone();
+            bare.house_choice = None;
+            assert!(validate_ruling_shape("r", &bare).is_err());
+
+            // Rule 5's silent limb is the other admissible authority.
+            let mut silent_limb = choice.clone();
+            silent_limb.house_choice = Some(house(RuleFiveSilent));
+            assert!(validate_ruling_shape("r", &silent_limb).is_ok());
+
+            // The refusal this field exists for.
+            let mut governs = choice.clone();
+            governs.governing = Some("a.md:1".to_string());
+            assert!(validate_ruling_shape("r", &governs).is_err());
+
+            // …and its sibling: a clause reaching far enough to be departed from
+            // is a clause that reaches.
+            let mut deviates = ruling(Decided, &["a.md:1", "b.md:2"], None, &["b.md:2"]);
+            deviates.house_choice = Some(house(RuleSix));
+            assert!(validate_ruling_shape("r", &deviates).is_err());
+
+            // A choice that has been made is decided by definition.
+            let mut unsettled = ruling(Undecided, &["a.md:1", "b.md:2"], None, &[]);
+            unsettled.house_choice = Some(house(RuleSix));
+            assert!(validate_ruling_shape("r", &unsettled).is_err());
+
+            // A conclusion with its alternatives deleted.
+            let mut mute = choice.clone();
+            mute.house_choice = Some(overrides::HouseChoice {
+                under: RuleSix,
+                considered_and_rejected: "   ".to_string(),
+            });
+            assert!(validate_ruling_shape("r", &mute).is_err());
+        }
+
+        /// `under` is a closed enum, so a record cannot write "the spec" into
+        /// the slot reserved for the project's own authority.
+        ///
+        /// Checked at *deserialize*, which is the only place it can be checked:
+        /// by the time [`validate_ruling_shape`] runs the value is already one
+        /// of the two variants. A free-text field would have made this
+        /// unenforceable, which is why it is not one.
+        #[test]
+        fn the_house_rule_is_a_closed_set() {
+            let with = |under: &str| {
+                serde_json::from_value::<overrides::HouseChoice>(serde_json::json!({
+                    "under": under,
+                    "considered_and_rejected": "something",
+                }))
+            };
+            assert!(with("rule-six").is_ok());
+            assert!(with("rule-five-silent").is_ok());
+            assert!(with("general.md:34").is_err());
+            assert!(with("rule-2").is_err());
+        }
+
+        /// An absent `house_choice` deserializes, so every existing record is
+        /// unaffected by the field being added.
+        #[test]
+        fn an_absent_house_choice_deserializes() {
+            let parsed: overrides::Ruling = serde_json::from_value(serde_json::json!({
+                "id": "a-record",
+                "status": "decided",
+                "question": "does a record predating the field still parse?",
+                "rationale": "it must, or adding the field re-statuses the whole ledger",
+                "governing": "a.md:1",
+                "clauses": [{ "clause": "a.md:1", "quote": "q" }],
+            }))
+            .expect("a record with no `house_choice` must deserialize");
+            assert!(parsed.house_choice.is_none());
         }
 
         #[test]

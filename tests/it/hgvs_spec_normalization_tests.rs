@@ -76,7 +76,22 @@ struct Ruling {
     governing: Option<String>,
     #[serde(default)]
     deviates_from: Vec<String>,
+    /// Present when the record's ruling is the project's own rather than the
+    /// spec's — see `generate_spec_fixture`'s `overrides::HouseChoice`. Such a
+    /// record is `decided` and names **no** governing clause, which is the one
+    /// shape this test used to reject outright.
+    #[serde(default)]
+    house_choice: Option<HouseChoice>,
     rationale: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HouseChoice {
+    /// `rule-five-silent` or `rule-six`; the generator's enum refuses anything
+    /// else at deserialize, so this is a string here only because the fixture is
+    /// read back untyped.
+    under: String,
+    considered_and_rejected: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1423,11 +1438,50 @@ fn ruling_records_are_intact() {
         );
         let cited: std::collections::BTreeSet<&str> =
             ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
+        // The other half of the load-bearing pair below. A `house_choice` says
+        // the recommendations do not reach the point and the project chose under
+        // `README.md` rule 5's silent limb or rule 6; naming a clause that
+        // governs — or one deviated from, which requires the clause to reach —
+        // takes that choice and dresses it as compliance. That is the exact
+        // failure the field was added for, so it is checked here and not only in
+        // the generator.
+        if let Some(house) = &ruling.house_choice {
+            assert_eq!(
+                ruling.status, "decided",
+                "ruling {:?} carries a house choice but is not decided; a choice that has been \
+                 made is decided by definition",
+                ruling.id
+            );
+            assert!(
+                ruling.governing.is_none() && ruling.deviates_from.is_empty(),
+                "ruling {:?} is a house choice yet names a governing or deviated-from clause — \
+                 a choice made where the recommendations are silent must not be recorded as a \
+                 reading of one",
+                ruling.id
+            );
+            assert!(
+                matches!(house.under.as_str(), "rule-five-silent" | "rule-six"),
+                "ruling {:?} makes its house choice under {:?}, which is not a `README.md` rule \
+                 that admits one",
+                ruling.id,
+                house.under
+            );
+            assert!(
+                !house.considered_and_rejected.trim().is_empty(),
+                "ruling {:?} is a house choice that rejects nothing; the refutation is the half \
+                 of a record that stops the belief recurring",
+                ruling.id
+            );
+        }
         match ruling.status.as_str() {
+            // A house choice is the one `decided` shape with no governing
+            // clause. Everything else must name one.
+            "decided" if ruling.house_choice.is_some() => {}
             "decided" => {
                 let governing = ruling.governing.as_deref().unwrap_or_else(|| {
                     panic!(
-                        "ruling {:?} is decided but names no governing clause",
+                        "ruling {:?} is decided but names neither a governing clause nor a \
+                         house choice",
                         ruling.id
                     )
                 });

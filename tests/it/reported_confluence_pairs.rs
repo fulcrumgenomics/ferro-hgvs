@@ -391,15 +391,31 @@ fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
     // a `dup` where `general.md:56` ranks a substitution above it. That is a
     // README rule-2 preference miss, disclosed in the PR trailer, pinned in
     // `reported_partition_verdicts.rs` (`1420-v2/span` -> `Gap`, the pair ->
-    // `NeitherReaches`, `OPEN_GAPS` 12 -> 13) and filed as issue #1878. Closing
-    // #1878 should move the span back onto `MERGED_ACROSS_UNCHANGED` below —
-    // which is why that string stays named here rather than being deleted.
+    // `NeitherReaches`, `OPEN_GAPS` 12 -> 13) and filed as issue #1878.
+    //
+    // WHAT THE DISPOSITION OF #1878 IS, THIS FILE DOES NOT SAY. An earlier
+    // revision of this comment and of the assertion message below told a future
+    // maintainer what to do when the span reaches the merged form again — re-pin
+    // the verdicts, lower `OPEN_GAPS`, delete the assertion — as though that
+    // outcome were already agreed. It is not. Prescribing the reversal of a
+    // decision nobody has taken is the same failure as restating a rule in a
+    // second place: the next agent follows the instruction and the decision gets
+    // made by whoever wrote the comment.
+    //
+    // The relevant rule is recorded, and is the record to read rather than this
+    // comment: `rulings[unchanged-is-read-over-every-minimal-alignment]` settles
+    // what "unchanged" means for `general.md:34`'s separation test, and
+    // explicitly leaves unmeasured which blocks it moves. Whether #1878 and
+    // #1904 should change what these spellings normalize to is the operator's
+    // call, and until it is made the assertions below stay as they are and this
+    // string stays named rather than deleted.
     const SPAN: &str = "TEMPLATE:g.38_41delinsATTG";
     const CIS: &str = "TEMPLATE:g.[37dup;41del]";
     const CIS_OUTPUT: &str = "TEMPLATE:g.[37dup;41del]";
     const CIS_OUTPUT_FIVE_PRIME: &str = "TEMPLATE:g.[36dup;41del]";
-    // The form #1420 asks for, and the form a merge across the unchanged 39
-    // would produce. Not currently reached by either spelling; see #1878.
+    // The form #1420 asks for, and the form a merge across the unchanged
+    // nucleotides would produce. Not currently reached by either spelling; see
+    // #1878 and #1904.
     const MERGED_ACROSS_UNCHANGED: &str = "TEMPLATE:g.[38T>A;40_41delinsTG]";
 
     for direction in DIRECTIONS {
@@ -426,10 +442,13 @@ fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
         assert_ne!(
             span, MERGED_ACROSS_UNCHANGED,
             "{direction:?}: the `1420-v2` span spelling now reaches #1420's \
-             wanted form again. If that is issue #1878 being fixed, this is the \
-             good news — re-pin `1420-v2/span` to `Canonical`, the pair to \
-             `OneReaches`, and `OPEN_GAPS` back to 12, and delete this \
-             assertion in the same change",
+             wanted form again. That is a REPRESENTATION CHANGE on a row this \
+             family pins, not a result this assertion has pre-approved: the \
+             disposition of #1878 / #1904 is undecided, and \
+             `rulings[unchanged-is-read-over-every-minimal-alignment]` leaves \
+             the affected set unmeasured. Say which change produced it and put \
+             the disposition to the operator; do not re-pin the verdicts and \
+             delete this assertion on the strength of the string alone",
         );
     }
 }

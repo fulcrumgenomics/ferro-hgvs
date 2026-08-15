@@ -45,6 +45,7 @@ mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;
 mod stranded_identity_member;
 
+mod adjudication_prose_regrowth;
 mod allele_grammar_corners;
 mod allele_trans_phase;
 mod allele_unknown_phase;

@@ -439,14 +439,39 @@ fn render_record(record: &Record) -> String {
         );
     }
 
+    // A house choice and an open question both reach the loop below with no
+    // governing clause, and the reason differs completely — one has chosen and
+    // has no clause to choose *under*, the other has a clause and has not
+    // chosen. The published note must not tell the reader the wrong one, so the
+    // house-choice case is stated here and the empty-governing note is suppressed
+    // for it.
+    let empty_governing_note = match &record.house_choice {
+        Some(choice) => {
+            let _ = writeln!(
+                out,
+                "**House choice.** This ruling is the project's own, made under {} where the \
+                 recommendations do not decide. It cites no governing clause and must never be \
+                 quoted as conformance.\n",
+                choice.under.label()
+            );
+            let _ = writeln!(
+                out,
+                "**Considered and rejected.** {}\n",
+                collapse(&choice.considered_and_rejected)
+            );
+            None
+        }
+        None => Some(
+            "**Governing clause.** None. An open record names a conflict without choosing a \
+             side, and the generator refuses to build one that names an authority.",
+        ),
+    };
+
     for (role, heading, empty_note) in [
         (
             Role::Governing,
             "**Governing clause.**",
-            Some(
-                "**Governing clause.** None. An open record names a conflict without choosing a \
-                 side, and the generator refuses to build one that names an authority.",
-            ),
+            empty_governing_note,
         ),
         (Role::DeviatesFrom, "**Deviates from.**", None),
         (Role::Cited, "**Also cited.**", None),

@@ -568,6 +568,9 @@ fn record(
         question: format!("A synthetic record for {id}."),
         equivalence_classes: Vec::new(),
         guard: rulings::Guard::Declined("a synthetic record, enforced by this file".to_string()),
+        // Not a house choice: every case here names a governing clause, which is
+        // the shape a house choice may not take.
+        house_choice: None,
         rationale: rationale.to_string(),
         applies_to: applies_to.iter().map(|s| s.to_string()).collect(),
         citations: clauses
