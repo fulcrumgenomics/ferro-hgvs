@@ -70,7 +70,7 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use crate::error::FerroError;
-use crate::hgvs::location::{AminoAcid, CdsPos, ProtPos, TxPos};
+use crate::hgvs::location::{AminoAcid, CdsPos, ProtPos, TxPos, CDS_BASE_UNKNOWN};
 use crate::reference::transcript::{IntronPosition, Strand, Transcript};
 
 /// Maps coordinates between different systems for a transcript
@@ -97,16 +97,98 @@ impl<'a> CoordinateMapper<'a> {
     /// transcript-coordinate gap in the genome alignment (#1619).
     ///
     /// One input where this is **not** interchangeable with the normalizer's
-    /// own sequence-frame copy (`Normalizer::cds_to_tx_pos`): `c.0`, which is
-    /// not a valid HGVS position but is reachable (`CDS_BASE_UNKNOWN` is `0`,
-    /// and cis-collapse can build a `base == 0` anchor). It falls into the
-    /// `base < 1` branch here and answers `cds_start`, where the normalizer
-    /// continues the formula and answers `cds_start - 1`. Which is right needs
-    /// its own ruling; see #1772. A `c.-N` further upstream than the transcript
-    /// is long diverges too: this method returns a `TxPos` with a *negative*
-    /// `base` (which [`Self::fold_non_intronic_utr_offset`] relies on), where
-    /// the normalizer's copy errors.
+    /// own sequence-frame copy (`Normalizer::cds_to_tx_pos`): a `c.-N` further
+    /// upstream than the transcript is long. This method returns a `TxPos` with
+    /// a *negative* `base` (which [`Self::fold_non_intronic_utr_offset`] relies
+    /// on), where the normalizer's copy errors.
+    ///
+    /// `c.0` used to be a second such input, and is the divergence #1772 was
+    /// opened on: it fell into the `base < 1` branch and answered `cds_start`,
+    /// where the normalizer continued the formula and answered `cds_start - 1`.
+    /// It no longer reaches that branch. `CDS_BASE_UNKNOWN` is the integer `0`,
+    /// so a `base == 0` anchor — whether the `c.?` sentinel, a `*0`, a
+    /// terminus marker, or one cis-collapse built — is refused outright by the
+    /// no-base guard below rather than computed on. #1772's question is
+    /// therefore moot *here*; it is still live for the normalizer's own copy.
+    ///
+    /// # Errors
+    ///
+    /// Beyond a transcript with no CDS, this declines two kinds of input that
+    /// are not coordinates at all rather than computing on them:
+    ///
+    /// - a base of `0`, which names no nucleotide on this 1-based axis. That
+    ///   integer is shared by three distinct shapes — the `c.?` unknown
+    ///   sentinel, a `c.*0` in the 3'UTR zone, and a `pter`/`qter`/`cen`
+    ///   terminus marker — and all three are refused, together with a marker
+    ///   carrying any base at all;
+    /// - a base whose conversion **overflows** `i64`, which is #1690.
     pub fn cds_to_tx(&self, pos: &CdsPos) -> Result<TxPos, FerroError> {
+        // A CDS base of 0 names no nucleotide. `background/numbering.md:31`
+        // states it inside the definition of the `c.` axis itself, immediately
+        // after the `-1` and `*1` lines: "there is no nucleotide `c.0`". That
+        // is an existence claim, so there is no transcript position to answer
+        // with, and the doctrine is already written on the sibling predicate
+        // `CdsPos::has_unknown_offset` for an unknown *offset*: the sentinel is
+        // not a distance, and "no coordinate can be derived from them at all".
+        //
+        // The `*` zone is settled by the line above it, `:30`: nucleotides 3'
+        // of the stop "are marked with a `*` (asterisk) and numbered `c.*1`,
+        // `c.*2`, `c.*3`, etc., going further downstream". The enumeration
+        // starts at `*1`, so `*0` is outside it — and the coordinate it was
+        // being answered with, `cds_end`, is the last CDS base, which already
+        // has a plain `c.` spelling.
+        //
+        // **Keyed on `base == 0`, not on `is_unknown()`, and that is the whole
+        // point of this guard.** `is_unknown()` is
+        // `base == CDS_BASE_UNKNOWN && !utr3 && special.is_none()`, so it
+        // recognises only ONE of the three shapes that carry the integer 0, and
+        // the two it misses are the more reachable ones:
+        //
+        //   c.?              base 0, utr3=false, special=None   is_unknown
+        //   c.*0             base 0, utr3=TRUE                  NOT is_unknown
+        //   c.pter/qter/cen  base 0, special=Some               NOT is_unknown
+        //
+        // Measured on `NM_TEST.1` (cds_start 6, cds_end 35) before this widened:
+        // `c.*0` answered tx 35, which is `c.30`'s own answer, and each of
+        // `c.pter`, `c.qter` and `c.cen` answered tx 6, which is `c.1`'s. That
+        // collapse survives to the entry point: through `hgvs_to_spdi` on
+        // `JsonProvider::with_test_data`, `c.pterdel`, `c.qterdel`, `c.cendel`
+        // and `c.1del` all produced the bit-identical triple
+        // `NM_001234.1:4:A:`. `pter` and `qter` are opposite ends of a
+        // chromosome, so answering them the same coordinate — and the same
+        // coordinate as an ordinary `c.1` — is not a near miss.
+        //
+        // This is also what `Normalizer::cds_to_tx_pos` already says it does
+        // (#1799, `src/normalize/mod.rs`): "Base 0 names no nucleotide whatever
+        // put it there, so one predicate covers both", citing this method as
+        // the mapper side of the same seam. Until now that citation was false.
+        //
+        // A terminus marker is refused on its SHAPE as well as on its base. It
+        // is a genomic landmark, not a displacement from the CDS start, so no
+        // `c.` arithmetic applies to it whatever integer accompanies it — the
+        // constructors all set 0 today, and keying on the shape too means a
+        // later one that does not cannot silently re-open this. The markers are
+        // resolved, where they can be resolved at all, by
+        // `project_cds_terminus_to_parent` against a named genomic parent,
+        // which is a different frame from this one.
+        if pos.base == CDS_BASE_UNKNOWN || pos.special.is_some() {
+            // The rendering usually does NOT read `c.0`, and the message says
+            // so rather than asserting a spelling the reader cannot see:
+            // `CDS_BASE_UNKNOWN` *is* 0, so the unknown sentinel prints `c.?`,
+            // a marker prints as the marker, and only `c.*0` prints its zero.
+            let shape = if pos.special.is_some() {
+                "it is a telomere/centromere marker, which names a genomic landmark rather than \
+                 a position on this transcript's CDS axis"
+            } else if pos.utr3 {
+                "the 3'UTR zone is numbered from `*1`, so `*0` names no nucleotide"
+            } else {
+                "the CDS base is unknown"
+            };
+            return Err(FerroError::ConversionError {
+                msg: format!("cannot resolve c.{pos} to a transcript position: {shape}"),
+            });
+        }
+
         let cds_start = self
             .transcript
             .cds_start
@@ -121,17 +203,37 @@ impl<'a> CoordinateMapper<'a> {
                 msg: "Transcript has no CDS end".to_string(),
             })?;
 
+        // Every branch below adds an unbounded `i64` (nothing bounds a parsed
+        // `c.` coordinate — `parse_hgvs` holds no provider) to a transcript
+        // coordinate, so every branch can overflow. Refusing is the answer
+        // #1658 already took at the three sibling sites in `normalize/merge.rs`:
+        // a coordinate that cannot be represented is not one this transcript
+        // has, and a wrapped one is worse than an error because release builds
+        // then compute against a negative position in silence.
+        let overflowed = || FerroError::ConversionError {
+            msg: format!(
+                "cannot resolve c.{pos} to a transcript position on {}: the coordinate is out \
+                 of range",
+                self.transcript.id
+            ),
+        };
+        let cds_start = i64::try_from(cds_start).map_err(|_| overflowed())?;
+        let cds_end = i64::try_from(cds_end).map_err(|_| overflowed())?;
+
         let tx_base = if pos.utr3 {
             // 3' UTR: *N = cds_end + N
-            cds_end as i64 + pos.base
+            cds_end.checked_add(pos.base)
         } else if pos.base < 1 {
             // 5' UTR: -N = cds_start - N (N is positive in HGVS, stored negative),
             // e.g. c.-3 is 3 bases before the CDS start.
-            cds_start as i64 + pos.base
+            cds_start.checked_add(pos.base)
         } else {
             // Normal CDS position: c.1 = cds_start, c.2 = cds_start + 1, …
-            cds_start as i64 + pos.base - 1
-        };
+            cds_start
+                .checked_add(pos.base)
+                .and_then(|b| b.checked_sub(1))
+        }
+        .ok_or_else(overflowed)?;
 
         // `downstream: false` is a decision, not a default. `CdsPos.utr3`
         // (`c.*N`) is the 3'UTR of a *coding* transcript, which lies **inside**
@@ -258,13 +360,29 @@ impl<'a> CoordinateMapper<'a> {
     }
 
     /// Get the amino acid at a protein position (if sequence is available)
+    ///
+    /// Returns `None` whenever no codon can be read — including when the
+    /// transcript's own CDS metadata does not name one. `Transcript` stores
+    /// `cds_start` exactly as its provider supplied it and validates nothing
+    /// (`validate.rs`'s CDS check is out-of-band and report-only), so `0` is
+    /// representable, and `0` is a 1-based coordinate naming no transcript
+    /// base. `Transcript::utr5_length` defends the same field the same way.
     fn get_amino_acid_at(&self, position: u64) -> Option<AminoAcid> {
         let cds_start = self.transcript.cds_start?;
         let cds_end = self.transcript.cds_end?;
 
-        // Get codon start position (0-based in sequence)
-        let codon_start = cds_start as usize - 1 + (position as usize - 1) * 3;
-        let codon_end = codon_start + 3;
+        // Get codon start position (0-based in sequence).
+        //
+        // Both subtrahends are 1-based, so `0` is not an off-by-one to absorb
+        // on either — it names no base and no residue, and there is nothing to
+        // read. Unchecked, this panicked in *both* profiles and the release
+        // failure moved: debug aborted here on `attempt to subtract with
+        // overflow`, while release wrapped to `usize::MAX` and aborted on the
+        // slice below, reporting a string index instead of the bad metadata.
+        let cds_start_0based = cds_start.checked_sub(1)?;
+        let codon_offset = position.checked_sub(1)?.checked_mul(3)?;
+        let codon_start = usize::try_from(cds_start_0based.checked_add(codon_offset)?).ok()?;
+        let codon_end = codon_start.checked_add(3)?;
 
         // Need cached transcript bases to translate; coordinate-only
         // transcripts return `None`.
@@ -673,6 +791,7 @@ pub struct GenomicLocation {
 mod tests {
     use super::*;
     use crate::data::CigarOp;
+    use crate::hgvs::location::SpecialPosition;
     use crate::reference::transcript::{Exon, ManeStatus, Strand};
     use std::sync::OnceLock;
 
@@ -1503,11 +1622,13 @@ mod tests {
     /// unknown-position sentinel, not an arithmetic edge of the UTR check.
     /// It must still decline to fold, and doing so also happens to pin
     /// `pos.base < 0` against a `<= 0` mutant, since 0 is where the two
-    /// diverge. Base 0 is the interesting input precisely because the two
-    /// functions disagree about it: this gate classifies 5'UTR as
-    /// `pos.base < 0`, while `cds_to_tx` (above) uses `pos.base < 1`,
-    /// so base 0 is 5'UTR to `cds_to_tx` but not to this gate — that
-    /// divergence is the whole reason this test exists.
+    /// diverge. Base 0 is the interesting input because this gate and
+    /// `cds_to_tx` reach the same verdict by different routes: this gate
+    /// classifies 5'UTR as `pos.base < 0`, so base 0 is simply not a UTR
+    /// position to it, while `cds_to_tx` refuses base 0 outright as a value
+    /// that names no nucleotide. Neither computes on it, and this test pins
+    /// that the gate declines on its own terms rather than by borrowing
+    /// `cds_to_tx`'s refusal.
     #[test]
     fn fold_offset_declines_unknown_position() {
         let tx = make_test_transcript();
@@ -1520,46 +1641,321 @@ mod tests {
         // `false || (0 < 0)` = `false` for base 0 (`CDS_BASE_UNKNOWN`), so
         // `fold_non_intronic_utr_offset` returns `None` right there and the
         // `c.?` sentinel never reaches the conversion at all.
-        // (`cds_to_tx`'s own handling of this sentinel — it coerces rather
-        // than declines — is pinned separately by
-        // `cds_to_tx_coerces_the_unknown_sentinel` below.)
+        // (`cds_to_tx`'s own refusal of this sentinel is pinned separately by
+        // `cds_to_tx_refuses_an_unknown_position` below.)
         assert!(mapper.fold_non_intronic_utr_offset(&pos).is_none());
     }
 
-    /// `cds_to_tx` does not honour the `c.?` sentinel the way
-    /// `merge::simple_cds_pos` (in `src/normalize/merge.rs`) and
-    /// `VariantProjector::project_to_genomic` (in `src/project/projector.rs`)
-    /// do — both decline it explicitly. Here it silently coerces
-    /// `CdsPos::unknown(Some(5))` (base `CDS_BASE_UNKNOWN` = 0) into
-    /// `TxPos { base: 6, offset: Some(5) }`, bit-identical to what `c.1+5`
-    /// produces (`cds_start` is 6 on `make_test_transcript`).
+    // -----------------------------------------------------------------------
+    // Unvalidated CDS metadata, and coordinates that do not name a base.
+    //
+    // Everything below guards arithmetic that this file used to perform on a
+    // value it had not established was a coordinate at all. The three shapes
+    // are independent and each reaches a different expression, so they are
+    // pinned separately rather than folded into one table-driven test.
+    // -----------------------------------------------------------------------
+
+    /// A transcript whose `cds_start` is `0` — the value `Transcript` accepts
+    /// and never validates.
     ///
-    /// The quirk is not contained by those declining callers:
-    /// `spdi::convert::resolve_cds_to_tx` (in `src/spdi/convert.rs`) guards
-    /// only `is_intronic()`, which is `false` for `c.?` (offset is `None`),
-    /// so the sentinel passes straight through and is emitted as a concrete
-    /// SPDI position for what is, by definition, an unknown coordinate.
-    /// This pins today's behaviour, not a requirement — if `cds_to_tx`
-    /// later grows an `is_unknown()` guard and declines this input, update
-    /// this assertion to match; do not revert the guard to keep it green.
+    /// `Transcript::new` takes `cds_start: Option<u64>` verbatim, and nothing on
+    /// the construction path rejects `0`: `validate.rs`'s CDS check is
+    /// out-of-band and report-only, so a provider serving corrupt or truncated
+    /// CDS metadata reaches the mapper with it. `Transcript::utr5_length`
+    /// already defends the same field with `saturating_sub(1)`, which is the
+    /// in-tree precedent that `0` is representable here rather than a shape
+    /// only a test can build.
+    ///
+    /// `0` is not merely out of range: `cds_start` is a **1-based** transcript
+    /// coordinate, so `0` names no base of the transcript at all.
+    fn make_zero_cds_start_transcript() -> Transcript {
+        Transcript {
+            cds_start_incomplete: false,
+            id: "NM_ZEROCDS.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("ATGCCCAAAGGGTTTAGG".to_string()),
+            cds_start: Some(0),
+            cds_end: Some(18),
+            exons: vec![Exon::new(1, 1, 18)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        }
+    }
+
+    /// `get_amino_acid_at` computed its codon offset as
+    /// `cds_start as usize - 1 + (position as usize - 1) * 3`, subtracting from
+    /// an unvalidated `cds_start` in `usize`, where subtraction below zero is
+    /// not representable.
+    ///
+    /// It panics in **both** build profiles, which is why this test is worth
+    /// running under `--release` as well: debug aborts on the subtraction
+    /// itself (`attempt to subtract with overflow`), and release wraps it to
+    /// `usize::MAX` and aborts three lines later on the slice
+    /// (`start byte index 18446744073709551615 is out of bounds`). The release
+    /// failure is the worse of the two because it moves — the reported location
+    /// is the string index, which names neither the bad input nor the
+    /// subtraction that produced it.
+    ///
+    /// Reached through the ordinary public path `cds_to_protein`, which is what
+    /// `python.rs`'s `c_to_p` calls.
     #[test]
-    fn cds_to_tx_coerces_the_unknown_sentinel() {
+    fn cds_to_protein_declines_a_zero_cds_start_instead_of_underflowing() {
+        let tx = make_zero_cds_start_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        // The protein *number* is arithmetic on the `c.` position alone and is
+        // still derivable, so the conversion succeeds. What must not happen is
+        // that resolving its residue underflows: with no usable `cds_start`
+        // there is no codon to read, which is the `None` this method already
+        // returns for a coordinate-only transcript.
+        let prot = mapper
+            .cds_to_protein(&CdsPos::new(1))
+            .expect("the protein number does not depend on cds_start being usable");
+        assert_eq!(prot.number, 1);
+        assert_eq!(
+            prot.aa,
+            AminoAcid::Xaa,
+            "a cds_start of 0 names no transcript base, so no residue is resolvable",
+        );
+    }
+
+    /// The same guard on the second subtrahend. `position` is a 1-based protein
+    /// number, so `0` names no residue; it is private and today unreachable
+    /// from `cds_to_protein` (which refuses `base < 1` first), and it is pinned
+    /// anyway because the two subtractions are one expression and a caller
+    /// added later would not know that.
+    #[test]
+    fn a_zero_protein_number_resolves_no_residue() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        assert_eq!(mapper.get_amino_acid_at(0), None);
+        // The neighbouring live value still resolves, so the guard is not just
+        // returning `None` for everything: `NM_TEST.1` has cds_start = 6 and
+        // sequence `AAAAATGCCC…`, so codon 1 is `TGC`.
+        assert_eq!(mapper.get_amino_acid_at(1), Some(AminoAcid::Cys));
+    }
+
+    /// `c.?` declares the position unknown, so no transcript coordinate can be
+    /// derived from it. `cds_to_tx` answered `Ok(cds_start)` — `c.1`'s own
+    /// coordinate — because `CDS_BASE_UNKNOWN` is the integer `0`, and `0` took
+    /// the `base < 1` 5'UTR branch with a zero displacement.
+    ///
+    /// The doctrine is already written in this tree, twice over. On the sibling
+    /// predicate `CdsPos::has_unknown_offset` (`src/hgvs/location.rs`), for an
+    /// unknown *offset*: "no coordinate can be derived from them at all", and
+    /// "callers doing coordinate arithmetic MUST check this first". And at two
+    /// sites in `src/project/projector.rs`, which reject `is_unknown()` before
+    /// calling down here precisely because — in that code's own words —
+    /// "`base <= 0` would misclassify it as 5'UTR and return `Ok`". That is
+    /// this defect, described by its callers; the guard belongs at the site
+    /// they were working around.
+    #[test]
+    fn cds_to_tx_refuses_an_unknown_position() {
         let tx = make_test_transcript();
         let mapper = CoordinateMapper::new(&tx);
 
-        let pos = CdsPos::unknown(Some(5));
+        assert!(
+            mapper.cds_to_tx(&CdsPos::unknown(None)).is_err(),
+            "c.? must not be answered with c.1's transcript coordinate",
+        );
+        // An offset does not make the base known: `c.?+5` is still anchored on
+        // a position that names nothing.
+        assert!(mapper.cds_to_tx(&CdsPos::unknown(Some(5))).is_err());
+    }
 
-        let result = mapper
-            .cds_to_tx(&pos)
-            .expect("cds_to_tx coerces the c.? sentinel rather than declining it");
-        assert_eq!(
-            result,
-            TxPos {
-                base: 6,
-                offset: Some(5),
-                downstream: false,
-            },
-            "cds_to_tx coerces the c.? sentinel rather than declining it (today's observed behaviour, not a requirement)"
+    /// The neighbours on both sides of the refused value still convert, so the
+    /// guard is `base == 0` and not a widened 5'UTR refusal. `NM_TEST.1` has
+    /// cds_start = 6.
+    #[test]
+    fn cds_to_tx_still_answers_the_positions_either_side_of_the_sentinel() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        assert_eq!(mapper.cds_to_tx(&CdsPos::new(1)).unwrap().base, 6);
+        assert_eq!(mapper.cds_to_tx(&CdsPos::new(-1)).unwrap().base, 5);
+        assert_eq!(mapper.cds_to_tx(&CdsPos::utr3(1)).unwrap().base, 36);
+    }
+
+    /// #1690: `cds_to_tx`'s addition is unchecked, so a `c.` coordinate near
+    /// `i64::MAX` panics with `attempt to add with overflow` instead of being
+    /// refused — in debug, and wrapping to a nonsense negative coordinate in
+    /// release.
+    ///
+    /// This is the same defect class as the two above and lives in the same
+    /// expression, so it is guarded here rather than left behind. The issue's
+    /// own reproducer is three tests in
+    /// `tests/it/issue_1487_canonical_window_overflow.rs`, which reach it
+    /// through `hgvs_to_spdi` under `FERRO_ASSERT_SEQUENCE=1`; the unit test
+    /// below pins the refusal unconditionally, in every profile and with no
+    /// oracle armed.
+    ///
+    /// Note the issue names `cds_to_tx_exon_aware` at `mapper.rs:113`. That
+    /// function no longer exists — #1735 deleted the exon walk from this axis —
+    /// and the overflow moved to the flat conversion that replaced it, which
+    /// the recorded panic locates at `mapper.rs:114`.
+    #[test]
+    fn cds_to_tx_refuses_an_extreme_coordinate_instead_of_overflowing() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        // The CDS body and the 3'UTR both add a positive base to a positive
+        // transcript coordinate, so both overflow at the top of the range.
+        assert!(mapper.cds_to_tx(&CdsPos::new(i64::MAX)).is_err());
+        assert!(mapper.cds_to_tx(&CdsPos::utr3(i64::MAX)).is_err());
+
+        // The 5'UTR branch is the one that CANNOT overflow, and saying so is
+        // worth more than a third assertion: `cds_start` is a non-negative
+        // `i64` and the branch is taken only for `base < 1`, so the sum lies in
+        // `i64::MIN..=cds_start` by construction. `c.-9223372036854775808`
+        // therefore converts, to a coordinate no transcript has — which is the
+        // callers' question, and they already ask it
+        // (`noncoding_from_coding` refuses `n.` below 1, `resolve_cds_to_tx`
+        // bounds both endpoints against the transcript length). The
+        // `checked_add` on that branch is kept for symmetry and is deliberately
+        // not claimed as tested.
+        assert!(mapper.cds_to_tx(&CdsPos::new(i64::MIN)).unwrap().base < 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // The other two shapes that carry CDS base 0.
+    //
+    // `is_unknown()` is `base == 0 && !utr3 && special.is_none()`, so a guard
+    // written on it recognises exactly one of the three shapes that carry the
+    // integer `0`. Each of the two it misses gets its own test, so a future
+    // regression names WHICH arm re-opened rather than reporting "the base-0
+    // guard broke".
+    //
+    // Each asserts the COLLAPSE, not merely that some error occurs: it pairs
+    // the no-base input with the ordinary coordinate that used to receive the
+    // same answer, and requires the two to be told apart. A test that only
+    // asserted `is_err()` would pass against a guard that had accidentally
+    // widened to refuse the ordinary neighbour too.
+    // -----------------------------------------------------------------------
+
+    /// `c.*0` (base `0`, `utr3 = true`).
+    ///
+    /// `is_unknown()` is false for it — the `utr3` conjunct fails — so it took
+    /// the 3'UTR arm with a zero displacement and came back as `cds_end`, which
+    /// is the transcript coordinate of the LAST CDS BASE. On `NM_TEST.1`
+    /// (cds_start 6, cds_end 35) that made `c.*0` and `c.30` both answer tx 35.
+    ///
+    /// The `*` zone is numbered from `*1`: `background/numbering.md:30` gives
+    /// the nucleotides 3' of the stop codon as "numbered `c.*1`, `c.*2`,
+    /// `c.*3`, etc., going further downstream", and `:31` adds "there is no
+    /// nucleotide `c.0`". So `*0` is outside the enumeration, and answering it
+    /// with a nucleotide that already has a plain `c.` spelling is worse than
+    /// refusing.
+    ///
+    /// Reachable only by a **Rust** caller constructing a `CdsPos` — the fields
+    /// are `pub`. Not from a string: `parse_hgvs` refuses `c.*0del` outright
+    /// (measured: `Failed to parse variant … code: Verify`). And not from the
+    /// Python bindings either, which is a change of reach that arrived with the
+    /// rebase rather than with this guard: #1741 (`b3568679`, on `main` but not
+    /// on this branch's original base) added `reject_zero_base`, and `c_to_g`,
+    /// `c_to_p`, `c_to_n` and `n_to_c` all call it before converting. `c_to_n`
+    /// passes its own `utr3` through and `reject_zero_base` keys on the base
+    /// alone, so `c_to_n(tx, 0, utr3=True)` — this shape — is refused at the
+    /// boundary. Do not restate the older "Rust API and the Python
+    /// `c_to_n`/`c_to_g` entry points" reach for any base-0 shape; it was true
+    /// when written and #1741 closed the Python half.
+    #[test]
+    fn cds_to_tx_refuses_a_zero_three_prime_utr_position() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let star_zero = CdsPos {
+            base: 0,
+            offset: None,
+            utr3: true,
+            special: None,
+        };
+        assert!(
+            !star_zero.is_unknown(),
+            "the shape under test is precisely the one `is_unknown()` does not see",
+        );
+
+        // The collapse: `c.30` is a real coordinate and must keep its answer,
+        // and `c.*0` must no longer be given the same one.
+        let last_cds_base = mapper
+            .cds_to_tx(&CdsPos::new(30))
+            .expect("c.30 is the last CDS base and must still convert");
+        assert_eq!(last_cds_base.base, 35);
+        assert!(
+            mapper.cds_to_tx(&star_zero).is_err(),
+            "c.*0 names no nucleotide and must not be answered with c.30's \
+             transcript coordinate ({})",
+            last_cds_base.base,
+        );
+
+        // The refusal is about the zero, not about the 3'UTR zone: `c.*1`, the
+        // first nucleotide the zone actually numbers, still converts.
+        assert_eq!(mapper.cds_to_tx(&CdsPos::utr3(1)).unwrap().base, 36);
+    }
+
+    /// `c.pter` / `c.qter` / `c.cen` (base `0`, `special = Some(..)`).
+    ///
+    /// `is_unknown()` is false for these — the `special.is_none()` conjunct
+    /// fails — so they took the `base < 1` 5'UTR arm with a zero displacement
+    /// and came back as `cds_start`, which is `c.1`'s own answer. On
+    /// `NM_TEST.1` all three markers and `c.1` answered tx 6.
+    ///
+    /// `pter` and `qter` are opposite ends of a chromosome, so the defect is
+    /// not a near miss in either direction: the two markers agreed with each
+    /// other as well as with an ordinary coding position. End to end through
+    /// `hgvs_to_spdi` the three descriptions `c.pterdel`, `c.qterdel` and
+    /// `c.1del` produced one bit-identical SPDI triple; that half is pinned in
+    /// `tests/it/issue_1487_canonical_window_overflow.rs`, since it needs a
+    /// provider.
+    ///
+    /// A marker is a *genomic* landmark. Where it can be resolved at all it is
+    /// resolved by `project_cds_terminus_to_parent` against a named genomic
+    /// parent, which declines outright without one — so a marker arriving here,
+    /// on the transcript's own flat axis, has no coordinate to be given.
+    #[test]
+    fn cds_to_tx_refuses_a_terminus_marker() {
+        let tx = make_test_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let cds_first_base = mapper
+            .cds_to_tx(&CdsPos::new(1))
+            .expect("c.1 must still convert");
+        assert_eq!(cds_first_base.base, 6);
+
+        for marker in [CdsPos::pter(), CdsPos::qter(), CdsPos::cen()] {
+            assert!(
+                !marker.is_unknown(),
+                "c.{marker} is precisely a shape `is_unknown()` does not see",
+            );
+            assert!(
+                mapper.cds_to_tx(&marker).is_err(),
+                "c.{marker} names no position on this transcript's CDS axis and \
+                 must not be answered with c.1's transcript coordinate ({})",
+                cds_first_base.base,
+            );
+        }
+
+        // The marker is refused on its shape, not only on its base, so a
+        // marker carrying some other integer cannot slip past. The public
+        // constructors all set `0` today; keying on the shape as well means a
+        // later one that does not cannot silently re-open this.
+        let marker_with_a_base = CdsPos {
+            base: 7,
+            offset: None,
+            utr3: false,
+            special: Some(SpecialPosition::Qter),
+        };
+        assert!(
+            mapper.cds_to_tx(&marker_with_a_base).is_err(),
+            "a terminus marker is not a displacement from the CDS start, whatever \
+             base accompanies it",
         );
     }
 }

@@ -88,6 +88,7 @@
 
 use crate::common::synthetic::SyntheticBuilder;
 use ferro_hgvs::parse_hgvs;
+use ferro_hgvs::spdi::hgvs_to_spdi;
 use ferro_hgvs::JsonProvider;
 use ferro_hgvs::Normalizer;
 
@@ -290,48 +291,67 @@ fn the_parser_is_what_keeps_an_insertion_anchor_off_i64_max() {
 }
 
 // ---------------------------------------------------------------------------
-// A FOURTH site, on a different entry point, and NOT closed by this change.
+// The FOURTH site (#1690), on a different entry point — now closed.
 //
-// `convert::mapper::CoordinateMapper::cds_to_tx` resolves a `c.` position with
-// an unchecked add on each of its three arms — `cds_end as i64 + pos.base` for
-// `*N`, `cds_start as i64 + pos.base` for `-N`, and `cds_start as i64 +
-// pos.base - 1` for a plain CDS position — and an extreme `c.` coordinate
-// reaches it through `hgvs_to_spdi` rather than through normalization, so
-// nothing on the derivation path this module is about stands in front of it.
+// `convert::mapper::CoordinateMapper::cds_to_tx` resolved a `c.` position with
+// an unchecked add on each arm — `cds_end + pos.base` for `*N`, `cds_start +
+// pos.base` for `-N`, and `cds_start + pos.base - 1` for a plain CDS position —
+// and an extreme `c.` coordinate reaches it through `hgvs_to_spdi` rather than
+// through normalization, so nothing on the derivation path this module is about
+// stood in front of it.
 //
-// **The name here is the only thing this branch moved.** The site used to be
-// spelled `cds_to_tx_exon_aware`, a private helper `cds_to_tx` delegated to;
-// #1619 deleted it and inlined the flat arithmetic, so the same three
-// additions now sit directly in `cds_to_tx`. The defect is unchanged — do not
-// read the rename as a fix, and do not grep for the old name and conclude the
-// site is gone.
+// **Two renames precede the fix and neither was one.** The site was originally
+// spelled `cds_to_tx_exon_aware`, a private helper `cds_to_tx` delegated to
+// (which is the name #1690 records, at `mapper.rs:113`); #1619 deleted it and
+// inlined the flat arithmetic, moving the same additions into `cds_to_tx` at
+// `mapper.rs:114`. Do not read either move as a fix, and do not grep for the
+// old name and conclude the site is gone.
 //
-// Measured, not inferred, and re-measured on this branch. Of the four
-// seam-oracle flags only `FERRO_ASSERT_SEQUENCE=1` converts the output, and
-// under it exactly THREE of the four tests above that carry an extreme
-// coordinate into `normalize` panic with `attempt to add with overflow`:
+// It is closed by refusal, not by saturation: the two arms that can overflow
+// are `checked_add` and return a `ConversionError`, matching what this module's
+// own fix did at the three sites in `normalize/merge.rs`. The 5'UTR arm cannot
+// overflow at all — `cds_start` is non-negative and that arm is taken only for
+// `base < 1` — and `convert::mapper`'s unit tests state that rather than
+// claiming a third assertion.
+//
+// Measured, not inferred. Of the four seam-oracle flags only
+// `FERRO_ASSERT_SEQUENCE=1` converts the output, and under it exactly THREE of
+// the four tests above that carry an extreme coordinate into `normalize`
+// panicked with `attempt to add with overflow`:
 //
 //   an_extreme_coordinate_is_refused_instead_of_panicking
 //   two_adjacent_members_at_the_top_of_the_range_are_refused_instead_of_panicking
 //   a_lone_member_at_an_extreme_coordinate_is_refused_instead_of_panicking
 //
-// The other three flags are green. `a_narrow_span_at_an_extreme_position_…`
-// does NOT panic here — its coordinates sit at `…700`/`…702`, so `+ cds_start
-// - 1` fits — and naming it would overstate the coverage. The same three fail
-// on `origin/main` at `1ea75334` (`src/convert/mapper.rs:113`, inside the old
-// helper) and on this branch (`src/convert/mapper.rs:114`, inside `cds_to_tx`),
-// so the set is identical either side and only the line moved. This paragraph
-// previously said "exactly the four", which was already wrong before #1619;
-// the count is stated here so the next re-measurement has something to check
-// against.
+// The other three flags were green. `a_narrow_span_at_an_extreme_position_…`
+// did NOT panic — its coordinates sit at `…700`/`…702`, so `+ cds_start - 1`
+// fits — and naming it would overstate the coverage. The same three failed on
+// `origin/main` at `1ea75334` and on the flat-frame branch, so the set was
+// identical either side and only the line moved. All three are green now.
 //
-// CI's `test-oracle` job does not set that flag (`sweeps` and the nightly do,
-// over selections that exclude this module), which is why the gate is green
-// and why the site would otherwise stay invisible.
-//
-// Left to a separate change on purpose: a different module, a different entry
-// point, and a refusal there is a behaviour question for the conversion API
-// rather than for this derivation. Recorded here with its reproducer so the
-// next person does not re-derive it — which is the failure the `crosses_exon_
-// junction` comment's own "tracked separately" caused the first time.
+// **Those three are not the regression guard, and that is the point of the
+// test below.** CI's `test-oracle` job does not set `FERRO_ASSERT_SEQUENCE`
+// (`sweeps` and the nightly do, over selections that exclude this module), so
+// the site would go back to being invisible to the required checks the moment
+// the refusal is removed. The guard has to be a test that runs unarmed.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn an_extreme_coordinate_is_refused_by_the_conversion_layer_too() {
+    // The `hgvs_to_spdi` entry point, with no oracle armed and in every build
+    // profile: debug used to panic on the addition, release used to wrap it to
+    // a negative transcript coordinate and carry on.
+    let parsed = parse_hgvs(EXTREME_LONE_MEMBER).expect("the description parses");
+    let outcome = hgvs_to_spdi(&parsed, &JsonProvider::with_test_data());
+    assert!(
+        outcome.is_err(),
+        "c.{} names no base of NM_001234.1 and must be refused, not wrapped: {outcome:?}",
+        i64::MAX,
+    );
+
+    // The refusal is about the magnitude, not about the entry point: an
+    // ordinary coordinate on the same reference still converts.
+    let ordinary = parse_hgvs("NM_001234.1:c.4del").expect("the description parses");
+    hgvs_to_spdi(&ordinary, &JsonProvider::with_test_data())
+        .expect("an ordinary coding position must still convert");
+}
