@@ -246,8 +246,11 @@ fn main() {
         let distance = match catch_unwind(AssertUnwindSafe(|| {
             dev_partitioners::edit_distance(reference, alt)
         })) {
-            Ok(distance) => distance.to_string(),
-            Err(_) => "-".to_string(),
+            Ok(Some(distance)) => distance.to_string(),
+            // A refusal (the pair is past `MAX_ALIGNMENT_SPAN`) and a panic both
+            // mean "no distance to report", and the column already spells that
+            // `-`.
+            Ok(None) | Err(_) => "-".to_string(),
         };
 
         writeln!(

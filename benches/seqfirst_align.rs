@@ -103,30 +103,64 @@ fn diverge_subs(reference: &[u8], k: usize, seed: u64) -> Vec<u8> {
 /// generators so their timings are comparable, and it is the shape the
 /// `unchanged-is-read-over-every-minimal-alignment` ruling governs.
 fn diverge_indels(reference: &[u8], k: usize, seed: u64) -> Vec<u8> {
-    if reference.is_empty() || k < 2 {
+    // `pairs` is clamped so `stride >= 2`, which is what keeps the deletion site
+    // (`offset == 0`) and the insertion site (`offset == stride / 2`) distinct.
+    let pairs = (k / 2).min(reference.len().saturating_sub(2) / 2);
+    if pairs == 0 {
         return reference.to_vec();
     }
     let mut state = seed | 1;
-    let pairs = k / 2;
-    // Delete at `pairs` sites and insert at `pairs` others, walking left to
-    // right so the result stays the same length.
-    let mut out = Vec::with_capacity(reference.len());
     let stride = reference.len() / (pairs + 1);
+    let insert_offset = stride / 2;
+
+    // Delete at `pairs` sites and insert at `pairs` others, half a stride apart,
+    // walking left to right so the result stays the same length.
+    let mut out = Vec::with_capacity(reference.len());
+    let (mut deleted, mut inserted) = (0usize, 0usize);
     for (i, &b) in reference.iter().enumerate() {
-        let slot = i / stride.max(1);
-        if slot < pairs && i % stride.max(1) == 0 {
-            // Insert a base that differs from the one it precedes, then skip a
-            // base — one insertion and one deletion, `stride` apart.
-            out.push(b"ACGT"[(next(&mut state) as usize) % 4]);
+        let (slot, offset) = (i / stride, i % stride);
+        if slot < pairs && offset == 0 {
+            // Deletion: consume the reference base and emit nothing.
+            deleted += 1;
             continue;
+        }
+        if slot < pairs && offset == insert_offset {
+            // Insertion: emit an extra base before this one.
+            out.push(b"ACGT"[(next(&mut state) as usize) % 4]);
+            inserted += 1;
         }
         out.push(b);
     }
-    out.truncate(reference.len());
-    while out.len() < reference.len() {
-        out.push(b'A');
-    }
+
+    // Asserted rather than trusted, and asserted with `assert!` rather than
+    // `debug_assert!`: `[profile.bench]` inherits `release`, so a `debug_assert`
+    // here would never run in the profile the benchmark is measured in. This
+    // runs once per generator call, outside `b.iter()`.
+    //
+    // The predecessor of this function pushed a random base *instead of* the
+    // reference base and `continue`d, so it emitted exactly one byte per input
+    // byte — a substitution, not an indel pair — and `edit == hamming` at every
+    // `k`. Nothing said so; the vestigial `truncate`/pad tail that could never
+    // fire was the only trace. See #1970.
+    assert_eq!(
+        deleted, inserted,
+        "each deletion must be paired with an insertion"
+    );
+    assert_eq!(
+        out.len(),
+        reference.len(),
+        "the pairs must net to zero length change"
+    );
     out
+}
+
+/// Positions at which two equal-length blocks differ.
+///
+/// Only meaningful beside an edit distance: `edit < hamming` is what says an
+/// optimal path leaves the main diagonal, which is the property the indel arm
+/// exists to exercise.
+fn hamming(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).filter(|(x, y)| x != y).count()
 }
 
 /// Cost against **block length, with `k` held constant** — the shape a real
@@ -147,7 +181,8 @@ fn bench_by_length_fixed_k(c: &mut Criterion) {
                 &len,
                 |b, _| {
                     b.iter(|| {
-                        let dag = AlignmentDag::build(black_box(&reference), black_box(&alt));
+                        let dag = AlignmentDag::build(black_box(&reference), black_box(&alt))
+                            .expect("benchmark blocks are far below MAX_ALIGNMENT_SPAN");
                         black_box(dag.edit_distance())
                     })
                 },
@@ -171,7 +206,8 @@ fn bench_by_divergence(c: &mut Criterion) {
         group.throughput(Throughput::Elements((len * len) as u64));
         group.bench_with_input(BenchmarkId::from_parameter(format!("k{k}")), &k, |b, _| {
             b.iter(|| {
-                let dag = AlignmentDag::build(black_box(&reference), black_box(&alt));
+                let dag = AlignmentDag::build(black_box(&reference), black_box(&alt))
+                    .expect("benchmark blocks are far below MAX_ALIGNMENT_SPAN");
                 black_box(dag.edit_distance())
             })
         });
@@ -193,13 +229,38 @@ fn bench_indel_vs_substitution(c: &mut Criterion) {
             ("sub", diverge_subs(&reference, k, 7)),
             ("indel", diverge_indels(&reference, k, 7)),
         ] {
+            // The group's whole premise, checked rather than assumed, once per
+            // arm and outside the timing loop. A substitution-only alternate has
+            // `edit == hamming`, because the all-substitution diagonal is
+            // already minimal; an indel-bearing one is strictly cheaper to align
+            // than to overwrite, which is the same as saying some optimal path
+            // leaves the diagonal. That is the property this arm is *for*, and
+            // it is the assertion that would have caught the generator emitting
+            // substitutions (#1970).
+            let distance = AlignmentDag::build(&reference, &alt)
+                .expect("benchmark blocks are far below MAX_ALIGNMENT_SPAN")
+                .edit_distance() as usize;
+            let differing = hamming(&reference, &alt);
+            match kind {
+                "sub" => assert_eq!(
+                    distance, differing,
+                    "k{k}_sub: substitution-only divergence must stay on the diagonal"
+                ),
+                _ => assert!(
+                    distance < differing,
+                    "k{k}_indel: an indel arm must be cheaper than {differing} substitutions, \
+                     got {distance} — the generator is emitting substitutions"
+                ),
+            }
+
             group.throughput(Throughput::Elements((len * len) as u64));
             group.bench_with_input(
                 BenchmarkId::from_parameter(format!("k{k}_{kind}")),
                 &k,
                 |b, _| {
                     b.iter(|| {
-                        let dag = AlignmentDag::build(black_box(&reference), black_box(&alt));
+                        let dag = AlignmentDag::build(black_box(&reference), black_box(&alt))
+                            .expect("benchmark blocks are far below MAX_ALIGNMENT_SPAN");
                         black_box(dag.edit_distance())
                     })
                 },
