@@ -1,20 +1,31 @@
 //! Sizing the sequence-first DP.
 //!
-//! `AlignmentDag::build` **allocates** `O(n*m)` and, since the band landed,
-//! **fills** only `O((n+m)*k)`. Criterion has no memory axis, so this measures
-//! wall-clock time only, and the block-size cap in the migration is chosen on
-//! time evidence.
+//! `AlignmentDag::build` **fills** `O((n+m)*k)` since the band landed (#1928),
+//! and since #1988 **allocates** `O((n+m)*k)` too. Criterion has no memory axis,
+//! so this measures wall-clock time only, and the block-size cap in the
+//! migration is chosen on time evidence.
 //!
 //! The memory dimension is **not** measured here; the figures are on #1928, and
 //! note they moved when the cost grid narrowed to `u16`: **14.60 bytes per grid
 //! cell, 215.4 MB** at the widest accepted block (`W = 3840`), down from 18.67
 //! and 275.4 MB. This header carried the older pair until the banding change.
+//! **Both figures predate #1988** — they are per *full-grid* cell — and neither
+//! has been retaken for **this benchmark's shape**, the widest accepted block at
+//! `W = 3840`. Do not read the narrowed allocation as a measured RSS figure for
+//! it.
 //!
-//! Because the allocation is unnarrowed while the fill is narrowed, a timing
-//! here is partly an allocator measurement: at `n = 4096` the banded arm runs at
-//! roughly memory bandwidth, and two groups that compute the *same* thing can
-//! differ several-fold purely on whether a large arena has already been faulted
-//! in. Compare each group against its own baseline, never across groups.
+//! #1988 *did* measure peak RSS, but at `n = m = 4096, k = 2` and on 16 kB pages
+//! only, where it read **101.8 MiB -> 5.73 MiB**. That is a different shape and
+//! one page size, so it does not transfer here in either direction. The figure
+//! lives on `AlignmentDag::build` in `src/normalize/seqfirst/align.rs`, together
+//! with the limits that qualify it, and that is where to read it.
+//!
+//! While the allocation was unnarrowed and the fill was not, a timing here was
+//! partly an allocator measurement: at `n = 4096` the banded arm ran at roughly
+//! memory bandwidth, and two groups that compute the *same* thing differed
+//! **5.8x** purely on whether a large arena had already been faulted in.
+//! Narrowing the storage removes the cause, not the discipline: compare each
+//! group against its own baseline, never across groups.
 //!
 //! # Divergence is an AXIS, not a constant (#1928)
 //!

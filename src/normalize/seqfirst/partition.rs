@@ -252,11 +252,14 @@ const RUN_OPEN: usize = 1;
 ///
 /// # Cost
 ///
-/// One reverse topological sweep plus one forward walk, both `Θ(n·m)` — the same
-/// order as [`AlignmentDag::build`] and [`AlignmentDag::dominators`]. The cost of
-/// a *path* is the number of maximal change runs on it, not its edge count, so
-/// the sweep carries the two-valued run state described above rather than a
-/// plain per-cell distance.
+/// One reverse topological sweep plus one forward walk, both `Θ((n + m) · k)`
+/// for `k` the edit distance — the same order as [`AlignmentDag::build`] and
+/// [`AlignmentDag::dominators`], since #1988 in space as well as time: the
+/// `to_go` planes are addressed through the DAG's own
+/// [`BandLayout`](super::align::BandLayout) rather than sized to the full grid.
+/// The cost of a *path* is the number of maximal change
+/// runs on it, not its edge count, so the sweep carries the two-valued run state
+/// described above rather than a plain per-cell distance.
 ///
 /// # The tie-break is an implementer's choice
 ///
@@ -293,9 +296,12 @@ impl CanonicalAlignment {
     pub(crate) fn of(dag: &AlignmentDag) -> Self {
         let ref_len = dag.ref_len();
         let alt_len = dag.alt_len();
-        let width = alt_len as usize + 1;
-        let size = (ref_len as usize + 1) * width;
-        let index = |i: u32, j: u32| i as usize * width + j as usize;
+        // Band-major, like every other plane over these cells (#1988): the only
+        // cells indexed below come from `cells()` or from an out-edge of one, and
+        // both are in-band by construction.
+        let band = dag.band();
+        let size = band.len();
+        let index = |i: u32, j: u32| band.index(i as usize, j as usize);
         let sink = (ref_len, alt_len);
 
         // `to_go[state * size + cell]` is the fewest additional members any
