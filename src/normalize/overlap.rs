@@ -1333,16 +1333,34 @@ mod tests {
     }
 
     #[test]
-    fn duplication_and_insertion_at_one_junction_emit_one_warning() {
-        // Mixed spellings compete for the same slot too, and the warning must
-        // name each member by its own kind rather than labelling both `ins`.
+    fn duplication_and_insertion_at_one_junction_do_not_conflict() {
+        // They share a write junction but not a claimed base — an insertion is
+        // interbase and consumes none — and `DNA/duplication.md:90` publishes
+        // exactly this pair, ordering it in prose ("a duplication ... followed
+        // by the insertion of the sequence GTAAA"). So the slot is shared and
+        // the order is given, which is not a collision.
+        //
+        // This asserted one warning until that ruling. The `dup`-labelling
+        // contract it also carried is not lost: it moves to a group that still
+        // conflicts, in `tests/it/issue_1276_dup_junction_overlap.rs`.
         let (variants, phase) = parse_allele("NM_TEST.1:c.[5_6dup;6_7insA]");
-        let warnings = detect_insertion_overlaps(&variants, phase);
-        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
-        let NormalizationWarning::OverlapConflict { edit_kinds, .. } = &warnings[0] else {
-            panic!("expected OverlapConflict, got {:?}", warnings[0]);
-        };
-        assert_eq!(edit_kinds, &vec!["dup".to_string(), "ins".to_string()]);
+        assert!(
+            detect_insertion_overlaps(&variants, phase).is_empty(),
+            "a dup and an insertion at one junction compose"
+        );
+    }
+
+    #[test]
+    fn two_insertions_at_one_junction_still_conflict() {
+        // The narrowing above is per kind, not a blanket exemption: two
+        // insertions at one junction both write at the same interbase point and
+        // nothing orders them, so this must stay a conflict.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[6_7insA;6_7insG]");
+        assert_eq!(
+            detect_insertion_overlaps(&variants, phase).len(),
+            1,
+            "two insertions at one junction have no defined order"
+        );
     }
 
     #[test]
@@ -1546,8 +1564,8 @@ mod tests {
         ),
         (
             "NC_TEST.1:g.[10_11A[3];11_12insT]",
-            true,
-            "both write at junction 11",
+            false,
+            "both write at junction 11, and duplication.md:90 orders that pair",
         ),
         (
             "NC_TEST.1:g.[10_11A[3];10_11dup]",
