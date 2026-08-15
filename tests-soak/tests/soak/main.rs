@@ -97,6 +97,9 @@ mod failure_expectations;
 #[path = "../../../tests/it/common/fixture_gen.rs"]
 mod fixture_gen;
 #[allow(dead_code)]
+#[path = "../../../tests/it/common/hg38_window.rs"]
+mod hg38_window;
+#[allow(dead_code)]
 #[path = "../../../tests/it/common/manifest.rs"]
 mod manifest;
 #[allow(dead_code)]
@@ -117,7 +120,7 @@ mod synthetic;
 /// directory instead of two.
 mod common {
     pub(crate) use super::{
-        bulk_fixtures, cis_apply_oracle, failure_expectations, fixture_gen, manifest,
+        bulk_fixtures, cis_apply_oracle, failure_expectations, fixture_gen, hg38_window, manifest,
         minimal_alignment, spec_fixture, synthetic,
     };
 }
@@ -128,6 +131,8 @@ mod common {
 // ---------------------------------------------------------------------------
 
 // `soak` — `-E 'test(proptest)'`, eight shards of 125,000 cases each.
+#[path = "../../../tests/it/adjacency_confluence_proptest.rs"]
+mod adjacency_confluence_proptest;
 #[path = "../../../tests/it/cis_allele_confluence_proptest.rs"]
 mod cis_allele_confluence_proptest;
 #[path = "../../../tests/it/from_sequences_proptest.rs"]
