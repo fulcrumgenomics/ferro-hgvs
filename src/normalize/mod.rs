@@ -30,6 +30,7 @@ pub mod config;
 pub(crate) mod footprint;
 pub(crate) mod merge;
 mod overlap;
+pub(crate) mod render;
 pub mod rules;
 // `pub` only under the `dev` feature (test/bench builds), so the
 // `seqfirst_align` criterion benchmark — an external crate — can reach
@@ -5208,6 +5209,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
             .iter()
             .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
         let emitted_verbatim = normalized == allele.variants;
+
+        // Choose how the settled member set is *spelled*, now that no stage after
+        // this one has to compute on the result (#1946). A strict no-op today; the
+        // seam is landed on its own so its placement is reviewable apart from any
+        // behaviour. Both bounds are forced — after `detect_overlap_conflicts`
+        // because a split member's pieces share a junction and would otherwise read
+        // as a conflict, before `sort_cis_members_by_genomic_order` because those
+        // pieces must be ordered — and it sits after `emitted_verbatim` so a
+        // presentational re-spelling cannot flip a claim about the *derivation*.
+        // See `render::render_canonical_spelling` for the full argument and for the
+        // invariant it preserves, which is apply-equality and not member-count
+        // stability.
+        crate::normalize::render::render_canonical_spelling(&mut normalized, &self.provider);
+
         if is_cis
             && !allele.uncertain
             && !(has_overlap_conflict && emitted_verbatim)
