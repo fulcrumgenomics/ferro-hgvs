@@ -1574,4 +1574,51 @@ mod tests {
              the `r.` member is what selects `AlphabetMode::Rna`"
         );
     }
+    /// The flush rule is geometric, not kind-specific: an insertion at the 5'
+    /// edge of a **deletion** or an **inversion** composes as cleanly as the one
+    /// against a substitution pinned in `issue_1831_applier_member_order`, because the edit 3' of the junction is
+    /// applied first and the zero-width insertion then lands exactly at the
+    /// span's start rather than inside it.
+    ///
+    /// Bases 11-13 of the fixture are `CAT`. `g.11_13del` removes them, so the
+    /// window `CAT` becomes just the inserted `AC`; `g.11_13inv` reverses `CAT`
+    /// to `ATG`, so the window becomes `AC` + `ATG`. Both spellings of each
+    /// allele give one sequence — the tie-break sorts by deletion width, not
+    /// input order — so this asserts every member ordering, the property that
+    /// would regress first if the sort key changed.
+    #[test]
+    fn an_insertion_flush_against_a_deletion_or_inversion_applies() {
+        for (descriptor, resulting) in [
+            ("NC_KEY.1:g.[10_11insAC;11_13del]", "AC"),
+            ("NC_KEY.1:g.[11_13del;10_11insAC]", "AC"),
+            ("NC_KEY.1:g.[10_11insAC;11_13inv]", "ACATG"),
+            ("NC_KEY.1:g.[11_13inv;10_11insAC]", "ACATG"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let applied = apply_to_reference(&variant, &provider())
+                .unwrap_or_else(|e| panic!("`{descriptor}` must apply: {e}"));
+            assert_eq!(applied.start, 10, "0-based interbase start of base 11");
+            assert_eq!(applied.reference, "CAT", "bases 11-13 of the fixture");
+            assert_eq!(
+                applied.resulting, resulting,
+                "`{descriptor}`: the insertion lands 5' of the span, which then \
+                 rewrites its own bases"
+            );
+        }
+    }
+
+    /// The interior rule holds for an inversion just as it does for a deletion:
+    /// an insertion whose junction falls *inside* the reversed span has no
+    /// defined position and is declined.
+    ///
+    /// `g.11_12insAC` sits at the junction 11|12, interior to `g.10_13inv`
+    /// (bases 10-13), so the pair denotes no single sequence.
+    #[test]
+    fn an_insertion_interior_to_an_inversion_declines() {
+        let variant = parse_hgvs("NC_KEY.1:g.[10_13inv;11_12insAC]").expect("must parse");
+        assert!(
+            apply_to_reference(&variant, &provider()).is_err(),
+            "an insertion interior to an inversion has no single resulting sequence"
+        );
+    }
 }
