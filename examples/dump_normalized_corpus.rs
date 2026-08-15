@@ -84,14 +84,47 @@
 //!    brings its own designed references because a random core cannot be asked to
 //!    have a coincidence pattern.
 //!
-//!    **Two corpus totals appear in this file and both are correct — do not
-//!    "reconcile" them.** `78,028` is the corpus *before* `separated_revcomp_runs`
-//!    existed, which is the only denominator a measurement taken before that
-//!    family was added can honestly carry; `78,298` is the corpus now, and
-//!    `78,298 - 78,028 = 270` is exactly that family's row count. They differ by a
-//!    digit transposition as well as by 270, which is a coincidence and has
-//!    already been read once as a typo in one of them. When you quote a figure,
-//!    quote the denominator it was measured against.
+//!    **Several corpus totals appear in this file and every one of them is
+//!    correct — do not "reconcile" them.** Each is the corpus as it stood when
+//!    some measurement was taken, so each is anchored to what changed it:
+//!
+//!    - `78,028` — before `separated_revcomp_runs` existed, and the only
+//!      denominator a measurement taken before that family was added can honestly
+//!      carry;
+//!    - `78,298` — after it, and `78,298 - 78,028 = 270` is exactly that family's
+//!      row count. The two differ by a digit transposition as well as by 270,
+//!      which is a coincidence and has already been read once as a typo in one of
+//!      them;
+//!    - `85,642` — after #1606 added the protein axis. It is the denominator of
+//!      item 6 below, and stays attached to that measurement;
+//!    - `86,398` — after #1752 added `repeat_beside_a_sibling` (756 rows, in two
+//!      steps: 378 when the family landed, 378 more when it was made to emit
+//!      shrinking repeats as well as growing ones, which is why `86,020` appears
+//!      in that PR's own disclosure as a superseded figure).
+//!
+//!    When you quote a figure, quote the denominator it was measured against.
+//!
+//!    **This list is a history, not a census, and deliberately does not say which
+//!    entry is current** — the current total is whatever the generator prints
+//!    today, and asking the file is the wrong way to find out:
+//!
+//!    ```text
+//!    cargo run --release --features dev --example dump_normalized_corpus -- --out /tmp/now.tsv
+//!    ```
+//!
+//!    That framing is the #1947 correction, and it is the second one this
+//!    paragraph has needed. It first said there were exactly **two** totals while
+//!    item 6 eight lines below already quoted the third — the more misleading
+//!    half of that error, since a reader who trusts an explicit "there are
+//!    exactly two, here they are" has no reason to look for a third. Corrected to
+//!    three, it was stale again **the next day**, when #1752 added a family: the
+//!    entry marked "the corpus **now**" had stopped being now, and nothing about
+//!    it said so. Counting the entries and naming a current one are both claims
+//!    that go stale on a change that has no reason to touch this comment, which
+//!    is the same defect as the family counts below — except that a corpus total
+//!    cannot be derived at compile time, so the fix here is to stop making the
+//!    claim rather than to import it. The *method* this paragraph states was
+//!    right throughout; its own bookkeeping is what kept drifting.
 //!
 //! 6. **…and only on the molecule types it builds** (#1606). Every family above is
 //!    spelled from nucleotides, so until the protein axis was added this corpus
@@ -102,7 +135,7 @@
 //!    place the same change measures **1,584 of 85,642 rows, all in
 //!    `protein_equal_length_delins` and none anywhere else**.
 //!
-//!    Note what the four instances have in common and why the list keeps growing:
+//!    Note what these instances have in common and why the list keeps growing:
 //!    fixing one blindness does not reveal the next. Geometry (#1456) was only
 //!    findable once the conflict families existed, scale (#1460) once geometry was
 //!    fixed, transcript geometry (#1478) once scale was — and molecule type was
@@ -110,10 +143,21 @@
 //!    covered. `compare` names the families it covered (#1459), which catches a
 //!    missing *family*; it cannot tell you the axis you never built.
 //!
+//!    **That chain is illustrative, not an inventory, and this comment states no
+//!    count of it on purpose.** It said "the four instances" until #1947, by which
+//!    time there were at least six — sequence structure (#1517) and reversed
+//!    ranges (#1917) are both missing from the chain above, and #1752 added a
+//!    seventh from inside this very file, its `repeat_beside_a_sibling` family
+//!    having first shipped able to build only *growing* repeats. A count of
+//!    blindnesses is itself a number that goes stale every time the thing it
+//!    counts happens, which is the failure this whole section is about. The
+//!    maintained list is `CLAUDE.md`'s, under "Assert the property. Measure the
+//!    count. Never let a count BE the property".
+//!
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never
-//! whether an output is *right*. Thirteen of the fifteen families cannot be asked:
+//! whether an output is *right*. Fifteen of the seventeen families cannot be asked:
 //! they are sets of descriptions with no record of what the description was meant
 //! to denote. `separated_revcomp_runs` is built the other way round, choosing the
 //! alternate first and deriving the reference around it, so `(reference,
@@ -305,7 +349,7 @@ enum SpdiVerdict {
 /// one panicking row must not take the whole dump with it.
 ///
 /// The provider is built from [`Row::core`] and **not** from `Row::reference`
-/// (#1624). Those two are the same string for thirteen of the fifteen families,
+/// (#1624). Those two are the same string for fifteen of the seventeen families,
 /// which is what made reading the wrong one survive review: the two families
 /// whose `reference` column is a *label* — `long_block_inversion` and
 /// `separated_revcomp_runs` — were verified against the label itself. On the
@@ -475,7 +519,7 @@ fn report_partition_declines() {
 /// re-running the old code.
 struct Row {
     /// The dump's `reference` column, and part of the row's identity. For
-    /// thirteen of the fifteen families this **is** the reference sequence; for
+    /// fifteen of the seventeen families this **is** the reference sequence; for
     /// the two that bring their own designed references it is a label, because a
     /// kilobase core repeated on every row is not a column anyone can read.
     reference: String,
@@ -648,7 +692,7 @@ const PROTEIN_FAMILIES: &[(&str, &str)] = &[
 /// The family drawn against the **long** cores, and the one shape in this file
 /// whose point is its size rather than its geometry (#1460).
 ///
-/// Kept out of `FAMILIES` on purpose. The nine families there are crossed with
+/// Kept out of `FAMILIES` on purpose. The fifteen families there are crossed with
 /// every short core, and crossing a kilobase core with all of them would multiply
 /// the dump cost while adding no coverage: `MAX_SPLIT_BLOCK` gates on the *length*
 /// of the block being partitioned, not on how its members are arranged.
@@ -2115,7 +2159,7 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A row of one of the thirteen sequence-keyed families, where the
+    /// A row of one of the fifteen sequence-keyed families, where the
     /// `reference` column and the sequence are the same string.
     fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
         Row {
@@ -2213,7 +2257,7 @@ mod tests {
     /// Every row carries the reference **sequence** it was drawn against, which
     /// for two families is not what its `reference` column says (#1624).
     ///
-    /// The two views agree on thirteen of the fifteen families, and that is
+    /// The two views agree on fifteen of the seventeen families, and that is
     /// precisely what made the verify pass's confusion of them survive review —
     /// a bug that only manifests on `long_block_inversion` and
     /// `separated_revcomp_runs` is a bug in 286 rows out of 78,298. So this pins
@@ -3362,7 +3406,7 @@ mod tests {
     //
     // Everything above measures *movement*: two dumps, one diff, "did this change
     // the output". Nothing above ever asks whether an output is **right**, and for
-    // thirteen of the fifteen families it cannot — they are sets of descriptions,
+    // fifteen of the seventeen families it cannot — they are sets of descriptions,
     // with no record of what the description was meant to denote.
     //
     // `separated_revcomp_runs` is built the other way round: the generator picks
@@ -4416,5 +4460,243 @@ mod tests {
             report.contains("**moved** | **0 (0.0%)**"),
             "a dump compared with itself must report zero movement:\n{report}"
         );
+    }
+
+    /// English for the family counts this file quotes. Deliberately narrow: a
+    /// count outside the range is a signal that the corpus grew past what the
+    /// prose was written for, so failing loudly beats rendering a digit.
+    fn number_word(n: usize) -> String {
+        const WORDS: &[&str] = &[
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        ];
+        WORDS
+            .get(n)
+            .map(|w| (*w).to_string())
+            .unwrap_or_else(|| panic!("no word for {n}; extend WORDS in number_word"))
+    }
+
+    /// Strip Markdown and punctuation so a word inside `**bold**` or before a
+    /// comma still compares equal.
+    fn bare(word: &str) -> String {
+        word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-')
+            .to_ascii_lowercase()
+    }
+
+    /// This file's prose must state the family counts this file actually has.
+    ///
+    /// # Why this is a guard rather than a correction
+    ///
+    /// The header is where a reader decides whether their change is measurable,
+    /// and it drifted (#1947): seven sites gave the sequence-keyed count as 13
+    /// (five of them pairing it with a DNA total of 15), one gave it as 9, while
+    /// `FAMILIES` held 14 and the DNA total was 16. Every one of those numbers
+    /// understated the corpus, which is the direction that makes a reader trust a
+    /// measurement more than they should.
+    ///
+    /// The stale phrasings are given as digits above **on purpose**: the scan
+    /// below reads comment text, so spelling them out here would make this
+    /// comment its own first failure. `claude_md_adjudication_tables` records the
+    /// same hazard and the same answer — keep the prose clear of the pattern
+    /// rather than exempting the file, which would blind the scan to it for good.
+    ///
+    /// Correcting the seven sites fixes today and guarantees a repeat: the counts
+    /// live in a `const` and the prose restates them, which is precisely the
+    /// "a count restated instead of imported" shape `CLAUDE.md` names. So the
+    /// counts are **derived here** — from `FAMILIES.len()`, from
+    /// `PROTEIN_FAMILIES.len()`, and from the singleton `const … _FAMILY`
+    /// declarations counted out of the source — and the prose is asserted against
+    /// them. Adding a family now fails this test with the sites to fix, instead of
+    /// silently making the header wrong again.
+    ///
+    /// Checked against a deliberate sabotage rather than assumed: appending one
+    /// entry to `FAMILIES` turns this red and names every stale site.
+    #[test]
+    fn the_header_states_the_family_counts_this_file_actually_has() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("dump_normalized_corpus.rs");
+        let file = fs::read_to_string(&path).expect("read this generator's own source");
+
+        // Comment lines only. The claims being checked are prose, and the scan
+        // would otherwise read this test's own string literals as stale sites —
+        // it did, on the first draft.
+        let src: String = file
+            .lines()
+            .filter(|line| line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Two families bring their own designed reference and so are keyed by
+        // label rather than by sequence. Counted from the source rather than
+        // written down, so adding a third is not silently missed.
+        let designed_reference = file
+            .lines()
+            .filter(|line| line.starts_with("const ") && line.contains("_FAMILY: (&str, &str)"))
+            .count();
+        assert!(
+            designed_reference >= 2,
+            "expected at least LONG_FAMILY and REVCOMP_FAMILY; found {designed_reference}"
+        );
+
+        let sequence_keyed = number_word(FAMILIES.len());
+        let dna_total = number_word(FAMILIES.len() + designed_reference);
+        let mut wrong: Vec<String> = Vec::new();
+
+        // How many sites each anchor actually reached. Every anchor below is a
+        // `match_indices` loop, so a phrasing that stops appearing does not fail
+        // — the loop body simply never runs, `wrong` stays empty, and the test
+        // passes having verified nothing. Two of the three hang on a **single
+        // sentence each**, and these are 80-column doc comments, so a rewrap is
+        // enough: anchor 1 reads across whitespace from `" of the "`, and a
+        // rewrap that ends a line there makes the next token the `//!` marker,
+        // so the site is skipped in silence.
+        //
+        // That is the exact shape this whole test is about — a check that keys
+        // on a property it never confirms is present — so the counts are
+        // asserted below rather than trusted.
+        let (mut n1, mut n2, mut n3) = (0usize, 0usize, 0usize);
+
+        // First anchor: the two-number form, pairing the sequence-keyed count
+        // with the DNA total.
+        for (at, _) in src.match_indices(" of the ") {
+            let mut after = src[at + " of the ".len()..].split_whitespace();
+            let (Some(total), Some(noun)) = (after.next(), after.next()) else {
+                continue;
+            };
+            if bare(noun) != "families" {
+                continue;
+            }
+            // Counted here rather than at the top of the loop: `" of the "`
+            // occurs throughout this file in ordinary prose, and only the sites
+            // that survive the `families` test are ones this anchor judges.
+            n1 += 1;
+            let part = src[..at].split_whitespace().next_back().unwrap_or("");
+            if bare(part) != sequence_keyed || bare(total) != dna_total {
+                wrong.push(format!(
+                    "  \"{} of the {} families\" — expected \"{sequence_keyed} of the \
+                     {dna_total} families\"",
+                    bare(part),
+                    bare(total)
+                ));
+            }
+        }
+
+        // Second anchor: the form in the LONG_FAMILY note, which counts
+        // `FAMILIES` alone. Phrased here without quoting the pattern, since this
+        // scan reads comment text.
+        for (at, _) in src.match_indices(" families there") {
+            n2 += 1;
+            let word = src[..at].split_whitespace().next_back().unwrap_or("");
+            if bare(word) != sequence_keyed {
+                wrong.push(format!(
+                    "  \"{} families there\" — expected \"{sequence_keyed} families there\"",
+                    bare(word)
+                ));
+            }
+        }
+
+        // Third anchor: the form that qualifies the count as sequence-keyed.
+        for (at, _) in src.match_indices(" sequence-keyed families") {
+            n3 += 1;
+            let word = src[..at].split_whitespace().next_back().unwrap_or("");
+            if bare(word) != sequence_keyed {
+                wrong.push(format!(
+                    "  \"{} sequence-keyed families\" — expected \"{sequence_keyed} \
+                     sequence-keyed families\"",
+                    bare(word)
+                ));
+            }
+        }
+
+        // Asserted BEFORE `wrong`, because an empty `wrong` means two opposite
+        // things and only this tells them apart: every site agreed, or there
+        // were no sites. Non-zero is the minimum that closes the silent-disarm
+        // hole; pinning the exact counts (5/1/1) would additionally catch a new
+        // unguarded restatement being *added*, and is deliberately not done
+        // here — it would fail on every legitimate edit that adds a sentence.
+        assert!(
+            n1 > 0 && n2 > 0 && n3 > 0,
+            "the count-bearing phrasings this guard anchors on are gone \
+             ({n1}/{n2}/{n3} sites) — the prose was reworded and this scan now checks nothing"
+        );
+
+        assert!(
+            wrong.is_empty(),
+            "this file's prose states family counts it does not have.\n\
+             derived: FAMILIES = {} ({sequence_keyed}), designed-reference singletons = {}, \
+             DNA total = {} ({dna_total})\n\
+             anchor sites reached: {n1}/{n2}/{n3}\n\
+             stale sites:\n{}",
+            FAMILIES.len(),
+            designed_reference,
+            FAMILIES.len() + designed_reference,
+            wrong.join("\n")
+        );
+    }
+
+    /// `PROTEIN_FAMILIES` is deliberately **not** anchored, and this records why.
+    ///
+    /// The guard above derives three quantities from `const`s and compares each
+    /// against the prose. `PROTEIN_FAMILIES.len()` used to be derived beside them
+    /// and then interpolated into the failure message only — never compared —
+    /// which reads as a fourth guarded count and is not one. Adding a sixth
+    /// protein family would have moved nothing that test can see.
+    ///
+    /// The reason is that the header states no protein-family count to anchor:
+    /// `PROTEIN_FAMILIES` is described qualitatively (which axes it covers, why
+    /// it is kept out of `FAMILIES`) and never enumerated in words, so there is
+    /// no phrasing to key on and inventing one to guard would be writing the
+    /// claim in order to check it.
+    ///
+    /// So this test asserts the *absence* rather than leaving the gap implicit.
+    /// If someone later writes a protein count into the header, this fails and
+    /// the answer is to add a fourth anchor beside the other three — not to
+    /// delete this.
+    #[test]
+    fn the_header_states_no_protein_family_count_to_anchor() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("dump_normalized_corpus.rs");
+        let file = fs::read_to_string(&path).expect("read this generator's own source");
+        let src: String = file
+            .lines()
+            .filter(|line| line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let stated = number_word(PROTEIN_FAMILIES.len());
+        let phrasings = [
+            format!("{stated} protein families"),
+            format!("{stated} protein shape families"),
+        ];
+        for phrasing in &phrasings {
+            assert!(
+                !src.contains(phrasing.as_str()),
+                "the header now states a protein-family count (\"{phrasing}\"). \
+                 `the_header_states_the_family_counts_this_file_actually_has` does not \
+                 anchor one, so it would go stale unwatched — add a fourth anchor there \
+                 rather than deleting this test."
+            );
+        }
     }
 }
