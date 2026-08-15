@@ -100,6 +100,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves to `insGCGAGGAAA` — the bases `normalize` names — rather than to the transcript-offset
   span 36 bases 5' of it. `n.`/`g.`/`m.`/`o.` payloads are transcript/genomic offsets already and
   are read unshifted.
+- **Exact tandem-repeat insertions are now expanded rather than refused.** An insertion whose bases
+  are named by a spelled unit and an exact copy count — `g.100_101insC[4]`, `g.100_101insCG[3]` —
+  was rejected as "not a literal sequence" whenever a provider-backed path needed its bases. It now
+  expands the unit the named number of times, exactly as the short-form repeat edit does, so
+  `sequence_normalize` re-derives the literal `g.100_101insCCCC` / `g.100_101insCGCGCG` form (the
+  same `MAX_REPEAT_EXPANSION_BASES` cap applies). `delins` with an exact repeat insert is resolved
+  on the same path. Uncertain or range counts (`insC[10_15]`, `insC[?]`) remain undetermined and
+  still decline.
+- **Compound-insert brackets mixing shapes are now resolved rather than refused.** A bracketed
+  insertion whose parts combine a literal with a same-reference coordinate span or an exact tandem
+  repeat — `g.185_201delins[T;213_271]`, `g.100_101ins[C[3];A]`, `g.100_101ins[213_271inv;A]` —
+  was rejected as "Unsupported variant type … cannot apply to reference" whenever a provider-backed
+  path needed its bases, because only single-part brackets were read out. Each part is now resolved
+  through the same leaf that resolves it on its own — a span reads from the reference (and
+  reverse-complements for the `…inv` form), an exact repeat expands its unit — and the parts are
+  concatenated in written order into one contiguous inserted sequence, so a compound insert encodes
+  to SPDI just as a plain literal does. This applies on both the `ins` and `delins` arms. A part
+  whose bases are genuinely undetermined — an uncertain or range repeat count, a CDS position range
+  carrying intronic offsets, or an external reference SPDI cannot dereference — still declines the
+  whole insert.
 
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
