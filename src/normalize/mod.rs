@@ -73,6 +73,14 @@ pub use merge::{partition_decline_counts, PartitionDeclineCounts};
 #[cfg(debug_assertions)]
 pub use merge::partition_blocks_cut;
 
+// The widest changed block `canonicalize_from_sequence` will accept, so a
+// corpus can straddle the gate that actually fires instead of restating a
+// literal beside it. NOT gated on `dev`: the reason this exists is that a guard
+// which repeats the number cannot notice the number moving (#1925), and a
+// constant present in only some builds re-creates that gap for anyone building
+// without the feature. See `merge::MAX_CANONICAL_BLOCK`.
+pub use merge::MAX_CANONICAL_BLOCK;
+
 // The refusal a binary should print and exit on when `FERRO_PARTITION` named an
 // arm this build has not got. A library cannot refuse from
 // `canonicalize_from_sequence` -- it is infallible -- so the refusal is offered
