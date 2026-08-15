@@ -138,6 +138,181 @@ pub(crate) fn render_canonical_spelling<P: ReferenceProvider>(
     let _ = (members, provider);
 }
 
+/// Which of the per-member pipeline's two reference shapes a [`MintReference`]
+/// rebuilds (#1946).
+///
+/// This is what the reference gate keys its comparison on. It is derived from the
+/// member's `CisKind` and from nothing else —
+/// an earlier revision inferred the same distinction from the *contents* of the
+/// rebuilt reference (`complete && offset == 0`), which happened to agree only
+/// because a genomic window's padding is narrower than the transcript-flanking
+/// pad, and would have started disagreeing the moment either constant moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MintFrame {
+    /// `c.`/`r.`/`n.` — the entire transcript, exactly as `normalize_cds`,
+    /// `normalize_rna` and `normalize_tx` serve it. There is no window to choose.
+    WholeTranscript,
+    /// `g.`/`m.` — a window around the member's own span.
+    GenomicWindow,
+}
+
+/// The reference a render-time mint is evaluated against, and the frame its
+/// positions live in (#1946).
+///
+/// `ref_seq` is **not one thing** in the per-member pipeline — it is the entire
+/// spliced transcript on `c.`/`r.`/`n.`, a growing window on `g.`/`m.`, and a
+/// reverse-complemented genomic window on the intronic paths — so a stage that
+/// receives only a settled member list has to rebuild it deliberately rather than
+/// substitute one uniform window. Doing the latter silently truncates tract
+/// discovery near an edge: `insertion_to_repeat` walks outward bounded only by
+/// `ref_seq.len()`.
+#[derive(Debug, Clone)]
+pub struct MintReference {
+    /// Reference bases, **exactly as the pipeline's own fetch produces them**.
+    ///
+    /// Deliberately not case-normalized here: byte-equality with what
+    /// `normalize_na_edit` was handed is the property the gate asserts, so this
+    /// has to inherit each path's own convention rather than impose one.
+    /// `fetch_canonical_window` upper-cases, so [`MintFrame::GenomicWindow`]
+    /// bases are upper-case; a transcript's bases are served verbatim, so
+    /// [`MintFrame::WholeTranscript`] bases are whatever the provider holds.
+    /// (This field's doc claimed "upper-cased" flatly, which was true of neither
+    /// the transcript branch nor of the growth loop it is compared against —
+    /// `normalize_in_grown_window` passes `provider.get_sequence(..).as_bytes()`
+    /// with no case fold at all.)
+    pub bases: Vec<u8>,
+    /// Which shape this is. Ask this, not the flags below, when the question is
+    /// "which pipeline call does this model".
+    pub frame: MintFrame,
+    /// A 1-based **sequence** position `p` indexes `bases[(p - 1 - offset)]`.
+    /// Zero when `bases` starts at the sequence's own first base.
+    pub offset: i64,
+    /// The 5' edge of `bases` is the sequence's own start, so there is nothing
+    /// further 5' for a tract walk to reach.
+    pub at_sequence_start: bool,
+    /// The 3' edge of `bases` is the sequence's own end, so there is nothing
+    /// further 3' for a tract walk to reach.
+    ///
+    /// Separate from [`Self::at_sequence_start`] on purpose: the predicate this
+    /// replaces (`complete`) was set from a 3'-clamped fetch alone and then
+    /// documented as "`bases` is the complete reference", which is a strictly
+    /// stronger claim than the code checked — a window clamped only at the
+    /// contig end reported itself complete while its 5' side sat in the interior.
+    pub at_sequence_end: bool,
+}
+
+impl MintReference {
+    /// Whether `bases` is the entire reference sequence, so no edge can truncate
+    /// a tract walk and there is nothing to grow into on either side.
+    #[must_use]
+    pub fn is_whole_sequence(&self) -> bool {
+        self.at_sequence_start && self.at_sequence_end
+    }
+}
+
+/// Half-width of the first genomic window, matching `NormalizeConfig`'s default.
+pub const MINT_WINDOW: i64 = 100;
+
+/// Rebuild the reference a settled `member`'s mint should be evaluated against.
+///
+/// **Unused by `render_canonical_spelling` on purpose.** This lands with its
+/// equivalence test and nothing else: the gate on relocating the repeat mint is
+/// whether a reference rebuilt here matches what the per-member pipeline was given,
+/// and that question is answered before any mint moves.
+///
+/// Mirrors the existing callers rather than unifying them:
+///
+/// - **`c.`/`r.`/`n.`** — the whole transcript, exactly as `normalize_cds`,
+///   `normalize_rna` and `normalize_tx` pass it. [`MintReference::is_whole_sequence`]
+///   holds, so no growth is possible or needed.
+/// - **`g.`/`m.`** — a window, whose edges are flagged individually. Growth is the
+///   caller's business and is **triggered differently from
+///   `normalize_in_grown_window`**: that loop grows when the *shuffle* runs to an
+///   edge, and at render time there is no shuffle, so a render-time mint must grow
+///   when the *tract walk* reaches one.
+///
+/// # What this does NOT model, and why the gate has to say so
+///
+/// A `c.` member whose span crosses an exon/exon junction, or which sits in an
+/// intron, is **not** normalized against the spliced transcript: `normalize_cds`
+/// hands it to `normalize_boundary_spanning_cds` or `normalize_intronic_cds`, which
+/// fetch a *genomic* window and shuffle there. This function returns the whole
+/// transcript for such a member, because that is what its `CisKind` says — so for
+/// those members it rebuilds a reference the pipeline's junction-crossing call was
+/// never given.
+///
+/// That is a real gap in this function, and the gate reports it as its own
+/// population rather than letting it hide inside a match: see
+/// `the_render_time_reference_matches_what_the_pipeline_was_given`, which selects
+/// the recorded calls by [`NaEditCallSite`](crate::normalize::NaEditCallSite) and
+/// counts members whose depth-0 calls were all at a site this function does not
+/// model. Closing it means minting the same genomic window those two paths build,
+/// and is the next step rather than a widening to do in passing.
+///
+/// # Measured over `dump(1)`
+///
+/// Comparing what this rebuilds against what `normalize_na_edit` was actually
+/// handed (recorded by `normalize::take_na_edit_references`), selecting by call
+/// site — the figures are printed by the gate and are quoted in its doc comment
+/// rather than here, so that one measurement has one home. What is worth stating
+/// on the function is the shape of the answer: the whole-transcript frame is
+/// asserted **byte-identical**, the genomic frame is **reported** and cannot be
+/// byte-equal by construction (the pipeline's window is centred on the *input*
+/// position, and it starts one base 3' of this one — `normalize_in_grown_window`
+/// fetches from `start - w` where this fetches from `start - 1 - w`).
+pub fn mint_reference_for<P: ReferenceProvider>(
+    member: &HgvsVariant,
+    provider: &P,
+    half_width: i64,
+) -> Option<MintReference> {
+    use crate::normalize::merge::{
+        cis_axis_parts, cis_kind_of, fetch_canonical_window, region_sequence_delta, CisKind,
+    };
+
+    let kind = cis_kind_of(member)?;
+    let (accession, region, axis_start, axis_end, _edit) = cis_axis_parts(member, kind)?;
+    let key = accession.transcript_accession();
+
+    // Transcript axes: the reference is served whole, so there is no window to
+    // choose. Keyed on the kind, which is what decides the frame — never on the
+    // shape of what came back.
+    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
+        let transcript = provider.get_transcript_for_variant(member).ok()?;
+        let bases = transcript.sequence.as_deref()?.as_bytes().to_vec();
+        return Some(MintReference {
+            bases,
+            frame: MintFrame::WholeTranscript,
+            offset: 0,
+            at_sequence_start: true,
+            at_sequence_end: true,
+        });
+    }
+
+    // Genomic: a window around the member's own span, in sequence coordinates.
+    let delta = region_sequence_delta(region, &key, provider)?;
+    let (lo, hi) = (
+        axis_start.min(axis_end) + delta,
+        axis_start.max(axis_end) + delta,
+    );
+    let start0 = (lo - 1 - half_width).max(0);
+    let end0 = hi + half_width;
+    if end0 <= start0 {
+        return None;
+    }
+    let bases = fetch_canonical_window(provider, &key, start0, end0)?;
+    // A short read means the fetch ran off the contig, which is the only way to
+    // learn the 3' edge without a second provider round-trip. The 5' edge is
+    // decidable from `start0` alone.
+    let at_sequence_end = (bases.len() as i64) < end0 - start0;
+    Some(MintReference {
+        bases,
+        frame: MintFrame::GenomicWindow,
+        offset: start0,
+        at_sequence_start: start0 == 0,
+        at_sequence_end,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

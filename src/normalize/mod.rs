@@ -31,6 +31,14 @@ pub(crate) mod footprint;
 pub(crate) mod merge;
 mod overlap;
 pub(crate) mod render;
+// The render stage is internal, but `examples/dump_normalized_corpus.rs` is an
+// external crate and the #1946 reference gate lives there, so the three items it
+// needs are re-exported by name. `#[doc(hidden)]`, and *only* these three — the
+// module itself was briefly widened to `pub`, which put `render_canonical_spelling`
+// and the module's own design notes on the public documentation surface for the
+// sake of a test. `src/lib.rs`'s `ShuffleDirection` re-export is the pattern.
+#[doc(hidden)]
+pub use render::{mint_reference_for, MintFrame, MintReference, MINT_WINDOW};
 pub mod rules;
 // `pub` only under the `dev` feature (test/bench builds), so the
 // `seqfirst_align` criterion benchmark — an external crate — can reach
@@ -2122,6 +2130,268 @@ fn denoted_sequence_self_check_enabled() -> bool {
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
     })
+}
+
+// Every `ref_seq` handed to `Normalizer::normalize_na_edit` during one
+// normalization, **attributed to the call that was handed it** (#1946).
+//
+// Test-only, and it exists to answer one question that cannot be answered any
+// other way: does a reference rebuilt from a settled member match the one the
+// per-member pipeline was given? That is the gate on relocating the repeat mint
+// into `render::render_canonical_spelling` -- a stage that receives only the final
+// member list has to reconstruct this, and `ref_seq` is not one thing. It is the
+// whole spliced transcript on c./r./n., a growing window on g./m., and a
+// reverse-complemented genomic window on the intronic paths.
+//
+// **The attribution is the whole point, and a flat list of `(len, digest)` was
+// not enough to be worth having.** One normalization records a reference per
+// member of a cis allele, per growth attempt of the `g.`/`m.` window, per
+// `FERRO_ASSERT_IDEMPOTENT` verification pass, and per recursive re-entry --
+// `normalize_na_edit` calls itself from eight arms, always with the same
+// `ref_seq`, so the list is longer than the number of distinct references by a
+// wide and irregular margin. A gate that asked whether *some* entry matched
+// therefore answered yes for any member on a transcript axis whatever the mint
+// rebuilt, because the whole-transcript entry is always somewhere in the union.
+// Recording the site, the depth and the call id lets the gate ask the question it
+// means: does the mint match the reference **the call it is modelling** was
+// given?
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NaEditCallSite {
+    /// A call made outside any instrumented entry point. Reaching this is a gap
+    /// in the instrumentation rather than a fact about normalization, so the
+    /// gate counts it rather than folding it into a real site.
+    Unattributed,
+    /// `normalize_cds` — the whole spliced transcript, served entire.
+    Cds,
+    /// `normalize_tx` — the whole transcript, served entire.
+    Tx,
+    /// `normalize_rna` — the whole transcript, served entire.
+    Rna,
+    /// `normalize_intronic_cds` / `normalize_intronic_tx` — a genomic window,
+    /// reverse-complemented on the minus strand.
+    Intronic,
+    /// `normalize_boundary_spanning_cds` / `normalize_boundary_spanning_tx` — a
+    /// genomic window around a span that crosses an exon/exon junction, so the
+    /// spliced transcript is the wrong frame to shuffle in.
+    BoundarySpanning,
+    /// `normalize_in_grown_window` — the `g.`/`m.` window, at whatever width the
+    /// growth loop had reached when this attempt ran.
+    GrownWindow,
+    /// `canonicalize_without_shifting` — the fallback the growth loop takes when
+    /// it hits its cap.
+    UnshiftedWindow,
+}
+
+/// One `ref_seq` handed to one [`Normalizer::normalize_na_edit`] call.
+///
+/// `len` and `digest` identify the bytes; the other three identify the call, so
+/// a reader can select the calls it is entitled to compare against instead of
+/// searching the union.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NaEditReference {
+    /// Monotonic within one recording window, in call order.
+    pub call: u32,
+    /// The call this one recursed out of, or `None` at an entry point.
+    pub parent: Option<u32>,
+    /// `0` for a call made directly by an entry point, `n` for the `n`th
+    /// recursive re-entry beneath it.
+    pub depth: u32,
+    /// Which entry point's frame this call is in.
+    pub site: NaEditCallSite,
+    /// `ref_seq.len()`.
+    pub len: usize,
+    /// [`reference_digest`] of `ref_seq`.
+    pub digest: u64,
+}
+
+/// Ceiling on retained entries, so an unarmed-by-accident recording cannot grow
+/// without bound. A single row's normalization records tens of entries; this is
+/// three orders of magnitude above that, and an overrun is reported by
+/// [`na_edit_references_overflowed`] rather than silently truncating a set the
+/// gate then reads as complete.
+#[cfg(debug_assertions)]
+const NA_EDIT_REFERENCE_CAP: usize = 4096;
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static NA_EDIT_REFERENCES: std::cell::RefCell<Vec<NaEditReference>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Off by default, so an ordinary normalization records nothing at all.
+    static NA_EDIT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NA_EDIT_OVERFLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NA_EDIT_SITE: std::cell::Cell<NaEditCallSite> =
+        const { std::cell::Cell::new(NaEditCallSite::Unattributed) };
+    /// Call ids of the frames currently on the stack; its length is the depth
+    /// and its last element is the parent.
+    static NA_EDIT_FRAMES: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static NA_EDIT_NEXT_CALL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// FNV-1a over `bases`. Cheap, and only ever compared against itself.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn reference_digest(bases: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bases {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Arms the recorder for as long as it is held, and clears it on both edges.
+///
+/// Recording is **off** unless a test asks for it: the buffer is a debug-build
+/// diagnostic for one gate, and a normalization that nobody is measuring must not
+/// pay for it or accumulate into it.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+#[must_use = "recording stops when the guard is dropped"]
+pub struct NaEditReferenceRecording {
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(debug_assertions)]
+impl NaEditReferenceRecording {
+    /// Arm the recorder on this thread.
+    pub fn arm() -> Self {
+        reset_na_edit_recorder();
+        NA_EDIT_ARMED.with(|a| a.set(true));
+        Self {
+            _not_send: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for NaEditReferenceRecording {
+    fn drop(&mut self) {
+        NA_EDIT_ARMED.with(|a| a.set(false));
+        reset_na_edit_recorder();
+    }
+}
+
+#[cfg(debug_assertions)]
+fn reset_na_edit_recorder() {
+    NA_EDIT_REFERENCES.with(|r| r.borrow_mut().clear());
+    NA_EDIT_FRAMES.with(|f| f.borrow_mut().clear());
+    NA_EDIT_NEXT_CALL.with(|c| c.set(0));
+    NA_EDIT_OVERFLOWED.with(|o| o.set(false));
+}
+
+/// Clear the recorder and return what it held. Test-only.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn take_na_edit_references() -> Vec<NaEditReference> {
+    NA_EDIT_NEXT_CALL.with(|c| c.set(0));
+    NA_EDIT_REFERENCES.with(|r| r.borrow_mut().drain(..).collect())
+}
+
+/// Whether the recorder hit [`NA_EDIT_REFERENCE_CAP`] since the last take.
+///
+/// A truncated set is indistinguishable from a complete one to a reader that
+/// only sees the vector, and "the entry I was looking for is not here" is exactly
+/// the shape a truncation takes — so the gate asks.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn na_edit_references_overflowed() -> bool {
+    NA_EDIT_OVERFLOWED.with(std::cell::Cell::get)
+}
+
+/// Marks every `normalize_na_edit` call made while it is held as belonging to
+/// `site`. Restores the enclosing site on drop, so a nested entry point (the
+/// boundary-spanning path is reached from `normalize_cds`) does not leak.
+#[must_use = "the site is only marked for as long as the guard is held"]
+pub(crate) struct NaEditSiteGuard {
+    #[cfg(debug_assertions)]
+    previous: NaEditCallSite,
+}
+
+impl NaEditSiteGuard {
+    #[cfg(debug_assertions)]
+    pub(crate) fn enter(site: NaEditCallSite) -> Self {
+        Self {
+            previous: NA_EDIT_SITE.with(|s| s.replace(site)),
+        }
+    }
+
+    /// A zero-sized no-op in release, where the recorder does not exist.
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn enter(_site: NaEditCallSite) -> Self {
+        Self {}
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for NaEditSiteGuard {
+    fn drop(&mut self) {
+        NA_EDIT_SITE.with(|s| s.set(self.previous));
+    }
+}
+
+/// Records `ref_seq` against the call now being entered, and pops that call on
+/// drop. A guard rather than a bare call because `normalize_na_edit` returns from
+/// a dozen places, several of them through `?`.
+#[must_use = "the frame is only open for as long as the guard is held"]
+pub(crate) struct NaEditFrameGuard {
+    #[cfg(debug_assertions)]
+    pushed: bool,
+}
+
+impl NaEditFrameGuard {
+    #[cfg(debug_assertions)]
+    pub(crate) fn enter(ref_seq: &[u8]) -> Self {
+        if !NA_EDIT_ARMED.with(std::cell::Cell::get) {
+            return Self { pushed: false };
+        }
+        let call = NA_EDIT_NEXT_CALL.with(|c| {
+            let next = c.get();
+            c.set(next.saturating_add(1));
+            next
+        });
+        let (parent, depth) = NA_EDIT_FRAMES.with(|f| {
+            let frames = f.borrow();
+            (frames.last().copied(), frames.len() as u32)
+        });
+        let entry = NaEditReference {
+            call,
+            parent,
+            depth,
+            site: NA_EDIT_SITE.with(std::cell::Cell::get),
+            len: ref_seq.len(),
+            digest: reference_digest(ref_seq),
+        };
+        NA_EDIT_REFERENCES.with(|r| {
+            let mut v = r.borrow_mut();
+            if v.len() < NA_EDIT_REFERENCE_CAP {
+                v.push(entry);
+            } else {
+                NA_EDIT_OVERFLOWED.with(|o| o.set(true));
+            }
+        });
+        NA_EDIT_FRAMES.with(|f| f.borrow_mut().push(call));
+        Self { pushed: true }
+    }
+
+    /// A zero-sized no-op in release, where the recorder does not exist.
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn enter(_ref_seq: &[u8]) -> Self {
+        Self {}
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for NaEditFrameGuard {
+    fn drop(&mut self) {
+        if self.pushed {
+            NA_EDIT_FRAMES.with(|f| {
+                f.borrow_mut().pop();
+            });
+        }
+    }
 }
 
 /// Normalizations the denoted-sequence oracle looked at but could not compare.
@@ -5853,6 +6123,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         edit: &NaEdit,
         fetch_end_of: impl Fn(u64) -> u64,
     ) -> Result<Option<WindowedNormalization>, FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed the g./m. window at this attempt's width,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::GrownWindow);
         // A reversed range names a wraparound, and this window is linear
         // (#1917). Refuse it here, where the arithmetic that cannot express it
         // lives, so the caller takes its minimal-notation fallback.
@@ -6015,6 +6288,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end: u64,
         edit: &NaEdit,
     ) -> Result<Option<WindowedNormalization>, FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed the un-grown fallback window,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::UnshiftedWindow);
         // A repeat's canonical form IS an extent claim, so there is no
         // travel-free part of it to salvage: `normalize_repeat` would report the
         // slice's own edges as the tract's. Hand it back untouched.
@@ -6440,6 +6716,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &CdsVariant,
         manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed the whole spliced transcript,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::Cds);
         // #972 Task 5: a transcript whose 5' CDS is annotated incomplete
         // (`cds_start_NF`) has no confirmed ATG, so `c.1` is undefined
         // against it and it is not an HGVS-recommended `c.` reference
@@ -7854,6 +8133,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &TxVariant,
         manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed the whole transcript,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::Tx);
         // Can't normalize variants with unknown edits or positions
         let edit = match variant.loc_edit.edit.inner() {
             Some(e) => e,
@@ -9534,6 +9816,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &crate::hgvs::variant::RnaVariant,
         manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed the whole transcript,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::Rna);
         use crate::hgvs::interval::RnaInterval;
         use crate::hgvs::variant::{LocEdit, RnaVariant};
 
@@ -10681,6 +10966,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end_pos: &CdsPos,
         edit: &NaEdit,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed a genomic window, reverse-complemented on the minus strand,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::Intronic);
         use crate::convert::CoordinateMapper;
 
         // #1012: warn-and-degrade when the reference carries no genomic data.
@@ -10909,6 +11197,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end_pos: &TxPos,
         edit: &NaEdit,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed a genomic window, reverse-complemented on the minus strand,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::Intronic);
         use crate::convert::CoordinateMapper;
 
         // #1012: warn-and-degrade when the reference carries no genomic data —
@@ -11106,6 +11397,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end_pos: &CdsPos,
         edit: &NaEdit,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed a genomic window across the junction,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::BoundarySpanning);
         use crate::convert::CoordinateMapper;
 
         // #1012: warn-and-degrade when the reference carries no genomic data.
@@ -11599,6 +11893,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end_pos: &TxPos,
         edit: &NaEdit,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #1946: every `normalize_na_edit` call below is handed a genomic window across the junction,
+        // and the reference gate must be able to say so.
+        let _na_edit_site = NaEditSiteGuard::enter(NaEditCallSite::BoundarySpanning);
         use crate::convert::CoordinateMapper;
 
         // #1012: warn-and-degrade when the reference carries no genomic data —
@@ -11756,6 +12053,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         gate: CodonGate,
         frame: MismatchFrame<'_>,
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
+        // Held for the whole body: this is what attributes every recursive
+        // re-entry below to the call it recursed out of (#1946).
+        let _na_edit_frame = NaEditFrameGuard::enter(ref_seq);
         let mut warnings = Vec::new();
 
         // An insertion resting at interbase 0 — "before base 1" — reaches here
