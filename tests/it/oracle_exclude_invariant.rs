@@ -493,8 +493,16 @@ fn the_local_oracle_runner_selects_exactly_what_ci_selects() {
 /// `and not ($SWEEP_FILTER)` inverts the job from "the suite minus the three
 /// sweeps" to "only the three sweeps", i.e. ~8,900 tests down to ~30, which is
 /// the quiet-narrowing failure the runner's own header warns about.
+/// **Its name may not contain `proptest`, and that is not cosmetic.** `test()`
+/// is a substring predicate over the whole test name, so a function carrying
+/// that token is selected by the `soak` job's `-E 'test(proptest)'` and negated
+/// by `test` and `test-oracle` — which used to mean this assertion about
+/// `ci.yml` ran only inside the 1M-case soak, and now that the soak archive
+/// holds only the modules `tests-soak/tests/soak/main.rs` compiles, would mean
+/// it ran nowhere at all. `tests/it/soak_package_membership.rs` fails on any
+/// such name.
 #[test]
-fn the_ci_oracle_selection_negates_proptest_the_sweeps_and_the_corpus_modules() {
+fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_modules() {
     let selection = ci_oracle_selection();
     assert!(
         selection.contains("not test(proptest)"),

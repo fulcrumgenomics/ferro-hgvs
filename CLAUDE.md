@@ -66,6 +66,25 @@ cargo test --features dev            # Alternative
 cargo nextest run -E 'test(parse)'   # Run specific tests by name pattern
 ```
 
+**Those commands do not build `ferro-hgvs-soak-tests`, and they do not need to.**
+That workspace member (`tests-soak/`) is the driver CI's optimized-archive jobs
+run; it `#[path]`-includes the modules those jobs select, which remain under
+`tests/it/` and remain
+declared in `tests/it/main.rs`, so the commands above still run every one of
+them, from the `it` binary. It is out of `default-members` precisely so nothing
+above changes and no module is run twice locally. Build the driver itself only
+when you have touched one of the modules it includes, a `tests/it/common/` helper they
+reach, or the profile:
+
+```bash
+cargo nextest run -p ferro-hgvs-soak-tests
+```
+
+The one thing it exercises that `it` cannot: that binary's working directory is
+`tests-soak/`, not the workspace root, so a helper resolving a fixture against
+the cwd goes red there and passes in `it`. Fixture paths go through
+`common::fixture_gen::fixture_path` for that reason.
+
 #### Fast local iteration — two knobs, both measured
 
 A one-line test edit costing two minutes is not the crate being big; it is two

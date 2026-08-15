@@ -1,0 +1,36 @@
+# The test driver for the three jobs that run off the optimized archive.
+#
+# WHY THIS IS ITS OWN PACKAGE, and not a second `[[test]]` target of the root
+# package: cargo profile overrides are keyed on the PACKAGE, never on the
+# target. `[profile.soak.package.ferro-hgvs]` applies to `ferro-hgvs`'s lib, its
+# bins AND its `it` test target alike — measured, not assumed — so while the
+# driver lived in `tests/it/` there was no way to say "the code under test at
+# `opt-level = 3`, the loops-and-`format!` driver cheaply". A separate package is
+# the only unit that override can address.
+#
+# It compiles the module files IN PLACE under `tests/it/` via `#[path]` rather
+# than owning copies of them; see `tests/soak/main.rs` for why.
+[package]
+name = "ferro-hgvs-soak-tests"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+description = "Test driver for ferro-hgvs's optimized-archive CI jobs (soak, sweeps, censuses)"
+publish = false
+
+# No `src/`: this package exists only to own the `tests/soak` target and the
+# profile override that addresses it. Cargo is happy with a package whose sole
+# target is an integration test.
+
+[dependencies]
+ferro-hgvs = { path = ".." }
+
+# The direct dependencies of the modules `tests/soak/main.rs` compiles and
+# of the four `tests/it/common/` helpers they reach through. Kept at the same
+# requirements as the root manifest's, so one lockfile entry serves both.
+flate2 = "1.0"
+proptest = "1.0"
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

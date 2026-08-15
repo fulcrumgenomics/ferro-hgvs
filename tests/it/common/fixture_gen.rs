@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Serializes regeneration attempts within a single test binary, across both
 /// fixtures. Cross-binary races are made safe by writing to a per-process temp
@@ -21,12 +21,46 @@ use std::sync::Mutex;
 /// mutex is safe.
 static GEN_LOCK: Mutex<()> = Mutex::new(());
 
-/// Absolute path to a generated fixture, rooted at `CARGO_MANIFEST_DIR` so it is
-/// independent of the test's working directory.
+/// The workspace root, which every path in this module is relative to.
+///
+/// **Not `CARGO_MANIFEST_DIR` directly, and the difference is the whole reason
+/// this function exists.** That macro names the package this file is compiled
+/// INTO, and it is compiled into two of them: the root `ferro-hgvs` package's
+/// `it` target, and the `ferro-hgvs-soak-tests` member, which `#[path]`-includes
+/// this file (see `tests-soak/tests/soak/main.rs`). For the first it already
+/// names the workspace root; for the second it names `<root>/tests-soak`, and
+/// every fixture path built from it would be wrong by one directory — silently,
+/// because a missing generated fixture is *regenerated* rather than reported,
+/// so the failure would be a nested `cargo run` writing into a directory nobody
+/// reads.
+///
+/// The root is found by ascending to the first ancestor holding `Cargo.lock`,
+/// which cargo writes at the workspace root and never in a member. Resolved once
+/// and cached: it is read on every fixture lookup and the answer cannot change
+/// within a process.
+fn workspace_root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if dir.join("Cargo.lock").is_file() {
+                return dir;
+            }
+            assert!(
+                dir.pop(),
+                "no Cargo.lock in any ancestor of {} — the workspace root cannot \
+                 be located, so no generated-fixture path can be built",
+                env!("CARGO_MANIFEST_DIR")
+            );
+        }
+    })
+}
+
+/// Absolute path to a generated fixture, rooted at the workspace root so it is
+/// independent of the test's working directory *and* of which package the
+/// caller was compiled into.
 pub fn fixture_path(relative: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push(relative);
-    p
+    workspace_root().join(relative)
 }
 
 /// Ensure `path` exists, regenerating it via
@@ -107,7 +141,12 @@ fn ensure_generated(
         return;
     }
 
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    // The workspace root, not this package's directory: the generators are
+    // `[[bin]]`/`[[example]]` targets of `ferro-hgvs`, so a nested `cargo run`
+    // has to start where that package is the default one. From
+    // `ferro-hgvs-soak-tests`'s own directory it would fail with "no bin target
+    // named `generate_spec_fixture`".
+    let manifest_dir = workspace_root();
     let dir = path.parent().expect("fixture path has a parent directory");
     let tmp = dir.join(format!("{tmp_stem}.{}.tmp", std::process::id()));
 
@@ -149,5 +188,42 @@ fn ensure_generated(
     } else if let Err(err) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         assert!(path.exists(), "failed to install generated {label}: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The root every fixture path hangs off must be the WORKSPACE root, not
+    /// the including package's directory.
+    ///
+    /// This compiles into both binaries that include this file, so it is
+    /// asserted once per package — which is the point: the `it` copy would pass
+    /// under the old `CARGO_MANIFEST_DIR` reading too, and the
+    /// `ferro-hgvs-soak-tests` copy is the one that would not. A regression
+    /// here does not go red on its own, it makes `ensure_spec_fixture`
+    /// regenerate into a directory nobody reads.
+    #[test]
+    fn the_fixture_root_is_the_workspace_root_from_either_package() {
+        let root = workspace_root();
+        assert!(
+            root.join("Cargo.lock").is_file(),
+            "{} holds no Cargo.lock",
+            root.display()
+        );
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml"))
+            .unwrap_or_else(|e| panic!("read {}/Cargo.toml: {e}", root.display()));
+        assert!(
+            manifest.lines().any(|line| line.trim() == "[workspace]"),
+            "{} holds a Cargo.toml with no [workspace] table, so it is a member \
+             directory rather than the workspace root",
+            root.display()
+        );
+        assert!(
+            fixture_path("tests/fixtures/grammar").is_dir(),
+            "the generated-fixture directory does not resolve from {}",
+            root.display()
+        );
     }
 }

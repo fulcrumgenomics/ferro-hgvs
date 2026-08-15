@@ -39,8 +39,8 @@ jobs:
   # eight compiled the whole test suite from scratch AND ran both spec
   # generators first — eight full builds, and ~52s of fixture generation per
   # shard for an artifact no proptest module reads. This mirrors what PR CI's
-  # `test-build-soak` does instead: build once, archive the `it` binary, and let
-  # the shards download it.
+  # `test-build-soak` does instead: build once, archive the soak driver package,
+  # and let the shards download it.
   #
   # `--cargo-profile soak` matters more here than anywhere: measured at 5,000
   # cases, a confluence property costs 1.90s of user CPU in the test profile
@@ -115,12 +115,18 @@ jobs:
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build soak archive
-        # No `--features dev` — see the same step in ci.yml. The feature drags
+        # `-p ferro-hgvs-soak-tests`, not `--test it` — see the same step in
+        # ci.yml for why that package exists. The three proptest modules this
+        # workflow's shards select are `#[path]`-included by
+        # `tests-soak/tests/soak/main.rs`, so they are in the archive; nothing
+        # else in `tests/it/` is compiled at `opt-level = 3` to get them there.
+        #
+        # No `--features dev`, also as in ci.yml. The feature drags
         # `web-service` and `benchmark` into an `opt-level = 3` build for a
         # binary that uses neither, and `test(proptest)` resolves to the same
         # 10 tests with or without it.
         run: |
-          cargo nextest archive --cargo-profile soak --test it \
+          cargo nextest archive --cargo-profile soak -p ferro-hgvs-soak-tests \
             --archive-file nextest-soak.tar.zst
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

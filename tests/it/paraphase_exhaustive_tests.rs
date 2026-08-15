@@ -46,7 +46,7 @@ fn load_fixture_bytes() -> Option<Vec<u8>> {
     let path = "tests/fixtures/validation/paraphase_genes_exhaustive.json.gz";
     // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
     // which CI sets — see `common::bulk_fixtures`.
-    crate::common::bulk_fixtures::present_or_skip(path)?;
+    let path = crate::common::bulk_fixtures::present_or_skip(path)?;
     // See cmrg_exhaustive_tests::load_fixture_bytes for why we
     // decompress to a Vec and use `from_slice`.
     let file = File::open(path).expect("Failed to open paraphase_genes_exhaustive.json.gz");

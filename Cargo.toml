@@ -47,6 +47,25 @@ autoexamples = false
 autobins = false
 autobenches = false
 
+# One member, `tests-soak`, which owns the test driver the optimized-archive CI
+# jobs run. It exists because cargo profile overrides are keyed on the PACKAGE
+# and never on the target: `[profile.soak.package.ferro-hgvs]` reaches this
+# package's lib, its bins AND its `it` test target alike, so while that driver
+# was a target of this package there was no way to optimize the code under test
+# without also optimizing 139k lines of loops-and-`format!` around it. See
+# `tests-soak/tests/soak/main.rs`.
+#
+# `default-members` is this package alone, deliberately, so nothing about a
+# local `cargo build` / `cargo nextest run` / `cargo llvm-cov` changes: the
+# member's modules are `#[path]`-included from `tests/it/` and are still
+# declared in `tests/it/main.rs`, so they keep running from the `it` binary
+# exactly as before. Build the member explicitly with `-p
+# ferro-hgvs-soak-tests`.
+[workspace]
+members = ["tests-soak"]
+default-members = ["."]
+resolver = "2"
+
 [lib]
 name = "ferro_hgvs"
 # cdylib is required for Python bindings (built via maturin)
@@ -485,6 +504,40 @@ opt-level = 3
 [profile.dev.package.flate2]
 opt-level = 3
 
+# `test-build-soak` builds this profile so that `soak`, `sweeps` and `censuses`
+# run against an optimized `libferro_hgvs`: their work is compute-bound and a
+# constant factor on the library is multiplied a million times over.
+#
+# THE TEST DRIVER IS NOT LOWERED, and that is a measured answer rather than an
+# omission — #1964 asked for exactly such an override and the measurement refused
+# it. Recorded here so it is not re-derived.
+#
+# The premise was that the driver is loops and `format!`, so it could sit at a
+# low `opt-level` while `ferro-hgvs` stayed at 3. That became expressible with
+# #1964's split — `ferro-hgvs-soak-tests` is its own package, and profile
+# overrides are keyed on the package — and it does not pay. Measured on an M2 Max
+# (12 core), `user` CPU seconds because wall clock on a shared machine is not
+# reproducible; deps warm and the workspace artifacts scrubbed every rep the way
+# `rust-cache` scrubs them in CI. Build is the median of 5 reps, run the mean of
+# 2; "sweeps" is that job's selection at `FERRO_SWEEP_SEEDS=full` with all four
+# oracles armed, "censuses" is both of that job's steps:
+#
+#   driver opt-level | build (soak archive) | run: sweeps | run: censuses
+#   -----------------+----------------------+-------------+---------------
+#   3 (as shipped)   |                105.7 |       139.8 |          90.2
+#   2                |                105.1 |       141.2 |          89.7
+#   1                |                101.1 |       143.9 |          92.8
+#   0                |                 85.5 |       240.9 |         109.2
+#
+# So `opt-level = 0` buys ~20s of compile and gives back ~101s of run; 1 and 2
+# are a wash in both directions. The compile column is flat because of the
+# *other* half of #1964: this package compiles ~8k lines where the `it` crate is
+# 139k, so there is little left for a lower `opt-level` to save. The comparison
+# that pays is against what this job used to build — `--test it`, 394.8s — and
+# that is the split, not the `opt-level`.
+#
+# `debug-assertions` and `overflow-checks` stay ON so this buys speed without
+# quietly weakening what the soak checks.
 [profile.soak]
 inherits = "test"
 opt-level = 3

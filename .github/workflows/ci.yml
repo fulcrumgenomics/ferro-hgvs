@@ -593,7 +593,12 @@ jobs:
           # eviction.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy
-      - run: cargo clippy --features dev --all-targets -- -D warnings
+      # `--workspace` because `default-members` is the root package alone (see
+      # `Cargo.toml`), so without it the `ferro-hgvs-soak-tests` driver — the one
+      # `test-build-soak` compiles — is linted by nothing. It is the only member,
+      # and it compiles a dozen modules that `--features dev` does not reach here
+      # anyway, so the added cost is one small test target.
+      - run: cargo clippy --workspace --features dev --all-targets -- -D warnings
 
   clippy-all-features:
     # Lints the feature-gated code that `--features dev` never compiles —
@@ -964,9 +969,33 @@ jobs:
   # 0.355s under this one — 5.4x. The other jobs run each test once and would
   # only pay the longer compile.
   #
-  # Only the `it` binary is built (`--test it`): every test the soak selects
-  # with `-E 'test(proptest)'` lives there, so compiling the rest of the test
-  # targets at `opt-level = 3` would be pure cost.
+  # ONE PACKAGE IS BUILT, AND IT IS NOT `ferro-hgvs`'s `it` TARGET. This job used
+  # to build `--test it`, which compiles the whole 139k-line `it` crate — 6,217
+  # tests — at `opt-level = 3` so that about 45 of them can run. Measured on an
+  # M2 Max, `user` CPU with the workspace artifacts scrubbed the way `rust-cache`
+  # scrubs them here, deps warm: 394.8s for the `it` archive, of which the
+  # library is a minority. The rest was the driver, and the runtime
+  # `opt-level = 3` buys comes from optimizing the LIBRARY.
+  #
+  # Cargo profile overrides are keyed on the PACKAGE, never on the target, so
+  # `[profile.soak.package.ferro-hgvs]` reaches the lib, the bins and the `it`
+  # test target alike — there is no way to spell "library optimized, driver
+  # cheap" while both are one package. `ferro-hgvs-soak-tests` is that second
+  # package: `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the
+  # three consuming jobs select — plus, separately marked, any module one of
+  # those reaches into — while the modules themselves stay under `tests/it/` and
+  # stay declared in `tests/it/main.rs`.
+  #
+  # NOTE the package is NOT dropped to a lower `opt-level`, which is the half of
+  # #1964 the measurement refused; the table and the reasoning are on
+  # `[profile.soak]` in `Cargo.toml`. The saving is from compiling ~9k lines
+  # instead of 139k, not from optimizing them less.
+  #
+  # `tests/it/soak_package_membership.rs` polices both directions: a module CI
+  # selects from this archive that is not compiled into it would be negated by
+  # `test`/`test-oracle` and run nowhere while CI got faster, and a module
+  # compiled into it that nothing selects and nothing references is dead compile
+  # cost on the critical path.
   #
   # `debug-assertions` and `overflow-checks` stay ON in the profile (see
   # Cargo.toml) so this buys speed without quietly weakening what the soak
@@ -1047,11 +1076,12 @@ jobs:
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
         # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
         # futures) — an entire dependency tree compiled at `opt-level = 3` to
-        # produce one test binary that never touches any of it. `tests/it`
-        # gates only 2 of its ~360 modules on the feature and neither the soak
-        # nor the sweeps selects one, so the selections are unchanged: verified
-        # by listing both under each feature set, `test(proptest)` resolves to
-        # 20 tests either way and the sweep filter to 44.
+        # produce one test binary that never touches any of it. None of the ten
+        # modules this package compiles is gated on the feature and none of the
+        # three consuming jobs selects a gated one, so the selections are
+        # unchanged: verified by listing under each feature set,
+        # `test(proptest)` resolves to 20 tests either way and the sweep filter
+        # to 44.
         #
         # Both numbers have been stale before, in opposite directions and for
         # different reasons, which is why the re-measure commands are published
@@ -1064,10 +1094,10 @@ jobs:
         # "either way" — which held through both drifts and still holds; the
         # totals are incidental to it. Re-measure rather than trust them:
         #
-        #   cargo nextest list --test it -E 'test(proptest)' | wc -l
-        #   cargo nextest list --test it -E "$SWEEP_FILTER" | wc -l
+        #   cargo nextest list -p ferro-hgvs-soak-tests -E 'test(proptest)' | wc -l
+        #   cargo nextest list -p ferro-hgvs-soak-tests -E "$SWEEP_FILTER" | wc -l
         run: |
-          cargo nextest archive --cargo-profile soak --test it \
+          cargo nextest archive --cargo-profile soak -p ferro-hgvs-soak-tests \
             --archive-file nextest-soak.tar.zst
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         if: steps.soak-archive.outputs.cache-hit != 'true'
@@ -1489,10 +1519,13 @@ jobs:
     # Only the optimized archive, NOT `test-build`. Every test the selection
     # below reaches lives in `tests/it/{cis_allele_confluence,
     # from_sequences, minimal_alignment_enumeration,
-    # normalize_idempotency}_proptest.rs`, and none reads the generated spec
-    # fixture or shells out to the staged generators — so the shards need
-    # neither of those artifacts, and waiting on the job that produces them
-    # would put the dev-profile compile back on the soak's critical path.
+    # normalize_idempotency}_proptest.rs` — all four of which
+    # `tests-soak/tests/soak/main.rs` compiles, which is what puts them in this
+    # archive at all now that it holds one package rather than the whole `it`
+    # binary — and none reads the generated spec fixture or shells out to the
+    # staged generators — so the shards need neither of those artifacts, and
+    # waiting on the job that produces them would put the dev-profile compile
+    # back on the soak's critical path.
     #
     # `from_sequences_proptest.rs` joined this selection by being named
     # `*proptest*`, which is worth stating because the filter is by name: a new
@@ -1584,8 +1617,12 @@ jobs:
   #   repeat_span_sibling_overlap        40.44s -> 5.29s   7.6x
   #   issue_1254_sibling_crossing_shift  20.14s -> 2.32s   8.7x
   #
-  # They cost nothing extra to build: all three live in `tests/it/`, so they are
-  # already inside the archive `test-build-soak` produces for the soak.
+  # All three live in `tests/it/` and are `#[path]`-included by
+  # `tests-soak/tests/soak/main.rs`, so they are inside the archive
+  # `test-build-soak` produces alongside the soak's own modules — one archive for
+  # the three jobs, not one per job. Adding a fourth sweep means naming it there
+  # as well as in `SWEEP_FILTER`; `tests/it/soak_package_membership.rs` fails if
+  # only one of the two is done.
   #
   # Running them ONLY here, with both oracles on, loses no coverage. The oracles
   # add assertions at `normalize_core_checked`'s exit and change no behaviour, so
@@ -1702,10 +1739,13 @@ jobs:
   # file is absent, and this job has no crate to build from. `bulk-fixtures` is
   # needed for the three corpus tests in that same module.
   #
-  # Verified archive-safe the way `soak` and `sweeps` are: all three modules
-  # live in `tests/it/`, so they are already inside the archive
-  # `test-build-soak` produces, none is gated on the `dev` feature, and none
-  # reads `CARGO_BIN_EXE_ferro`.
+  # Verified archive-safe the way `soak` and `sweeps` are: all three modules live
+  # in `tests/it/` and are `#[path]`-included by `tests-soak/tests/soak/main.rs`,
+  # so they are inside the archive `test-build-soak` produces, none is gated on
+  # the `dev` feature, and none reads `CARGO_BIN_EXE_ferro`. A module named in
+  # `CENSUS_FILTER` but missing from that driver would be negated here and absent
+  # from the archive, i.e. run nowhere;
+  # `tests/it/soak_package_membership.rs` is what makes that loud.
   censuses:
     name: Slow censuses (optimized)
     needs: [test-build-soak, spec-fixtures, fixtures]
@@ -1896,7 +1936,8 @@ jobs:
       - run: cargo clippy --release -- -D warnings
       # The featureless guard (#1505). Every other Rust job in this workflow
       # either passes `--features dev` / `--all-features`, or is scoped to the
-      # integration binary (`test-build-soak`'s `--test it`). So the DEFAULT
+      # soak driver package (`test-build-soak`'s
+      # `-p ferro-hgvs-soak-tests`). So the DEFAULT
       # feature set's unit tests — the `#[cfg(test)]` modules under `src/` — are
       # compiled NOWHERE in CI, and a call from one of them into feature-gated
       # code cannot turn any job red.
