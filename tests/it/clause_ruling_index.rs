@@ -377,7 +377,7 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
-//!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
@@ -554,7 +554,7 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
-//!     `unchanged-is-read-over-every-minimal-alignment` — decided (governing)
+//!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:34
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
