@@ -125,7 +125,7 @@ jobs:
       # key hit so neither could correct it. `rust-cache` keys per job by
       # default; the `key` below only adds a legible name so
       # `gh api .../actions/caches` stays diagnosable.
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
           # keys per job and appends a lockfile/env hash, so every PR run that
@@ -263,7 +263,7 @@ jobs:
       # The second half of the shared-key problem described in the job above:
       # this job installs `clippy` and builds the spec generators, and used the
       # same key. Distinct name, so the two no longer overwrite each other (#1218).
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           # Save only from `main` — see the note on the first
           # `rust-cache` block in this file.
