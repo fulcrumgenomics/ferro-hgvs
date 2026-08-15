@@ -1439,11 +1439,11 @@ jobs:
     name: Idempotency soak (${{ matrix.shard }}/8)
     # Only the optimized archive, NOT `test-build`. Every test the selection
     # below reaches lives in `tests/it/{cis_allele_confluence,
-    # from_sequences, normalize_idempotency}_proptest.rs`, and none reads the
-    # generated spec fixture or shells out to the staged generators — so the
-    # shards need neither of those artifacts, and waiting on the job that
-    # produces them would put the dev-profile compile back on the soak's
-    # critical path.
+    # from_sequences, minimal_alignment_enumeration,
+    # normalize_idempotency}_proptest.rs`, and none reads the generated spec
+    # fixture or shells out to the staged generators — so the shards need
+    # neither of those artifacts, and waiting on the job that produces them
+    # would put the dev-profile compile back on the soak's critical path.
     #
     # `from_sequences_proptest.rs` joined this selection by being named
     # `*proptest*`, which is worth stating because the filter is by name: a new
@@ -1452,6 +1452,15 @@ jobs:
     # fixture — so the two claims above still hold, and it earns its place here
     # (`the_direction_does_not_decide_describability` held for 256 cases and
     # failed at 20,000). Re-check both claims when adding another.
+    #
+    # `minimal_alignment_enumeration_proptest.rs` joined the same way, and was
+    # re-checked rather than assumed: its eight properties are pure functions of
+    # a generated `(reference, alternate)` byte pair, reading no provider and no
+    # fixture. Its cost was measured too, because the enumerator it exercises is
+    # exponential in block length — `PROPTEST_CASES=125000` over the module
+    # costs 56.7 s wall in the *test* profile, i.e. before this job's ~5.4x
+    # optimization. That is bounded by its own `MAX_BLOCK_LEN` of 6; raising it
+    # is a soak-cost decision, not only a coverage one.
     needs: test-build-soak
     runs-on: ubuntu-latest
     strategy:

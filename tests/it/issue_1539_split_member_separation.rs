@@ -80,7 +80,26 @@ const MAX_ALIGNMENT_CELLS: usize = 4_000_000;
 /// is the correct bias for a gate that blocks merges.
 ///
 /// Returns `None` when the matrix would exceed [`MAX_ALIGNMENT_CELLS`].
-fn forced_unchanged_columns(reference: &[u8], payload: &[u8]) -> Option<Vec<bool>> {
+///
+/// # Relationship to `common::minimal_alignment`
+///
+/// This is the closed form of the notion
+/// `rulings[unchanged-is-read-over-every-minimal-alignment]` decides on, and it
+/// is the detector that record names as where the ruling came from. It reaches
+/// the answer in `Θ(n·m)` without ever materialising an alignment, which is
+/// what makes it usable as a gate.
+///
+/// `common::minimal_alignment` reaches the same answer the other way — by
+/// enumerating every minimal alignment and intersecting — and is
+/// correspondingly exponential. The two are kept separate rather than one
+/// rewritten in terms of the other precisely so that each can check the other;
+/// `minimal_alignment_enumeration_proptest::the_closed_form_and_the_enumerator_agree`
+/// asserts they do. Note this function is hardcoded to substitution cost 1,
+/// which is the model that record's own worked example implies but never
+/// states.
+///
+/// `pub(crate)` only so that cross-check can name it.
+pub(crate) fn forced_unchanged_columns(reference: &[u8], payload: &[u8]) -> Option<Vec<bool>> {
     let (n, m) = (reference.len(), payload.len());
     if (n + 1).checked_mul(m + 1)? > MAX_ALIGNMENT_CELLS {
         return None;
