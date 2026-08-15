@@ -2310,6 +2310,65 @@ impl MultiFastaProvider {
             })
             .collect();
 
+        // #1783 — publish the genome axis only when the transcript axis this
+        // table is stated on IS the axis `n.`/`c.` positions are stated on.
+        //
+        // The table above is on the gap-COLLAPSED axis, which is the axis of
+        // the bytes this function serves. `n.k`, though, names the k-th base of
+        // the DEPOSITED transcript — the FLAT axis, which is the one cdot's own
+        // `tx_start`/`tx_end` are stated in. And that flat axis is what the
+        // OTHER transcript→genome route reads: `CdotTranscript::tx_to_genome`
+        // offsets from each exon's own `tx_start` and returns `None` for a base
+        // no exon covers. It is reached from `project/projector.rs`,
+        // `data/mapping.rs` and `service/handlers/convert.rs`, and it never
+        // touches this `Transcript` — so it is invisible to any census of who
+        // reads `Transcript.exons`.
+        //
+        // When the two axes coincide (a table contiguous from 0) the two routes
+        // are the same function and both are served. When they do not, a genome
+        // coordinate published here answers a question the deposited axis
+        // answers differently. Measured on the head-offset shape: this route
+        // says `n.1` → 1 where `tx_to_genome` declines, and `n.10` → 15 where
+        // `tx_to_genome` says 3 — two `Ok`s, different coordinates, no warning,
+        // and nothing in the answer telling a consumer which route produced it.
+        //
+        // So withhold the alignment rather than serve a second answer. This is
+        // `tx_to_genome_extending_polya`'s own rule one level up ("a gap/hole
+        // […] decline rather than guess"), and it is what biocommons/hgvs does
+        // with such a transcript from any provider. The bases, the collapsed
+        // exon table and the CDS bounds are still served — they are on the
+        // collapsed axis and are correct there, which is what the rest of this
+        // fix buys; only the cross-axis question is refused.
+        //
+        // The FASTA-backed path is unaffected: it serves the flat deposited
+        // sequence beside cdot's flat table, so its two routes already agree
+        // base for base, including declining together inside a hole.
+        let axes_coincide = tx
+            .exons
+            .iter()
+            .zip(exons.iter())
+            .all(|(e, published)| published.start == e[2] + 1 && published.end == e[3]);
+        let exons: Vec<TxExon> = if axes_coincide {
+            exons
+        } else {
+            warn!(
+                "{id}: cdot's exon table is not on the axis of the bases synthesis serves (a \
+                 head offset, an internal hole, or an exon emitting a different number of \
+                 bases than its declared transcript span), so the synthesized transcript is \
+                 served WITHOUT a genome alignment — a c./n. position on it resolves to a \
+                 genome coordinate only through the cdot record itself, which states the \
+                 deposited transcript's axis (issues #1773, #1783)"
+            );
+            exons
+                .into_iter()
+                .map(|e| TxExon {
+                    genomic_start: None,
+                    genomic_end: None,
+                    ..e
+                })
+                .collect()
+        };
+
         let (genomic_start, genomic_end) = {
             let min_start = exons.iter().filter_map(|e| e.genomic_start).min();
             let max_end = exons.iter().filter_map(|e| e.genomic_end).max();
@@ -6808,13 +6867,19 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             "the last exon must end at the last served base"
         );
 
-        // The genome axis is cdot's alignment and must not move with it.
+        // The genome axis is NOT re-tiled with it — cdot's alignment is stated
+        // in genome coordinates and no transcript-space question can move it.
+        // On this record it is withheld instead: the collapsed axis the table
+        // above is on is not the deposited axis `n.` positions are stated on,
+        // and publishing a genome coordinate against it would contradict
+        // `CdotTranscript::tx_to_genome` (#1783). See
+        // `route_parity_declines_when_the_flat_and_collapsed_axes_differ`.
         assert_eq!(
             tx.exons
                 .iter()
                 .map(|e| (e.genomic_start, e.genomic_end))
                 .collect::<Vec<_>>(),
-            vec![(Some(1), Some(9)), (Some(15), Some(23))]
+            vec![(None, None), (None, None)]
         );
     }
 
@@ -7014,6 +7079,418 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             vec![(1, 9)],
             "the exon must claim the 9 bases it served, not its declared span of 4"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // #1783 — ROUTE PARITY for a cdot-synthesized transcript.
+    //
+    // Enumerated by ROUTE to the answer, not by consumer of a structure: a
+    // census of `Transcript.exons`' readers cannot see route B below, because
+    // route B never mentions `Transcript` at all.
+    //
+    //   Route A — the published `Transcript`. `CoordinateMapper::tx_to_genomic`
+    //     and `tx_to_genomic_with_intron` walk `Transcript.exons`, which for a
+    //     cdot-synthesized transcript is the table this file builds. Reached
+    //     from `normalize/mod.rs`, `vcf/from_hgvs.rs`,
+    //     `equivalence/checker.rs` and
+    //     `error_handling/corrections.rs::resolve_cds_endpoint_to_genomic`.
+    //
+    //   Route B — the raw cdot arrays. `CdotTranscript::tx_to_genome` and
+    //     `tx_to_genome_extending_polya` offset from each exon's own
+    //     `tx_start` and return `None` when no exon covers the position.
+    //     Reached from `project/projector.rs` (the non-coding arm and the
+    //     poly-A walk), `data/mapping.rs` (which every coding
+    //     `cds_to_genome*` call bottoms out in) and
+    //     `service/handlers/convert.rs`.
+    //
+    // Route B is the authority: `n.k` names the k-th base of the DEPOSITED
+    // transcript, cdot's `tx_start`/`tx_end` are offsets into that same flat
+    // sequence, and a base that aligns nowhere gets no genome coordinate —
+    // "decline rather than guess", the rule `tx_to_genome_extending_polya`
+    // already states in its own body.
+    //
+    // Route A on a synthesized transcript is asked the same `n.k` but reads a
+    // table on the gap-COLLAPSED axis, so for any record whose flat and
+    // collapsed axes differ it answers about a different base. The failure
+    // mode this guard exists to prevent is both routes returning `Ok` with
+    // different coordinates and nothing noticing.
+    // ----------------------------------------------------------------------
+
+    /// What one route answered at one transcript position.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum RouteAnswer {
+        Genome(u64),
+        Declined,
+    }
+
+    impl RouteAnswer {
+        fn genome(self) -> Option<u64> {
+            match self {
+                RouteAnswer::Genome(g) => Some(g),
+                RouteAnswer::Declined => None,
+            }
+        }
+    }
+
+    /// Every route's answer at one deposited transcript position `n`.
+    struct ParityRow {
+        n: i64,
+        route_a: RouteAnswer,
+        route_a_intron: RouteAnswer,
+        route_b: RouteAnswer,
+        route_b_polya: RouteAnswer,
+    }
+
+    impl ParityRow {
+        fn all(&self) -> [(&'static str, RouteAnswer); 4] {
+            [
+                ("A tx_to_genomic", self.route_a),
+                ("A tx_to_genomic_with_intron", self.route_a_intron),
+                ("B tx_to_genome", self.route_b),
+                ("B tx_to_genome_extending_polya", self.route_b_polya),
+            ]
+        }
+    }
+
+    /// The whole observation for one exon-table geometry.
+    struct ParityProbe {
+        /// The synthesized transcript, if synthesis served one at all.
+        served: Option<std::sync::Arc<Transcript>>,
+        rows: Vec<ParityRow>,
+    }
+
+    /// Seat a two-exon cdot record over `NC_ORF.1` with the given exon table
+    /// and no CDS, so the transcript-space geometry is the only variable.
+    fn seat_parity_tx(exons: Vec<[u64; 4]>) -> CdotMapper {
+        use crate::data::cdot::CdotTranscript;
+        use crate::reference::transcript::Strand;
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NR_PARITY.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("PARITY".to_string()),
+                contig: "NC_ORF.1".to_string(),
+                exons,
+                strand: Strand::Plus,
+                cds_start: None,
+                cds_end: None,
+                gene_id: None,
+                protein: None,
+                exon_cigars: vec![None, None],
+            },
+        );
+        cdot
+    }
+
+    /// Drive every enumerated route at every deposited transcript position.
+    ///
+    /// The sweep runs `n.1 ..= flat_tx_end` — the positions the cdot exon
+    /// table itself spans — so `tx_to_genome_extending_polya` is never asked
+    /// about the poly-A region, where declining to extend is by design and not
+    /// a parity question.
+    fn probe_routes(exons: Vec<[u64; 4]>) -> ParityProbe {
+        use crate::convert::mapper::CoordinateMapper;
+        use crate::hgvs::location::TxPos;
+
+        let flat_tx_end = exons.iter().map(|e| e[3]).max().expect("non-empty table");
+        let (mut provider, _kept) = build_provider_with_orf_genome();
+        let cdot = seat_parity_tx(exons);
+        let cdot_tx = cdot
+            .get_transcript("NR_PARITY.1")
+            .expect("fixture seats the record")
+            .clone();
+        provider.cdot_mapper = Some(cdot);
+
+        let served = provider.get_transcript("NR_PARITY.1").ok();
+
+        let rows = (1..=flat_tx_end as i64)
+            .map(|n| {
+                let (route_a, route_a_intron) = match served.as_ref() {
+                    // Synthesis declined, so route A has no transcript to walk
+                    // and every consumer of it declines with it.
+                    None => (RouteAnswer::Declined, RouteAnswer::Declined),
+                    Some(tx) => {
+                        let mapper = CoordinateMapper::new(tx);
+                        let a = match mapper.tx_to_genomic(&TxPos::new(n)) {
+                            Ok(Some(g)) => RouteAnswer::Genome(g),
+                            Ok(None) | Err(_) => RouteAnswer::Declined,
+                        };
+                        let a_intron = match mapper.tx_to_genomic_with_intron(&TxPos::new(n)) {
+                            Ok(g) => RouteAnswer::Genome(g),
+                            Err(_) => RouteAnswer::Declined,
+                        };
+                        (a, a_intron)
+                    }
+                };
+                let tx_pos_0based = (n - 1) as u64;
+                let route_b = match cdot_tx.tx_to_genome(tx_pos_0based) {
+                    Some(g) => RouteAnswer::Genome(g),
+                    None => RouteAnswer::Declined,
+                };
+                let route_b_polya = match cdot_tx.tx_to_genome_extending_polya(tx_pos_0based) {
+                    Some(g) => RouteAnswer::Genome(g),
+                    None => RouteAnswer::Declined,
+                };
+                ParityRow {
+                    n,
+                    route_a,
+                    route_a_intron,
+                    route_b,
+                    route_b_polya,
+                }
+            })
+            .collect();
+
+        ParityProbe { served, rows }
+    }
+
+    /// Collect every violation of the two parity invariants, so a failure
+    /// reports the whole disagreement rather than only its first row.
+    fn parity_violations(probe: &ParityProbe) -> Vec<String> {
+        let mut out = Vec::new();
+        for row in &probe.rows {
+            let routes = row.all();
+            // INV1 — no two routes may both answer with DIFFERENT coordinates.
+            for (i, (ln, la)) in routes.iter().enumerate() {
+                for (rn, ra) in routes.iter().skip(i + 1) {
+                    if let (Some(l), Some(r)) = (la.genome(), ra.genome()) {
+                        if l != r {
+                            out.push(format!(
+                                "n.{}: {ln} -> {l} but {rn} -> {r} (both answered, different)",
+                                row.n
+                            ));
+                        }
+                    }
+                }
+            }
+            // INV2 — route A may never answer where route B declines. Route B
+            // is the authority on which deposited bases have a genome
+            // coordinate at all.
+            if row.route_b == RouteAnswer::Declined {
+                for (ln, la) in routes.iter().take(2) {
+                    if let Some(g) = la.genome() {
+                        out.push(format!(
+                            "n.{}: {ln} -> {g} but B tx_to_genome declined (answer where the \
+                             authority declines)",
+                            row.n
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The control: a cdot exon table that is contiguous and starts at 0, so
+    /// the flat and collapsed transcript axes are the same axis. Every route
+    /// must answer at every position, and answer the same thing.
+    ///
+    /// This is the half of the guard that can only pass by routes actually
+    /// ANSWERING — without it the invariants above are satisfiable by a
+    /// transcript nothing serves, and the guard would pass while checking
+    /// nothing.
+    #[test]
+    fn route_parity_holds_when_the_flat_and_collapsed_axes_coincide() {
+        let probe = probe_routes(vec![[1, 10, 0, 9], [15, 24, 9, 18]]);
+
+        let tx = probe
+            .served
+            .as_ref()
+            .expect("a contiguous zero-based exon table must still synthesize");
+        assert_eq!(
+            tx.sequence.as_deref(),
+            Some("ATGCCCGGGAAACCCTAA"),
+            "the served bases are unchanged by the parity guard"
+        );
+
+        assert!(
+            parity_violations(&probe).is_empty(),
+            "identity geometry must not disagree: {:?}",
+            parity_violations(&probe)
+        );
+        assert_eq!(probe.rows.len(), 18, "the sweep must cover every position");
+        for row in &probe.rows {
+            for (name, answer) in row.all() {
+                assert!(
+                    matches!(answer, RouteAnswer::Genome(_)),
+                    "n.{}: {name} declined on an identity-axis transcript",
+                    row.n
+                );
+            }
+        }
+        // And the answers are the genome windows the fixture states.
+        assert_eq!(probe.rows[0].route_a, RouteAnswer::Genome(1));
+        assert_eq!(probe.rows[9].route_a, RouteAnswer::Genome(15));
+    }
+
+    /// The three geometries where the flat and collapsed axes differ. cdot has
+    /// all of them — 167 GRCh38 and 442 GRCh37 records, the head offset the
+    /// larger class on both.
+    ///
+    /// Route B is right and stays untouched. Route A must decline rather than
+    /// serve a second, different coordinate for the same `n.` position: on the
+    /// head-offset shape it previously answered `n.1 -> 1` where route B
+    /// declines, and `n.10 -> 15` where route B says `3`.
+    #[test]
+    fn route_parity_declines_when_the_flat_and_collapsed_axes_differ() {
+        // (name, exon table, whether route B ever declines inside the sweep)
+        let geometries: Vec<(&str, Vec<[u64; 4]>)> = vec![
+            ("head offset only", vec![[1, 10, 7, 16], [15, 24, 16, 25]]),
+            ("internal hole only", vec![[1, 10, 0, 9], [15, 24, 20, 29]]),
+            ("both", vec![[1, 10, 7, 16], [15, 24, 27, 36]]),
+        ];
+
+        for (name, exons) in geometries {
+            let probe = probe_routes(exons);
+
+            let violations = parity_violations(&probe);
+            assert!(
+                violations.is_empty(),
+                "{name}: routes disagree ({} violations): {violations:#?}",
+                violations.len()
+            );
+
+            // Non-vacuity, both directions. Route B must be live — answering
+            // somewhere and declining somewhere — or the invariants above
+            // would hold for a fixture that asks nothing.
+            assert!(
+                probe
+                    .rows
+                    .iter()
+                    .any(|r| matches!(r.route_b, RouteAnswer::Genome(_))),
+                "{name}: route B answered nowhere, so the fixture proves nothing"
+            );
+            assert!(
+                probe
+                    .rows
+                    .iter()
+                    .any(|r| r.route_b == RouteAnswer::Declined),
+                "{name}: route B declined nowhere, so this geometry has no gap"
+            );
+
+            // Route A must be silent across the whole transcript: the
+            // collapsed axis is not the axis `n.` is stated on, so there is no
+            // position at which it may answer.
+            for row in &probe.rows {
+                assert_eq!(
+                    row.route_a,
+                    RouteAnswer::Declined,
+                    "{name}: route A answered at n.{}",
+                    row.n
+                );
+            }
+        }
+    }
+
+    /// The same divergent geometry, served from a transcript FASTA instead of
+    /// synthesized — the case where both routes must ANSWER, and answer the
+    /// same thing, including declining together inside the hole.
+    ///
+    /// This is the control that stops the fix from being "make route A silent
+    /// whenever the geometry is awkward": here the deposited bases exist, the
+    /// served sequence IS the flat transcript, cdot's flat table is the right
+    /// table for it, and the genome axis is published in full. If the
+    /// withholding leaked onto this path the parity assertions below would
+    /// still pass (silence never contradicts) but the non-vacuity assertions
+    /// would not.
+    #[test]
+    fn route_parity_holds_on_the_fasta_backed_path_with_a_divergent_geometry() {
+        use crate::convert::mapper::CoordinateMapper;
+        use crate::hgvs::location::TxPos;
+
+        let exons = vec![[1u64, 10, 7, 16], [15, 24, 27, 36]];
+        let dir = tempdir().unwrap();
+        {
+            let mut f = File::create(dir.path().join("genome.fna")).unwrap();
+            writeln!(f, ">NC_ORF.1").unwrap();
+            writeln!(f, "ATGCCCGGGTTTTTAAACCCTAA").unwrap();
+            let mut i = File::create(dir.path().join("genome.fna.fai")).unwrap();
+            writeln!(i, "NC_ORF.1\t23\t10\t23\t24").unwrap();
+        }
+        {
+            // The deposited transcript on the flat axis the table states: 7
+            // unaligned head bases, exon 1's 9, an 11-base hole, exon 2's 9.
+            let mut f = File::create(dir.path().join("tx.fna")).unwrap();
+            writeln!(f, ">NR_PARITY.1").unwrap();
+            writeln!(f, "GGGGGGGATGCCCGGGNNNNNNNNNNNAAACCCTAA").unwrap();
+            let mut i = File::create(dir.path().join("tx.fna.fai")).unwrap();
+            writeln!(i, "NR_PARITY.1\t36\t13\t36\t37").unwrap();
+        }
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        let cdot = seat_parity_tx(exons.clone());
+        let cdot_tx = cdot
+            .get_transcript("NR_PARITY.1")
+            .expect("fixture seats the record")
+            .clone();
+        provider.cdot_mapper = Some(cdot);
+
+        let tx = provider
+            .get_transcript("NR_PARITY.1")
+            .expect("the FASTA record must serve this accession");
+        assert_eq!(
+            tx.sequence.as_deref().map(str::len),
+            Some(36),
+            "the FASTA path serves the flat deposited sequence"
+        );
+
+        let mapper = CoordinateMapper::new(&tx);
+        let mut answered = 0usize;
+        let mut declined = 0usize;
+        for n in 1..=36i64 {
+            let route_a = match mapper.tx_to_genomic(&TxPos::new(n)) {
+                Ok(Some(g)) => RouteAnswer::Genome(g),
+                Ok(None) | Err(_) => RouteAnswer::Declined,
+            };
+            let route_b = match cdot_tx.tx_to_genome((n - 1) as u64) {
+                Some(g) => RouteAnswer::Genome(g),
+                None => RouteAnswer::Declined,
+            };
+            assert_eq!(
+                route_a, route_b,
+                "n.{n}: the FASTA-backed routes must agree exactly"
+            );
+            match route_a {
+                RouteAnswer::Genome(_) => answered += 1,
+                RouteAnswer::Declined => declined += 1,
+            }
+        }
+        // 18 aligned bases answer; the 7-base head and the 11-base hole
+        // decline — on BOTH routes, which is the "agreeing to decline" half.
+        assert_eq!((answered, declined), (18, 18));
+    }
+
+    /// The bases and the transcript-axis table are NOT withdrawn — only the
+    /// genome axis is. #1783's fix stands: the published exon table still
+    /// tiles the served sequence from 1.
+    #[test]
+    fn a_divergent_axis_withholds_the_genome_alignment_not_the_bases() {
+        let probe = probe_routes(vec![[1, 10, 7, 16], [15, 24, 27, 36]]);
+        let tx = probe
+            .served
+            .as_ref()
+            .expect("a divergent-axis record still serves its bases");
+
+        assert_eq!(tx.sequence.as_deref(), Some("ATGCCCGGGAAACCCTAA"));
+        assert_eq!(
+            tx.exons
+                .iter()
+                .map(|e| (e.start, e.end))
+                .collect::<Vec<_>>(),
+            vec![(1, 9), (10, 18)],
+            "#1783's collapsed exon table is unchanged"
+        );
+        assert!(
+            tx.exons
+                .iter()
+                .all(|e| e.genomic_start.is_none() && e.genomic_end.is_none()),
+            "the genome axis must be withheld, got {:?}",
+            tx.exons
+                .iter()
+                .map(|e| (e.genomic_start, e.genomic_end))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!((tx.genomic_start, tx.genomic_end), (None, None));
     }
 
     #[test]
