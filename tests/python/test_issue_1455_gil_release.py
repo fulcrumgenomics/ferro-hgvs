@@ -71,9 +71,24 @@ call would never have given it, and the two populations converge — at load
 average 30 on this 12-core host the held-GIL calibration rose to 0.311 while the
 weakest entry point fell to 0.349. Two guards detect that and **skip**, because a
 measurement that cannot discriminate should not be reported as a failure: see
-``MAX_LOAD_PER_CORE`` and ``MAX_CONTROL_OVER_FAIR``. The calibration numbers are
-emitted as a warning on every run so a skip on a machine you cannot log into is
-still diagnosable from the CI log.
+``MAX_LOAD_PER_CORE`` and ``MAX_CONTROL_OVER_FAIR``.
+
+What every run emits
+--------------------
+
+Two kinds of warning, so a run on a machine you cannot log into is diagnosable
+from the CI log alone:
+
+* one module-scoped ``#1455 GIL calibration:`` line, carrying ``fair`` and
+  ``held``; and
+* one ``#1455 GIL margin:`` row **per parametrized entry point** — ``MEASURED``
+  with the observed ratios, or ``STOOD-DOWN`` naming the guard that fired.
+
+The second is the point of the exercise, and the invariant it rests on is that
+the two shapes are exhaustive: a case emits one row or the other, never neither.
+So a parametrized case with no row did not run at all — a stand-down is never
+silent, and cannot be mistaken for a healthy quiet run. ``_margin_line``'s own
+docstring says which of its fields may be pooled across runs and which may not.
 """
 
 import json
@@ -131,7 +146,13 @@ WINDOW_SECONDS = 0.08
 # GIL-holding binding sits at the control's own share, nowhere near the threshold
 # — but it does turn a transient CPU spike into a slower success.
 ROUNDS = 3
-ATTEMPTS = 2
+# Raised 2 -> 3 after a merge-group run ejected a PR on a 1.1% miss (share 0.671
+# against a 0.678 threshold) while a PR-level run on the SAME head passed sixteen
+# minutes earlier, with a diff that compiles into nothing in the wheel. That is
+# the transient-spike case this constant exists for, and two attempts did not
+# absorb it. The reasoning above is unchanged and bounds the cost: a retry cannot
+# manufacture a false pass, so the only price is a slower success on a noisy host.
+ATTEMPTS = 3
 
 # The negative control is measured once for the whole module and every threshold
 # is derived from it, so it gets more rounds than a single case does: one unlucky
@@ -409,6 +430,112 @@ def calibration(normalizer, wide_variant):
     return fair, held
 
 
+#: Every row this module emits about a single entry point opens with this, whether it
+#: measured or stood down, so one grep over a CI log returns exactly one row per
+#: parametrized case per run. A *missing* row therefore means the case did not run,
+#: which is the one thing a silent skip made unreadable.
+MARGIN_PREFIX = "#1455 GIL margin:"
+
+
+def _stand_down_reason(load, fair, held):
+    """Why this host cannot support the measurement, or ``None`` if it can.
+
+    All three guards in one place, in the order they are checked, as a pure function
+    of three numbers — so their boundaries can be driven from a test with fixed
+    values instead of being reachable only by finding a machine in the right state.
+    An unexercised guard is how a guard quietly stops guarding, and this module's
+    guards are the only thing standing between a contended runner and a false red.
+    """
+    if load is not None and load > MAX_LOAD_PER_CORE:
+        return (
+            f"load average is {load:.2f} per core, above {MAX_LOAD_PER_CORE} — a "
+            "contended machine deschedules the worker mid-call and the measurement "
+            "stops discriminating"
+        )
+    if fair > MAX_FAIR_SHARE:
+        return (
+            f"fair-sharing calibration measured {fair:.3f}, which two GIL-bound "
+            "Python threads cannot reach — the calibration was corrupted by load "
+            "moving between its two windows, and it is the pivot every threshold "
+            "here derives from"
+        )
+    if held >= fair * MAX_CONTROL_OVER_FAIR:
+        return (
+            f"a Rust call known to hold the GIL kept {held:.3f} of the observer's "
+            f"rate against {fair:.3f} for fair sharing, so this machine does not "
+            "show starvation at all and the measurement cannot discriminate"
+        )
+    return None
+
+
+def _load_field(load):
+    """``os.getloadavg`` has no answer on Windows, and "no answer" must be a value in
+    the row rather than a missing field, or the row's shape varies by platform."""
+    return "n/a" if load is None else f"{load:.2f}"
+
+
+def _margin_line(entry_point, *, shares, threshold, fair, load):
+    """The row a case that took a measurement emits.
+
+    ``shares`` is **every** attempt in order, not only the one the verdict used.
+    Three ratios come out of it and they are three different statistics — pooling
+    the wrong one across runs is precisely the mistake this row exists to prevent:
+
+    ``first/fair``
+        Attempt 1, taken unconditionally before any outcome is known. This is the
+        field to mine: it is an unbiased sample of this host's headroom, and its
+        distribution is what answers "does CI normally clear at 1.6x or at 1.51x".
+    ``decided/fair``
+        The attempt the assertion acted on, i.e. the last one. On a **pass** this
+        exceeds ``MIN_SHARE_OVER_FAIR`` *by construction*, because the loop stops at
+        the first attempt that clears — so its passing population is truncated from
+        below and is not a margin distribution. It is reported because it is what
+        the verdict used, and for no other purpose.
+    ``all/fair``
+        Every attempt. Elements past the first exist only because an earlier attempt
+        missed, so they are conditioned on a miss and over-represent the low tail.
+        Read one run with it; do not pool it.
+
+    ``fair`` divides all three and is measured once for the whole module, so a
+    corrupted calibration moves every row of a run together rather than one of them.
+    That is what ``_stand_down_reason``'s second and third guards exist to catch, and
+    why ``load/core`` rides along here instead of only in the stand-down row.
+    """
+    ratios = [share / fair for share in shares]
+    return (
+        f"{MARGIN_PREFIX} {entry_point} MEASURED "
+        f"first/fair={ratios[0]:.3f} decided/fair={ratios[-1]:.3f} "
+        f"share={shares[-1]:.3f} threshold={threshold:.3f} "
+        f"(needs > {MIN_SHARE_OVER_FAIR}) attempts={len(shares)}/{ATTEMPTS} "
+        f"all/fair={[round(ratio, 3) for ratio in ratios]} "
+        f"load/core={_load_field(load)}"
+    )
+
+
+def _stand_down_line(entry_point, reason, load, fair, held):
+    """The row a case that could not take a measurement emits.
+
+    It carries the same three numbers on every platform and in every reason, so the
+    decision to stand down is auditable from the log without the prose being parsed.
+    """
+    return (
+        f"{MARGIN_PREFIX} {entry_point} STOOD-DOWN "
+        f"load/core={_load_field(load)} fair={fair:.3f} held={held:.3f} — {reason}"
+    )
+
+
+def _stand_down(entry_point, reason, load, fair, held):
+    """Report the stand-down on the margin series, **then** skip.
+
+    The order is the whole point and is pinned by a test. ``pytest.skip`` raises, so
+    anything after it never runs; a case that emitted nothing would be
+    byte-indistinguishable in a CI log from a case that never ran, which is how a
+    green suite comes to be guarding nothing.
+    """
+    warnings.warn(_stand_down_line(entry_point, reason, load, fair, held), stacklevel=2)
+    pytest.skip(reason)
+
+
 @pytest.mark.parametrize(
     "entry_point",
     [
@@ -426,36 +553,56 @@ def test_reference_backed_calls_release_the_gil(
     normalizer, checker, variant, wide_variant, decomposed, entry_point, calibration
 ):
     fair, held = calibration
-
     load = _load_per_core()
-    if load is not None and load > MAX_LOAD_PER_CORE:
-        pytest.skip(
-            f"load average is {load:.2f} per core, above {MAX_LOAD_PER_CORE} — a "
-            "contended machine deschedules the worker mid-call and the measurement "
-            "stops discriminating"
-        )
 
-    if fair > MAX_FAIR_SHARE:
-        pytest.skip(
-            f"fair-sharing calibration measured {fair:.3f}, which two GIL-bound "
-            "Python threads cannot reach — the calibration was corrupted by load "
-            "moving between its two windows, and it is the pivot every threshold "
-            "here derives from"
-        )
-
-    if held >= fair * MAX_CONTROL_OVER_FAIR:
-        pytest.skip(
-            f"a Rust call known to hold the GIL kept {held:.3f} of the observer's "
-            f"rate against {fair:.3f} for fair sharing, so this machine does not "
-            "show starvation at all and the measurement cannot discriminate"
-        )
+    # A guard may stand the measurement down; it may not do so silently. `_stand_down`
+    # emits a row under the same `MARGIN_PREFIX` before it skips, so a grep over a CI
+    # log gets one row per parametrized case whether or not a number was obtained.
+    #
+    # This is not a hypothetical tidiness: with the load guard the only one firing, a
+    # CI-shaped run of the whole Python suite reported `982 passed, 8 skipped` and
+    # emitted the margin ZERO times, while `-v` printed a bare `SKIPPED` with no
+    # reason. The absence of a number and the absence of its explanation coincided.
+    reason = _stand_down_reason(load, fair, held)
+    if reason is not None:
+        _stand_down(entry_point, reason, load, fair, held)
 
     call = _entry_points(normalizer, checker, variant, wide_variant, decomposed)[entry_point]
     threshold = fair * MIN_SHARE_OVER_FAIR
+
+    # Keep every attempt, not only the one the loop stops on.
+    #
+    # The loop still breaks on the first attempt that clears — that is the retry
+    # semantics `ATTEMPTS` exists for and it is unchanged. What changes is that the
+    # attempts it discards are still recorded. Reporting only the deciding attempt
+    # censors the passing population from below at `MIN_SHARE_OVER_FAIR`: a row could
+    # never show a margin *tighter* than the threshold, which is the only regime a
+    # reader of these rows cares about. Measured on this file's own base, one probe
+    # run logged `apply_to_reference share/fair=1.539 attempts=3/3` — two
+    # sub-threshold samples taken and thrown away — and `to_spdi share/fair=2.177
+    # attempts=2/3`, which reads comfortable for a run that was not.
+    #
+    # See `_margin_line` for what each reported ratio means and which of them may be
+    # pooled across runs.
+    shares: list[float] = []
     for _ in range(ATTEMPTS):
-        share = _median_share(call)
-        if share > threshold:
+        shares.append(_median_share(call))
+        if shares[-1] > threshold:
             break
+    share = shares[-1]
+
+    # Why the row exists at all: the calibration warning reports `fair` and `held`, so
+    # a CI log says whether the measurement could discriminate — but nothing reported
+    # how much headroom a *passing* case had. The assertion message below carries
+    # those numbers only when it fires, so "is this test chronically marginal on CI,
+    # or was that one unlucky?" was unanswerable from history. A merge-group ejection
+    # was measured at 1.483x fair against a 1.5x threshold, where the docstring's
+    # quiet-host table has these entry points at 3.4-4.1x. This makes every run that
+    # takes a measurement answer it, and every run that cannot say so out loud.
+    warnings.warn(
+        _margin_line(entry_point, shares=shares, threshold=threshold, fair=fair, load=load),
+        stacklevel=1,
+    )
 
     assert share > threshold, (
         f"{entry_point} starved a competing Python thread: it kept only "
@@ -463,6 +610,134 @@ def test_reference_backed_calls_release_the_gil(
         f"fair GIL sharing and {held:.3f} for a Rust call known to hold the GIL. "
         "A call that released the GIL scores above fair sharing, not below it. "
         "The binding is holding the GIL across reference I/O (#1455)."
+    )
+
+
+@pytest.mark.parametrize(
+    ("load", "fair", "held", "expected"),
+    [
+        # A healthy host, and the two ways "healthy" can sit exactly on a boundary.
+        (0.1, 0.4, 0.2, None),
+        (MAX_LOAD_PER_CORE, 0.4, 0.2, None),
+        (0.1, MAX_FAIR_SHARE, 0.2, None),
+        # No load average to read (Windows) is not a reason to stand down.
+        (None, 0.4, 0.2, None),
+        (None, 2.0, 0.2, "fair-sharing calibration"),
+        # One guard past its bar at a time, so each reason is attributable.
+        (MAX_LOAD_PER_CORE + 0.01, 0.4, 0.2, "load average"),
+        (0.1, MAX_FAIR_SHARE + 0.01, 0.2, "fair-sharing calibration"),
+        # `held >= fair * MAX_CONTROL_OVER_FAIR`: equality stands the run down,
+        # a hair under it does not.
+        (0.1, 0.4, 0.4, "known to hold the GIL"),
+        (0.1, 0.4, 0.39999, None),
+    ],
+)
+def test_the_stand_down_guards_fire_at_their_documented_boundaries(load, fair, held, expected):
+    """Each guard's bar is a claim about when this measurement stops meaning anything,
+    and the three bars are the only thing that can turn a red run green here.
+
+    Driving them with fixed numbers is the only way to exercise them at all: reaching
+    a boundary by finding a machine in the right state is not reproducible, so before
+    this the comparison operators were unexercised in both directions.
+    """
+    reason = _stand_down_reason(load, fair, held)
+    if expected is None:
+        assert reason is None, f"stood down on a host it should have measured: {reason}"
+    else:
+        assert reason is not None, "measured on a host it should have stood down on"
+        assert expected in reason, f"the wrong guard fired: {reason}"
+
+
+def test_the_margin_row_reports_the_attempts_the_verdict_discarded():
+    """A retried case's earlier, sub-threshold attempts must reach the log.
+
+    The loop stops at the first attempt that clears the threshold, so the attempt the
+    assertion acts on is above `MIN_SHARE_OVER_FAIR` whenever the case passes. Were
+    that the only attempt reported, the recorded margin could never be *below* 1.5x
+    however many attempts missed first — the passing population would be truncated
+    from below, censoring exactly the regime the row is collected to characterise.
+    """
+    fair = 0.400
+    threshold = fair * MIN_SHARE_OVER_FAIR
+    line = _margin_line(
+        "Namespace.entry_point",
+        shares=[0.480, 0.900],
+        threshold=threshold,
+        fair=fair,
+        load=0.25,
+    )
+
+    assert line.startswith(f"{MARGIN_PREFIX} Namespace.entry_point MEASURED ")
+    # 0.480 / 0.400 = 1.200, i.e. a miss — the attempt the loop discarded.
+    assert "first/fair=1.200" in line
+    assert "decided/fair=2.250" in line
+    assert "all/fair=[1.2, 2.25]" in line
+    assert f"attempts=2/{ATTEMPTS}" in line
+    assert "threshold=0.600" in line
+    assert "load/core=0.25" in line
+
+
+def test_a_single_attempt_row_reports_that_attempt_as_both_ratios():
+    """The common case, pinned so the two ratios cannot drift apart when they agree —
+    and so `load/core` still has a value on a platform with no load average."""
+    line = _margin_line(
+        "Namespace.entry_point", shares=[1.200], threshold=0.600, fair=0.400, load=None
+    )
+
+    assert "first/fair=3.000" in line
+    assert "decided/fair=3.000" in line
+    assert "all/fair=[3.0]" in line
+    assert f"attempts=1/{ATTEMPTS}" in line
+    assert "load/core=n/a" in line
+
+
+def test_a_stand_down_reports_a_row_before_it_skips():
+    """A guard may stand the measurement down; it may not do so silently.
+
+    `pytest.skip` raises, so a report placed after it never runs — and a case that
+    emits nothing is indistinguishable in a CI log from a case that never ran, which
+    is how the margin came to be emitted zero times on a run reporting `8 skipped`.
+    `pytest.warns` fails unless the warning is raised inside the block, and the block
+    cannot be left except through the skip, so the order is what is being pinned.
+    """
+    with (
+        pytest.warns(UserWarning, match=r"#1455 GIL margin: Namespace\.ep STOOD-DOWN") as caught,
+        pytest.raises(pytest.skip.Exception),
+    ):
+        _stand_down("Namespace.ep", "the reason it stood down", load=9.31, fair=0.815, held=0.684)
+
+    (record,) = caught
+    message = str(record.message)
+    assert "load/core=9.31" in message
+    assert "fair=0.815" in message
+    assert "held=0.684" in message
+    assert "the reason it stood down" in message
+
+
+def test_the_measurement_test_reports_on_both_of_its_exits():
+    """Both ways out of the measurement test must emit a row, and this is the only
+    level at which that is visible.
+
+    The tests above pin what `_margin_line` and `_stand_down` *do*. Nothing in them
+    stops the measurement test from dropping the margin warning, or from calling
+    `pytest.skip` directly again — and neither regression reddens anything, because a
+    skip is green and a warning nobody asserts on is free to disappear. Measured:
+    restoring the direct `pytest.skip` makes this module report `8 skipped`, exit 0,
+    and emit zero margin rows. So the guard reads the source.
+    """
+    source = Path(__file__).read_text()
+    tail = source.split("def test_reference_backed_calls_release_the_gil(", 1)
+    assert len(tail) == 2, "the measurement test was renamed; update this guard"
+    # Top-level definitions are separated by two blank lines under `ruff format`, so
+    # this is the test body plus, at worst, more of the file — and "more" only makes
+    # the prohibition below stricter.
+    body = tail[1].split("\n\n\n", 1)[0]
+
+    assert "_margin_line(" in body, "the measuring exit no longer emits a margin row"
+    assert "_stand_down(" in body, "the standing-down exit no longer emits a margin row"
+    assert "pytest.skip(" not in body, (
+        "the measurement test calls `pytest.skip` directly, so that stand-down emits "
+        "no margin row — the failure this module's reporting exists to remove"
     )
 
 
