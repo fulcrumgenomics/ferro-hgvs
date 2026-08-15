@@ -30,6 +30,9 @@ find_declarations = check_representation_change.find_declarations
 find_near_misses = check_representation_change.find_near_misses
 watched_files = check_representation_change.watched_files
 WATCHED_PREFIXES = check_representation_change.WATCHED_PREFIXES
+fenced_line_numbers = check_representation_change.fenced_line_numbers
+find_trailers_as_git_cliff_would = check_representation_change.find_trailers_as_git_cliff_would
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ---------------------------------------------------------------------------
@@ -1079,4 +1082,202 @@ def test_the_decline_exclusion_precedes_the_inclusion() -> None:
     )
     assert not any(word in inclusion for word in check_representation_change.NONE_VALUES), (
         f"the second rule is {inclusion!r}, which looks like the exclusion -- the two are reversed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A fenced trailer is documentation, not a declaration (#1929)
+# ---------------------------------------------------------------------------
+
+
+def test_a_fenced_trailer_is_not_a_declaration() -> None:
+    """The #1929 reproducer: quoting the docs must not file a disclosure.
+
+    This is the one decoration that reached column 0 with its text intact, so unlike an
+    inline code span or a blockquote it did not merely go unread — it was read as REAL, and
+    the author was recorded as disclosing a 577-row migration they said in the same body
+    they had not worked out. A false disclosure, not a missed one.
+    """
+    body = (
+        "This PR refactors a helper.\n\n"
+        "For reference, CONTRIBUTING.md says the trailer looks like:\n\n"
+        "```\n"
+        "Representation-Change: 577 rows move, 360 merge / 205 split / 12 respell.\n"
+        "  Previously-accepted inputs, so a real migration for the consumer.\n"
+        "```\n\n"
+        "I have not worked out the disclosure for this change yet.\n"
+    )
+    assert find_declaration(body) is None
+    passed, message = check(["src/normalize/mod.rs"], body)
+    assert not passed
+    assert "fenced code block" in message
+
+
+def test_a_fenced_trailer_is_reported_as_a_near_miss_not_as_silence() -> None:
+    """Someone who pasted the documented form is asking a question, not staying silent."""
+    body = "x\n\n```\nRepresentation-Change: none\n```\n"
+    misses = find_near_misses(body)
+    assert len(misses) == 1
+    line_number, line, reason = misses[0]
+    assert line_number == 4
+    assert line.startswith("Representation-Change:")
+    assert "fenced" in reason and "column 0" in reason
+
+
+@pytest.mark.parametrize(
+    "opener,closer",
+    [("```", "```"), ("~~~", "~~~"), ("````", "````"), ("```rust", "```")],
+)
+def test_every_fence_spelling_hides_a_trailer(opener: str, closer: str) -> None:
+    body = f"x\n\n{opener}\nRepresentation-Change: 9 rows move\n{closer}\n"
+    assert find_declaration(body) is None
+
+
+def test_a_longer_fence_may_contain_a_shorter_one() -> None:
+    """The shape the issue reproduced with: a ```` block quoting a ``` block."""
+    body = "x\n\n````markdown\n```\nRepresentation-Change: 577 rows move\n```\n````\n"
+    assert find_declaration(body) is None
+
+
+def test_a_backtick_opener_whose_info_carries_a_backtick_is_not_a_fence() -> None:
+    """CommonMark forbids a backtick in a BACKTICK fence's info string; tildes allow it.
+
+    Without that restriction an inline code span opens a block, so a line like
+    ```` ```see `none` below ```` reads as an opener and blanks everything after it — the
+    real declaration below included. It fails closed (the author is refused rather than
+    credited with a disclosure they never wrote), which is the safe direction and still
+    the wrong answer.
+
+    Both halves are asserted because only together do they show the rule is about the
+    fence CHARACTER and not about backticks in info strings generally.
+    """
+    body = "```see `none` below\n\nRepresentation-Change: none. Tests only.\n"
+    assert find_declaration(body) == "none. Tests only."
+    passed, _ = check(["src/normalize/mod.rs"], body)
+    assert passed
+
+    # A tilde fence has no such restriction, so this one genuinely opens and swallows it.
+    tilde = "~~~see `none` below\n\nRepresentation-Change: none. Tests only.\n"
+    assert find_declaration(tilde) is None
+
+
+def test_an_unclosed_fence_runs_to_the_end() -> None:
+    """CommonMark's rule, and the safe direction: withhold rather than invent."""
+    body = "x\n\n```\nRepresentation-Change: 577 rows move\n"
+    assert find_declaration(body) is None
+
+
+def test_a_real_trailer_after_a_closed_fence_still_counts() -> None:
+    """The fence must not swallow the rest of the body."""
+    body = "```\nsome code\n```\n\nRepresentation-Change: none. Tests only.\n"
+    assert find_declaration(body) == "none. Tests only."
+    passed, _ = check(["src/normalize/mod.rs"], body)
+    assert passed
+
+
+def test_a_fenced_example_beside_a_real_trailer_is_still_refused() -> None:
+    """The safety property that makes the fence-aware set the WRONG one to count.
+
+    `git_conventional` has no Markdown awareness — any `word:` line is a footer token — so
+    git-cliff sees the fenced example too. Were the duplicate refusal made fence-aware, this
+    body would pass here while the changelog still had two footers to choose from, and the
+    quoted 577-row example could land under an author who declared `none`.
+
+    So a fenced trailer may not BE the declaration and still COUNTS toward how many the
+    changelog will see. The refusal is what forces the author to indent or drop the quote.
+    """
+    body = (
+        "```\n"
+        "Representation-Change: 577 rows move\n"
+        "```\n\n"
+        "Representation-Change: none. Tests only.\n"
+    )
+    assert find_declaration(body) == "none. Tests only."
+    assert len(find_trailers_as_git_cliff_would(body)) == 2
+    passed, message = check(["src/normalize/mod.rs"], body)
+    assert not passed
+    assert "trailers found" in message
+
+
+def test_two_fenced_examples_and_no_real_trailer_are_refused_naming_the_fence() -> None:
+    """The one path where the fenced case does not get the fenced message.
+
+    `check` counts trailers as git-cliff would — fences included, deliberately — and
+    refuses on more than one BEFORE the near-miss scan runs. When *every* counted trailer
+    is fenced, that refusal is the one the author meets, and its advice ("Keep exactly
+    one", "Delete the superseded trailer") names a construct they never wrote: a Markdown
+    reader sees two code blocks. The advice happens to work, since indenting inside the
+    fence drops the line from `TRAILER_RE`, but it sends the author looking for a
+    declaration they have not made.
+
+    The body is not contrived. `CONTRIBUTING.md` publishes three such blocks and the whole
+    premise of #1929 is someone quoting the docs to ask what to write; quoting two of them
+    is how you ask WHICH form applies.
+
+    Both halves of the refusal are asserted, because both are true and neither alone
+    explains it: the count is what the changelog will see, and the fence is why the author
+    cannot see it.
+    """
+    body = (
+        "Which of these should I write?\n\n"
+        "```\n"
+        "Representation-Change: none\n"
+        "```\n\n"
+        "or\n\n"
+        "```\n"
+        "Representation-Change: 577 rows move, 360 merge / 205 split / 12 respell.\n"
+        "```\n"
+    )
+    assert find_declaration(body) is None, "neither example is readable, so nothing is declared"
+    assert len(find_trailers_as_git_cliff_would(body)) == 2, "git-cliff counts both"
+
+    passed, message = check(["src/normalize/mod.rs"], body)
+    assert not passed
+    assert "trailers found" in message, "the duplicate count is still reported"
+    assert "fenced code block" in message, (
+        "the duplicate refusal fired without naming the fence, so the author is told to "
+        f"delete a trailer that is not one; message was:\n{message}"
+    )
+    assert "nothing to delete here" in message
+
+
+def test_the_fenced_note_is_absent_when_a_real_trailer_is_among_the_duplicates() -> None:
+    """The negative control for the arm above: a readable trailer means real duplicates.
+
+    Here `Delete the superseded trailer` is exactly right, so the fenced note must not be
+    appended — it would tell an author with a genuine duplicate that there is nothing to
+    delete.
+    """
+    body = (
+        "```\n"
+        "Representation-Change: 577 rows move\n"
+        "```\n\n"
+        "Representation-Change: none. Tests only.\n"
+    )
+    passed, message = check(["src/normalize/mod.rs"], body)
+    assert not passed
+    assert "trailers found" in message
+    assert "nothing to delete here" not in message
+
+
+def test_contributing_md_s_own_examples_are_not_read_as_declarations() -> None:
+    """Run the checker over the contributor documentation itself.
+
+    The issue's suggested guard, and it is stronger than a hand-copied fixture: it keeps
+    working when the docs are rewritten. `CONTRIBUTING.md` publishes the trailer's form in
+    fenced blocks, so before #1929 its own text — pasted by someone asking what to write —
+    filed a disclosure.
+    """
+    contributing = (_REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    assert "Representation-Change:" in contributing, "the docs stopped documenting the trailer"
+    fenced = fenced_line_numbers(contributing)
+    quoted_in_a_fence = [
+        number
+        for number, line in enumerate(contributing.splitlines(), 1)
+        if line.startswith("Representation-Change:") and number in fenced
+    ]
+    assert quoted_in_a_fence, "expected CONTRIBUTING.md to publish the form inside a fence"
+    assert find_declaration(contributing) is None, (
+        "CONTRIBUTING.md's own examples are read as a declaration; "
+        f"fenced trailer lines were {quoted_in_a_fence}"
     )
