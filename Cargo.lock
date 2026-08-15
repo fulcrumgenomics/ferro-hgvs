@@ -1063,6 +1063,7 @@ dependencies = [
  "flate2",
  "proptest",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
 ]

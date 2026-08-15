@@ -91,6 +91,9 @@ mod bulk_fixtures;
 #[path = "../../../tests/it/common/cis_apply_oracle.rs"]
 mod cis_apply_oracle;
 #[allow(dead_code)]
+#[path = "../../../tests/it/common/failure_expectations.rs"]
+mod failure_expectations;
+#[allow(dead_code)]
 #[path = "../../../tests/it/common/fixture_gen.rs"]
 mod fixture_gen;
 #[allow(dead_code)]
@@ -114,8 +117,8 @@ mod synthetic;
 /// directory instead of two.
 mod common {
     pub(crate) use super::{
-        bulk_fixtures, cis_apply_oracle, fixture_gen, manifest, minimal_alignment, spec_fixture,
-        synthetic,
+        bulk_fixtures, cis_apply_oracle, failure_expectations, fixture_gen, manifest,
+        minimal_alignment, spec_fixture, synthetic,
     };
 }
 
@@ -152,6 +155,13 @@ mod issue_1542_direction_symmetry;
 mod normalize_axis_preserving;
 #[path = "../../../tests/it/spec_conformance_axis.rs"]
 mod spec_conformance_axis;
+// A parser benchmark rather than a normalization census — it never reaches
+// `canonicalize_from_sequence` — which is exactly why it belongs here: its cost
+// is a constant factor on gzip decode, JSON deserialization and `parse_hgvs`,
+// and the soak profile lowers all three. It was the second-heaviest test in
+// `Test oracle (2/4)` at 54.9s, on the shard that ended that job last.
+#[path = "../../../tests/it/clinvar_hgvs_tests.rs"]
+mod clinvar_hgvs_tests;
 
 // ---------------------------------------------------------------------------
 // SUPPORT: compiled because a module above reaches into it, NOT because any job

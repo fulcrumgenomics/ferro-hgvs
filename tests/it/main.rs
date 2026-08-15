@@ -464,6 +464,7 @@ mod normalize_tests;
 mod normalize_warning_seam;
 mod one_unknown_offset_sentinel_definition;
 mod oracle_exclude_invariant;
+mod oracle_only_filter_invariant;
 mod paraphase_exhaustive_tests;
 mod parser_tests;
 mod partition_switch_wiring;

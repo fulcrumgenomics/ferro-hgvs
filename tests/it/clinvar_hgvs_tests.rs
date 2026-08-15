@@ -11,10 +11,10 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
 use std::time::Instant;
 
 use crate::common::failure_expectations::{enforce, FixtureCheck};
+use crate::common::fixture_gen;
 
 const CLINVAR_500K_FAILURE_EXPECTATIONS_PATH: &str =
     "tests/fixtures/bulk/clinvar_hgvs_500k_failure_expectations.json";
@@ -160,7 +160,14 @@ fn test_clinvar_hgvs_500k_benchmark() {
     );
 
     enforce(
-        Path::new(CLINVAR_500K_FAILURE_EXPECTATIONS_PATH),
+        // Resolved against the workspace root, not the cwd: nextest sets the cwd
+        // to the PACKAGE root, and this module is compiled into
+        // `ferro-hgvs-soak-tests` as well as into `it`, where that root is
+        // `tests-soak/`. A bare relative path resolves there and the snapshot is
+        // reported missing — loudly, but in the one binary that cannot be run
+        // from the workspace root. Same reason `common::bulk_fixtures` and
+        // `common::fixture_gen` resolve their own paths this way.
+        &fixture_gen::fixture_path(CLINVAR_500K_FAILURE_EXPECTATIONS_PATH),
         "UPDATE_FAILURE_EXPECTATIONS",
         FixtureCheck {
             total_inputs: total,
@@ -239,7 +246,9 @@ fn test_clinvar_hgvs_unique_benchmark() {
     eprintln!("\n========================================\n");
 
     enforce(
-        Path::new(CLINVAR_UNIQUE_FAILURE_EXPECTATIONS_PATH),
+        // See the note on the 500k call above: workspace-root-relative, because
+        // this module now also compiles into the soak driver.
+        &fixture_gen::fixture_path(CLINVAR_UNIQUE_FAILURE_EXPECTATIONS_PATH),
         "UPDATE_FAILURE_EXPECTATIONS",
         FixtureCheck {
             total_inputs: total,
