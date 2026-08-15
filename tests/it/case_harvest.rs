@@ -1167,18 +1167,24 @@ fn the_arfgef2_pair_denotes_one_sequence() {
 /// attempt to use it that way was refuted on exactly that ground — so `:56`
 /// cannot settle a merge-versus-split question at all". `c.[710T>A;713T>A]`
 /// against `c.710_713inv` is precisely a multi-member allele against a spanning
-/// description, so `:56` does not reach it. Note the sibling `decided` record
-/// `inversion-vs-two-delins-76-83` reads `:56` the other way ("a genuine
-/// two-substitution shape splits"); the two are in tension, which is the
-/// operator's call and not this file's.
+/// description, so `:56` does not reach it. The sibling `decided` record
+/// `inversion-vs-two-delins-76-83` once read `:56` the other way ("a genuine
+/// two-substitution shape splits"), and that tension **has since been resolved
+/// by the operator, against the split**: the `decided` record
+/// `whole-span-reverse-complement-types-as-inv` (2026-08-13) types a whole-span
+/// reverse complement `inv` uniformly and supersedes the competitor-type
+/// reasoning in both.
 ///
 /// So the assertion below is held on `background/basics.md:38` — the corpus's
 /// stated authority for its stability pins, which are explicitly **not**
 /// spec-correctness claims. It fires if the form moves, which is what it is for:
 /// #1541's own 2026-08-12 status records that this locus is a live member of the
 /// #1703 family and that "whichever way that is ruled, this row moves with it".
-/// When it is ruled, re-bless this constant **with the ruling**, rather than
-/// deleting the pin.
+/// **It has now been ruled, and this constant is on the losing side** — the
+/// decided target is `NM_000500.9:c.710_713inv`. The pin is deliberately left
+/// at today's value here, because the ruling ships no code and this file must
+/// stay green until #1541/#1703 implement it; re-bless it **in that change**,
+/// citing the ruling, rather than deleting the pin.
 const CYP21A2_TARGET: &str = "NM_000500.9:c.[710T>A;713T>A]";
 
 /// #1541 — `NM_000500.9:c.[710T>A;713T>A]`, `c.710_713inv` and
@@ -1271,10 +1277,20 @@ fn the_four_mer_inversion_pair_converges() {
 ///
 /// Green, and deliberately not folded into
 /// [`the_confluence_classes_converge`]. Without it the rule #1541 asks for could
-/// be implemented as "always prefer the split", which would satisfy the red test
-/// and silently break the decided `inversion-vs-two-delins-76-83` ruling that
-/// #1535 shipped. The two tests are a pair: the ranking discriminates on *what
-/// the block competes with*, and only holding both sides pins that.
+/// be implemented as "always prefer the split", which would silently break the
+/// decided `inversion-vs-two-delins-76-83` ruling that #1535 shipped.
+///
+/// **What this control is now for has changed, and the change matters to
+/// whoever implements #1541.** It used to pin the *discriminator* — that the
+/// ranking turned on what the block competes with — so that only holding both
+/// sides caught a fix written as "always prefer the split". The decided ruling
+/// `whole-span-reverse-complement-types-as-inv` (2026-08-13) retires that
+/// discriminator and types a whole-span reverse complement `inv` uniformly, so
+/// the sibling row is now expected to move to the `inv` **and this row is
+/// expected not to move at all**. The control therefore still earns its place,
+/// against the opposite error: a fix written as "always prefer the split" is now
+/// wrong in both directions, and a fix written as the uniform `inv` must leave
+/// this row exactly where it is.
 #[test]
 fn the_inversion_preference_control_still_holds() {
     let cases = cases();
@@ -1292,11 +1308,13 @@ fn the_inversion_preference_control_still_holds() {
         assert_eq!(
             result.as_deref(),
             Ok("NM_004006.2:c.76_83inv"),
-            "`{input}` must stay typed as an inversion. Its competing members are `delins`, which \
-             general.md:56 does not rank at all, so DNA/inversion.md:5 governs — the decided \
-             ruling `inversion-vs-two-delins-76-83`, shipped by #1535. If this moved while \
-             fixing #1541, the fix was written as \"always prefer the split\" rather than as the \
-             ranking."
+            "`{input}` must stay typed as an inversion. DNA/inversion.md:5 governs, because the \
+             span is an exact reverse complement — the decided ruling \
+             `whole-span-reverse-complement-types-as-inv`, which types this shape `inv` \
+             uniformly and supersedes the competitor-type reasoning in \
+             `inversion-vs-two-delins-76-83` (whose outcome for this row is unchanged). If this \
+             moved while fixing #1541, the fix was written as \"always prefer the split\" — \
+             which the ruling now rejects in both directions."
         );
     }
 }

@@ -372,7 +372,10 @@ const WORKED: &[Worked] = &[
         rebase: Rebase::Local,
         fixture: Fixture::Genomic,
         why: "a whole-block reverse complement is an `inv`, not a `delins` \
-              (inversion.md:5, and the ruling `inversion-vs-two-delins-76-83`)",
+              (inversion.md:5, and the ruling \
+              `whole-span-reverse-complement-types-as-inv`, which types the span \
+              uniformly and supersedes the competitor-type reasoning in \
+              `inversion-vs-two-delins-76-83`)",
     },
     Worked {
         id: "W38",
