@@ -6,12 +6,14 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64", "osx-64", "linux-64"]
 
 [tasks]
-# Run ferro-benchmark compare-normalize with mutalyzer
-compare-mutalyzer = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- compare-normalize --validator mutalyzer" }
-# Run ferro-benchmark compare-normalize with biocommons
-compare-biocommons = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- compare-normalize --validator biocommons" }
-# Check if validators are available
-check-validators = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- check-biocommons && cargo run --release --features benchmark --bin ferro-benchmark -- check-mutalyzer-normalizer" }
+# Compare ferro-hgvs normalization against the pinned mutalyzer comparator.
+# Requires an input patterns file, e.g. `pixi run compare-mutalyzer -i patterns.txt --reference benchmark-output/ferro`.
+compare-mutalyzer = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- benchmark normalize --validator mutalyzer" }
+# Compare ferro-hgvs normalization against the biocommons/hgvs comparator.
+# Requires an input patterns file, e.g. `pixi run compare-biocommons -i patterns.txt --reference benchmark-output/ferro`.
+compare-biocommons = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- benchmark normalize --validator biocommons" }
+# Check if the external validators (biocommons + mutalyzer) are available.
+check-validators = { cmd = "cargo run --release --features benchmark --bin ferro-benchmark -- check biocommons && cargo run --release --features benchmark --bin ferro-benchmark -- check mutalyzer" }
 
 [dependencies]
 # Python runtime

@@ -45,7 +45,7 @@ pub struct Fixture {
 /// source; the biocommons/hgvs-rs versions are the benchmark suite's other
 /// comparators, recorded here for one canonical provenance record. Prefer
 /// **deriving** expected values from these pinned comparators (via
-/// `ferro-benchmark compare-normalize`) over copying an upstream test suite —
+/// `ferro-benchmark normalize mutalyzer`) over copying an upstream test suite —
 /// the practice that prevents the Mutalyzer2-era drift #882 surfaced.
 #[derive(Debug, Deserialize, Default)]
 #[allow(dead_code)]

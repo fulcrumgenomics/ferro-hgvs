@@ -7,10 +7,10 @@
 //!
 //! ```bash
 //! # Check if hgvs-rs is properly configured
-//! ferro-benchmark check-hgvs-rs --uta-db-url postgresql://... --seqrepo-path /path/to/seqrepo
+//! ferro-benchmark check hgvs-rs --uta-db-url postgresql://... --seqrepo-path /path/to/seqrepo
 //!
 //! # Compare normalization with hgvs-rs
-//! ferro-benchmark compare-normalize --validator hgvs-rs --uta-db-url postgresql://...
+//! ferro-benchmark benchmark normalize --validator hgvs-rs --input <patterns> --uta-db-url postgresql://...
 //! ```
 
 use std::path::Path;
