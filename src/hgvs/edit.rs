@@ -406,16 +406,39 @@ impl InsertedSequence {
     /// `(start, end, inverted)` 1-based inclusive coordinates, or `None` when
     /// this is not one.
     ///
-    /// An all-numeric same-reference range has **two** AST spellings that the
-    /// parser mints interchangeably and that [`Display`](fmt::Display) renders
-    /// identically: the bare [`PositionRange`](InsertedSequence::PositionRange) /
+    /// An all-numeric same-reference range has **two** AST spellings that
+    /// [`Display`](fmt::Display) renders identically but that reach the AST from
+    /// two different producers: the bare
+    /// [`PositionRange`](InsertedSequence::PositionRange) /
     /// [`PositionRangeInv`](InsertedSequence::PositionRangeInv) variant, and the
-    /// single-part `Complex([PositionRange | PositionRangeInv])` shape (the
-    /// parser wraps `parse_cds_position_range`'s result in `Complex` but falls
-    /// through to the bare variant for `parse_simple_count`). Both denote one
-    /// contiguous slice of the same accession, so this is the single place that
-    /// collapses them — consumers call it rather than re-deriving the match, and
-    /// so cannot disagree about which spelling they handle (#1986).
+    /// single-part `Complex([PositionRange | PositionRangeInv])` shape. Both
+    /// denote one contiguous slice of the same accession, so this is the single
+    /// place that collapses them — consumers call it rather than re-deriving the
+    /// match, and so cannot disagree about which spelling they handle (#1986).
+    ///
+    /// The **parser never mints the bare variant.** For any input reaching the
+    /// `<digits>_<digits>` dispatch arm, `parse_cds_position_range` is tried
+    /// first and accepts every plain numeric pair, returning an
+    /// [`InsertedPart`] that the arm wraps in `Complex` — so a parsed same-
+    /// reference numeric range is always the single-part `Complex` shape.
+    /// `parse_simple_count`'s own `PositionRange` / `PositionRangeInv` returns
+    /// are therefore unreachable for any parseable input, and no HGVS string
+    /// produces either bare variant. Both are minted by **normalization**, not
+    /// the parser:
+    ///
+    /// - bare [`PositionRange`](InsertedSequence::PositionRange) —
+    ///   [`canonicalize_conversion_to_delins`](crate::normalize::rules::canonicalize_conversion_to_delins)
+    ///   rewrites a same-reference `con` source (e.g.
+    ///   `NaEdit::Conversion { source: "100_200" }`) into
+    ///   `Delins { sequence: PositionRange { 100, 200 } }`;
+    /// - bare [`PositionRangeInv`](InsertedSequence::PositionRangeInv) — the
+    ///   `DNA/inversion.md:69` inverted-duplication `ins<range>inv` re-spell in
+    ///   `normalize_genome` (`crate::normalize`) mints it inside an
+    ///   `Insertion` (currently on the `g.` axis only).
+    ///
+    /// So this accessor exists to collapse those normalization-minted bare forms
+    /// with the parser's `Complex` form, not two interchangeable parser
+    /// spellings (#2035).
     ///
     /// Multi-part `Complex` payloads, [`CdsPositionRange`](InsertedPart::CdsPositionRange)
     /// (intronic-offset / UTR-marker ranges), external references,
