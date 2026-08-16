@@ -3,6 +3,7 @@ title = "ferro-hgvs"
 description = "HGVS variant nomenclature parser and normalizer — user documentation"
 authors = ["Fulcrum Genomics"]
 language = "en"
+text-direction = "ltr"
 src = "src"
 
 [build]
@@ -10,6 +11,7 @@ build-dir = "book"
 
 [output.html]
 additional-css = ["theme/custom.css"]
+additional-js = ["theme/sidebar-brand.js"]
 git-repository-url = "https://github.com/fulcrumgenomics/ferro-hgvs"
 edit-url-template = "https://github.com/fulcrumgenomics/ferro-hgvs/edit/main/docs/{path}"
 no-section-label = true
@@ -21,11 +23,21 @@ enable = true
 
 [output.html.fold]
 enable = true
-level = 1
+# level = 0 -> every nested section starts collapsed; mdBook's runtime JS expands
+# only the section containing the current page. Matches the fgumi/bwa-mem3 docs.
+level = 0
 
 [output.html.playground]
 editable = false
 runnable = false
+
+# NOTE: no [preprocessor.mermaid] yet. The fgumi/bwa-mem3 docs use mermaid diagrams
+# and wire it in (bwa-mem3 via this stanza + an mdbook-mermaid install in CI/RTD;
+# fgumi via its xtask). ferro's docs currently contain zero mermaid diagrams, so we
+# deliberately do not declare the preprocessor — it would force an mdbook-mermaid
+# dependency into CI/RTD for dead config. When the first diagram lands (e.g. a
+# confluence graph in a shadow-spec page), add the stanza, the theme JS/CSS assets,
+# and the pinned install to .readthedocs.yaml + .github/workflows/docs.yml together.
 
 # Broken-link checker (mdbook-linkcheck2, the fork tracking mdBook 0.5). Configured as an
 # output backend so `mdbook build` FAILS on internal dead links — mdBook alone only warns.
