@@ -10,7 +10,7 @@ repository = "https://github.com/fulcrumgenomics/ferro-hgvs"
 keywords = ["hgvs", "variant", "normalization", "bioinformatics"]
 categories = ["science", "command-line-utilities"]
 readme = "README.md"
-homepage = "https://github.com/fulcrumgenomics/ferro-hgvs"
+homepage = "https://ferro-hgvs.readthedocs.io/en/stable/"
 exclude = [
     "tests/fixtures/bulk/*.gz",
     "tests/fixtures/validation/*_exhaustive.json.gz",
