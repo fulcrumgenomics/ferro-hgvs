@@ -5627,7 +5627,239 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
     if split_is_a_placed_gap_coincidence(&pieces, reference, result, carve_out) {
         return whole();
     }
-    pieces
+    prefer_minimal_alignment(pieces, reference, result, carve_out)
+}
+
+/// Re-cut an already-split block with the **minimal** alignment when the
+/// single-gap search provably over-describes it.
+///
+/// [`best_alignment`] considers only single-gap alignments — one contiguous
+/// indel plus substitutions — and [`partition_block`]'s own note records why:
+/// letting it place compensating gaps lets it manufacture matches from
+/// coincidence and shred a genuinely contiguous replacement (#1034/#1040/#182).
+/// The same note states the condition that restriction rests on — it "is sound
+/// only while the block *has* a single-gap explanation as economical" as the
+/// alternative. When two members' length changes do not cancel within one gap,
+/// it does not: the lone gap parks at one end and the offset between the two
+/// real changes reads as a run of substitutions.
+///
+/// # The measured case
+///
+/// `TATATAATAAT` -> `CTATATATAATAA` carries a `+3` insertion and a `-1`
+/// deletion eleven bases apart — **mixed signs, so no single gap can carry
+/// both**, which is the whole trigger. Read off `examples/dump_partitions`,
+/// in block-local 0-based half-open `ref_start:ref_end/alt` form:
+///
+/// ```text
+/// ref          alt            dist  live (before)         cols  canonical  cols
+/// TATATAATAAT  CTATATATAATAA  4     0:6/CTATAT|11:11/AA   8     0:0/CTA|10:11/  4
+/// ```
+///
+/// **8** changed columns against **4** — six of the eight are substitutions
+/// that exist only because the gap could not be split. Both denote the same
+/// bases; one describes twice the change. In the window frame the tests use
+/// (the block starts at offset 4) that is `[4..10>CTATAT, 15..15>AA]` against
+/// `[4..4>CTA, 14..15>]`, and the insertion 5'-rolls to `3..3>ACT` before it is
+/// rendered — so the description reads `g.[3_4insACT;15del]`. The raw member
+/// and the rendered member are quoted separately here on purpose; conflating
+/// them is how an earlier draft of this comment came to state a partition
+/// offset the partitioner never produces.
+///
+/// # WHICH ARM THIS REACHES — read this before quoting it as a fix
+///
+/// This function is inside [`partition_block`], which is
+/// [`PartitionRule::Live`]. It is therefore reached by `FERRO_PARTITION=live`,
+/// by the shadow audit's independent baseline, and by `dev::live` — **not** by
+/// the shipped default.
+///
+/// Under [`DEFAULT_PARTITION_RULE`] (`CanonicalCoalesced`) the dispatch calls
+/// [`partition_block_canonical`] first and only falls back to
+/// [`partition_block`] when that **declines**. On that fallback this rule
+/// provably cannot fire, and the proof is over *every* way
+/// [`partition_block_canonical_within`] can decline, because it is reached here
+/// on the **same two slices** the canonical arm was just handed:
+///
+/// * `cells > max_grid_cells` — `cells` is a function of the two lengths alone.
+///   The canonical arm declines at [`MAX_SEQFIRST_GRID_CELLS`] (`4097^2` =
+///   16 785 409); this rule retries at [`MAX_SEPARATION_AUDIT_CELLS`] (`2^20` =
+///   1 048 576), **16x smaller**, so a smaller budget can only decline more.
+/// * the `checked_add`/`checked_mul` overflow arms computing `cells` — the same
+///   two lengths, so the same answer.
+/// * `AlignmentDag::build` returning `None`, which is `n + m >
+///   MAX_ALIGNMENT_SPAN` (#1970) — a **span** cap, independent of the cells
+///   budget entirely, so it declines identically at either.
+///
+/// A grid budget appears in exactly one of the three and is monotone there, so
+/// the retry declines whenever the first call did. **On the default arm this is
+/// a no-op by construction, not by measurement** — and a corpus zero taken on
+/// that arm is structural and says nothing about the rule.
+///
+/// (An earlier revision of this comment claimed the callee "has exactly one
+/// decline path". It has three. The conclusion survives — but it survives on
+/// span-independence and budget monotonicity, not on there being one arm, and
+/// the difference is the whole proof.)
+///
+/// # What it closes, stated against the tree it lands on
+///
+/// It converges the `live` arm toward the answer the canonical arm already
+/// gives, and that is the whole of its measured effect. Under
+/// `FERRO_PARTITION=live`, `TEMPLATE:g.[4_5insC;5_6dup;15del]` on `DUP_RUN`
+/// normalizes to `TEMPLATE:g.[5_10delinsCTATAT;16A[3]]` without this rule and
+/// to `TEMPLATE:g.[3_4insACT;15del]` with it — the one-member spelling's own
+/// fixed point.
+///
+/// **Sized, so nobody has to guess how much of that there is.** The whole Rust
+/// suite under `FERRO_PARTITION=live` goes from **58 failures to 53** with this
+/// rule enabled: 5 rows fixed, **0** broken. They are
+/// `merge::tests::seqfirst_shadow_audit::equal_weight_different_division`,
+/// `it::cis_junction_crossing_shift::the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`,
+/// `it::issue_1316_coincident_tract_repeats::the_seeds_deletion_survives_the_combination`,
+/// `it::spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`
+/// and
+/// `it::weight_bound_worked_examples::one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split`.
+/// On the shipped default the same sabotage costs exactly **one** assertion of
+/// 11 321 — the unit test above, which reads `partition_block` directly.
+///
+/// **The designed corpus cannot see any of it, on either arm, and the zero is
+/// STRUCTURAL on both — for two different reasons, measured rather than argued.**
+/// `examples/dump_normalized_corpus` moves **0 of 96 182 rows** with the rule
+/// enabled under `FERRO_PARTITION=live` as well as under the default. Do not
+/// quote either zero as safety; each is a claim about the instrument.
+///
+/// * **Default arm — the function is never entered.** The dump's own partitioner
+///   census reads "0 of 73 374 blocks declined and were served by
+///   `partition_block`", so the canonical arm answers every block and the
+///   fallback this rule sits behind is reached **zero** times. That is the
+///   monotonicity proof above, measured: a code-path zero, not a shape zero.
+/// * **`live` arm — entered, fully exercised, and stopped at one gate.**
+///   Instrumenting each gate over the same corpus: **60 555** calls, **39 260**
+///   rejected as equal-length or single-piece, **21 295** reaching the cost
+///   comparison, and **21 295 of 21 295** rejected there because the minimal
+///   alignment is never *strictly* cheaper. `partition_block_canonical_within`
+///   declined **0** times, so the grid budget is not what is blocking. The zero
+///   is attributable to `changed_columns_of_pieces(&minimal) >=
+///   changed_columns_of_pieces(&pieces)` and to nothing else.
+///
+/// The trigger is a block whose length changes have **mixed signs** at
+/// non-overlapping loci, and no shape family builds one: `three_member_allele`
+/// is three substitutions, `dup_plus_ins` two insertions, `del_plus_sub` a
+/// deletion and a substitution; the only family that mixes signs,
+/// `junction_interior_to_span`, makes them *coincident*, which the overlap
+/// detector refuses before partitioning. Add the family before reading the
+/// `live` zero as a statement about this rule.
+///
+/// **What the corpus cannot witness, an exhaustive sweep can — and it is not
+/// small.** Over **524 291** block pairs (every unequal-length `(ref, alt)` with
+/// lengths 4x5 and 5x4 across the full `ACGT` alphabet, plus the three named
+/// cases), driven through `examples/dump_partitions`:
+///
+/// ```text
+/// re-cut by this rule      6 098   (1.163%)
+///   strictly cheaper       6 098   (all of them)
+///   equal columns              0
+///   MORE columns               0   (no regression at any size)
+///   `live` == `canonical` after 6 098   (before: 0)
+/// changed columns eliminated  6 101
+/// ```
+///
+/// So the rule is neither rare nor cosmetic on the class it targets; it is
+/// exactly a `live`-onto-`canonical` convergence, every instance strictly
+/// improving, with no case where it costs anything. The designed corpus simply
+/// builds none of that class. Reproduce with the recipe in the PR description.
+///
+/// **It is not what closed the `#1235` non-confluence.** The ruling record
+/// `contiguous-insertion-split-by-a-blocked-derivation` describes a
+/// two-stable-strings defect that the partition default flip (**#1835**) closed
+/// on the shipping arm; `it::cis_junction_crossing_shift::the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`
+/// asserts that convergence and passes without this rule. Nor is the mechanism
+/// that record names still present: the `canonicalize_from_sequence`
+/// changed-columns bound it blames was **deleted outright by #1899**
+/// (`derivation-may-not-be-bounded-by-the-inputs-spelling`), so the
+/// over-described partition is now emitted rather than discarded — which is why
+/// the `live` "before" above is a `delins`+repeat pair and not the input's own
+/// three members.
+///
+/// # What it may not do, and how each is held
+///
+/// The comparand is the **block**, never the input's spelling: this function
+/// reads only `reference` and `result`, so two spellings of one variant reach
+/// it with identical arguments and leave with identical pieces. An
+/// input-relative trigger would not have worked — it converges nothing, because
+/// the over-described form is its own fixed point once it is what arrived.
+/// (`derivation-may-not-be-bounded-by-the-inputs-spelling`.)
+///
+/// * **It never cuts a block the single-gap search left whole.** Every
+///   `whole()` exit in [`partition_block`] is an adjudication —
+///   `delins.md:44-47`'s payload coincidence among them — and they all return
+///   before this runs.
+/// * **It never manufactures a member.** `minimal.len() <= pieces.len()`, so
+///   the rule re-places cuts and lowers weight; deciding that a block splits at
+///   all stays with the guards above.
+/// * **It re-runs those guards on its own candidate, under the same axis
+///   scope.** The minimal alignment maximizes matches exactly as
+///   [`best_alignment`] does, so a separation it finds can be the same
+///   coincidence, and the same two tests bind — `separations_are_meaningful`
+///   and, gated on [`CoincidenceCarveOut::may_disbelieve_a_separation`], the
+///   `every_separation_is_a_single_base` collapse. The gate is not optional and
+///   is not this rule's own policy: it is
+///   `delins-payload-coincidence-carve-out-is-coding-dna-scoped`, and a
+///   candidate accepted here must clear exactly the tests the shipped partition
+///   cleared, on the same axis, or this becomes a second route past a ruling
+///   `partition_block` enforces directly above.
+/// * **Equal weight keeps the shipped partition.** Only a strict improvement
+///   moves a row, which is what keeps this off every block that already had a
+///   single-gap explanation as economical as the minimal one.
+///
+/// The grid is bounded by [`MAX_SEPARATION_AUDIT_CELLS`] rather than
+/// [`MAX_SEQFIRST_GRID_CELLS`]: this is an audit of an already-accepted
+/// partition, and over the cap the answer is the shipped one — under-reporting,
+/// never over-reporting, the bias `concealed_separations` takes for the same
+/// reason.
+fn prefer_minimal_alignment(
+    pieces: Vec<Piece>,
+    reference: &[u8],
+    result: &[u8],
+    carve_out: CoincidenceCarveOut,
+) -> Vec<Piece> {
+    // Scoped to UNEQUAL-length blocks, and deliberately not on the premise the
+    // three guards beside it state. Those say an equal-length block "has no gap
+    // to place", and `unchanged-is-read-over-every-minimal-alignment` records
+    // that premise as FALSE — `CAG -> AGA` is equal-length with edit distance 2,
+    // so a minimal alignment there is cheaper than the position-wise one and this
+    // rule would have something to prefer. Restating it here would be a fourth
+    // copy of a claim the ledger has already refuted.
+    //
+    // The real ground is the direction scope of
+    // `delins-merge-vs-individual-gap-two-or-more`: the over-description this
+    // rule exists to undo is a gap that could not be split, which needs a length
+    // change to exist at all. The equal-length class is `#1939`'s and is measured
+    // as large (28% at L=6); moving it is a separate, disclosable change and is
+    // not smuggled in here.
+    if reference.len() == result.len() || pieces.len() < 2 {
+        return pieces;
+    }
+    let Some(minimal) =
+        partition_block_canonical_within(reference, result, MAX_SEPARATION_AUDIT_CELLS)
+    else {
+        return pieces;
+    };
+    if minimal.is_empty()
+        || minimal.len() > pieces.len()
+        || changed_columns_of_pieces(&minimal) >= changed_columns_of_pieces(&pieces)
+    {
+        return pieces;
+    }
+    if !separations_are_meaningful(&minimal, result.len().abs_diff(reference.len()), carve_out) {
+        return pieces;
+    }
+    if carve_out.may_disbelieve_a_separation()
+        && minimal.len() > 1
+        && every_separation_is_a_single_base(&minimal)
+        && split_buys_no_higher_priority_type(&minimal, reference)
+    {
+        return pieces;
+    }
+    minimal
 }
 
 /// Cap on the alignment grid [`concealed_separations`] will build for one piece,
@@ -19125,8 +19357,21 @@ mod tests {
         /// same number of changed columns; they only divide the change
         /// differently. Which is preferable is not decided here — `delins.md:17`
         /// and ferro's own `split_buys_no_higher_priority_type` policy are what
-        /// reach these, and the two blocks below fall to them in opposite
-        /// directions.
+        /// reach these, and the first block below falls to them.
+        ///
+        /// **The second block left this class when [`prefer_minimal_alignment`]
+        /// landed**, and it is kept here rather than moved because the pair is
+        /// what makes the class legible. `AGAGT -> GAAGAG` used to be live 4
+        /// against shadow 4; live now spends **3**, because the single-gap
+        /// alignment's `[(0,2,"GA"), (4,5,"AG")]` was strictly heavier than the
+        /// minimal alignment's `[(0,0,"GA"), (4,5,"")]` — one insertion in, one
+        /// base out, with no substitution run between them. The two splitters
+        /// still divide it differently, so it is not a `converged` row; the
+        /// weights are simply no longer equal.
+        ///
+        /// The table above is a **harvest**, taken before that rule existed, and
+        /// this is the one block of it re-measured here. Do not read the `n`
+        /// column as current.
         #[test]
         fn equal_weight_different_division() {
             let (live, shadow) = both(b"ACAGCG", b"CGCTGT");
@@ -19141,13 +19386,13 @@ mod tests {
             let (live, shadow) = both(b"AGAGT", b"GAAGAG");
             assert_eq!(
                 shape(&live),
-                [(0, 2, b"GA".as_slice()), (4, 5, b"AG".as_slice())]
+                [(0, 0, b"GA".as_slice()), (4, 5, b"".as_slice())]
             );
             assert_eq!(
                 shape(&shadow),
                 [(0, 1, b"GAA".as_slice()), (4, 5, b"".as_slice())]
             );
-            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&live), 3);
             assert_eq!(changed_columns_of_pieces(&shadow), 4);
         }
 
