@@ -36,7 +36,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Get NCBI API key from environment variable.
@@ -1914,6 +1914,17 @@ fn fetch_fasta_fallback(
 }
 
 /// Supplemental transcript metadata extracted from GenBank records.
+///
+/// **Every field here is *sourced*** — only a GenBank record supplies it, and a FASTA cannot
+/// re-derive it. The one thing that used to sit beside them, `sequence_length`, is *derived*:
+/// its authority is the accession's bases in the supplemental FASTA. R4 dropped it from this
+/// type so the derived/sourced split is explicit in the shape rather than in prose. That
+/// makes a "hollow" row — one that claims a length it has no bases behind, the shape 116,572
+/// of the shipped `patterns_transcripts.metadata.json`'s 140,027 rows had (#1722) —
+/// *unrepresentable*: there is no length field to be zero, stale, or otherwise wrong, and so
+/// nothing to detect and repair. Length is read straight from the FASTA index at every point
+/// that needs it (see `MultiFastaProvider::get_supplemental_cds_info`, which already sourced
+/// it there since #1722).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SupplementalTranscript {
     /// Transcript accession (e.g., "NM_033517.1")
@@ -1924,8 +1935,6 @@ pub struct SupplementalTranscript {
     pub cds_start: Option<u64>,
     /// CDS end position (1-based, inclusive)
     pub cds_end: Option<u64>,
-    /// Sequence length
-    pub sequence_length: usize,
 }
 
 /// Supplemental metadata for transcripts not in cdot.
@@ -1937,29 +1946,6 @@ pub struct SupplementalMetadata {
     pub transcripts: std::collections::HashMap<String, SupplementalTranscript>,
 }
 
-impl SupplementalTranscript {
-    /// Whether this row claims no sequence at all — the shape #1722 calls **hollow**.
-    ///
-    /// A hollow row is not a row with missing *information*. `sequence_length` is a
-    /// **derived** field: all three sites that build a [`SupplementalTranscript`] set it to
-    /// the length of the sequence they just wrote to the FASTA and to nothing else, so the
-    /// FASTA is its authority and the sidecar is a cache of it. `gene_symbol`, `cds_start`
-    /// and `cds_end` are **sourced** — only a GenBank record supplies them — and a FASTA
-    /// cannot re-derive them.
-    ///
-    /// That split is what makes a hollow row repairable without a network round trip: if
-    /// the accession's bases are on disk, its length is not missing, merely not indexed.
-    ///
-    /// This is the **reporting** predicate, and deliberately not what
-    /// [`repair_derived_lengths`] keys on: the repair asks the strictly more complete
-    /// question — does this row's length agree with the FASTA — which also covers a
-    /// non-zero length that has drifted. `is_hollow` names the shape #1722 measured, so a
-    /// run can say how degraded the artifact it found was.
-    pub fn is_hollow(&self) -> bool {
-        self.sequence_length == 0
-    }
-}
-
 impl SupplementalMetadata {
     /// An empty artifact, stamped now — what a first run starts from.
     fn empty() -> Self {
@@ -1967,14 +1953,6 @@ impl SupplementalMetadata {
             generated_at: chrono::Utc::now().to_rfc3339(),
             transcripts: std::collections::HashMap::new(),
         }
-    }
-
-    /// How many rows are hollow, for the run to report.
-    fn hollow_record_count(&self) -> usize {
-        self.transcripts
-            .values()
-            .filter(|record| record.is_hollow())
-            .count()
     }
 }
 
@@ -1996,136 +1974,6 @@ fn load_supplemental_metadata(metadata_path: &Path) -> Result<SupplementalMetada
     })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|e| FerroError::Json {
         msg: format!("Failed to parse {}: {}", metadata_path.display(), e),
-    })
-}
-
-/// Bases per accession in a supplemental FASTA, streamed, **first record winning**.
-///
-/// First-wins rather than last-wins so this agrees with
-/// [`SupplementalStore::commit`](crate::benchmark::supplemental_store::SupplementalStore::commit),
-/// which keeps the first record for an accession and drops every later duplicate. Reading a
-/// duplicate-bearing FASTA the other way round would repair a row to a length the commit is
-/// about to discard.
-///
-/// A header with **no** bases yields nothing, for the same reason the store's own reader
-/// skips one: it is a presence claim with nothing behind it, and recording a length of zero
-/// for it would write the very shape this repair exists to remove.
-///
-/// An absent FASTA is a genuine first run and yields nothing, not an error.
-fn supplemental_fasta_lengths(fasta_path: &Path) -> Result<HashMap<String, usize>, FerroError> {
-    let mut lengths: HashMap<String, usize> = HashMap::new();
-    if !fasta_path.exists() {
-        return Ok(lengths);
-    }
-    let file = File::open(fasta_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open {}: {}", fasta_path.display(), e),
-    })?;
-
-    let mut accession: Option<String> = None;
-    let mut bases = 0usize;
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|e| FerroError::Io {
-            msg: format!("Failed to read {}: {}", fasta_path.display(), e),
-        })?;
-        if let Some(header) = line.strip_prefix('>') {
-            if let Some(previous) = accession.take().filter(|_| bases > 0) {
-                lengths.entry(previous).or_insert(bases);
-            }
-            accession = header.split_whitespace().next().map(str::to_string);
-            bases = 0;
-        } else {
-            bases += line.trim().len();
-        }
-    }
-    if let Some(previous) = accession.filter(|_| bases > 0) {
-        lengths.entry(previous).or_insert(bases);
-    }
-
-    Ok(lengths)
-}
-
-/// Re-derive every sidecar row's `sequence_length` from the FASTA, returning how many moved.
-///
-/// **This is the repair #1722 needs, and it makes no network call.** The shipped
-/// `patterns_transcripts.metadata.json` carries 116,572 hollow rows out of 140,027, and all
-/// 116,572 of those accessions are already in the FASTA — which is exactly why the resume
-/// filter, keyed on the FASTA by #1791, admits none of them. A hollow row is therefore a
-/// stale *derived* field and not a missing fetch, and re-fetching to recover a value that
-/// can be computed would be a 116,572-accession round trip against a rate-limited endpoint
-/// to learn something already on disk.
-///
-/// Only `sequence_length` is touched. `gene_symbol`, `cds_start` and `cds_end` are sourced
-/// from a GenBank record and are carried through untouched, including on a row that has
-/// none — recovering those is a fetch, and a separate, per-accession change.
-///
-/// A row whose accession the FASTA has no record for is left alone: it is an orphan, and
-/// [`SupplementalStore::commit`](crate::benchmark::supplemental_store::SupplementalStore::commit)
-/// drops it as part of reconciling the key sets.
-///
-/// # Cost
-///
-/// One extra sequential read of the FASTA per run, on top of the one
-/// [`SupplementalStore::open`](crate::benchmark::supplemental_store::SupplementalStore::open)
-/// already does — the same trade that module makes, and taken for the reason it records
-/// there: it measures that scan at **2.08 s over the 1.3 GB shipped artifact**, against a
-/// provisioning run whose fetch half is a networked, rate-limited operation measured in
-/// hours. This scan has the same shape, so it costs about the same. It is run unconditionally
-/// rather than gated on the sidecar looking degraded, so that a length which has drifted to
-/// some *other* wrong value is repaired too — a derived field is derived, or it is not.
-/// The accession-to-length map it builds is bounded by the record count (140,027 on that
-/// artifact), not by the file's size.
-fn repair_derived_lengths(
-    fasta_path: &Path,
-    metadata: &mut SupplementalMetadata,
-) -> Result<usize, FerroError> {
-    let lengths = supplemental_fasta_lengths(fasta_path)?;
-    let mut repaired = 0usize;
-    for (accession, record) in metadata.transcripts.iter_mut() {
-        let Some(&bases) = lengths.get(accession) else {
-            continue;
-        };
-        if record.sequence_length != bases {
-            record.sequence_length = bases;
-            repaired += 1;
-        }
-    }
-    Ok(repaired)
-}
-
-/// Write the sidecar to `path` atomically: a temp file, `fsync`, then a rename over it.
-///
-/// Used for the repair path, where the FASTA and its index are already correct and only the
-/// derived sidecar is stale. Routing that through a full commit instead would re-emit the
-/// FASTA — 1.3 GB on the shipped artifact — to change one number per row in a 24 MB file
-/// beside it, and would move the mtime of two artifacts that did not change.
-fn write_supplemental_metadata(
-    path: &Path,
-    metadata: &SupplementalMetadata,
-) -> Result<(), FerroError> {
-    let json = serde_json::to_vec_pretty(metadata).map_err(|e| FerroError::Json {
-        msg: format!("Failed to serialize {}: {}", path.display(), e),
-    })?;
-    let mut tmp = std::ffi::OsString::from(path.as_os_str());
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    {
-        let mut file = File::create(&tmp).map_err(|e| FerroError::Io {
-            msg: format!("Failed to create {}: {}", tmp.display(), e),
-        })?;
-        std::io::Write::write_all(&mut file, &json).map_err(|e| FerroError::Io {
-            msg: format!("Failed to write {}: {}", tmp.display(), e),
-        })?;
-        file.sync_all().map_err(|e| FerroError::Io {
-            msg: format!("Failed to sync {}: {}", tmp.display(), e),
-        })?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| FerroError::Io {
-        msg: format!(
-            "Failed to install {} over {}: {}",
-            tmp.display(),
-            path.display(),
-            e
-        ),
     })
 }
 
@@ -2258,15 +2106,13 @@ pub fn fetch_fasta_to_file(
 ///
 /// # Repair, and why it is not a fetch
 ///
-/// A sidecar row can be **hollow** — `sequence_length: 0` for an accession whose bases are
-/// on disk (#1722). That is a stale *derived* field, not a missing fetch, so it is repaired
-/// from the FASTA by [`repair_derived_lengths`] before anything is fetched. **Never fetch
-/// to recover a value you can compute:** every hollow accession in the shipped artifact is
-/// already in the FASTA, so widening the resume filter to admit them would be a
-/// 116,572-accession round trip against a rate-limited endpoint to learn a number that is
-/// one sequential read away.
+/// The sidecar carries only *sourced* fields, so there is no derived length to fall stale or
+/// go "hollow" (#1722) and nothing to re-derive here before a fetch — R4 dropped the persisted
+/// `sequence_length`, and every consumer reads length from the FASTA index directly. Presence
+/// is a question about the FASTA, and the resume filter is keyed on it (#1791); a metadata row
+/// is an annotation claim, not a sequence.
 ///
-/// A run with nothing to fetch and nothing to repair writes no byte at all.
+/// A run with nothing to fetch writes no byte at all.
 pub fn fetch_fasta_to_file_with(
     accessions: &[String],
     output_file: &Path,
@@ -2348,24 +2194,6 @@ pub fn fetch_fasta_to_file_with(
     // reset to empty — see `load_supplemental_metadata`.
     let mut metadata = load_supplemental_metadata(&metadata_path)?;
 
-    // Re-derive stale `sequence_length` values from the FASTA before deciding anything
-    // else. This runs first so a fetch's own inserts, and the commit's reconciliation,
-    // both see repaired rows; and it runs unconditionally so a hollow row is repaired
-    // whether or not this run has anything to fetch.
-    let hollow_before = metadata.hollow_record_count();
-    let repaired = repair_derived_lengths(output_file, &mut metadata)?;
-    if repaired > 0 {
-        eprintln!(
-            "  Re-derived sequence_length for {} of {} records in {} from {} ({} were hollow); \
-             no fetch is needed for a derived field",
-            repaired,
-            metadata.transcripts.len(),
-            metadata_path.display(),
-            output_file.display(),
-            hollow_before
-        );
-    }
-
     let duplicates = store.duplicate_record_count();
     if duplicates > 0 {
         eprintln!(
@@ -2389,11 +2217,10 @@ pub fn fetch_fasta_to_file_with(
             "  All {} accessions already fetched (skipping)",
             original_count
         );
-        // Nothing to fetch is not necessarily nothing to do: a duplicate-bearing FASTA, a
-        // sidecar whose keys have drifted from it, or a row whose derived length was stale
-        // is repaired here. When none of those holds, this is the fixed point and not one
-        // byte is written.
-        if let Some(report) = commit_or_repair(store, &mut metadata, &metadata_path, repaired)? {
+        // Nothing to fetch is not necessarily nothing to do: a duplicate-bearing FASTA, or a
+        // sidecar whose keys have drifted from it, is reconciled here. When neither holds,
+        // this is the fixed point and not one byte is written.
+        if let Some(report) = commit_if_dirty(store, &mut metadata)? {
             eprintln!(
                 "  Repaired {}: {} records, {} duplicates removed, {} metadata rows dropped, {} synthesized",
                 output_file.display(),
@@ -2402,8 +2229,6 @@ pub fn fetch_fasta_to_file_with(
                 report.metadata_rows_dropped,
                 report.metadata_rows_synthesized
             );
-        } else if repaired > 0 {
-            eprintln!("  Wrote repaired metadata to {}", metadata_path.display());
         }
         return Ok(0);
     }
@@ -2487,7 +2312,6 @@ pub fn fetch_fasta_to_file_with(
                             },
                             cds_start,
                             cds_end,
-                            sequence_length: seq.len(),
                         },
                     );
 
@@ -2539,7 +2363,6 @@ pub fn fetch_fasta_to_file_with(
                                         },
                                         cds_start: None,
                                         cds_end: None,
-                                        sequence_length: current_seq.len(),
                                     },
                                 );
 
@@ -2571,7 +2394,6 @@ pub fn fetch_fasta_to_file_with(
                                 },
                                 cds_start: None,
                                 cds_end: None,
-                                sequence_length: current_seq.len(),
                             },
                         );
 
@@ -2620,7 +2442,7 @@ pub fn fetch_fasta_to_file_with(
     // Gated on `is_dirty` rather than unconditional: reaching here having staged nothing
     // is a real outcome — every batch can fail against a down or rate-limiting endpoint —
     // and a failed run must not rewrite the artifact it could not add to.
-    if let Some(report) = commit_or_repair(store, &mut metadata, &metadata_path, repaired)? {
+    if let Some(report) = commit_if_dirty(store, &mut metadata)? {
         eprintln!(
             "  Committed {} records to {} ({} replaced, {} duplicates removed)",
             report.records,
@@ -2629,37 +2451,26 @@ pub fn fetch_fasta_to_file_with(
             report.duplicates_removed
         );
         eprintln!("  Wrote metadata to {}", metadata_path.display());
-    } else if repaired > 0 {
-        eprintln!("  Wrote repaired metadata to {}", metadata_path.display());
     }
 
     Ok(fetched)
 }
 
-/// Persist whatever needs persisting, and nothing more.
+/// Commit when there is something to commit, and nothing more.
 ///
-/// A **commit** when the FASTA or its index has moved or the sidecar's key set disagrees
-/// with it: that is the merge-and-rename which makes all three artifacts consistent, and it
-/// carries any repaired rows out with it, since `commit` preserves the rows it already has.
+/// A **commit** — the merge-and-rename that makes the FASTA, its index, and the sidecar
+/// consistent — runs when the FASTA or its index has moved or the sidecar's key set disagrees
+/// with it. Otherwise every artifact is already the fixed point and nothing is written: the
+/// sidecar carries only sourced fields, so once its key set agrees with the FASTA there is no
+/// derived value left to fall stale and no reason to rewrite it.
 ///
-/// A **sidecar-only write** when the FASTA and its index are already the fixed point and the
-/// only thing that moved is a derived row. Repairing 116,572 lengths must not re-emit a
-/// 1.3 GB FASTA and a 4.9 MB index that are byte-for-byte correct; and the authority rule
-/// says the same thing from the other side — the sidecar is derived from the FASTA, so
-/// correcting the derived artifact is not a reason to rewrite the authoritative one.
-///
-/// `Ok(None)` means no commit was performed, which is the fixed point when `repaired` is 0.
-fn commit_or_repair(
+/// `Ok(None)` means the store was already the fixed point.
+fn commit_if_dirty(
     store: crate::benchmark::supplemental_store::SupplementalStore,
     metadata: &mut SupplementalMetadata,
-    metadata_path: &Path,
-    repaired: usize,
 ) -> Result<Option<crate::benchmark::supplemental_store::CommitReport>, FerroError> {
     if store.is_dirty(metadata) {
         return Ok(Some(store.commit(metadata)?));
-    }
-    if repaired > 0 {
-        write_supplemental_metadata(metadata_path, metadata)?;
     }
     Ok(None)
 }
@@ -4800,165 +4611,57 @@ fn save_protein_fasta(cache_dir: &Path, accession: &str, sequence: &str) -> Resu
 mod supplemental_metadata_tests {
     use super::*;
 
-    /// A sidecar row carrying no sequence length — the shape 116,572 of the shipped
-    /// `patterns_transcripts.metadata.json`'s 140,027 rows have (#1722).
-    fn hollow_row(accession: &str) -> SupplementalTranscript {
-        SupplementalTranscript {
-            id: accession.to_string(),
-            gene_symbol: Some("GENEA".to_string()),
-            cds_start: None,
-            cds_end: None,
-            sequence_length: 0,
-        }
-    }
-
-    fn metadata_with(rows: Vec<SupplementalTranscript>) -> SupplementalMetadata {
-        let mut metadata = SupplementalMetadata::empty();
-        for row in rows {
-            metadata.transcripts.insert(row.id.clone(), row);
-        }
-        metadata
-    }
-
-    /// Write a FASTA holding the given `(accession, description, sequence)` records, wrapped
-    /// so the reader has to sum several sequence lines per record.
-    fn write_fasta(path: &Path, records: &[(&str, &str, &str)]) {
-        let mut body = String::new();
-        for (accession, description, sequence) in records {
-            body.push_str(&format!(">{} {}\n", accession, description));
-            for chunk in sequence.as_bytes().chunks(4) {
-                body.push_str(std::str::from_utf8(chunk).unwrap());
-                body.push('\n');
-            }
-        }
-        std::fs::write(path, body).unwrap();
-    }
-
-    /// A wrapped record's length is the sum of its sequence lines, and the accession is the
-    /// header up to its first space.
+    /// R4: `sequence_length` is a **derived** field whose authority is the FASTA, so it is
+    /// not persisted. A "hollow" row — one that claims a length it has no bases behind —
+    /// is therefore *unrepresentable*: the type carries only sourced fields, and the
+    /// serialized sidecar has no length key at all for a later run to find stale or zero.
     #[test]
-    fn a_records_length_is_summed_across_its_wrapped_lines() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(
-            &fasta,
-            &[
-                ("NM_000001.1", "GENEA (variant 1)", "ACGTACGTAC"),
-                ("NR_000002.1", "GENEB", "TTTT"),
-            ],
-        );
-
-        let lengths = supplemental_fasta_lengths(&fasta).unwrap();
-
-        assert_eq!(lengths.get("NM_000001.1"), Some(&10));
-        assert_eq!(lengths.get("NR_000002.1"), Some(&4));
-    }
-
-    /// An absent FASTA is a genuine first run, not a failure.
-    #[test]
-    fn an_absent_fasta_yields_no_lengths() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let lengths = supplemental_fasta_lengths(&dir.path().join("absent.fna")).unwrap();
-
-        assert!(lengths.is_empty());
-    }
-
-    /// #1722, stated at the level the repair works at: a hollow row's `sequence_length` is
-    /// **derived**, so it comes back from the FASTA and never from a fetch.
-    #[test]
-    fn a_hollow_row_gets_its_length_back_from_the_fasta() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
-        let mut metadata = metadata_with(vec![hollow_row("NM_000001.1")]);
-
-        let repaired = repair_derived_lengths(&fasta, &mut metadata).unwrap();
-
-        assert_eq!(repaired, 1);
-        assert_eq!(metadata.transcripts["NM_000001.1"].sequence_length, 10);
-        assert_eq!(metadata.hollow_record_count(), 0);
-    }
-
-    /// The other half of the derived/sourced split, and the reason this repair is safe to
-    /// run over a whole artifact: a FASTA cannot supply a CDS, so the repair must not
-    /// invent one, and must not disturb a `gene_symbol` that a GenBank record supplied.
-    #[test]
-    fn a_sourced_field_is_left_exactly_as_it_was() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(&fasta, &[("NM_000001.1", "SOMETHING ELSE", "ACGTACGTAC")]);
-        let mut metadata = metadata_with(vec![SupplementalTranscript {
+    fn a_persisted_row_cannot_carry_a_derived_length() {
+        let row = SupplementalTranscript {
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("GENEA".to_string()),
-            cds_start: Some(2),
-            cds_end: Some(7),
-            sequence_length: 0,
-        }]);
-
-        repair_derived_lengths(&fasta, &mut metadata).unwrap();
-
-        let row = &metadata.transcripts["NM_000001.1"];
-        assert_eq!(row.sequence_length, 10, "the derived field is re-derived");
-        assert_eq!(row.cds_start, Some(2), "a sourced field is untouched");
-        assert_eq!(row.cds_end, Some(7));
+            cds_start: Some(1),
+            cds_end: Some(9),
+        };
+        let json = serde_json::to_value(&row).unwrap();
+        assert!(
+            json.get("sequence_length").is_none(),
+            "the derived length must not be persisted: {json}"
+        );
+        // The sourced annotation is still carried.
+        assert_eq!(json.get("cds_start").and_then(|v| v.as_u64()), Some(1));
         assert_eq!(
-            row.gene_symbol.as_deref(),
-            Some("GENEA"),
-            "gene_symbol is sourced from a GenBank record, not from a FASTA description"
+            json.get("gene_symbol").and_then(|v| v.as_str()),
+            Some("GENEA")
         );
     }
 
-    /// A row the FASTA has no record for is an orphan, and dropping it belongs to the
-    /// store's key-set reconciliation. The repair must not fabricate a length of zero for
-    /// it, nor count it as repaired.
+    /// A sidecar written before R4 still carries `sequence_length`. Loading it must not
+    /// fail — serde ignores the now-unknown key — and the derived value is simply dropped,
+    /// because nothing in the type can hold it.
     #[test]
-    fn a_row_with_no_fasta_record_is_left_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGT")]);
-        let mut metadata = metadata_with(vec![hollow_row("NM_999999.9")]);
-
-        let repaired = repair_derived_lengths(&fasta, &mut metadata).unwrap();
-
-        assert_eq!(repaired, 0);
-        assert_eq!(metadata.transcripts["NM_999999.9"].sequence_length, 0);
+    fn an_older_sidecar_that_still_carries_a_length_loads_without_it() {
+        let old = r#"{
+            "generated_at": "2026-01-06T00:00:00Z",
+            "transcripts": {
+                "NM_000001.1": {
+                    "id": "NM_000001.1",
+                    "gene_symbol": "GENEA",
+                    "cds_start": 1,
+                    "cds_end": 9,
+                    "sequence_length": 9
+                }
+            }
+        }"#;
+        let metadata: SupplementalMetadata = serde_json::from_str(old).unwrap();
+        let row = &metadata.transcripts["NM_000001.1"];
+        assert_eq!(row.cds_start, Some(1));
+        assert_eq!(row.gene_symbol.as_deref(), Some("GENEA"));
     }
 
-    /// The repair is a fixed point after one pass, which is what lets the caller use
-    /// "anything was repaired" as its only reason to write the sidecar.
-    #[test]
-    fn a_second_repair_pass_moves_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(&fasta, &[("NM_000001.1", "GENEA", "ACGTACGTAC")]);
-        let mut metadata = metadata_with(vec![hollow_row("NM_000001.1")]);
-
-        assert_eq!(repair_derived_lengths(&fasta, &mut metadata).unwrap(), 1);
-        assert_eq!(repair_derived_lengths(&fasta, &mut metadata).unwrap(), 0);
-    }
-
-    /// A duplicate-bearing FASTA is repaired from its **first** record, because that is the
-    /// one `SupplementalStore::commit` keeps. Reading it the other way round would repair a
-    /// row to a length the commit is about to discard.
-    #[test]
-    fn a_duplicate_bearing_fasta_repairs_from_the_record_the_commit_keeps() {
-        let dir = tempfile::tempdir().unwrap();
-        let fasta = dir.path().join("supp.fna");
-        write_fasta(
-            &fasta,
-            &[
-                ("NM_000001.1", "GENEA", "ACGTACGTAC"),
-                ("NM_000001.1", "GENEA", "ACGT"),
-            ],
-        );
-        let mut metadata = metadata_with(vec![hollow_row("NM_000001.1")]);
-
-        repair_derived_lengths(&fasta, &mut metadata).unwrap();
-
-        assert_eq!(metadata.transcripts["NM_000001.1"].sequence_length, 10);
-    }
-
+    /// A sidecar row carrying no CDS annotation — the shape 116,572 of the shipped
+    /// `patterns_transcripts.metadata.json`'s 140,027 rows have (#1722): a gene symbol
+    /// and nothing else. Its length is not "missing" — it is sourced from the FASTA index.
     /// An absent sidecar is the legitimate "nothing has been fetched yet" state and must
     /// stay silent.
     #[test]
@@ -5005,30 +4708,5 @@ mod supplemental_metadata_tests {
 
         assert!(load_supplemental_metadata(&absent).is_ok());
         assert!(load_supplemental_metadata(&corrupt).is_err());
-    }
-
-    /// The sidecar write is atomic and leaves no temp file behind, so an interrupted repair
-    /// cannot be what produces the corrupt sidecar the loader above refuses.
-    #[test]
-    fn the_repaired_sidecar_is_written_atomically_and_reads_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("patterns_transcripts.metadata.json");
-        let mut metadata = metadata_with(vec![hollow_row("NM_000001.1")]);
-        metadata
-            .transcripts
-            .get_mut("NM_000001.1")
-            .unwrap()
-            .sequence_length = 10;
-
-        write_supplemental_metadata(&path, &metadata).unwrap();
-
-        let reloaded = load_supplemental_metadata(&path).unwrap();
-        assert_eq!(reloaded.transcripts["NM_000001.1"].sequence_length, 10);
-        assert!(
-            !dir.path()
-                .join("patterns_transcripts.metadata.json.tmp")
-                .exists(),
-            "the temp file is renamed, not left behind"
-        );
     }
 }

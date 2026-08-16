@@ -86,12 +86,16 @@ use crate::reference::provider::{AlignmentGap, GenomicPlacement, ReferenceProvid
 use crate::reference::transcript::Transcript;
 
 /// Supplemental transcript info for a single transcript.
+///
+/// Carries only the *sourced* fields the sidecar persists (R4): a curated CDS and gene
+/// symbol, which come from a GenBank record. The transcript's length is *derived* — its
+/// authority is the FASTA index — so it is not held here; every consumer that needs it reads
+/// it from the index at the point of use (see [`MultiFastaProvider::get_supplemental_cds_info`]).
 #[derive(Debug, Clone)]
 pub struct SupplementalTranscriptInfo {
     pub cds_start: Option<u64>,
     pub cds_end: Option<u64>,
     pub gene_symbol: Option<String>,
-    pub sequence_length: u64,
 }
 
 impl SupplementalTranscriptInfo {
@@ -113,12 +117,13 @@ impl SupplementalTranscriptInfo {
         self.cds_start.is_some() && self.cds_end.is_some()
     }
 
-    /// Whether the record carries a CDS bound or a length — the two fields any
-    /// transcript *geometry* could be built from.
+    /// Whether the record carries either CDS bound — the only *sourced* geometry a
+    /// supplemental row can add over the FASTA index.
     ///
-    /// Used at load to report how much of a supplemental artifact supplies neither,
-    /// rather than inserting such rows and letting `contains_key` imply they mean
-    /// something.
+    /// Used at load to report how much of a supplemental artifact supplies none, rather than
+    /// inserting such rows and letting `contains_key` imply they mean something. Length is no
+    /// longer a term: it is derived from the FASTA index and never persisted (R4), so it is
+    /// present for every row and could not distinguish one row from another.
     ///
     /// **`gene_symbol` is deliberately excluded, which is why this is not named
     /// "is informative".** It is not a dead field: [`Self::can_replace_cdot_table`]'s
@@ -129,8 +134,8 @@ impl SupplementalTranscriptInfo {
     /// this returns `false` for carries a `gene_symbol` (116,572 of 116,572), so
     /// calling that population "inert" would be the same presence-vs-usability
     /// conflation this type exists to stop, run the other way.
-    pub fn carries_cds_or_length(&self) -> bool {
-        self.cds_start.is_some() || self.cds_end.is_some() || self.sequence_length > 0
+    pub fn carries_a_cds_bound(&self) -> bool {
+        self.cds_start.is_some() || self.cds_end.is_some()
     }
 }
 
@@ -1229,7 +1234,7 @@ impl MultiFastaProvider {
                             if let Some(transcripts) =
                                 metadata.get("transcripts").and_then(|v| v.as_object())
                             {
-                                let mut without_cds_or_length = 0usize;
+                                let mut without_cds = 0usize;
                                 let mut with_cds = 0usize;
                                 for (accession, info) in transcripts {
                                     let cds_start = info.get("cds_start").and_then(|v| v.as_u64());
@@ -1238,18 +1243,17 @@ impl MultiFastaProvider {
                                         .get("gene_symbol")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
-                                    let sequence_length = info
-                                        .get("sequence_length")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0);
+                                    // `sequence_length` is deliberately not read: it is a
+                                    // derived field the sidecar no longer persists (R4), and
+                                    // an older artifact that still carries it is ignored here
+                                    // because length is sourced from the FASTA index at use.
                                     let record = SupplementalTranscriptInfo {
                                         cds_start,
                                         cds_end,
                                         gene_symbol,
-                                        sequence_length,
                                     };
-                                    if !record.carries_cds_or_length() {
-                                        without_cds_or_length += 1;
+                                    if !record.carries_a_cds_bound() {
+                                        without_cds += 1;
                                     }
                                     if record.can_replace_cdot_table() {
                                         with_cds += 1;
@@ -1265,8 +1269,8 @@ impl MultiFastaProvider {
                                 let total = provider.supplemental_cds.transcripts.len();
                                 eprintln!(
                                     "Loaded {} supplemental transcripts ({} with a CDS, {} with \
-                                     neither a CDS nor a length)",
-                                    total, with_cds, without_cds_or_length
+                                     no CDS bound)",
+                                    total, with_cds, without_cds
                                 );
                                 // A supplemental artifact that carries almost no CDS is a
                                 // data defect, not a normal state, and it used to be
@@ -10602,7 +10606,6 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_start: None,
                 cds_end: None,
                 gene_symbol: Some("GAPPY".to_string()),
-                sequence_length: 0,
             },
         );
 
@@ -10630,7 +10633,6 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_start: Some(7),
                 cds_end: Some(24),
                 gene_symbol: Some("GAPPY".to_string()),
-                sequence_length: 0, // deliberately 0: the span comes from the index
             },
         );
 
@@ -10670,7 +10672,6 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                     cds_start,
                     cds_end,
                     gene_symbol: Some("GAPPY".to_string()),
-                    sequence_length: 0,
                 },
             );
 
@@ -10708,21 +10709,20 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert!(!artifact_is_largely_without_cds(usize::MAX, usize::MAX));
     }
 
-    /// `carries_cds_or_length` deliberately ignores `gene_symbol`, and the counter
+    /// `carries_a_cds_bound` deliberately ignores `gene_symbol`, and the counter
     /// it feeds is named for that. Pinned because the earlier spelling
     /// (`is_informative`, "carries any information at all") was measurably false:
     /// every one of the 116,572 records it returned `false` for on the shipped
     /// artifact carries a gene symbol, and that symbol IS propagated onto the
     /// served transcript.
     #[test]
-    fn carries_cds_or_length_ignores_the_gene_symbol_it_still_propagates() {
+    fn carries_a_cds_bound_ignores_the_gene_symbol_it_still_propagates() {
         let name_only = SupplementalTranscriptInfo {
             cds_start: None,
             cds_end: None,
             gene_symbol: Some("SHANK3".to_string()),
-            sequence_length: 0,
         };
-        assert!(!name_only.carries_cds_or_length());
+        assert!(!name_only.carries_a_cds_bound());
         assert!(!name_only.can_replace_cdot_table());
 
         // …and the symbol still reaches the served transcript, which is why the
