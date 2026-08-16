@@ -541,6 +541,42 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                          sequence was reconstructed"
                     )));
             }
+            // The window is bounded and both sides convert to SPDI on a shared
+            // accession, but the provider could not serve its bases, so — as with
+            // `WindowTooWide` — nothing was reconstructed and nothing was
+            // compared (#1989). This is the "want of reference data" decline, and
+            // it must report `Indeterminate` for the same reason its sibling does:
+            // falling through to the `NotEquivalent` tail would assert a decided
+            // negative about a pair that was never examined. Pinned by
+            // `issue_1989_declined_is_indeterminate`.
+            SequenceVerdict::ReferenceUnavailable => {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                    .with_normalized(str1, str2)
+                    .with_note(
+                        "The reference window covering both variants could not be read from the \
+                         provider, so neither resulting sequence was reconstructed"
+                            .to_string(),
+                    ));
+            }
+            // `Different` is a decided negative — both sides were reconstructed
+            // and disagree. `Declined` is the catch-all decline. The shapes the
+            // checker routes to `NotEquivalent` *deliberately* are an edit SPDI
+            // cannot carry (`issue_1578_followup_equivalence_rungs` for a
+            // fusion), a cross-accession pair (the mixed-accession arm of
+            // `same_resulting_sequence`) and an un-appliable overlapping allele
+            // (`issue_1244_equivalence_overlap_panic`), each pinned there.
+            //
+            // Those are not all of it, and the arm above does not make them so.
+            // `edit_triples` discards its conversion error —
+            // `hgvs_to_spdi(member, provider).ok()?`, `checker.rs:1114` — so a
+            // member whose conversion needed the reference and could not read it
+            // also arrives here as `Declined` and is read as a negative:
+            // `NC_ABSENT.1:g.2del` vs `g.2delC` answers `NotEquivalent` against
+            // a provider serving no bases and `CrossAxisSequenceMatch` against a
+            // served contig. So `ReferenceUnavailable` above is the
+            // reference-level decline reachable from the WINDOW FETCH, not every
+            // reference-level decline; the rest is #2056, a follow-up on
+            // `edit_triples`. These two fall through.
             SequenceVerdict::Different | SequenceVerdict::Declined => {}
         }
 
@@ -654,7 +690,9 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                     // nowhere else; carrying it in the level needs a rung of its
                     // own rather than a reuse of `Indeterminate`. Pinned by
                     // `a_second_axis_that_cannot_be_computed_stops_at_the_single_axis_rung`.
-                    SequenceVerdict::WindowTooWide | SequenceVerdict::Declined => (
+                    SequenceVerdict::WindowTooWide
+                    | SequenceVerdict::ReferenceUnavailable
+                    | SequenceVerdict::Declined => (
                         EquivalenceLevel::SequenceMatch,
                         format!(
                             "Variants produce the same resulting sequence on their own axis; the \
@@ -882,9 +920,23 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     ///
     /// Best-effort and side-effect free. [`SequenceVerdict::Declined`] covers
     /// every variant that cannot be projected to SPDI triples on a single
-    /// shared accession; [`SequenceVerdict::WindowTooWide`] is split out from it
-    /// because it is the one decline that must not be read as a negative — see
-    /// [`MAX_SEQUENCE_COMPARE_WINDOW`].
+    /// shared accession. Two declines are split out of it because they must not
+    /// be read as a negative: [`SequenceVerdict::WindowTooWide`] when the union
+    /// window exceeds [`MAX_SEQUENCE_COMPARE_WINDOW`], and
+    /// [`SequenceVerdict::ReferenceUnavailable`] when the provider cannot serve
+    /// the window's bases (#1989). Both are resolved to
+    /// [`EquivalenceLevel::Indeterminate`] by the caller.
+    ///
+    /// **The split covers the window fetch, and not every reference failure.**
+    /// [`Self::edit_triples`] discards its conversion error —
+    /// `hgvs_to_spdi(member, provider).ok()?`, `checker.rs:1114` — so a member
+    /// whose SPDI conversion had to read the reference and could not is `None`
+    /// there and `Declined` here, indistinguishable from an edit SPDI cannot
+    /// carry. Measured on this revision, against a provider serving no bases:
+    /// `NC_ABSENT.1:g.2del` vs `g.2delC` — one edit, two spellings — answers
+    /// `NotEquivalent`, while the same pair on a served contig answers
+    /// `CrossAxisSequenceMatch`. Narrowing that is #2056, a follow-up on
+    /// `edit_triples`, not on this function.
     fn same_resulting_sequence(&self, v1: &HgvsVariant, v2: &HgvsVariant) -> SequenceVerdict {
         let Some((acc1, triples1)) = self.edit_triples(v1) else {
             return SequenceVerdict::Declined;
@@ -1171,11 +1223,32 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
 /// What a sequence-level comparison concluded.
 ///
-/// `Declined` and `WindowTooWide` are both "nothing was compared", and they are
-/// separate because only one of them is safe to read as a negative: a decline
-/// is usually a provider or representation limit that leaves the pre-existing
-/// verdict alone, while a window overrun is the case that would otherwise be
-/// argued into a decided negative it has not earned.
+/// Three of the four variants mean "nothing was compared", and they are kept
+/// apart because they are not read the same way. `WindowTooWide` and
+/// `ReferenceUnavailable` are the two declines [`compare_triples`] raises before
+/// it reconstructs anything — the window that would settle the pair was not
+/// obtained, once because it exceeds the cap and once because the provider could
+/// not serve it — and both must report `Indeterminate`, because arguing either
+/// into a decided negative claims a comparison that never ran (#1989).
+/// `Declined` is the catch-all; the checker deliberately routes it to
+/// `NotEquivalent`, and the shapes it is *meant* to carry — an edit SPDI cannot
+/// carry, a cross-accession pair, an un-appliable overlapping allele — are
+/// pinned elsewhere. `Different` is the one decided negative that was actually
+/// measured: both sides reconstructed, and they disagree.
+///
+/// **`Declined` is not purely representation-level.** `EquivalenceChecker::edit_triples`
+/// discards its conversion error — `hgvs_to_spdi(member, provider).ok()?`,
+/// `checker.rs:1114` — so a member whose SPDI conversion had to read the
+/// reference and could not is `None` there and `Declined` here, on the same
+/// footing as an unrepresentable edit. Measured on this revision:
+/// `NC_ABSENT.1:g.2del` vs `g.2delC` (one edit, two spellings) answers
+/// `NotEquivalent` against a provider serving no bases and
+/// `CrossAxisSequenceMatch` against a served contig; `g.2dup` vs `g.2_3insC`
+/// against the unserved provider, and two out-of-bounds substitutions on a
+/// *served* 12-base contig, answer `NotEquivalent` by the same route. Each of
+/// those declines before the fetch, which is how it is distinguishable from the
+/// `ReferenceUnavailable` arm at all. Distinguishing them is #2056, a follow-up
+/// on `edit_triples`; the split below is scoped to [`compare_triples`]'s fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SequenceVerdict {
     /// Both sides were reconstructed and the resulting sequences are equal.
@@ -1185,7 +1258,19 @@ enum SequenceVerdict {
     /// Nothing was reconstructed: the union window exceeds
     /// [`MAX_SEQUENCE_COMPARE_WINDOW`].
     WindowTooWide,
-    /// Nothing was reconstructed, for any other reason.
+    /// Nothing was reconstructed: the union window is bounded and both sides
+    /// convert to SPDI on a shared accession, but the provider could not serve
+    /// the reference bases needed to compare them (#1989). The "want of
+    /// reference data" decline — the sibling of [`Self::WindowTooWide`], and like
+    /// it a decline that must **not** be read as a negative.
+    ReferenceUnavailable,
+    /// Nothing was reconstructed, for any other reason. The shapes it is meant
+    /// to carry are representation-level — an edit SPDI cannot carry, a
+    /// cross-accession pair, an overlapping allele that cannot be applied — and
+    /// the checker deliberately reads this as a negative. It also carries a
+    /// reference failure that happened *before* the fetch, in `edit_triples`'s
+    /// discarded conversion error (`checker.rs:1114`) — that is #2056, and the
+    /// enum-level note has the measurements.
     Declined,
 }
 
@@ -1228,7 +1313,11 @@ where
     }
 
     let Some(reference) = fetch(win_start, win_end) else {
-        return SequenceVerdict::Declined;
+        // The window is bounded and both triple sets are in hand, but the
+        // provider could not serve the bases. This is "want of reference data",
+        // not a representation limit, so it is the `WindowTooWide` sibling and
+        // must not be read as a negative (#1989).
+        return SequenceVerdict::ReferenceUnavailable;
     };
 
     match (
@@ -1623,9 +1712,17 @@ mod tests {
 
     #[test]
     fn test_genomic_variants_different() {
-        let checker = checker();
-        let v1 = parse_hgvs("NC_000001.11:g.12345A>G").unwrap();
-        let v2 = parse_hgvs("NC_000001.11:g.12346A>G").unwrap();
+        // Two genuinely different substitutions must compare `NotEquivalent` —
+        // but only once the sequence rung can actually reconstruct their window.
+        // The reference is served here for exactly that reason: without it, the
+        // comparison never runs and the honest verdict is `Indeterminate`, not a
+        // decided negative (#1989). See
+        // `issue_1989_declined_is_indeterminate` for the unserved case.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_000001.11", "ACGTACGTACGT");
+        let checker = EquivalenceChecker::new(provider);
+        let v1 = parse_hgvs("NC_000001.11:g.1A>G").unwrap();
+        let v2 = parse_hgvs("NC_000001.11:g.2C>G").unwrap();
 
         let result = checker.check(&v1, &v2).unwrap();
         assert_eq!(result.level, EquivalenceLevel::NotEquivalent);
