@@ -27,8 +27,10 @@ struct ParsingTestCase {
 }
 
 fn load_mutalyzer_fixtures() -> TestFixture {
-    let content = fs::read_to_string("tests/fixtures/normalization/mutalyzer.json")
-        .expect("Failed to read mutalyzer.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/normalization/mutalyzer.json",
+    ))
+    .expect("Failed to read mutalyzer.json");
     serde_json::from_str(&content).expect("Failed to parse mutalyzer.json")
 }
 

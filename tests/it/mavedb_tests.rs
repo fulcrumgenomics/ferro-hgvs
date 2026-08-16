@@ -64,8 +64,10 @@ struct Variant {
 }
 
 fn load_mavedb_fixtures() -> MaveDbFixture {
-    let content = fs::read_to_string("tests/fixtures/external/mavedb_functional.json")
-        .expect("Failed to read mavedb_functional.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/mavedb_functional.json",
+    ))
+    .expect("Failed to read mavedb_functional.json");
     serde_json::from_str(&content).expect("Failed to parse mavedb_functional.json")
 }
 

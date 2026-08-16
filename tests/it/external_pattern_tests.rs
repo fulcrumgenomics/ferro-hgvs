@@ -9,8 +9,10 @@ use std::fs;
 
 /// Extract HGVS patterns from biocommons grammar_test.tsv
 fn extract_grammar_test_patterns() -> Vec<(String, bool)> {
-    let content = fs::read_to_string("tests/fixtures/external/biocommons_grammar_test.tsv")
-        .expect("Failed to read biocommons_grammar_test.tsv");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/biocommons_grammar_test.tsv",
+    ))
+    .expect("Failed to read biocommons_grammar_test.tsv");
 
     let mut patterns = Vec::new();
 
@@ -46,8 +48,10 @@ fn extract_grammar_test_patterns() -> Vec<(String, bool)> {
 
 /// Extract HGVS patterns from biocommons gauntlet file
 fn extract_gauntlet_patterns() -> Vec<(String, bool)> {
-    let content = fs::read_to_string("tests/fixtures/external/biocommons_gauntlet.txt")
-        .expect("Failed to read biocommons_gauntlet.txt");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/biocommons_gauntlet.txt",
+    ))
+    .expect("Failed to read biocommons_gauntlet.txt");
 
     let mut patterns = Vec::new();
 
@@ -83,8 +87,10 @@ fn extract_gauntlet_patterns() -> Vec<(String, bool)> {
 
 /// Extract HGVS patterns from biocommons real.tsv
 fn extract_real_tsv_patterns() -> Vec<(String, bool)> {
-    let content = fs::read_to_string("tests/fixtures/external/biocommons_real.tsv")
-        .expect("Failed to read biocommons_real.tsv");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/biocommons_real.tsv",
+    ))
+    .expect("Failed to read biocommons_real.tsv");
 
     let mut patterns = Vec::new();
 
@@ -114,8 +120,10 @@ fn extract_real_tsv_patterns() -> Vec<(String, bool)> {
 
 /// Extract HGVS patterns from mutalyzer test file
 fn extract_mutalyzer_patterns() -> Vec<(String, bool)> {
-    let content = fs::read_to_string("tests/fixtures/external/mutalyzer_patterns.txt")
-        .expect("Failed to read mutalyzer_patterns.txt");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/mutalyzer_patterns.txt",
+    ))
+    .expect("Failed to read mutalyzer_patterns.txt");
 
     let mut patterns = Vec::new();
 
@@ -136,8 +144,10 @@ fn extract_mutalyzer_patterns() -> Vec<(String, bool)> {
 
 /// Extract HGVS patterns from NCBI dbSNP file
 fn extract_ncbi_patterns() -> Vec<(String, bool)> {
-    let content = fs::read_to_string("tests/fixtures/external/ncbi_dbsnp.txt")
-        .expect("Failed to read ncbi_dbsnp.txt");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/external/ncbi_dbsnp.txt",
+    ))
+    .expect("Failed to read ncbi_dbsnp.txt");
 
     let mut patterns = Vec::new();
 

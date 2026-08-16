@@ -63,8 +63,10 @@ struct TestCase {
 }
 
 fn load_fixtures() -> TestFixture {
-    let content = fs::read_to_string("tests/fixtures/comprehensive_edge_cases.json")
-        .expect("Failed to read comprehensive_edge_cases.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/comprehensive_edge_cases.json",
+    ))
+    .expect("Failed to read comprehensive_edge_cases.json");
     serde_json::from_str(&content).expect("Failed to parse fixture JSON")
 }
 

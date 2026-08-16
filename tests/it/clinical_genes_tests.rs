@@ -42,8 +42,10 @@ struct ClinicalGeneCase {
 }
 
 fn load_clinical_genes_fixtures() -> ClinicalGenesFixture {
-    let content = fs::read_to_string("tests/fixtures/validation/clinical_genes.json")
-        .expect("Failed to read clinical_genes.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/validation/clinical_genes.json",
+    ))
+    .expect("Failed to read clinical_genes.json");
     serde_json::from_str(&content).expect("Failed to parse clinical_genes.json")
 }
 

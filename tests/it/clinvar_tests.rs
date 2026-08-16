@@ -66,8 +66,10 @@ struct Statistics {
 }
 
 fn load_clinvar_fixtures() -> ClinVarFixture {
-    let content = fs::read_to_string("tests/fixtures/validation/clinvar.json")
-        .expect("Failed to read clinvar.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/validation/clinvar.json",
+    ))
+    .expect("Failed to read clinvar.json");
     serde_json::from_str(&content).expect("Failed to parse clinvar.json")
 }
 

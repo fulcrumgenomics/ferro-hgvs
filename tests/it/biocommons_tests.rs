@@ -32,8 +32,10 @@ fn default_supported() -> bool {
 }
 
 fn load_biocommons_fixtures() -> TestFixture {
-    let content = fs::read_to_string("tests/fixtures/grammar/biocommons.json")
-        .expect("Failed to read biocommons.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/grammar/biocommons.json",
+    ))
+    .expect("Failed to read biocommons.json");
     serde_json::from_str(&content).expect("Failed to parse biocommons.json")
 }
 
