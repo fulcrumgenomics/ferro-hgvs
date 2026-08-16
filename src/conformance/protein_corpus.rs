@@ -49,11 +49,15 @@
 //!
 //! # The structural-blindness audit
 //!
-//! Five blindnesses have been found in this repository's generators, each
-//! invisible until the one before it was fixed. A protein stratum is exactly the
-//! kind of generator that acquires a sixth, so every property it varies is named
-//! here **and demonstrated by a test**, and every property it provably cannot
-//! reach is stated as a limit rather than left to read as coverage.
+//! Structural blindnesses have been found in this repository's generators
+//! repeatedly, each invisible until the one before it was fixed; the maintained
+//! inventory is `CLAUDE.md`'s, under "Assert the property. Measure the count.
+//! Never let a count BE the property". **No count is restated here** — one would
+//! go stale on the next instance, which is the very failure that section is
+//! about. A protein stratum is exactly the kind of generator that acquires
+//! another, so every property it varies is named here **and demonstrated by a
+//! test**, and every property it provably cannot reach is stated as a limit
+//! rather than left to read as coverage.
 //!
 //! | property | varied by | demonstrated by |
 //! |---|---|---|
@@ -102,7 +106,8 @@
 //! That is measured rather than assumed: `shape_is_inert_for_the_protein_axis`
 //! in `tests/it/protein_conformance_axis.rs` reports whether any row's outcome
 //! differs across the three geometries. A measured inertness is a fact about the
-//! axis worth recording; an *assumed* one would be the sixth blindness.
+//! axis worth recording; an *assumed* one would be another entry on the
+//! blindness inventory.
 //!
 //! # What a green run does NOT say
 //!
