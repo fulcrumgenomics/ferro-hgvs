@@ -1,8 +1,9 @@
 name: Docs
 
-# Builds the mdBook user docs as a PR gate. Read the Docs does the actual hosting/deploy
-# via .readthedocs.yaml; this job only validates that the book builds and has no dead
-# internal links (mdbook-linkcheck2). Tool versions are pinned in lockstep with
+# Builds the mdBook user docs on pull requests. Read the Docs does the actual hosting/deploy
+# via .readthedocs.yaml; this job validates that the book builds and that internal links
+# resolve to real pages (mdbook-linkcheck2 — link targets, not fragment anchors). It is
+# advisory unless added to the branch ruleset. Tool versions are pinned in lockstep with
 # .readthedocs.yaml.
 
 on:
@@ -13,6 +14,10 @@ on:
       - "docs/**"
       - ".readthedocs.yaml"
       - ".github/workflows/docs.yml"
+  # Run on merge_group so this context still reports if it is ever added to the
+  # branch ruleset as required — a required check that never runs on merge_group
+  # hangs the first merge-queue entry forever (#1769).
+  merge_group:
 
 permissions:
   contents: read
@@ -23,6 +28,10 @@ concurrency:
 
 jobs:
   build:
+    # Names the status-check context `Docs` rather than the default `build`, which
+    # would collide with ci.yml's already-required `Build` in a ruleset that matches
+    # context strings exactly (differing only in case).
+    name: Docs
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
