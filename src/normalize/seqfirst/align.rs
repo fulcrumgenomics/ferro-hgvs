@@ -1368,10 +1368,18 @@ mod tests {
             (&b"CAG"[..], &b"AGA"[..]),
             (&b"AAAC"[..], &b"ACCCAA"[..]),
             (&b"AACA"[..], &b"CCCAAC"[..]),
-            // Plus the shapes a band is most likely to get wrong, since the
-            // copy carries its own `band.contains` / `row_span` arithmetic:
-            // both blocks empty, either block empty, and a length ratio far
-            // from one so `|delta|` and not the divergence sets the band.
+            // Plus the degenerate grid shapes: both blocks empty, either block
+            // empty, and a length ratio far from one. These reach the copy's
+            // loop bounds and the `widest` computation below — NOT its band
+            // arithmetic, which at this band cannot clip at all: `band_for(n, m,
+            // n + m)` is `lo = -m, hi = n`, i.e. every diagonal of the grid, so
+            // `band.contains` is unconditionally true inside `0..=n`/`0..=m` and
+            // `row_span` returns the whole row. Measured: dropping the copy's
+            // `band.contains(i + 1, j)` guard leaves this pin GREEN and reddens
+            // only `the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag`,
+            // whose `build_confined_to_band` calls pass a narrow `k`. So a
+            // band-clipping drift is not what this pin catches; a drift in the
+            // shared post-loop body is.
             (&b""[..], &b""[..]),
             (&b""[..], &b"ACGT"[..]),
             (&b"ACGT"[..], &b""[..]),
