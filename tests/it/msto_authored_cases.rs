@@ -26,6 +26,11 @@
 //! *visible in a diff* the day somebody changes it, which prose in a closed
 //! issue cannot do.
 //!
+//! A `Gap` is not only pinned but **tracked**: every open #87 gap is enrolled in
+//! [`ISSUE_87_GAP_TRACKING`], which names the formal surface carrying it as a
+//! discrete record. That closes #1469 — the gaps were guarded here but nothing
+//! recorded where each fix is driven from.
+//!
 //! # Provenance
 //!
 //! Every row is traceable to a specific issue. Nothing here is invented. The
@@ -378,7 +383,8 @@ const ISSUE_87_SPEC_CASES: &[(&str, Outcome, Verdict, &str, &str)] = &[
         "DNA/alleles.md:106",
         "STILL OPEN. The spec writes the accession OUTSIDE the bracket group — \
          `LRG_199t1:c.[76A>C];[0]` — but Display hoists it inside the first bracket. \
-         Round-trips, but not to the spec's own spelling.",
+         Round-trips, but not to the spec's own spelling. Tracked discretely — see \
+         ISSUE_87_GAP_TRACKING.",
     ),
     // --- Inversion: span > 1 nt ---------------------------------------------
     (
@@ -432,7 +438,8 @@ const ISSUE_87_SPEC_CASES: &[(&str, Outcome, Verdict, &str, &str)] = &[
         "checklist.md:26",
         "STILL OPEN. The spec calls this incomplete — the second endpoint must \
          repeat its anchor (`c.123-65_123-50`). ferro accepts it, and the shorthand \
-         means something else entirely: a 5' UTR position.",
+         means something else entirely: a 5' UTR position. Tracked discretely — see \
+         ISSUE_87_GAP_TRACKING.",
     ),
     (
         "NM_000000.1:c.123-65_123-50",
@@ -455,7 +462,8 @@ const ISSUE_87_SPEC_CASES: &[(&str, Outcome, Verdict, &str, &str)] = &[
         Verdict::Gap,
         "uncertain.md:184",
         "STILL OPEN. `r.0?` (possibly no transcript) is a distinct spec form from \
-         `r.0` (no transcript) and does not parse.",
+         `r.0` (no transcript) and does not parse. Tracked discretely — see \
+         ISSUE_87_GAP_TRACKING.",
     ),
     (
         "NM_000000.1:r.=",
@@ -644,6 +652,110 @@ fn issue_87_gap_census_holds() {
         "the number of open #87 compliance gaps moved; if one was fixed, flip its \
          Verdict to Guard and lower ISSUE_87_OPEN_GAPS"
     );
+}
+
+/// Where a still-open #87 gap is recorded as a discrete item, beyond this
+/// module's pin.
+///
+/// This is what #1469 asked for. The three gaps were "guarded but untracked" —
+/// pinned in [`ISSUE_87_SPEC_CASES`] with nothing recording where each fix is
+/// driven from, so #87 (closed) and #1079 (aggregate theme counts) left none of
+/// them a discrete, actionable record. Each row here names a formal surface that
+/// carries the gap individually, and
+/// [`issue_87_open_gaps_are_tracked_in_a_formal_surface`] fails if a gap is
+/// added without one, or if a named surface stops carrying its gap — so
+/// "guarded but untracked" cannot recur silently.
+struct GapTracking {
+    /// The gap's input, exactly as it appears in [`ISSUE_87_SPEC_CASES`].
+    input: &'static str,
+    /// An accession-independent token from `input`, the shape each surface
+    /// records the gap under (surfaces use their own accessions).
+    token: &'static str,
+    /// The tracking file's name, for failure messages.
+    file_name: &'static str,
+    /// That file's source text, embedded at compile time so a rename fails the
+    /// build rather than the test.
+    file_text: &'static str,
+    /// What in that surface carries the gap as a discrete record.
+    why: &'static str,
+}
+
+/// One row per [`Verdict::Gap`] in [`ISSUE_87_SPEC_CASES`].
+const ISSUE_87_GAP_TRACKING: &[GapTracking] = &[
+    GapTracking {
+        input: "LRG_199t1:c.[76A>C];[0]",
+        token: "c.[76A>C];[0]",
+        file_name: "spec_worked_example_rules.rs",
+        file_text: include_str!("spec_worked_example_rules.rs"),
+        why: "registered as divergence `W53` in `DIVERGENT`, cross-referenced to \
+              class 2 of `KNOWN_DIVERGENT_INPUTS` — a render-placement divergence \
+              (`DNA/alleles.md:106`), not a content defect",
+    },
+    GapTracking {
+        input: "NM_000000.1:c.123-65_-50",
+        token: "c.123-65_-50",
+        file_name: "corpus_prohibited_inputs.rs",
+        file_text: include_str!("corpus_prohibited_inputs.rs"),
+        why: "`checklist.md:26`'s incomplete-range prohibition; the mode-gated \
+              refusal that closes it is scheduled by \
+              rulings[absolute-prohibition-enforcement-stage] and #1630",
+    },
+    GapTracking {
+        input: "NM_000000.1:r.0?",
+        token: "r.0?",
+        file_name: "rna_coding_consistency.rs",
+        file_text: include_str!("rna_coding_consistency.rs"),
+        why: "tracked on the RNA axis by \
+              `r_zero_question_predicted_parses_or_pins_gap`, which round-trips \
+              `r.0?` (`uncertain.md:184`) the day the parser accepts it",
+    },
+];
+
+/// Each still-open #87 gap names a formal tracking surface, and that surface
+/// still carries it.
+///
+/// The failure this guards is the one #1469 was filed for: a gap pinned here
+/// with nothing recording where its fix is tracked. A missing row, a stale row,
+/// or a surface that dropped its gap all fail loudly.
+#[test]
+fn issue_87_open_gaps_are_tracked_in_a_formal_surface() {
+    let gap_inputs: Vec<&str> = ISSUE_87_SPEC_CASES
+        .iter()
+        .filter(|(_, _, verdict, _, _)| *verdict == Verdict::Gap)
+        .map(|(input, _, _, _, _)| *input)
+        .collect();
+    let tracked_inputs: Vec<&str> = ISSUE_87_GAP_TRACKING.iter().map(|t| t.input).collect();
+
+    for input in &gap_inputs {
+        assert!(
+            tracked_inputs.contains(input),
+            "#87 gap `{input}` has no ISSUE_87_GAP_TRACKING row — it is guarded \
+             but untracked, the exact condition #1469 exists to prevent"
+        );
+    }
+    assert_eq!(
+        gap_inputs.len(),
+        ISSUE_87_GAP_TRACKING.len(),
+        "ISSUE_87_GAP_TRACKING carries a row that is no longer a Verdict::Gap"
+    );
+
+    for t in ISSUE_87_GAP_TRACKING {
+        assert!(
+            t.input.contains(t.token),
+            "tracking token `{}` is not a substring of gap `{}` — the token must \
+             be the gap's own shape, not an unrelated string",
+            t.token,
+            t.input
+        );
+        assert!(
+            t.file_text.contains(t.token),
+            "#87 gap `{}` is no longer tracked in {} (token `{}` absent) — {}",
+            t.input,
+            t.file_name,
+            t.token,
+            t.why
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
