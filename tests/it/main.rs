@@ -52,6 +52,7 @@ mod issue_1989_declined_is_indeterminate;
 mod issue_2018_past_cds_end_mode_dependent;
 mod issue_2037_cis_allele_at_transcript_start;
 mod issue_2056_edit_triples_reference_failure;
+mod issue_2075_apply_triples_reference_mismatch;
 mod issue_2092_explain_normalizer_codes;
 mod recommended_form_pins;
 mod repeat_input_idempotency;

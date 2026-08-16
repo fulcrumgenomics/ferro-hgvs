@@ -450,14 +450,159 @@ fn trim_common_flanks<'a>(reference: &'a [u8], resulting: &'a [u8]) -> (usize, &
 /// if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the reference
 /// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
 /// (`None`) rather than assert a sequence equivalence we cannot trust. Also
-/// returns `None` if any triple falls outside the window (a defensive guard;
-/// callers build the window to cover every triple), or if two triples overlap
-/// (see [`triples_are_disjoint`]).
+/// returns `None` if two triples overlap (see [`triples_are_disjoint`]), or if
+/// the window the caller handed over does not cover the triples it handed over
+/// with it — which is a broken precondition of this function rather than a fact
+/// about any description. [`ApplyDecline`] keeps the three apart for the caller
+/// that needs to tell them apart; this wrapper flattens all three.
 pub(crate) fn apply_triples(
     reference: &str,
     win_start: u64,
     triples: &[SpdiVariant],
 ) -> Option<String> {
+    apply_triples_classified(reference, win_start, triples).ok()
+}
+
+/// Why [`apply_triples`] could not reconstruct the edited sequence.
+///
+/// The split exists so a consumer can tell a **reference-level** obstacle from a
+/// **description-level** one, and both of those from a **broken precondition of
+/// the applier** — three things that must never be one, which is the whole point
+/// of #1989/#2053/#2069, made here at the apply step. [`apply_triples`] itself
+/// flattens all three to `None` for the callers that do not care.
+///
+/// # The classification is a total function, tested over the enum (#2104)
+///
+/// Which sequence verdict a decline reports is `into_sequence_verdict` in
+/// `src/equivalence/checker.rs` — there rather than here, because the verdict is
+/// the checker's own private type and `spdi` must not depend on `equivalence` —
+/// and which of two declines governs when both sides declined is
+/// [`Self::governing`]. Both are wildcard-free matches over this enum, so a
+/// fourth variant is a compile error at every place that has to decide what it
+/// means rather than a silent catch-all.
+///
+/// Both are also tested by **constructing each variant directly**, not only by
+/// driving the pipeline, because for two of the three the pipeline cannot pin
+/// them at all. Measured on this branch, over the whole suite: a `panic!()` in
+/// the checker's decline arm *and* in all five of this function's contract
+/// guards survived `11405 tests run: 11405 passed`, and with the classification
+/// carried by ordered match arms both mutations that matter were invisible —
+/// over-mapping a decline onto another's verdict, and reversing the precedence,
+/// each left `11405 passed` (#2104).
+///
+/// Where each variant can and cannot be reached, measured rather than assumed:
+///
+/// * [`Self::ReferenceMismatch`] is reached end-to-end and pinned by
+///   `issue_2075_apply_triples_reference_mismatch`.
+/// * [`Self::MembersOverlap`] is reachable, but **only through
+///   `EquivalenceChecker::compare_denotations`**, which compares the pair as
+///   written. `EquivalenceChecker::check` normalizes first, and normalization
+///   *repairs* the overlap: measured, `NC_TEST.1:g.[267_270AT[4];270_276del]`
+///   normalizes to the single-member `NC_TEST.1:g.270_272del`, and one member
+///   cannot overlap anything. That is why #1244's five tests — all of which use
+///   `check` — never reach this arm, and why the claim that they pinned it was
+///   withdrawn. It is now pinned end-to-end by the `compare_denotations` test in
+///   the same file.
+/// * [`Self::ContractViolated`] is unreachable from either caller by
+///   construction, so the enum is the *only* place its mapping can be asserted.
+///   `compare_triples` additionally asserts against it in debug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplyDecline {
+    /// A triple's stated deleted bases contradict the bases the reference
+    /// actually carries at that span — a ref-mismatched input (e.g. `g.5A>G`
+    /// where the served base is not `A`). The fetch succeeded, so this is not a
+    /// missing-window failure; it is still "want of usable reference data",
+    /// because the edit could not be faithfully reconstructed and nothing was
+    /// compared. Must **not** be read as a decided negative (#2075).
+    ReferenceMismatch,
+    /// Two triples claim the same reference base, so the set cannot be spliced
+    /// in one 3'->5' walk whatever the reference holds
+    /// ([`triples_are_disjoint`], #1244).
+    ///
+    /// **The only decline here that is a fact about the description**, and so
+    /// the only one a caller may read as a decided negative: an allele whose
+    /// members overlap denotes no single resulting sequence, so there is nothing
+    /// to compare and the description itself is what says so.
+    MembersOverlap,
+    /// A precondition of [`apply_triples_classified`] was broken by its caller:
+    /// a triple lies outside `[win_start, win_start + reference.len())`, its
+    /// coordinate arithmetic overflows, or the splice produced bytes that are
+    /// not UTF-8.
+    ///
+    /// **Never a fact about the description, and so never a decided negative.**
+    /// Both callers build the window as the union of the very triples they then
+    /// hand over — `compare_triples` over both sides' triples,
+    /// [`apply_to_reference_padded`] over one variant's — so a triple outside it
+    /// means the *caller* mis-computed, and answering a decided negative would
+    /// turn an internal inconsistency into a verdict about two descriptions.
+    /// That is the class #2053/#2069/#2075 spent three PRs removing, which is
+    /// why it is split out of #2075's own residual arm rather than left sitting
+    /// inside it (#2104). It governs every other decline for the same reason:
+    /// an internal inconsistency must not be masked by a decline about the
+    /// descriptions.
+    ContractViolated,
+}
+
+impl ApplyDecline {
+    /// Every variant, exactly once — the corpus the classification tests walk.
+    ///
+    /// Kept honest by [`Self::precedence`], whose match is wildcard-free: a new
+    /// variant is a compile error there, and
+    /// `all_declines_are_listed_exactly_once` then fails until this array
+    /// carries it too. Without both halves an "exhaustive over the enum" test
+    /// would quietly stop being exhaustive — which is #2104's own failure, one
+    /// level up.
+    ///
+    /// Test-only: it is a corpus, not part of the classification. The
+    /// classification's own totality is carried by the wildcard-free matches,
+    /// which are compiled in every configuration.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 3] = [
+        Self::ReferenceMismatch,
+        Self::MembersOverlap,
+        Self::ContractViolated,
+    ];
+
+    /// Which of two declines governs when **both** sides of a comparison
+    /// declined.
+    ///
+    /// A `min` over [`Self::precedence`], so it is symmetric, idempotent and
+    /// associative, and the precedence rule is a property of a pure function
+    /// over the enum rather than of the order in which a caller's match arms
+    /// happen to be written. Before #2104 it *was* that ordering, and reversing
+    /// it was a mutation the entire suite could not see.
+    pub(crate) fn governing(self, other: Self) -> Self {
+        if other.precedence() < self.precedence() {
+            other
+        } else {
+            self
+        }
+    }
+
+    /// Rank in the governing order — **lower governs**, and the ranks are
+    /// distinct, which is what makes [`Self::governing`] deterministic and
+    /// `ALL` checkable.
+    ///
+    /// [`Self::ContractViolated`] is first so a broken precondition of this
+    /// function is never masked by a decline about the descriptions.
+    /// [`Self::ReferenceMismatch`] outranks [`Self::MembersOverlap`] because a
+    /// difference cannot be asserted against a sequence that could not be built
+    /// — the rule #2075 states in words and #2104 found unpinned.
+    const fn precedence(self) -> u8 {
+        match self {
+            Self::ContractViolated => 0,
+            Self::ReferenceMismatch => 1,
+            Self::MembersOverlap => 2,
+        }
+    }
+}
+
+/// [`apply_triples`], but classifying *why* it declined — see [`ApplyDecline`].
+pub(crate) fn apply_triples_classified(
+    reference: &str,
+    win_start: u64,
+    triples: &[SpdiVariant],
+) -> Result<String, ApplyDecline> {
     let ref_bytes = reference.as_bytes();
     let mut bytes = ref_bytes.to_vec();
     let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
@@ -480,32 +625,52 @@ pub(crate) fn apply_triples(
         )
     });
     if !triples_are_disjoint(&ordered) {
-        return None;
+        return Err(ApplyDecline::MembersOverlap);
     }
     for t in ordered {
-        let rel = t.position.checked_sub(win_start)? as usize;
-        let end = rel.checked_add(t.deletion.len())?;
+        // The three guards below are the caller's contract, not the
+        // description's: the window is built from these very triples, so a
+        // position 5' of it, a span that overflows, or a span running past its
+        // 3' edge all mean the caller mis-computed. Classified as such so no
+        // consumer can read an internal inconsistency as a decided verdict
+        // (#2104).
+        let rel = t
+            .position
+            .checked_sub(win_start)
+            .ok_or(ApplyDecline::ContractViolated)? as usize;
+        let end = rel
+            .checked_add(t.deletion.len())
+            .ok_or(ApplyDecline::ContractViolated)?;
         if end > ref_bytes.len() {
-            return None;
+            return Err(ApplyDecline::ContractViolated);
         }
         // Validate the stated deletion against the original reference span.
         // (Checked against `ref_bytes`, not the mutated `bytes`: descending
         // order means every already-applied splice sits strictly 3' of `rel`,
         // so this span is untouched either way.)
+        //
+        // A disagreement is a reference-level obstacle, not a representation
+        // one: the served reference is not the reference the description
+        // asserts, so the edit cannot be faithfully reconstructed (#2075).
         if !ref_bytes[rel..end].eq_ignore_ascii_case(t.deletion.as_bytes()) {
-            return None;
+            return Err(ApplyDecline::ReferenceMismatch);
         }
         // The splice targets the mutated buffer, whose length no longer matches
         // the reference once a length-changing edit has been applied. The
         // disjointness guard above already makes `end <= bytes.len()` hold;
         // bound it explicitly anyway so a future change cannot turn a logic
-        // slip back into an out-of-bounds panic (#1244).
+        // slip back into an out-of-bounds panic (#1244). A logic slip is this
+        // function's own fault, hence `ContractViolated` and not a decline about
+        // the description.
         if end > bytes.len() {
-            return None;
+            return Err(ApplyDecline::ContractViolated);
         }
         bytes.splice(rel..end, t.insertion.bytes());
     }
-    String::from_utf8(bytes).ok()
+    // `reference` arrived as a `&str` and every insertion came from a `String`,
+    // so this can only fail if a splice cut a multi-byte character — again an
+    // invariant of ours, not a statement about the description.
+    String::from_utf8(bytes).map_err(|_| ApplyDecline::ContractViolated)
 }
 
 /// Whether `ordered` can be spliced in one 3' -> 5' walk.
@@ -1786,6 +1951,91 @@ mod tests {
                 "disjointness of {span:?} and {zero_width:?} changed with member \
                  order: {forward} vs {reverse}",
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // #2104: the decline classification, tested over the enum.
+    //
+    // These construct each `ApplyDecline` directly rather than driving an input
+    // through the applier, because no input is known that reaches
+    // `MembersOverlap` through `EquivalenceChecker::compare_triples` and
+    // `ContractViolated` is unreachable from either caller by construction —
+    // measured, see the enum's own docs. A pipeline test would therefore pin
+    // nothing, which is exactly what #2104 found.
+    // -----------------------------------------------------------------------
+
+    /// `ALL` cannot silently fall behind the enum.
+    ///
+    /// A new variant is a compile error in `precedence`; this then fails until
+    /// `ALL` carries it too, because the ranks of `ALL`'s members must be
+    /// exactly `0..ALL.len()`. That also pins the ranks as *distinct*, which is
+    /// what makes `governing` deterministic.
+    #[test]
+    fn all_declines_are_listed_exactly_once() {
+        let mut ranks: Vec<u8> = ApplyDecline::ALL.iter().map(|d| d.precedence()).collect();
+        ranks.sort_unstable();
+        let expected: Vec<u8> = (0..ApplyDecline::ALL.len() as u8).collect();
+        assert_eq!(
+            ranks,
+            expected,
+            "ApplyDecline::ALL must hold every variant exactly once, with distinct \
+             precedences; got {ranks:?} for {:?}",
+            ApplyDecline::ALL,
+        );
+    }
+
+    /// The rule #2075's PR body states in words — a reference obstacle governs
+    /// an overlap, because a difference cannot be asserted against a sequence
+    /// that could not be built.
+    ///
+    /// Asserted in **both** argument orders. Reversing this used to be a
+    /// mutation the whole suite could not see (#2104).
+    #[test]
+    fn a_reference_mismatch_governs_a_member_overlap() {
+        assert_eq!(
+            ApplyDecline::ReferenceMismatch.governing(ApplyDecline::MembersOverlap),
+            ApplyDecline::ReferenceMismatch,
+        );
+        assert_eq!(
+            ApplyDecline::MembersOverlap.governing(ApplyDecline::ReferenceMismatch),
+            ApplyDecline::ReferenceMismatch,
+        );
+    }
+
+    /// A broken precondition of the applier governs everything, in both orders,
+    /// so an internal inconsistency can never be masked by a decline about the
+    /// descriptions.
+    #[test]
+    fn a_contract_violation_governs_every_other_decline() {
+        for other in ApplyDecline::ALL {
+            assert_eq!(
+                ApplyDecline::ContractViolated.governing(other),
+                ApplyDecline::ContractViolated,
+                "ContractViolated must govern {other:?}",
+            );
+            assert_eq!(
+                other.governing(ApplyDecline::ContractViolated),
+                ApplyDecline::ContractViolated,
+                "ContractViolated must govern {other:?} from the other side too",
+            );
+        }
+    }
+
+    /// `governing` is symmetric and idempotent over the whole enum — the two
+    /// properties that make "which decline wins" independent of which side of a
+    /// comparison declined.
+    #[test]
+    fn governing_is_symmetric_and_idempotent() {
+        for first in ApplyDecline::ALL {
+            assert_eq!(first.governing(first), first, "{first:?} is not idempotent");
+            for second in ApplyDecline::ALL {
+                assert_eq!(
+                    first.governing(second),
+                    second.governing(first),
+                    "governing is not symmetric for {first:?} and {second:?}",
+                );
+            }
         }
     }
 }
