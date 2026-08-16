@@ -160,6 +160,12 @@ mod issue_1542_direction_symmetry;
 mod normalize_axis_preserving;
 #[path = "../../../tests/it/spec_conformance_axis.rs"]
 mod spec_conformance_axis;
+// The run-backed census instrument tests (#2094), carved out of
+// `conformance_census_instrument` so the `censuses` job owns them instead of the
+// `Test` shards. Selected by the job's UN-armed step, beside `spec_conformance_axis`
+// and for the same reason: `run_census` refuses with a seam oracle armed.
+#[path = "../../../tests/it/conformance_census_runs.rs"]
+mod conformance_census_runs;
 // A parser benchmark rather than a normalization census — it never reaches
 // `canonicalize_from_sequence` — which is exactly why it belongs here: its cost
 // is a constant factor on gzip decode, JSON deserialization and `parse_hgvs`,
