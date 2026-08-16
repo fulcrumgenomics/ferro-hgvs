@@ -214,6 +214,36 @@ fn readback_mismatch_fraction(
     Some(mism as f64 / expected.len().max(1) as f64)
 }
 
+/// Whether `sibling`'s exon table lives in the same coordinate frame the
+/// reconstructed mRNA is measured in: each exon's transcript coordinates are the
+/// running sum of the exon *genome* spans, contiguous from zero.
+///
+/// [`reconstruct_spliced_mrna`] builds the mRNA by concatenating exon *genome*
+/// slices, so its length — and everything derived from it downstream in
+/// [`derive_transcript_structure`], namely `old_len` and the alignment offset
+/// `off` — lives in gap-collapsed space. The exon-clipping loop there, by
+/// contrast, maps each exon's *transcript* coordinates into old space with
+/// `te - off` and compares the result against `old_len`. Those two frames
+/// coincide only when every exon's transcript span equals its genome span and
+/// the table runs contiguously from zero. On any gapped / non-contiguous table
+/// the terminal exon's flat `o_te` overshoots the collapsed `old_len` by exactly
+/// the transcript-coordinate gap. See #1922.
+fn sibling_tx_frame_matches_collapsed_mrna(sibling: &CdotTranscript) -> bool {
+    let mut collapsed: u64 = 0;
+    for e in &sibling.exons {
+        let (gs, ge, ts, te) = (e[0], e[1], e[2], e[3]);
+        if ge < gs {
+            return false; // malformed genome span
+        }
+        let genome_span = ge - gs;
+        if ts != collapsed || te != collapsed + genome_span {
+            return false;
+        }
+        collapsed += genome_span;
+    }
+    true
+}
+
 /// Derive an old version's structure by anchoring to a sibling cdot record.
 ///
 /// Enforces the clean-terminal-trim invariant: `old_mrna` must equal the
@@ -233,6 +263,21 @@ pub fn derive_transcript_structure(
     genome: &dyn GenomeSlice,
 ) -> Option<DerivedTxStructure> {
     let sib_mrna = reconstruct_spliced_mrna(sibling, genome)?;
+
+    // #1922: the exon-clipping loop below maps the sibling's *transcript*
+    // coordinates into old space (`te - off`) and compares them against
+    // `old_len`, which is measured in the gap-collapsed frame of the
+    // reconstructed mRNA. Those frames coincide only when the sibling's tx table
+    // is the running sum of its genome spans (contiguous from zero). On a gapped
+    // table they diverge: the terminal exon over-clips and the readback below
+    // then declines by coming up short. Decline explicitly here instead of
+    // relying on that emergent shortfall — a flat `o_te` must never be compared
+    // against a collapsed `old_len`, and making the decline explicit keeps a
+    // future refactor of the clip test from silently promoting this latent
+    // mis-frame into an emitted (wrong) value.
+    if !sibling_tx_frame_matches_collapsed_mrna(sibling) {
+        return None;
+    }
 
     // Strip any poly-A tail from old_mrna before alignment: the tail is
     // post-transcriptional and has no genomic coordinate, so it must not be
@@ -519,6 +564,68 @@ mod derivation_tests {
         let mut old = sib_mrna.clone();
         old.remove(10); // delete a base at the exon0/exon1 junction interior
         assert!(derive_transcript_structure("NM_T.1", &old, "NM_T.2", &cdot, &genome,).is_none());
+    }
+
+    /// #1922: a sibling whose transcript coordinates are NOT the running sum of
+    /// its exon genome spans (a gapped / non-contiguous tx table) mixes two
+    /// coordinate frames — the reconstructed mRNA is gap-collapsed while the
+    /// exon-clip test works in the sibling's gapped tx space. Such a table MUST
+    /// decline, never emit: comparing a flat `o_te` against a collapsed
+    /// `old_len` over-clips the terminal exon and can only ever produce a wrong
+    /// value. The explicit guard in `derive_transcript_structure` pins that
+    /// decline so a future refactor of the clip test cannot silently promote the
+    /// latent mis-frame into an emitted result.
+    #[test]
+    fn declines_on_gapped_sibling_tx_table() {
+        // Start from the contiguous fixture, then open a 2-base gap in the
+        // terminal exon's transcript coordinates (10..20 -> 12..22) WITHOUT
+        // touching its genome slice. The reconstructed mRNA is unchanged (20 nt,
+        // built from genome slices), so `old_len == 20`, but the terminal exon's
+        // tx_end is now 22 — two bases beyond the collapsed frame.
+        let (mut cdot, genome, sib_mrna) = sibling_fixture();
+        cdot.exons = vec![[1, 11, 0, 10], [15, 25, 12, 22]];
+        // The old version is byte-identical to the sibling mRNA (no trim), so the
+        // only thing that could make derivation decline is the frame mix itself,
+        // not an alignment or CDS-bounds issue.
+        assert!(
+            derive_transcript_structure("NM_T.1", &sib_mrna, "NM_T.2", &cdot, &genome).is_none(),
+            "a gapped sibling tx table must decline, not emit a mis-framed structure"
+        );
+    }
+
+    /// Minus-strand mirror of [`declines_on_gapped_sibling_tx_table`] (#1922).
+    /// The frame guard is strand-agnostic, so a gapped tx table on the minus
+    /// strand must decline just the same — pinned here to match the module's
+    /// plus/minus test-pairing convention.
+    #[test]
+    fn declines_on_gapped_sibling_tx_table_minus_strand() {
+        // Contiguous minus fixture, then a 2-base gap in the terminal exon's tx
+        // coordinates (10..20 -> 12..22); the genome slices are untouched, so the
+        // reconstructed mRNA (and `old_len`) is unchanged.
+        let (mut cdot, genome) = minus_sibling_fixture();
+        let sib_mrna = reconstruct_spliced_mrna(&cdot, &genome).unwrap();
+        cdot.exons = vec![[15, 25, 0, 10], [1, 11, 12, 22]];
+        assert!(
+            derive_transcript_structure("NM_M.1", &sib_mrna, "NM_M.2", &cdot, &genome).is_none(),
+            "a gapped minus-strand sibling tx table must decline, not emit"
+        );
+    }
+
+    /// Control for [`declines_on_gapped_sibling_tx_table`]: the SAME derivation
+    /// on the contiguous-from-zero table (the gap closed) still emits, isolating
+    /// the decline above to the frame mismatch — nothing else about the fixture
+    /// or the derivation changed. Guards behaviour-preservation of the #1922
+    /// hardening: contiguous tables are untouched.
+    #[test]
+    fn contiguous_sibling_tx_table_still_emits() {
+        // Contiguous terminal exon (tx 10..20 == running sum of genome spans).
+        let (cdot, genome, sib_mrna) = sibling_fixture();
+        let d = derive_transcript_structure("NM_T.1", &sib_mrna, "NM_T.2", &cdot, &genome)
+            .expect("a contiguous-from-zero sibling table must still derive");
+        assert_eq!(d.exons, vec![[1, 11, 0, 10], [15, 25, 10, 20]]);
+        assert_eq!(d.cds_start, Some(2));
+        assert_eq!(d.cds_end, Some(18));
+        assert!(d.mismatch_fraction < 1e-9);
     }
 
     #[test]
