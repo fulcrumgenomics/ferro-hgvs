@@ -2439,10 +2439,14 @@ enum RepeatSpanOrigin {
     /// The search ran and found no run at the anchor, so the span is the
     /// unit-wide fallback. This is the case that must not quote its span.
     NoRunAtAnchor,
-    /// The search never ran — an empty unit, or a provider that serves bases
-    /// but not `get_sequence_length`. The span is a placeholder rather than a
-    /// judgement, so the generic diagnostic remains the honest one: nothing was
-    /// measured that would justify saying "no run begins here".
+    /// The search never ran on an input the function does not itself refuse —
+    /// an empty unit, an empty sequence, or an anchor past the sequence end. The
+    /// span is a placeholder rather than a judgement, so the generic diagnostic
+    /// remains the honest one: nothing was measured that would justify saying
+    /// "no run begins here". A provider that cannot report a length is *not*
+    /// here — that case declines outright (#1497), because the unit-wide span it
+    /// would otherwise hand back passes the caller's checks by construction and
+    /// converts to a silently truncated triple.
     NotSearched,
 }
 
@@ -2514,20 +2518,35 @@ where
         anchor_one_based.saturating_add(unit_len - 1),
     );
 
-    // A failed length lookup must not fail the conversion. `get_sequence_length`
-    // carries a trait default that always errors (`provider.rs:424`), so a
-    // provider that serves bases perfectly well but does not implement it would
-    // otherwise go from converting `g.263A[7]` to refusing it outright — a
-    // regression for every out-of-tree `ReferenceProvider`, and one no in-repo
-    // test can see because all of ferro's own providers override it.
+    // A single-position anchor names "the tandem run beginning here", so the
+    // run's extent must be *measured* before it can be converted. Measuring it
+    // needs the sequence length — to clamp the search window and judge its edges
+    // — so a provider that serves bases perfectly well but cannot report a
+    // length (`get_sequence_length` carries a trait default that always errors,
+    // and no in-repo test can see this because all of ferro's own providers
+    // override it) leaves the run unmeasurable.
     //
-    // Without a length the window cannot be clamped or its edges judged, so the
-    // tract search is not attempted; the unit-wide span is what this returns
-    // instead. That leaves such a provider with the pre-#1431 answer rather than
-    // the corrected one, which is a known and stated limit, not a silent wrong
-    // span — the caller's divisibility and unit-match checks still judge it.
+    // Decline rather than fall back to the unit-wide span at the anchor. That
+    // fallback used to be returned here as "a known and stated limit, not a
+    // silent wrong span — the caller's divisibility and unit-match checks still
+    // judge it", but those checks cannot judge it: a unit-wide span is exactly
+    // one unit and passes both *by construction* (divisible, and one unit
+    // matched against itself), so the caller converts `g.263A[7]` to a triple
+    // denoting a single `A` even where the reference holds a longer run — the
+    // same silent truncation as #1452, defeated here by a provider that cannot
+    // report a length rather than by soft-masking (#1497). The explicit-range
+    // spelling (`g.<start>_<end>{unit}[n]`) carries its own span and never
+    // reaches this function, so it is unaffected.
     let Ok(sequence_length) = provider.get_sequence_length(accession) else {
-        return Ok((fallback.0, fallback.1, RepeatSpanOrigin::NotSearched));
+        return Err(ConversionError::UnsupportedEditType {
+            description: format!(
+                "cannot resolve the repeat tract at {accession}:{anchor_one_based}: the \
+                 reference provider could not report the length of {accession}, so the run's \
+                 extent could not be verified; spell the whole range explicitly \
+                 (`g.<start>_<end>{}[n]`) rather than the start alone",
+                String::from_utf8_lossy(unit)
+            ),
+        });
     };
     if sequence_length == 0 || anchor_one_based > sequence_length {
         return Ok((fallback.0, fallback.1, RepeatSpanOrigin::NotSearched));
@@ -3440,6 +3459,99 @@ mod tests {
             "on the DNA axis `U` is not `T`, so no tract exists and the \
              unit-wide fallback stands"
         );
+    }
+
+    /// A provider that serves bases perfectly but refuses every length lookup,
+    /// modelling the out-of-tree `ReferenceProvider` #1497 is about: one whose
+    /// `get_sequence`/`get_genomic_sequence` work while `get_sequence_length`
+    /// cannot answer — a lazily-indexed store, or one leaning on the trait's
+    /// always-erroring default. All of ferro's own providers override
+    /// `get_sequence_length`, so this state is unreachable without a purpose-
+    /// built stand-in.
+    struct LengthlessProvider(MockProvider);
+
+    impl ReferenceProvider for LengthlessProvider {
+        fn get_transcript(&self, id: &str) -> Result<std::sync::Arc<Transcript>, FerroError> {
+            self.0.get_transcript(id)
+        }
+
+        fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+            self.0.get_sequence(id, start, end)
+        }
+
+        fn get_genomic_sequence(
+            &self,
+            contig: &str,
+            start: u64,
+            end: u64,
+        ) -> Result<String, FerroError> {
+            self.0.get_genomic_sequence(contig, start, end)
+        }
+
+        /// The single deviation from the wrapped provider: no length, ever.
+        fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+            Err(FerroError::ReferenceNotFound { id: id.to_string() })
+        }
+    }
+
+    /// A 13-base contig `GGCAGCAGCAGGG` carrying a 3-copy `CAG` tract at
+    /// 1-based positions 3..=11, so the anchored spelling `g.3CAG[5]` and the
+    /// range spelling `g.3_11CAG[5]` name the same run.
+    fn cag_tract_provider() -> MockProvider {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", "GGCAGCAGCAGGG".to_string());
+        provider
+    }
+
+    /// When the tract search cannot run — here because `get_sequence_length`
+    /// fails — an anchored repeat must DECLINE rather than convert on the
+    /// unverified unit-wide span. The unit-wide fallback trivially satisfies the
+    /// caller's divisibility and unit-match checks (it is exactly one unit,
+    /// matched against itself), so those checks cannot stand in for the search
+    /// and the fallback would emit a triple denoting a single `CAG` where the
+    /// reference holds three (#1497). The explicit-range spelling carries its
+    /// own span, needs no search, and must still convert.
+    #[test]
+    fn an_anchored_repeat_declines_when_the_length_lookup_fails() {
+        let provider = LengthlessProvider(cag_tract_provider());
+
+        // The anchored spelling relies on searching for the run, which needs the
+        // length. With the length unavailable it declines rather than truncating.
+        let anchored = parse_hgvs("NC_TEST.1:g.3CAG[5]").unwrap();
+        let err = hgvs_to_spdi(&anchored, &provider)
+            .expect_err("an anchored repeat must decline when the tract span cannot be verified");
+        assert!(
+            matches!(err, ConversionError::UnsupportedEditType { .. }),
+            "declining an unverifiable anchored tract, got {err:?}"
+        );
+
+        // The explicit range names its own span and reads its bases directly, so
+        // a failed length lookup does not stop it converting.
+        let ranged = parse_hgvs("NC_TEST.1:g.3_11CAG[5]").unwrap();
+        let spdi = hgvs_to_spdi(&ranged, &provider)
+            .expect("the explicit-range spelling carries its own span and needs no length");
+        assert_eq!(spdi.position, 2);
+        assert_eq!(spdi.deletion, "CAGCAGCAG");
+        assert_eq!(spdi.insertion, "CAGCAGCAGCAGCAG");
+    }
+
+    /// The control: with a healthy provider the same anchored spelling searches
+    /// out the full 3-copy run and converts over its whole extent — identically
+    /// to the range spelling — so the decline above is scoped to the failed
+    /// search and does not regress the normal path (#1497).
+    #[test]
+    fn an_anchored_repeat_converts_over_its_full_run_when_the_length_is_known() {
+        let provider = cag_tract_provider();
+
+        let anchored = parse_hgvs("NC_TEST.1:g.3CAG[5]").unwrap();
+        let spdi = hgvs_to_spdi(&anchored, &provider)
+            .expect("a healthy provider resolves the anchored tract");
+        assert_eq!(spdi.position, 2);
+        assert_eq!(spdi.deletion, "CAGCAGCAG");
+        assert_eq!(spdi.insertion, "CAGCAGCAGCAGCAG");
+
+        let ranged = parse_hgvs("NC_TEST.1:g.3_11CAG[5]").unwrap();
+        assert_eq!(hgvs_to_spdi(&ranged, &provider).unwrap(), spdi);
     }
 
     /// A 28-base `ACGT…` contig, so a 1-based position `p` holds
