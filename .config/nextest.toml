@@ -95,3 +95,29 @@ command = 'scripts/pregenerate-spec-fixtures.sh'
 # If a CI profile is wanted later, derive it from what `ci.yml` actually runs,
 # and size any `slow-timeout` from the measured cost of the slowest test rather
 # than from a round number.
+
+# ---------------------------------------------------------------------------
+# `nightly-xfail`: the nightly reference-aware run's machine-readable channel.
+#
+# `nightly-mutalyzer.yml` runs `REFERENCE_AWARE_SELECTION` with this profile so
+# that the set of FAILING tests is captured as JUnit XML rather than scraped
+# from human summary output. That set is then diffed against a committed
+# baseline (`tests/fixtures/nightly-reference-aware/xfail-baseline.txt`) by
+# `scripts/diff_nightly_xfail_baseline.py`, which is the job's real gating
+# signal — a NEW failure, or a baselined test that starts PASSING, turns the
+# nightly red, while the ~38 known-xfail cases stay green. See #1998 for why the
+# bare `continue-on-error` conclusion could not surface that drift.
+#
+# JUnit is used deliberately over `--message-format libtest-json`: the latter is
+# still experimental in nextest 0.9.133 (gated behind
+# `NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1`, format subject to change), whereas the
+# JUnit schema is stable across nextest releases and trivially parsed by the
+# stdlib `xml.etree`. The report lands at
+# `target/nextest/nightly-xfail/junit.xml`.
+#
+# This profile only ADDS a report to the inherited `[profile.default]` settings
+# (`fail-fast = false` in particular, so a full FAIL set is always recorded); it
+# does NOT repeat the `[profile.ci]` mistake documented above — it sets no
+# timeout, no retries, and describes exactly what the nightly runs.
+[profile.nightly-xfail.junit]
+path = "junit.xml"
