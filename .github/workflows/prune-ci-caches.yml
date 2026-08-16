@@ -44,9 +44,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # `timeout-minutes` so this cannot inherit GitHub's 360-minute default. This is
+  # the half #1994 scoped out (see #2004). 15 = far more than 5x the slowest
+  # SUCCESSFUL run observed (48s, measured 2026-08-16 over the last 5 runs); the
+  # job only makes `gh` API calls to prune caches, so a hang is a stuck request.
   prune:
     name: Prune per-commit CI caches
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       # How many of each per-commit family to keep. Enough that a re-run of a

@@ -22,10 +22,32 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
+# 360-minute default. This is the half #1994 scoped out (see #2004): #1994
+# bounded the PR-gating workflows and deferred this one because it hits the
+# network and needed its own measurements. This is a weekly schedule, so nobody
+# watches a green run — the worse place to leave a job able to hang for six hours.
+#
+# Values are at least 5x the slowest SUCCESSFUL run observed for that job,
+# measured 2026-08-16 across the last 8 completed runs, then rounded up. The
+# failure that matters here is a bound firing on legitimate work, so — with
+# every job either compiling Rust or fetching from third-party APIs — the
+# headroom is deliberate. These bound a hang, they are not a budget.
+#
+#   90  run-standard-tests: compiles Rust AND fetches bulk fixtures over the
+#       network; peaks at 1044s (17.4m), whose 5x already exceeds the 60 tier.
+#   60  fetch-api-data (711s, network to Mutalyzer/VariantValidator/NCBI) and
+#       run-comparison-tests (compiles Rust, so a cold cache is on the table).
+#  120  fetch-external-databases: its three network fetches (LOVD, MaveDB,
+#       CIViC) EACH already carry a step-level `timeout-minutes: 30`, so the job
+#       bound must exceed their combined 90-minute budget or it would kill a run
+#       the steps consider legitimate. Job wall clock is 33s in practice.
+#   15  summary (6s), which only downloads a report and posts it.
 jobs:
   fetch-api-data:
     name: Fetch External API Data
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
 
     steps:
@@ -94,6 +116,7 @@ jobs:
   run-comparison-tests:
     name: Run API Comparison Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [fetch-api-data]
     if: always()
 
@@ -241,6 +264,7 @@ jobs:
   run-standard-tests:
     name: Run Standard Test Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -299,6 +323,9 @@ jobs:
   fetch-external-databases:
     name: Fetch External Database Data
     runs-on: ubuntu-latest
+    # 120, not 30: the three fetch steps below each carry `timeout-minutes: 30`,
+    # so the job must be able to outlast their combined 90-minute step budget.
+    timeout-minutes: 120
     if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
 
     steps:
@@ -355,6 +382,7 @@ jobs:
   summary:
     name: Generate Summary
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [run-comparison-tests, run-standard-tests]
     if: always()
 
