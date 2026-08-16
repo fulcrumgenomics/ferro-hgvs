@@ -12945,8 +12945,21 @@ pub(crate) fn drop_identity_members_covered_by_siblings<P: ReferenceProvider>(
             (0..members.len()).filter(|&j| j != i).any(|j| {
                 spans[j].as_ref().is_some_and(|s| {
                     s.blocks_shift
-                        && s.region == span.region
                         && s.accession == span.accession
+                        // No `s.region == span.region` gate (#1512). This pass
+                        // only *compares* two spans — its sole mutation is
+                        // `members.retain(..)` below and it never writes a
+                        // coordinate onto the `c.`/`n.` axis — so it must read the
+                        // sequence coordinates #1506 gave `MemberSpan`, in which
+                        // any two members of one molecule are comparable, rather
+                        // than refusing the comparison whenever the two sit in
+                        // different regions. A region gate here re-created the
+                        // #1512 blindness: a `c.*1=` identity covered by a
+                        // `c.15_*1dup` (whose span starts in the CDS) was kept, and
+                        // the allele then claimed `c.*1` twice. The overlap below
+                        // is on the sequence coordinates, which are correct across
+                        // the boundary; the accession test above still keeps
+                        // members of different molecules apart.
                         // Both spans forward. A reversed `<high>_<low>` range is
                         // SVD-WG006's circular deletion/duplication form, and
                         // `cis_axis_parts` hands the endpoints over raw, so one
