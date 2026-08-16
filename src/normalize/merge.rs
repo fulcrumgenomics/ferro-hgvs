@@ -2629,7 +2629,7 @@ impl PartitionRule {
     ///
     /// # Why this is a method with an exhaustive `match`
     ///
-    /// Both call sites used to spell this inline as
+    /// This used to be spelled inline at its call sites as
     /// `matches!(rule, Canonical | CanonicalCoalesced)`. A **positive** arm list
     /// is silently wrong for the next arm added: an arm missing from it takes
     /// the `else` branch, which is `live` behaviour, on an arm that does not cut
@@ -2919,10 +2919,12 @@ pub fn partition_switch_startup_error() -> Option<String> {
 /// # Panics
 ///
 /// In a **debug** build, if `FERRO_PARTITION` names an arm this build does not
-/// have. Both call sites are inside [`canonicalize_from_sequence`], which is
-/// infallible and sits deep under every public normalization entry point, so
-/// there is no `Result` to return the rejection through without threading one
-/// the length of the pipeline. A panic there is the honest alternative for a
+/// have. Every call site is either [`canonicalize_from_sequence`] — the sole
+/// production caller, which is infallible and sits deep under every public
+/// normalization entry point, so there is no `Result` to return the rejection
+/// through without threading one the length of the pipeline — or a
+/// `#[cfg(test)]` pin that asserts on the returned rule directly. A panic
+/// there is the honest alternative for a
 /// build somebody is measuring in: it fires once, at the first normalized
 /// variant, before any output exists to be mistaken for a measurement. See
 /// [`partition_rule_from_env`] for why silence was not an option, and
