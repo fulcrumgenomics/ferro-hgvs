@@ -1,5 +1,72 @@
+# Setup scripts are still gated behind this flag in cargo-nextest 0.9.133;
+# without it the `[scripts.setup.*]` block below is a hard config error rather
+# than a no-op. Keep this list minimal — it enables exactly the one feature the
+# pregeneration wiring needs.
+experimental = ["setup-scripts"]
+
 [profile.default]
 fail-fast = false
+
+# Pre-generate the gitignored spec fixtures ONCE, before any test process starts
+# (#1608). Their consumers otherwise regenerate them on demand from inside the
+# test body (`tests/it/common/fixture_gen.rs` -> nested `cargo run`), and under a
+# full `cargo nextest run` several of those nested builds race the cargo build
+# lock when the artifact is absent, so the generator intermittently "exits with
+# failure" and a spec-fixture consumer flakes red on the first full run (passing
+# on an isolated re-run). Hoisting generation into a setup script makes it happen
+# once, serially, after the build phase and before the tests — removing the
+# concurrency without removing the on-demand fallback (a plain `cargo test`, or
+# any run that still finds a fixture missing, still regenerates). This is the
+# local-`nextest` analogue of the CI / pre-push pregeneration guarded by #1775.
+#
+# BOUND TO THE CONSUMERS, NOT TO `all()`, and that is not a style preference.
+#
+# `filter = 'all()'` is what shipped here first, on the argument that the script
+# is "a near-free stat when the fixtures already exist, so there is no benefit to
+# a fragile per-consumer filter". That premise holds only where the fixtures CAN
+# be generated. `soak` and `sweeps` check out with no submodule and run
+# PRE-BUILT binaries out of a nextest archive (`scripts/run_nextest_archive.sh`),
+# so an `all()` binding fired there too, spent 68.7s-88.7s compiling the
+# generator in jobs whose entire design is to do no building, and then died on
+# the one thing those jobs cannot supply:
+#
+#     error: no HGVS strings harvested from assets/hgvs-nomenclature —
+#            the spec checkout is empty.
+#       SETUP FAIL [  88.702s] pregenerate-spec-fixtures
+#       Cancelling due to setup script failure
+#          Summary [  88.703s] 0/54 tests run: 0 passed, 80 skipped
+#
+# Measured on run 31931487583: 8 idempotency-soak shards and all three exhaustive
+# sweeps ran ZERO tests, and the required `Test` rollup reported them red. So an
+# `all()` binding cost two jobs their whole selection, and bought CI nothing —
+# every job that DOES read these fixtures already has them (`spec-fixtures`
+# publishes both as an artifact), which is why the script reported
+# `SETUP PASS [0.007s]` in `Test (1/6)` having done nothing.
+#
+# The fragility the `all()` argument was avoiding is real, and is closed by a
+# guard rather than by widening the filter. `tests/it/spec_fixture_setup_filter.rs`
+# derives the consumer set from the `ensure_spec_fixture()` /
+# `ensure_spec_enumeration()` calls in `tests/it` and fails when this list and
+# that set disagree in EITHER direction — so a future reader cannot be omitted
+# (which would reintroduce the race this script exists to remove) and a
+# non-reader cannot be added (which is how the archive jobs broke).
+#
+# Note the fourth entry. `normalize_axis_preserving` is a consumer, and it is not
+# in the two-module list `CLAUDE.md` gave until this change; a filter written
+# from that list would have been wrong on its first day. `censuses` selects that
+# module and downloads `spec-fixtures`, so the script fires there and is the
+# near-free stat `all()` promised — the archive jobs that break are exactly the
+# two that select neither it nor any other consumer.
+[[profile.default.scripts]]
+filter = 'test(hgvs_spec_normalization_tests) + test(idempotency_tests) + test(normalize_axis_preserving) + test(spec_enumeration_tests)'
+setup = 'pregenerate-spec-fixtures'
+
+# The command is resolved from, and runs in, the workspace root (nextest 0.9.133
+# does not accept a `relative-to` key here — it warns and ignores it). The script
+# additionally `cd`s to its own parent's parent, so it is robust to the working
+# directory regardless.
+[scripts.setup.pregenerate-spec-fixtures]
+command = 'scripts/pregenerate-spec-fixtures.sh'
 
 # There is deliberately no `[profile.ci]`.
 #
