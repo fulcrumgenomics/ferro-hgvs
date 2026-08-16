@@ -2,13 +2,34 @@ version: 2
 
 build:
   os: ubuntu-24.04
+  # A tool entry is required by the Read the Docs schema even when the build is
+  # driven entirely by `commands`. We do not use Python — it is the lightest
+  # always-available toolchain to satisfy the requirement. mdbook and
+  # mdbook-linkcheck2 are installed from prebuilt release binaries below, which
+  # drops the floating `rust: latest` toolchain (RTD has no 1.x selector) and its
+  # multi-minute from-source compile on every build. Prebuilt binaries also let
+  # us verify each download against a pinned checksum. These version pins MUST
+  # stay in lockstep with .github/workflows/docs.yml (which installs the same
+  # versions via cargo, matching how bwa-mem3 splits RTD vs CI).
   tools:
-    rust: "latest"  # RTD has no 1.x selector; rust-toolchain.toml pins the real version.
+    python: "3.12"
   commands:
-    # Pinned to match .github/workflows/docs.yml — keep the two in lockstep.
-    - cargo install mdbook --version 0.5.2 --locked
-    - cargo install mdbook-linkcheck2 --version 0.12.2 --locked
-    - cd docs && mdbook build
-    # With the linkcheck2 backend configured, mdBook writes HTML to book/html/.
+    # mdbook-linkcheck2 is the broken-link checker backend (see docs/book.toml).
+    # We use the fork rather than the original mdbook-linkcheck: the original is
+    # pinned to the mdBook 0.4 backend API and cannot parse mdBook 0.5's
+    # RenderContext. mdBook discovers it as the `linkcheck2` backend by finding
+    # `mdbook-linkcheck2` on PATH (bin/ is prepended below).
+    #
+    # Each binary is downloaded to a file, verified against its pinned SHA-256,
+    # and only then extracted — so a corrupted or tampered download fails the
+    # build with a checksum error instead of being run. The `&&` chain makes any
+    # step's failure (curl, checksum, or tar) abort the command. The checksums
+    # are for the official v0.5.2 / v0.12.2 release tarballs.
+    - mkdir -p bin
+    - curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-gnu.tar.gz -o bin/mdbook.tar.gz && echo "084e4342ba564db270108763e404a7d1f309d932651a22484e93c0dc1a071f6d  bin/mdbook.tar.gz" | sha256sum -c - && tar -xzf bin/mdbook.tar.gz -C bin
+    - curl -fsSL https://github.com/marxin/mdbook-linkcheck2/releases/download/v0.12.2/mdbook-linkcheck2-x86_64-unknown-linux-gnu.tar.gz -o bin/mdbook-linkcheck2.tar.gz && echo "c68bba37dd07887d308a8c1ccab56aef8250793196e35c0fe517b9c7fbc44c48  bin/mdbook-linkcheck2.tar.gz" | sha256sum -c - && tar -xzf bin/mdbook-linkcheck2.tar.gz -C bin && chmod +x bin/mdbook-linkcheck2
+    - cd docs && PATH="$PWD/../bin:$PATH" mdbook build
+    # With the linkcheck2 output backend configured, mdBook writes the HTML site
+    # to book/html/ (rather than book/), so copy from there.
     - mkdir -p _readthedocs/html
     - cp -r docs/book/html/. _readthedocs/html/
