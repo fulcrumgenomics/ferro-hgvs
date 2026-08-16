@@ -209,19 +209,25 @@ fn the_rule_is_scoped_to_the_coding_dna_axis() {
 ///
 /// Relaxing the length gate alone (`result.len() >= reference.len()` to `>`, so
 /// equal-length blocks are admitted) leaves this test **green**. Its split is
-/// held apart by a different condition: `n.2C>A` is a lone substitution, which
+/// held apart by a different condition: `c.2C>A` is a lone substitution, which
 /// is a rank-1 type the split buys, so the rule declines on condition 4 whatever
-/// the lengths are. That is not a defect in this test — an equal-length block
-/// reached through `partition_block` is always a run of substitutions, so an
-/// end-to-end case where *only* the length gate holds the line needs the
-/// canonical partitioner's compensating-gap geometry and is not reachable from
-/// a spelling this module can write.
+/// the lengths are. That is not a defect in this test — an equal-length block a
+/// full `normalize` emits as a split is always held by a substitution or a
+/// compensating insertion (condition 4 or the pure-insertion refusal), never by
+/// the length gate. Measured closing #1914: the `>=`->`>` sabotage moves zero
+/// rows over ~1.6M swept spelling inputs, so no spelling this module can write
+/// isolates the gate end to end.
 ///
-/// **The guard for the length gate itself is
-/// `merge::tests::the_placed_gap_predicate_discriminates`**, which asks the
-/// predicate directly with an equal-length `result` and the same pieces, and
-/// which the sabotage above turns red. Keep both: this one pins the *behaviour*
-/// at the boundary, that one pins the *rule*.
+/// **Two guards do pin the gate itself, and neither is reachable by a spelling:**
+/// `merge::tests::the_placed_gap_predicate_discriminates` asks the predicate
+/// directly with hand-built pieces and an artificial equal-length `result`, and
+/// `merge::tests::the_length_gate_holds_a_partitioner_derived_equal_length_block`
+/// (#1914) drives the **canonical partitioner** on `AACAAC -> CGAGGA`, whose
+/// derived `[delins;delins;placed-gap]` split makes the length gate the only
+/// condition that declines the collapse. Both go red under the `>=`->`>`
+/// sabotage. Keep all three: this one pins the *behaviour* at the boundary, and
+/// those two pin the *rule* — the second on a block the partitioner actually
+/// produces.
 ///
 /// # ASSERTED ON `c.`, DELIBERATELY
 ///
