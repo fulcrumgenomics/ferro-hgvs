@@ -5353,44 +5353,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &self.provider,
             );
 
-            // And last for the protein axis specifically: the coalesce above
-            // this loop runs on the *authored* members, so it only ever sees
-            // adjacency the input already had. The per-member 3' shift can
-            // *create* it — `p.[Gly13del;Gly16Ala]` shifts the deletion down
-            // its Gly run to `Gly17del`, which lands flush against `Gly16Ala`
-            // — and the nucleotide `merge_consecutive_edits` at the top of the
-            // pass never fires on protein members, so nothing closed that gap.
-            // The result was that pass one emitted `p.[Gly16Ala;Gly17del]` and
-            // pass two merged it to `p.Gly16_Gly17delinsAla`, i.e. `normalize`
-            // was not idempotent (found by #1614's protein corpus axis under
-            // `FERRO_ASSERT_IDEMPOTENT`).
-            //
-            // `substitution.md:32` is why the merged form is the right answer
-            // rather than a matter of taste: at separation zero the split
-            // spelling is marked `class="invalid"`, which the decided
-            // `rulings[delins-adjacent-members-when-both-consume-reference]`
-            // record scopes to members that both consume reference bases — a
-            // substitution and a single-residue deletion both do.
-            //
-            // `general.md:157-160` is the authority for the other half — the
-            // shift that *creates* the adjacency — and it is easy to miss
-            // because it is stated as a Q&A rather than as a rule: "protein
-            // variant descriptions should be derived from comparing the variant
-            // protein sequence with the reference protein sequence. Knowledge on
-            // the underlying change on the DNA level should not be used." Its
-            // worked example is a 3'-rule application at the protein level: a
-            // `Ser` lost from a `SerSer` run is `p.Ser5del`, and the passage
-            // says in as many words that placing it at the deleted *codon* —
-            // `p.Ser4del` — "is not correct". So carrying `Gly13del` down its
-            // Gly run to `Gly17del` is required rather than incidental, and
-            // `substitution.md:32` governs what is then made of the result. Both
-            // halves are published clauses; neither rests on judgement.
-            //
-            // Inside the loop for the same reason `respell_colliding_duplications`
-            // is: the coalesced allele is a new variant that must go back through
-            // the per-member pipeline. Termination is unchanged — a coalesce
-            // strictly reduces the member count, and the helper is a no-op once
-            // no adjacent run remains.
+            // Protein axis: the per-member 3' shift can CREATE adjacency the
+            // pre-loop coalesce (authored members only) never saw — e.g.
+            // `p.[Gly13del;Gly16Ala]` shifts to `p.[Gly16Ala;Gly17del]`, which
+            // must re-merge to `p.Gly16_Gly17delinsAla` or `normalize` is not
+            // idempotent (#1614). Why the merge is right, and why the shift that
+            // creates the adjacency is required: see docs/src/shadow-spec/recommendations/DNA/substitution.md `:32`
+            // (`rulings[delins-adjacent-members-when-both-consume-reference]` +
+            // `rulings[canonical-form-choice-when-both-legal]`, `general.md:157-160`).
+            // Inside the loop like `respell_colliding_duplications`: the coalesced
+            // allele re-enters the per-member pipeline; termination holds — a
+            // coalesce strictly reduces the member count.
             // Gated on the helper's *own* preconditions rather than on `is_cis`
             // alone. It declines an allele with fewer than two members or with
             // any non-protein member, so building the candidate under a bare
