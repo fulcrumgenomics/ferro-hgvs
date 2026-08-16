@@ -27,6 +27,10 @@ use crate::error_handling::{
     ResolvedAction,
 };
 use crate::hgvs::alignment_symbols::alignment_only_symbol;
+use crate::hgvs::insertion_size_counts::{
+    insertion_size_count, payload_forms_clause, reference_range_example, states_rna_axis,
+    unspecified_run_clause,
+};
 use crate::hgvs::noncoding_zones::{noncoding_zone_marker, NonCodingZone};
 use crate::hgvs::HgvsVariant;
 
@@ -181,6 +185,8 @@ pub fn parse_hgvs_with_config(
     let cardinality_action = config.action_for(ErrorType::NonConformantBracketCardinality);
     // Same, for the alignment-only-symbol rule (#1627).
     let alignment_symbol_action = config.action_for(ErrorType::AlignmentOnlySymbolInDescription);
+    // Same, for the `checklist.md:33` size-count-insertion rule (#1789).
+    let size_count_action = config.action_for(ErrorType::InsertionSizeCountWithoutSequence);
     // Same, for the `n.-N` numbering-zone rule (#1748). Its `n.*N` sibling is
     // NOT here: that one is refused unconditionally, from `parse_variant`.
     let noncoding_zone_action = config.action_for(ErrorType::NonCodingPositionOutsideTranscript);
@@ -234,6 +240,21 @@ pub fn parse_hgvs_with_config(
     apply_alignment_only_symbol_rule(
         &variant,
         alignment_symbol_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
+    // Apply the `checklist.md:33` size-count-insertion rule on the parsed AST
+    // (#1789). AST-keyed and mode-gated for the same two reasons as the rule
+    // above: keying on the rendered text would false-positive on
+    // `c.849_850ins858_895`, the range form `DNA/insertion.md:22` sanctions and
+    // which is also `ins` followed by digits; and putting it in the grammar
+    // would refuse in every mode and contradict
+    // `rulings[absolute-prohibition-enforcement-stage]`, which names
+    // `checklist.md:33` among its own clauses.
+    apply_insertion_size_count_rule(
+        &variant,
+        size_count_action,
         &preprocess_result.preprocessed,
         &mut warnings,
     )?;
@@ -491,6 +512,103 @@ fn apply_genomic_offset_rule(
                 "[{}] {}",
                 ErrorType::GenomicPositionOffset.code(),
                 found.refusal()
+            ),
+            diagnostic: None,
+        }),
+    }
+}
+
+/// Enforce `recommendations/checklist.md:33` on a parsed variant (#1789).
+///
+/// `checklist.md:32` asks "**do you provide the inserted sequence?**" and `:33`
+/// answers: "Describing a variant as `c.5439_5430ins6` is not allowed, the
+/// inserted sequence (for `ins6`, e.g., `TGCCAT`) should be specified." The
+/// example is printed `class="invalid"`. Both axis clauses say it
+/// constructively — `DNA/insertion.md:22` and `RNA/insertion.md:20` enumerate
+/// what an inserted sequence may be, and neither list contains a bare count.
+///
+/// **The stage is mode-dependent**, per the decided
+/// `rulings[absolute-prohibition-enforcement-stage]`, which lists
+/// `checklist.md:33` in its own clauses: strict validates input conformance and
+/// so fails here, at parse; lenient and silent do not validate input conformance
+/// and accept, and fail later at *normalize*, because a count names no bases to
+/// shuffle (see `Normalizer::normalize_core_checked`). Lenient carries a `W3029`
+/// warning saying so; silent is the same acceptance with no message.
+///
+/// There is no repair arm: `WarnCorrect` and `SilentCorrect` accept rather than
+/// correct. Re-spelling `ins6` as `insN[6]` would not be a repair but a
+/// different *claim* — it asserts the six bases are unspecified, where the
+/// author may simply have omitted bases they knew. That is why this returns
+/// `Result<(), _>` rather than a rewritten variant, like
+/// [`apply_alignment_only_symbol_rule`] and unlike
+/// [`apply_bracket_cardinality_rule`].
+///
+/// The diagnostic is axis-aware in **both** halves. `general.md:50` says an `r.`
+/// description states its nucleotides in lower case, so an RNA author is offered
+/// `insn[6]` rather than the DNA `insN[6]`; and because a `DNA/` clause cannot
+/// scope `r.`, the citations swap with it — `RNA/insertion.md:20` and `:41`
+/// rather than `DNA/insertion.md:22` and `:77`, with the range example spelled
+/// on the author's own axis. That is the same discipline the `W3028` sibling
+/// applies to its lower-case RNA arm.
+///
+/// See [`crate::hgvs::insertion_size_counts`] for what the predicate deliberately
+/// does not reach — `ins(10_20)`, `delins<number>` and `inv<number>`, each with
+/// its reason.
+fn apply_insertion_size_count_rule(
+    variant: &HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<(), FerroError> {
+    let Some(found) = insertion_size_count(variant) else {
+        return Ok(());
+    };
+    // Resolved once: the axis picks the suggested spelling AND the jurisdiction
+    // of every clause the message cites. Citing `DNA/insertion.md` at an `r.`
+    // author is the error the module docs warn about in as many words.
+    let rna_axis = states_rna_axis(variant);
+    let suggestion = if rna_axis {
+        found.conformant_spelling_for_rna()
+    } else {
+        found.conformant_spelling()
+    };
+
+    match action {
+        ResolvedAction::Accept | ResolvedAction::SilentCorrect => Ok(()),
+        ResolvedAction::WarnCorrect => {
+            warnings.push(CorrectionWarning::new(
+                ErrorType::InsertionSizeCountWithoutSequence,
+                format!(
+                    "`ins{count}` states how many nucleotides are inserted but not which, \
+                     which {clause} does not allow; normalization will refuse it. State the \
+                     bases, or `{suggestion}` if they are unspecified",
+                    count = found.count,
+                    clause = found.clause(),
+                ),
+                None,
+                source.to_string(),
+                // No correction is derivable — see the doc comment — so the
+                // "corrected" text is the input itself; the refusal comes at
+                // normalize.
+                source.to_string(),
+            ));
+            Ok(())
+        }
+        ResolvedAction::Reject => Err(FerroError::Parse {
+            pos: 0,
+            msg: format!(
+                "[{code}] `ins{count}` states a count where the inserted sequence belongs: \
+                 {clause} says a description like `c.5439_5430ins6` \"is not allowed, the \
+                 inserted sequence (for `ins6`, e.g., `TGCCAT`) should be specified\". State \
+                 the bases inserted, a range of the reference \
+                 (`{range_example}`, {payload_clause}), or — if the count is known and \
+                 the bases are not — `{suggestion}` ({unspecified_clause}).",
+                code = ErrorType::InsertionSizeCountWithoutSequence.code(),
+                count = found.count,
+                clause = found.clause(),
+                range_example = reference_range_example(rna_axis),
+                payload_clause = payload_forms_clause(rna_axis),
+                unspecified_clause = unspecified_run_clause(rna_axis),
             ),
             diagnostic: None,
         }),

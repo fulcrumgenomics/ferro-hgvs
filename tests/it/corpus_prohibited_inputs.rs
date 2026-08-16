@@ -32,7 +32,7 @@
 //! |---|---|---|
 //! | `conflicts_accepted` 72 | accepted, re-emitted verbatim | **all 72 refused**, `W5002` / `OverlapConflictingEdits` |
 //! | `prohibited_conditional_accepted` 40 | accepted | 16 of 40 refused (`W4007`, bare-transcript intronic); 24 accepted (`X`) |
-//! | `prohibited_absolute_accepted` 32 | accepted | **all 32 still accepted** |
+//! | `prohibited_absolute_accepted` 8 | accepted | **all 8 still accepted** |
 //!
 //! So "72 conflicting alleles accepted instead of refused" is not the finding it
 //! reads as: ferro has already adjudicated every one of those geometries as
@@ -42,8 +42,11 @@
 //! (preserve the conflict verbatim so strict re-reads it as one) and which this
 //! file does not reopen.
 //!
-//! The 32 **absolute** acceptances are a different matter: they are refused in
-//! neither mode, and they are the residue that a fix has to reach.
+//! The remaining 8 **absolute** acceptances are a different matter: they are
+//! refused in neither mode, and they are the residue that a fix has to reach.
+//! The figure was 32 until #1789 took `checklist.md:33`'s 24 `ins6` rows; the
+//! table above and the decomposition below are stated at their **current**
+//! values, with the movement recorded where each clause is discussed.
 //!
 //! # The clause-level decomposition, which the totals hide
 //!
@@ -51,8 +54,11 @@
 //! [`the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`]):
 //!
 //! ```text
-//! ACCEPTED, absolute (24)   checklist.md:33  ins6            24   <- rank-1 defect (#1627)
 //! ACCEPTED, conditional(16) checklist.md:20  bare NM_ intron 16   <- strict refuses; correct
+//! REFUSED, mode-gated (56)  checklist.md:33  ins6            24   <- closed by #1789
+//!                           checklist.md:16  g. `+` offset    4   <- closed by #1628
+//!                           checklist.md:45  g. hyphen range  4   <- closed by #1628
+//!                           standards.md:39  `X` base        24   <- closed by #1627
 //! REFUSED at parse (92)     checklist.md:31  c.10insT        24
 //!                           checklist.md:49  del3            24
 //!                           general.md:96    internal space  24
@@ -63,10 +69,12 @@
 //!                           checklist.md:45  g. hyphen range  4   <- closed by #1628
 //! ```
 //!
-//! The last block is the shape the enforcement-stage ruling asks for: strict
-//! refuses at PARSE, lenient and silent accept the input and then fail at
-//! NORMALIZE. Those 32 rows are absent from **both** acceptance maps in
-//! [`the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`],
+//! The mode-gated band is the shape the decided
+//! `rulings[absolute-prohibition-enforcement-stage]` produces: strict refuses at
+//! PARSE, lenient and silent accept there and refuse at NORMALIZE. It is
+//! distinct from the grammar band, which is refused in every mode with no
+//! conformance rule involved. Those rows are absent from **both** acceptance maps
+//! in [`the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`],
 //! which is how a mode-gated refusal reads from here.
 //!
 //! **The corpus's rule ids name the BULLET, the citations here name the
@@ -82,10 +90,14 @@
 //!
 //! Two things fall out that no total could show.
 //!
-//! **One numbered checklist item is half-enforced.** Item 3, "Insertions", has
-//! two bullets: `:31` rejects `c.52insT` and `:33` rejects `c.5439_5430ins6`.
-//! Ferro refuses the first at parse, with a citation in the error message, and
-//! accepts the second in both modes.
+//! **One numbered checklist item was half-enforced, and is not any more.** Item
+//! 3, "Insertions", has two bullets: `:31` rejects `c.52insT` and `:33` rejects
+//! `c.5439_5430ins6`. Ferro refused the first at parse, with a citation in the
+//! error message, and accepted the second in every mode until #1789. Both are
+//! now enforced — on different schedules, because `:31` has no production in the
+//! grammar while `:33` is a conformance rule on a shape that parses. See
+//! [`one_checklist_insertion_bullet_is_enforced_and_its_neighbour_is_not`],
+//! whose name is now half a historical record.
 //!
 //! **One clause naming three symbols was enforced for one of them, and the one
 //! it enforced was an accident.** `checklist.md:16` says a `g.` reference "can
@@ -376,24 +388,33 @@ fn the_refusals_that_cite_their_clause_keep_citing_it() {
 /// **Question.** `checklist.md` item 3 ("Insertions") states two prohibitions,
 /// four lines apart. Are they enforced alike?
 ///
-/// **No.** `:31` is refused at parse with a citation; `:33` is accepted in both
-/// modes and re-emitted unchanged. The two bullets are the same numbered item,
-/// the same edit type and the same prohibitive phrasing:
+/// **Now yes — and for years, no.** `:31` has always been refused at parse with
+/// a citation; `:33` was accepted in every mode and re-emitted unchanged until
+/// #1789. The two bullets are the same numbered item, the same edit type and the
+/// same prohibitive phrasing:
 ///
 /// - `:31` — "The format `c.52insT` is **ambiguous**, and not allowed."
 /// - `:33` — "Describing a variant as `c.5439_5430ins6` is not allowed, the
 ///   inserted sequence (for `ins6`, e.g., `TGCCAT`) should be specified."
 ///
-/// **Ruling: refuse, in both modes.** `:33` is absolute in as many words, so it
-/// is rank-1 under the precedence order and not tradeable against anything. It
-/// is also rank-1 a second way, independently of the clause: an insertion that
-/// states a length rather than a sequence **denotes no sequence**, which
+/// **Ruling: refuse.** `:33` is absolute in as many words, so it is rank-1 under
+/// the precedence order and not tradeable against anything. It is also rank-1 a
+/// second way, independently of the clause: an insertion that states a length
+/// rather than a sequence **denotes no sequence**, which
 /// [`an_insertion_stating_a_length_denotes_no_sequence`] asserts rather than
 /// argues. There is no lenient reading available — lenient mode exists for
 /// inputs that can be understood and repaired, and `ins6` cannot be repaired
 /// without inventing six bases.
 ///
-/// 24 of the census's 32 absolute acceptances are this one shape.
+/// **The STAGE is the decided `rulings[absolute-prohibition-enforcement-stage]`'s,
+/// not this test's**, and that record names `checklist.md:33` in its own clause
+/// list: strict refuses at PARSE, lenient and silent accept at parse and refuse
+/// at NORMALIZE. This doc used to say "refuse, in both modes", which is the
+/// verdict and not the schedule; the schedule is asserted below.
+///
+/// 24 of the census's then-32 absolute acceptances were this one shape, and
+/// `the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`
+/// pins that they are now gone from both the lenient and the strict map.
 #[test]
 fn one_checklist_insertion_bullet_is_enforced_and_its_neighbour_is_not() {
     let core = at_core();
@@ -413,46 +434,65 @@ fn one_checklist_insertion_bullet_is_enforced_and_its_neighbour_is_not() {
          single-position anchor `:31` names"
     );
 
-    // `:33`, not enforced — in either mode, either direction, alone or in an
-    // allele.
-    for direction in DIRECTIONS {
-        assert_eq!(
-            lenient(&coding, "NM_TEST.1:c.10_11ins6", direction).as_deref(),
-            Ok("NM_TEST.1:c.10_11ins6"),
-            "PINNED DEFECT — checklist.md:33 says an insertion sized by a number `is not \
-             allowed, the inserted sequence … should be specified`. Correct behaviour: refuse."
+    // `:33`, now enforced, on the ruled schedule. Every input here carries a
+    // VALID range: the spec's own example `c.5439_5430ins6` is separately
+    // refused for its inverted anchors, which is how this acceptance stayed
+    // invisible for so long, so a guard written on it would prove nothing.
+    for probe in ["NM_TEST.1:c.10_11ins6", "NM_TEST.1:c.[10_11ins6;9del]"] {
+        // STRICT — refused at PARSE.
+        let err = parse_hgvs_with_config(probe, ErrorConfig::strict())
+            .expect_err("strict refuses a size-count insertion at parse")
+            .to_string();
+        assert!(
+            err.contains("W3029"),
+            "{probe}: strict must refuse with W3029; got: {err}"
         );
-        assert_eq!(
-            strict(&coding, "NM_TEST.1:c.10_11ins6", direction).as_deref(),
-            Ok("NM_TEST.1:c.10_11ins6"),
-            "PINNED DEFECT — and STRICT mode does not catch it either, so this is not a \
-             hygiene-mode question: it is refused nowhere."
-        );
+
+        // LENIENT and SILENT — accepted at parse, refused at normalize.
+        for config in [ErrorConfig::lenient(), ErrorConfig::silent()] {
+            assert!(
+                parse_hgvs_with_config(probe, config.clone()).is_ok(),
+                "{probe}: lenient/silent do not validate input conformance"
+            );
+        }
+
+        // Both directions, all three modes. The allele arm is what makes this a
+        // per-MEMBER claim: a per-description check would pass the standalone
+        // probe and fail here.
+        for direction in DIRECTIONS {
+            for (label, outcome) in [
+                ("strict", strict(&coding, probe, direction)),
+                ("lenient", lenient(&coding, probe, direction)),
+                ("silent", silent(&coding, probe, direction)),
+            ] {
+                let err = outcome.expect_err(&format!(
+                    "{probe}: {label} must refuse to normalize a size-count insertion"
+                ));
+                assert!(
+                    err.contains("W3029"),
+                    "{probe}: {label} refusal must name W3029; got: {err}"
+                );
+            }
+        }
     }
 
-    // Inside an allele, both directions. The member order differs by direction
-    // because the legal sibling shifts; the offending member survives either way,
-    // which is the point.
-    assert_eq!(
-        lenient(
-            &coding,
-            "NM_TEST.1:c.[10_11ins6;9del]",
-            ShuffleDirection::ThreePrime
-        )
-        .as_deref(),
-        Ok("NM_TEST.1:c.[9del;10_11ins6]"),
-        "PINNED DEFECT — a per-description hygiene check would have to fire here too"
-    );
-    assert_eq!(
-        lenient(
-            &coding,
-            "NM_TEST.1:c.[10_11ins6;9del]",
-            ShuffleDirection::FivePrime
-        )
-        .as_deref(),
-        Ok("NM_TEST.1:c.[1del;10_11ins6]"),
-        "PINNED DEFECT — the 5' direction is not covered by spec_corpus_regressions.rs"
-    );
+    // The control, in both directions: the same allele with the payload spelled
+    // the way `DNA/insertion.md:77` spells it still normalizes, so the refusals
+    // above are attributable to the payload's FORM and not to the shape of the
+    // description.
+    //
+    // Both directions land on one `delins` rather than on two members — the
+    // deletion and the insertion are flush, so `substitution.md:32` merges them
+    // (`rulings[delins-adjacent-members-when-both-consume-reference]`) and the
+    // `N[6]` payload expands into a literal run on the way. That is why the two
+    // directions agree here where the refused probe's members would not have:
+    // the merge happens before any shuffle can separate them.
+    for direction in DIRECTIONS {
+        assert_eq!(
+            lenient(&coding, "NM_TEST.1:c.[10_11insN[6];9del]", direction).as_deref(),
+            Ok("NM_TEST.1:c.9_10delinsANNNNNN"),
+        );
+    }
 }
 
 /// **Question.** Is `c.10_11ins6` merely *prohibited*, or is it not a
@@ -1046,18 +1086,25 @@ fn a_bare_transcript_intronic_position_is_refused_at_parse_in_strict_mode() {
 // The decomposition, measured over the corpus
 // ---------------------------------------------------------------------------
 
-/// **Question.** The census pins 32 absolute and 16 conditional acceptances.
+/// **Question.** The census pins 8 absolute and 16 conditional acceptances.
 /// *Which clauses*, and does either figure change under strict mode?
 ///
-/// **Three clauses hold the whole absolute figure, and strict mode does not move
+/// **Two clauses hold the whole absolute figure, and strict mode does not move
 /// it at all.** The conditional figure drops to zero under strict, because
 /// `checklist.md:20` is enforced there.
 ///
-/// This is the test that turns two totals into an adjudication: a fix that
-/// refuses `ins6` moves 24 of the 32, and one that refuses `g.` offsets moves
-/// the remaining 8. Nothing else contributes, so nothing else needs a ruling —
-/// and if a new clause ever appears in this map, the corpus has grown a shape
-/// nobody has adjudicated.
+/// This is the test that turns two totals into an adjudication: it predicted
+/// that a fix refusing `ins6` would move 24 of the then-32, and one refusing
+/// `g.` offsets the remaining 8. **The first happened (#1789)**, by exactly the
+/// 24 rows this map named, which is the prediction closing rather than a new
+/// finding. Nothing else contributes, so nothing else needs a ruling — and if a
+/// new clause ever appears in this map, the corpus has grown a shape nobody has
+/// adjudicated.
+///
+/// **The absolute figure was 32 and is now 8 (#1789).**
+/// `checklist.md:33`'s 24 rows have left BOTH maps, on the same schedule
+/// `standards.md:39` left them on: strict refuses at parse, lenient and silent
+/// at normalize. The residual 8 are `checklist.md:16`/`:45`, which is #1628.
 ///
 /// **The conditional figure was 40 and is now 16 (#1627).**
 /// `standards.md:39`'s 24 rows have left BOTH maps: strict refuses them at
@@ -1109,23 +1156,22 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
                     ),
                     16
                 ),
-                (
-                    ("checklist.md:32-insertion-states-its-sequence", "absolute"),
-                    24
-                ),
-                // `checklist.md:16-genomic-has-no-offsets` (4) and
-                // `checklist.md:45-range-is-underscore` (4) used to sit here and
-                // no longer do (#1628): every mode now refuses them. Strict at
-                // parse (`W4009`), lenient and silent at normalize, because a
-                // genomic accession carries no exon boundary for the offset to
-                // be measured from. See
-                // `the_clauses_three_offset_symbols_are_refused_alike`.
+                // No absolute-prohibition clause survives here any more.
+                // `checklist.md:33-insertion-states-its-sequence` (24) left with
+                // #1789; `checklist.md:16-genomic-has-no-offsets` (4) and
+                // `checklist.md:45-range-is-underscore` (4) left with #1628.
+                // Every mode now refuses all three — strict at parse, lenient
+                // and silent at normalize.
                 // `standards.md:39`'s 24 rows used to sit here and no longer do
                 // (#1627): every mode now refuses them. Strict at parse, lenient
                 // and silent at normalize. See
                 // `an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`.
+                //
+                // `checklist.md:33`'s 24 `ins6` rows left on the same schedule
+                // (#1789) — see
+                // `one_checklist_insertion_bullet_is_enforced_and_its_neighbour_is_not`.
             ]),
-            "the per-clause decomposition of the census's 32 absolute + 16 conditional \
+            "the per-clause decomposition of the census's 8 absolute + 16 conditional \
              acceptances moved ({direction:?}). Every entry is adjudicated in this file; a NEW \
              clause here is a shape nobody has ruled on."
         );
@@ -1158,24 +1204,22 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
         assert_eq!(
             strict_accepted,
             BTreeMap::from([
-                (
-                    ("checklist.md:32-insertion-states-its-sequence", "absolute"),
-                    24
-                ),
-                // The two genomic-offset clauses used to survive strict mode
-                // too, and no longer do (#1628): strict refuses them at PARSE,
-                // which is where the enforcement-stage ruling puts an
-                // input-conformance check. They are now absent from BOTH maps
-                // rather than only this one.
+                    // Empty for the same reason as the map above: #1789 took the
+                    // 24 `ins6` rows and #1628 took the two genomic-offset clauses,
+                    // and strict refuses all of them at PARSE, which is where the
+                    // enforcement-stage ruling puts an input-conformance check.
                 // `standards.md:39` used to survive strict mode too, and no
                 // longer does (#1627): strict refuses it at PARSE, which is
                 // where the enforcement-stage ruling puts an input-conformance
                 // check. It is now absent from BOTH maps rather than only this
                 // one, because lenient and silent refuse it at normalize.
+                //
+                // `checklist.md:33`'s `ins6` rows are gone from both maps too,
+                // on the same schedule and for the same reason (#1789).
             ]),
-            "strict mode must refuse checklist.md:20 and standards.md:39 and nothing else \
-             ({direction:?}). The 32 ABSOLUTE acceptances survive strict mode, which is why \
-             they are the residue a fix has to reach."
+            "strict mode must refuse checklist.md:20, standards.md:39 and checklist.md:33 and \
+             nothing else ({direction:?}). The remaining 8 ABSOLUTE acceptances survive strict \
+             mode, which is why they are the residue a fix has to reach."
         );
     }
 }

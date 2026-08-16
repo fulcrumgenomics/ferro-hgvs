@@ -240,17 +240,21 @@ fn conflicting_member_geometries_are_normalized_instead_of_refused() {
 
 /// **Question.** Are the shapes the checklist calls "not allowed" rejected?
 ///
-/// **Three are not**, and each is accepted both standalone and inside an allele,
-/// then emitted again unchanged — so the prohibition is enforced on neither the
-/// input nor the output side.
+/// **Two are still not**, and each is accepted both standalone and inside an
+/// allele, then emitted again unchanged — so the prohibition is enforced on
+/// neither the input nor the output side. **The third, `checklist.md:33`'s
+/// `ins6`, is now refused (#1789)** and is asserted here as an
+/// adjudicated-correct guard rather than as a pinned defect.
 ///
 /// The clauses, verbatim:
 ///
 /// - `checklist.md:33` — "Describing a variant as `c.5439_5430ins6` is not
 ///   allowed, the inserted sequence (for `ins6`, e.g., `TGCCAT`) should be
-///   specified." Ferro *does* reject `ins6` when the two anchors are not adjacent
-///   (per `DNA/insertion.md:15`), which is a different check that happens to
-///   catch the spec's own example; with adjacent anchors nothing fires.
+///   specified." **Enforced since #1789.** Note the spec's own example is
+///   *separately* refused for its inverted range (5439 > 5430), which is a
+///   different check that happens to catch it — which is precisely why the
+///   acceptance stayed invisible, and why the row asserted here has a valid
+///   range instead.
 /// - `checklist.md:16` — a genomic reference "can not have nucleotides with
 ///   additions like a `+`, `-`, or `*`". **Closed by #1628**: both offset shapes
 ///   are refused now, so the two rows below are inverted rather than removed.
@@ -264,12 +268,22 @@ fn absolute_prohibitions_are_accepted_and_re_emitted() {
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
     let genomic = Frame::build(RefShape::Genomic, &core);
 
-    // `ins6`: an insertion that states a LENGTH instead of a sequence.
-    assert_eq!(
-        normalize_3prime(&coding, "NM_TEST.1:c.10_11ins6"),
-        "NM_TEST.1:c.10_11ins6",
-        "PINNED DEFECT — checklist.md:33 says an insertion sized by a number 'is not allowed, \
-         the inserted sequence … should be specified'. Correct behaviour: refuse."
+    // `ins6`: an insertion that states a LENGTH instead of a sequence. Refused
+    // at normalize in every mode since #1789 — the full three-mode, two-stage
+    // guard (and the `ins(6)` spelling, and the `r.` axis) is in
+    // `issue_1789_insertion_size_count.rs`; what is asserted here is the corpus
+    // row itself, in the file that owns the corpus's named regressions.
+    let ins6 = parse_hgvs("NM_TEST.1:c.10_11ins6").expect("the grammar admits it");
+    let err = Normalizer::with_config(
+        coding.provider().clone(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    )
+    .normalize(&ins6)
+    .expect_err("checklist.md:33 — a count names no bases to normalize")
+    .to_string();
+    assert!(
+        err.contains("W3029"),
+        "the refusal must name the size-count finding; got: {err}"
     );
 
     // The two genomic-offset shapes are no longer accepted at all (#1628), so
@@ -301,24 +315,45 @@ fn absolute_prohibitions_are_accepted_and_re_emitted() {
 /// **Question.** Does a prohibited member become *less* visible when it sits
 /// inside an allele?
 ///
-/// **This one does, and that is the more interesting half.** The three shapes
-/// above are accepted standalone, so an allele containing one is unsurprising —
-/// but it matters that the allele form is checked, because a hygiene check that
-/// runs once per description rather than once per member is a failure mode with
-/// its own signature, and the corpus generates both forms of every prohibition
-/// precisely to tell them apart.
+/// **It used to, and that was the more interesting half.** The allele form is
+/// checked separately because a hygiene check that runs once per description
+/// rather than once per member is a failure mode with its own signature, and the
+/// corpus generates both forms of every prohibition precisely to tell them
+/// apart.
 ///
-/// Note the reordering: ferro sorts members by position, so the offending member
-/// moves. That is the 3' rule doing its job and is not the defect.
+/// **#1789 closed this one, and the allele arm is what proves the fix is not
+/// per-description.** The refusal is keyed on the AST and walks every member, so
+/// the offending member is reached inside a cis allele exactly as it is
+/// standalone. Kept as a guard rather than deleted: a future re-implementation
+/// that checks only the top-level description would pass the standalone row and
+/// fail here, which is the whole reason this row exists.
 #[test]
 fn a_prohibited_member_inside_an_allele_is_also_accepted() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
+    let allele = parse_hgvs("NM_TEST.1:c.[10_11ins6;9del]").expect("the grammar admits it");
+    let err = Normalizer::with_config(
+        coding.provider().clone(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    )
+    .normalize(&allele)
+    .expect_err("the offending MEMBER must be reached, not only a top-level description")
+    .to_string();
+    assert!(
+        err.contains("W3029"),
+        "the refusal must name the size-count finding; got: {err}"
+    );
+
+    // The control: the same allele with the offending member's payload spelled
+    // conformantly still normalizes, so the refusal above is attributable to the
+    // payload's form and not to the allele. The two flush members merge into one
+    // `delins` (`substitution.md:32`) and the `N[6]` payload expands into a
+    // literal run on the way, which is ordinary normalization and not part of
+    // what this row measures.
     assert_eq!(
-        normalize_3prime(&coding, "NM_TEST.1:c.[10_11ins6;9del]"),
-        "NM_TEST.1:c.[9del;10_11ins6]",
-        "PINNED DEFECT — see `absolute_prohibitions_are_accepted_and_re_emitted`; the allele \
-         form is pinned separately so a per-description-only fix is visible as a partial one."
+        normalize_3prime(&coding, "NM_TEST.1:c.[10_11insN[6];9del]"),
+        "NM_TEST.1:c.9_10delinsANNNNNN",
+        "the conformant spelling of the same claim must still round-trip"
     );
 }
 

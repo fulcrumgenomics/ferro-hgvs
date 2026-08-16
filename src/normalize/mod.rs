@@ -3905,6 +3905,46 @@ impl<P: ReferenceProvider> Normalizer<P> {
             });
         }
 
+        // `checklist.md:33` (#1789): an insertion sized by a count states how
+        // many nucleotides are inserted but not which, so — exactly like the `X`
+        // rung above, and for the same reason — there is no sequence to shuffle
+        // and this refuses BEFORE any work, in EVERY mode.
+        //
+        // The mode gate belongs at parse. Per the decided
+        // `rulings[absolute-prohibition-enforcement-stage]` — which names
+        // `checklist.md:33` in its own clause list — the gate governs whether
+        // the INPUT is judged and cannot govern whether the OUTPUT conforms.
+        // That record measured this exact shape and said what was wrong with it:
+        // the `ins6` rows "genuinely denote nothing" (`denotation_of` returns
+        // `Denotation::Inexpressible`, and `to_spdi` refuses them by name), yet
+        // all three modes emitted them back byte-identically with an EMPTY
+        // warning vector — "normalization is not impossible here, it is VACUOUS,
+        // which is worse, because the output looks normalized".
+        if let Some(found) = crate::hgvs::insertion_size_counts::insertion_size_count(variant) {
+            let suggestion = if crate::hgvs::insertion_size_counts::states_rna_axis(variant) {
+                found.conformant_spelling_for_rna()
+            } else {
+                found.conformant_spelling()
+            };
+            // `InvalidCoordinates` is this function's existing carrier for a
+            // normalize-stage conformance refusal (W3028 above, W5004 and W3022
+            // below); the fault is in the stated payload rather than a position,
+            // and the `[W3029]` tag in the message is what names it.
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "[{code}] cannot normalize `ins{count}`: it states how many nucleotides \
+                     are inserted but not which, which {clause} does not allow. A count names \
+                     no bases, so the description denotes no sequence and there is nothing to \
+                     normalize. State the bases inserted, or `{suggestion}` if they are \
+                     unspecified.",
+                    code =
+                        crate::error_handling::ErrorType::InsertionSizeCountWithoutSequence.code(),
+                    count = found.count,
+                    clause = found.clause(),
+                ),
+            });
+        }
+
         // Call the canonical core directly (skipping the per-call
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.

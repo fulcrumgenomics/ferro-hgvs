@@ -423,16 +423,44 @@ fn a_non_literal_payload_is_indeterminate_rather_than_a_negative_verdict() {
     );
 }
 
-/// `ins6` — a count of unspecified bases — is the same shape spelled without a
-/// repeat unit.
+/// A count of unspecified bases is the same shape spelled without a repeat
+/// unit — and it now comes in two verdicts, which is the point of pinning both.
+///
+/// **`ins6` no longer reaches a verdict at all.** #1789 refuses a bare count at
+/// normalize, in every mode (`W3029`, `checklist.md:33`), so the checker — which
+/// normalizes both sides — errors instead of grading. That is asserted here
+/// rather than deleted, because "the pair is Indeterminate" and "the pair is
+/// refused" are different answers and a silent swap between them is exactly what
+/// this file exists to catch.
+///
+/// **`ins(6_9)` still reaches `Indeterminate`**, and must: #1789 deliberately
+/// leaves `InsertedSequence::Range` alone, because ferro's AST uses that one
+/// node for a count range and for an uncertain *position* range, and the second
+/// is spec-sanctioned. So the shape this test was written about still has a
+/// live representative, and the scope line is pinned from the equivalence side
+/// as well as the parser's.
 #[test]
 fn an_unspecified_insertion_count_is_indeterminate() {
     let provider = two_exon_provider();
+
+    let checker = EquivalenceChecker::new(provider.clone());
+    let refused = checker
+        .check(
+            &parse_hgvs(&format!("{CONTIG}:g.1001_1002ins6")).unwrap(),
+            &parse_hgvs(&format!("{CONTIG}:g.1001_1002ins8")).unwrap(),
+        )
+        .expect_err("a bare count cannot be normalized, so no verdict is reachable")
+        .to_string();
+    assert!(
+        refused.contains("W3029"),
+        "the refusal must name the size-count rule; got: {refused}"
+    );
+
     assert_eq!(
         level(
             &provider,
-            &format!("{CONTIG}:g.1001_1002ins6"),
-            &format!("{CONTIG}:g.1001_1002ins8"),
+            &format!("{CONTIG}:g.1001_1002ins(6_9)"),
+            &format!("{CONTIG}:g.1001_1002ins(6_12)"),
         ),
         EquivalenceLevel::Indeterminate
     );
@@ -481,9 +509,15 @@ fn an_indeterminate_input_never_wins_a_decided_denotational_rung() {
             format!("{CONTIG}:g.1001_1002insN[3]"),
             format!("{CONTIG}:g.1002_1003insNNN"),
         ),
-        // An unspecified count, which never expands at all.
+        // An unspecified count range, which never expands at all. This row used
+        // to spell the left side `ins6`; #1789 refuses a bare count at
+        // normalize in every mode, so that spelling can no longer reach a rung
+        // to be graded — and a row that errors would assert nothing here. The
+        // parenthesized range is the same "never expands" shape and is
+        // deliberately still accepted (see
+        // `an_unspecified_insertion_count_is_indeterminate`).
         (
-            format!("{CONTIG}:g.1005_1006ins6"),
+            format!("{CONTIG}:g.1005_1006ins(6_9)"),
             format!("{CONTIG}:g.1005delinsA6"),
         ),
         // On the transcript, where a second determined axis exists and so a

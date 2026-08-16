@@ -580,6 +580,42 @@ pub enum ErrorType {
     /// is about *output* conformance, and no per-code override may trade it.
     AlignmentOnlySymbolInDescription,
 
+    /// An insertion states a **count** of nucleotides where the inserted
+    /// sequence belongs — `c.10_11ins6`, `c.10_11ins(6)`.
+    ///
+    /// `recommendations/checklist.md:32` asks "**do you provide the inserted
+    /// sequence?**" and `:33` answers: "Describing a variant as
+    /// `c.5439_5430ins6` is not allowed, the inserted sequence (for `ins6`,
+    /// e.g., `TGCCAT`) should be specified." The example is printed
+    /// `class="invalid"`, and "not allowed" is MUST-level under
+    /// `recommendations/style.md:9`. Both axis clauses enumerate what an
+    /// inserted sequence may be — `DNA/insertion.md:22`, `RNA/insertion.md:20` —
+    /// and neither list contains a bare count.
+    ///
+    /// **There is no auto-correction, and no expressive power is lost.** ferro
+    /// will not invent six bases; but the spelling the spec offers for a known
+    /// number of *unspecified* nucleotides is `insN[6]` (`DNA/insertion.md:77`,
+    /// `RNA/insertion.md:41` for the lower-case `r.` form), which ferro already
+    /// accepts. The diagnostic names it.
+    ///
+    /// Enforcement follows the decided
+    /// `rulings[absolute-prohibition-enforcement-stage]`, which lists
+    /// `checklist.md:33` among its own clauses: **strict rejects at parse**;
+    /// lenient and silent accept at parse — lenient with this warning, silent
+    /// without — and then **fail at normalize**, because a count names no bases
+    /// and there is nothing to shuffle.
+    ///
+    /// The check is AST-keyed, on the inserted sequence, never a scan of the
+    /// rendered description: `c.849_850ins858_895` is also `ins` followed by
+    /// digits and is the range form `DNA/insertion.md:22` sanctions. See #1789.
+    ///
+    /// **An override on this code moves the PARSE stage only**, exactly as for
+    /// `W3028` above: `Normalizer::normalize_core_checked` refuses
+    /// unconditionally and consults no config, because rule 1 of the README
+    /// ruleset is about *output* conformance and no per-code override may trade
+    /// it.
+    InsertionSizeCountWithoutSequence,
+
     /// An `n.`-axis description states a `-N` position — a zone
     /// `background/numbering.md:52` does not put on the non-coding DNA axis.
     ///
@@ -719,6 +755,7 @@ impl ErrorType {
             ErrorType::IncompleteCdsStartReference => "W5004",
             ErrorType::InsertionWithoutInsertedSequence => "W3027",
             ErrorType::AlignmentOnlySymbolInDescription => "W3028",
+            ErrorType::InsertionSizeCountWithoutSequence => "W3029",
             ErrorType::NonCodingPositionOutsideTranscript => "W4008",
             ErrorType::GenomicPositionOffset => "W4009",
             ErrorType::MembersCoalescedFromReportedForm => "W5005",
@@ -770,6 +807,7 @@ impl ErrorType {
         ErrorType::NonConformantBracketCardinality,
         ErrorType::InsertionWithoutInsertedSequence,
         ErrorType::AlignmentOnlySymbolInDescription,
+        ErrorType::InsertionSizeCountWithoutSequence,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -889,6 +927,10 @@ impl ErrorType {
                 "description states an alignment-only symbol (`X` or `-`), which is not an \
                  IUPAC-IUBMB nucleotide"
             }
+            ErrorType::InsertionSizeCountWithoutSequence => {
+                "insertion sized by a count instead of stating the inserted sequence \
+                 (`ins6`; checklist.md:33)"
+            }
             ErrorType::NonCodingPositionOutsideTranscript => {
                 "n.-axis `-N` position, before the first nucleotide of the reference sequence \
                  (numbering.md:52 numbers this axis from the first to the last nucleotide only; \
@@ -1005,6 +1047,11 @@ impl ErrorType {
             // indeterminate length; neither names bases ferro could substitute,
             // so there is nothing to correct to.
             ErrorType::AlignmentOnlySymbolInDescription => false,
+            // ferro will not invent the bases a count leaves unstated. The
+            // conformant re-spelling `insN[6]` is a different *claim* (it
+            // asserts the bases are unspecified rather than merely unwritten),
+            // so choosing it for the author would be inventing intent.
+            ErrorType::InsertionSizeCountWithoutSequence => false,
             // Re-expressing `n.-5` as an in-transcript coordinate needs the
             // transcript's length, which the parser does not hold; and
             // `numbering.md:52` denies the zone rather than the spelling, so
@@ -1109,6 +1156,7 @@ impl ErrorType {
             | ErrorType::IncompleteCdsStartReference
             | ErrorType::InsertionWithoutInsertedSequence
             | ErrorType::AlignmentOnlySymbolInDescription
+            | ErrorType::InsertionSizeCountWithoutSequence
             | ErrorType::NonCodingPositionOutsideTranscript
             | ErrorType::GenomicPositionOffset
             | ErrorType::MembersCoalescedFromReportedForm => true,
@@ -1214,6 +1262,10 @@ impl ErrorType {
             ErrorType::AlignmentOnlySymbolInDescription => (
                 "NC_000001.11:g.10delinsACGTX (X is alignment-only, standards.md:39)",
                 "(no auto-correct; state the resolved bases)",
+            ),
+            ErrorType::InsertionSizeCountWithoutSequence => (
+                "NM_004006.2:c.5439_5440ins6 (a count, not a sequence, checklist.md:33)",
+                "(no auto-correct; state the bases, or insN[6] if they are unspecified)",
             ),
             ErrorType::NonCodingPositionOutsideTranscript => (
                 "NR_037639.1:n.-5A>G (numbering.md:52 numbers n. from 1 to the last base)",
@@ -1683,6 +1735,7 @@ mod tests {
             ErrorType::IncompleteCdsStartReference,
             ErrorType::InsertionWithoutInsertedSequence,
             ErrorType::AlignmentOnlySymbolInDescription,
+            ErrorType::InsertionSizeCountWithoutSequence,
             ErrorType::NonCodingPositionOutsideTranscript,
             ErrorType::GenomicPositionOffset,
             ErrorType::MembersCoalescedFromReportedForm,
@@ -1739,6 +1792,7 @@ mod tests {
                 | ErrorType::IncompleteCdsStartReference
                 | ErrorType::InsertionWithoutInsertedSequence
                 | ErrorType::AlignmentOnlySymbolInDescription
+                | ErrorType::InsertionSizeCountWithoutSequence
                 | ErrorType::NonCodingPositionOutsideTranscript
                 | ErrorType::GenomicPositionOffset
                 | ErrorType::MembersCoalescedFromReportedForm => {}

@@ -5106,6 +5106,21 @@ pub enum PyErrorType {
     // normalize since a masked base cannot be resolved (#1627). Numbered after
     // 46 so the existing discriminants are unchanged.
     AlignmentOnlySymbolInDescription = 47,
+    // 50 is W3029 InsertionSizeCountWithoutSequence — the insertion states a
+    // COUNT of nucleotides where the inserted sequence belongs (`ins6`),
+    // which `checklist.md:33` does not allow. Strict rejects at parse; lenient
+    // warns and silent is quiet, and both then fail at normalize since a count
+    // names no bases (#1789). Numbered after 49 so the existing discriminants
+    // are unchanged.
+    //
+    // It was 49 on this branch's original base, where 49 was free. #1969 landed
+    // `GenomicPositionOffset = 49` first, and the rebase merged both additions
+    // with no textual conflict — the two declarations sit on different lines —
+    // so the collision surfaced only as `E0081` under `--features python`, which
+    // the `--features dev` gate does not build. The `from_u8` arm below already
+    // reads `50 => InsertionSizeCountWithoutSequence`; this is the declaration
+    // catching up to it.
+    InsertionSizeCountWithoutSequence = 50,
     // 46 is W5005 MembersCoalescedFromReportedForm — normalization returned
     // fewer cis members than the input described. Purely informational: the
     // normalized string is identical whether or not it is emitted. It carries
@@ -5190,6 +5205,7 @@ native_enum_pymethods! {
         47 => AlignmentOnlySymbolInDescription,
         48 => NonCodingPositionOutsideTranscript,
         49 => GenomicPositionOffset,
+        50 => InsertionSizeCountWithoutSequence,
     },
 }
 
@@ -5255,6 +5271,9 @@ impl From<ErrorType> for PyErrorType {
                 PyErrorType::NonCodingPositionOutsideTranscript
             }
             ErrorType::GenomicPositionOffset => PyErrorType::GenomicPositionOffset,
+            ErrorType::InsertionSizeCountWithoutSequence => {
+                PyErrorType::InsertionSizeCountWithoutSequence
+            }
         }
     }
 }
@@ -5321,6 +5340,9 @@ impl From<PyErrorType> for ErrorType {
                 ErrorType::NonCodingPositionOutsideTranscript
             }
             PyErrorType::GenomicPositionOffset => ErrorType::GenomicPositionOffset,
+            PyErrorType::InsertionSizeCountWithoutSequence => {
+                ErrorType::InsertionSizeCountWithoutSequence
+            }
         }
     }
 }

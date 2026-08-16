@@ -1924,6 +1924,7 @@ class ErrorType(_NativeEnum):
     AlignmentOnlySymbolInDescription: ErrorType  # 47
     NonCodingPositionOutsideTranscript: ErrorType  # 48
     GenomicPositionOffset: ErrorType  # 49
+    InsertionSizeCountWithoutSequence: ErrorType  # 50
 
 class ErrorOverride(_NativeEnum):
     """Override behavior for a specific error type."""
