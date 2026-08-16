@@ -18288,11 +18288,14 @@ mod tests {
                 [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
             );
             // Two columns, against the four the spanning `delins` this replaced
-            // claimed. The count is pinned by value here rather than against the
-            // block's own Levenshtein distance: `minimal_changed_columns` is the
-            // helper that would state minimality directly, and it arrives with
-            // the separate change that derives the weight bound's ceiling from
-            // the block instead of the input.
+            // claimed. The count is pinned by value rather than derived because
+            // no helper states the block's minimality directly. The
+            // input-relative measure that once bounded a derivation by the
+            // input's own weight (`changed_columns_of_edits`) was deleted
+            // outright by #1899, under
+            // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`,
+            // and nothing sequence-derived was added to replace it — so a
+            // literal is the honest statement of what this split costs.
             assert_eq!(changed_columns_of_pieces(&pieces), 2);
         }
 
