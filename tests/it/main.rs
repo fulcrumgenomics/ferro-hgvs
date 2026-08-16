@@ -528,6 +528,7 @@ mod spec_conformance_axis;
 mod spec_corpus_regressions;
 mod spec_coverage_misc;
 mod spec_enumeration_tests;
+mod spec_fixture_setup_filter;
 // `CARGO_BIN_EXE_generate_spec_*` is defined only for bin targets cargo builds,
 // and both generators are `required-features = ["dev"]`. Without this gate a
 // plain `cargo test` (no `--features dev`) fails to compile the whole `it`
