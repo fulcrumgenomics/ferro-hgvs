@@ -1988,34 +1988,43 @@ impl MultiFastaProvider {
         // named `LRG_<N>g`); 164 of them were quietly served chromosome bases in
         // place of their frozen record. The callers now gate on `own_record`.
         //
-        // Map both endpoints onto the chromosome; on a minus-strand placement
-        // the parent runs antiparallel, so the low parent position maps to the
-        // *higher* `NC_` coordinate.
-        let (nc_a, nc_b) = match (
-            placement.parent_to_nc(start + 1),
-            placement.parent_to_nc(end),
-        ) {
-            (Some(a), Some(b)) => (a, b),
-            _ => {
-                return Err(FerroError::InvalidCoordinates {
-                    msg: format!(
-                        "parent window [{start}, {end}) falls outside the placed span on {}",
-                        placement.nc.full()
-                    ),
-                });
+        // Assemble the window block-by-block through the placement's alignment
+        // rather than as one contiguous `NC_` slice (#1926). A prior version
+        // mapped only the two endpoints and fetched everything between them,
+        // which silently sliced *across* any `<diff>` gap: a chromosome-only
+        // (`other_ins`) run got swept in (too many bases) and a parent-only
+        // (`lrg_ins`) run got dropped (too few), shifting every base past the
+        // gap. `parent_window_nc_ranges` walks the gap list, returning the
+        // chromosome sub-ranges that skip chromosome-only runs, and declining
+        // (via `None`) a window whose parent-only bases have no chromosome
+        // image to synthesize from. Latent on the shipped reference — 0 of
+        // 1 294 LRG records reach this path — but a wrong-but-well-formed
+        // sequence is exactly the class this guards against.
+        let ranges = placement
+            .parent_window_nc_ranges(start + 1, end)
+            .ok_or_else(|| FerroError::InvalidCoordinates {
+                msg: format!(
+                    "parent window [{start}, {end}) falls outside the placed span, or crosses a \
+                     parent-only alignment gap whose bases are absent from {}",
+                    placement.nc.full()
+                ),
+            })?;
+        let mut synthesized = String::new();
+        for (nc_lo, nc_hi) in ranges {
+            // 1-based inclusive [nc_lo, nc_hi] → 0-based half-open for the
+            // fetch. Each range is ascending on the chromosome; on the minus
+            // strand its bases run antiparallel to the parent, so
+            // reverse-complementing each range in parent-ascending block order
+            // reconstructs the parent 5'→3'.
+            let bases = self.get_genomic_sequence(&placement.nc.full(), nc_lo - 1, nc_hi)?;
+            match placement.strand {
+                crate::reference::Strand::Minus => {
+                    synthesized.push_str(&crate::sequence::reverse_complement(&bases))
+                }
+                _ => synthesized.push_str(&bases),
             }
-        };
-        let (nc_lo, nc_hi) = if nc_a <= nc_b {
-            (nc_a, nc_b)
-        } else {
-            (nc_b, nc_a)
-        };
-        // 1-based inclusive [nc_lo, nc_hi] → 0-based half-open for the fetch.
-        let bases = self.get_genomic_sequence(&placement.nc.full(), nc_lo - 1, nc_hi)?;
-        Ok(match placement.strand {
-            crate::reference::Strand::Minus => crate::sequence::reverse_complement(&bases),
-            _ => bases,
-        })
+        }
+        Ok(synthesized)
     }
 
     /// Build a `Transcript` for `id` whose bases are synthesized from the genome
@@ -4920,6 +4929,168 @@ mod tests {
         );
         // The last placed base must be readable at that length.
         assert_eq!(provider.get_sequence("LRG_997", 13, 14).unwrap(), "A");
+    }
+
+    // ------------------------------------------------------------------
+    // A record-less parent synthesized ACROSS an alignment gap (#1926)
+    // ------------------------------------------------------------------
+
+    /// A record-less parent whose placement carries a **chromosome-only**
+    /// (`other_ins`) gap must have those chromosome bases *dropped* when its
+    /// sequence is synthesized — they are not part of the parent — rather than
+    /// swept up in one contiguous slice across the gap (#1926).
+    ///
+    /// Genome `NC_TEST.1` is `AAAACCCCGGGGTTTT…` (1-based: 1-4 `A`, 5-8 `C`,
+    /// 9-12 `G`, …). `LRG_996` maps parent `1..=8` onto `NC_TEST.1:1..=10`
+    /// with a 2-base `other_ins` at chromosome `5..=6`, so parent `1..=4` →
+    /// `nc 1..=4` (`AAAA`) and parent `5..=8` → `nc 7..=10` (`CCGG`); the two
+    /// chromosome bases `5..=6` (`CC`) belong to no parent coordinate.
+    ///
+    /// So the parent sequence is `AAAACCGG` (8 bases). The contiguous-slice
+    /// defect maps the two endpoints (`nc 1` and `nc 10`) and fetches
+    /// `nc 1..=10` = `AAAACCCCGG` — 10 bases, two too many, with every base
+    /// past the gap shifted. Exact strings, because the lengths alone (8 vs 10)
+    /// already discriminate and the base identities pin *which* bases.
+    #[test]
+    fn a_record_less_parent_drops_a_chromosome_only_gap_when_synthesized() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(
+            xml_dir.join("LRG_996.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_TEST.1" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="8" other_start="1" other_end="10" strand="1">
+                  <diff type="other_ins" lrg_start="4" lrg_end="5" other_start="5" other_end="6" lrg_sequence="-" other_sequence="CC" />
+                </mapping_span>
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        // Discriminator: no `LRG_996g` record, so synthesis (not a FASTA read)
+        // serves it, and the placement genuinely carries the gap.
+        assert!(provider.own_record("LRG_996").is_none());
+        let placement = provider
+            .genomic_placement(&crate::hgvs::variant::Accession::new("LRG", "996", None))
+            .expect("placed");
+        assert_eq!(placement.gaps.len(), 1, "the fixture must carry the gap");
+
+        assert_eq!(
+            provider.get_sequence("LRG_996", 0, 8).unwrap(),
+            "AAAACCGG",
+            "the chromosome-only run must be skipped, not sliced across contiguously"
+        );
+        // The gap-crossing sub-window on its own: parent 3..=6 → nc 3,4,7,8 =
+        // `AACC`, never the contiguous `nc 3..=6` = `AACC`… (here they coincide
+        // in bases but not length past the gap, so also pin the 5' tail).
+        assert_eq!(
+            provider.get_sequence("LRG_996", 0, 4).unwrap(),
+            "AAAA",
+            "the aligned 5' block before the gap is served unchanged"
+        );
+        assert_eq!(
+            provider.get_sequence("LRG_996", 4, 8).unwrap(),
+            "CCGG",
+            "the aligned 3' block after the gap is served from beyond the skipped run"
+        );
+    }
+
+    /// A record-less parent whose placement carries a **parent-only**
+    /// (`lrg_ins`) gap has bases the chromosome does not carry, so a window
+    /// crossing that gap cannot be synthesized and must **decline** — never a
+    /// contiguous slice that silently drops the unfetchable parent bases and
+    /// shifts everything past them (#1926).
+    ///
+    /// `LRG_995` maps parent `1..=8` onto `NC_TEST.1:1..=6` with a 2-base
+    /// `lrg_ins` at parent `5..=6`, so parent `1..=4` → `nc 1..=4` and parent
+    /// `7..=8` → `nc 5..=6`, while parent `5..=6` exist only in the parent.
+    /// A window covering them (offsets `0..8`, i.e. parent `1..=8`) has no
+    /// honest chromosome image; the contiguous-slice defect maps `nc 1` and
+    /// `nc 6` and serves `AAAACC` — 6 bases for an 8-base window.
+    #[test]
+    fn a_record_less_parent_declines_a_window_crossing_a_parent_only_gap() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(
+            xml_dir.join("LRG_995.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_TEST.1" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="8" other_start="1" other_end="6" strand="1">
+                  <diff type="lrg_ins" lrg_start="5" lrg_end="6" other_start="4" other_end="5" lrg_sequence="AA" other_sequence="-" />
+                </mapping_span>
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        assert!(provider.own_record("LRG_995").is_none());
+        let placement = provider
+            .genomic_placement(&crate::hgvs::variant::Accession::new("LRG", "995", None))
+            .expect("placed");
+        assert_eq!(placement.gaps.len(), 1, "the fixture must carry the gap");
+
+        // The two aligned blocks on their own are fine.
+        assert_eq!(provider.get_sequence("LRG_995", 0, 4).unwrap(), "AAAA");
+        assert_eq!(provider.get_sequence("LRG_995", 6, 8).unwrap(), "CC");
+        // A window that includes the parent-only bases cannot be synthesized.
+        assert!(
+            provider.get_sequence("LRG_995", 0, 8).is_err(),
+            "parent-only bases have no chromosome image and must not be fabricated \
+             by slicing across the gap"
+        );
+    }
+
+    /// The gap-aware synthesis must honour the **minus** strand too: within
+    /// each aligned block the chromosome bases run antiparallel to the parent,
+    /// so each block is reverse-complemented, and a chromosome-only run between
+    /// blocks is still dropped (#1926).
+    ///
+    /// `LRG_994` maps parent `1..=8` onto `NC_TEST.1:1..=10` on the minus
+    /// strand with a 2-base `other_ins` at chromosome `5..=6`. On the minus
+    /// strand parent `1` maps to the *higher* chromosome endpoint (`nc 10`):
+    /// parent `1..=4` → `nc 10,9,8,7` and parent `5..=8` → `nc 4,3,2,1`, the
+    /// chromosome-only run at `nc 5..=6` sitting between the two blocks.
+    /// `NC_TEST.1` is `…A(1-4) C(5-8) G(9-12)…`, so the parent bases are
+    /// `revcomp(nc10 G)=C, revcomp(nc9 G)=C, revcomp(nc8 C)=G, revcomp(nc7 C)=G`
+    /// then `revcomp(nc4 A)=T, revcomp(nc3 A)=T, revcomp(nc2 A)=T,
+    /// revcomp(nc1 A)=T` → `CCGGTTTT`.
+    #[test]
+    fn a_record_less_minus_strand_parent_drops_a_chromosome_only_gap() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(
+            xml_dir.join("LRG_994.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_TEST.1" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="8" other_start="1" other_end="10" strand="-1">
+                  <diff type="other_ins" lrg_start="4" lrg_end="5" other_start="5" other_end="6" lrg_sequence="-" other_sequence="CC" />
+                </mapping_span>
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        assert!(provider.own_record("LRG_994").is_none());
+        let placement = provider
+            .genomic_placement(&crate::hgvs::variant::Accession::new("LRG", "994", None))
+            .expect("placed");
+        assert_eq!(
+            placement.strand,
+            crate::reference::transcript::Strand::Minus
+        );
+        assert_eq!(placement.gaps.len(), 1);
+
+        assert_eq!(
+            provider.get_sequence("LRG_994", 0, 8).unwrap(),
+            "CCGGTTTT",
+            "minus-strand blocks are reverse-complemented and the gap still dropped"
+        );
     }
 
     // ----------------------------------------------------------------------

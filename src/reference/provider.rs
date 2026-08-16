@@ -452,6 +452,64 @@ impl GenomicPlacement {
         }
         None
     }
+
+    /// The chromosome (`NC_`) sub-ranges to fetch to reconstruct the parent
+    /// bases for the 1-based inclusive parent window `[parent_lo, parent_hi]`,
+    /// in parent-ascending (output) order.
+    ///
+    /// This is what lets sequence synthesis honour the `<diff>` list rather
+    /// than taking one contiguous chromosome slice across a gap (#1926). A
+    /// [`ChromosomeOnly`](AlignmentGapKind::ChromosomeOnly) run inside the
+    /// window is *dropped* — its chromosome bases belong to no parent
+    /// coordinate, so the ranges skip over it, and the fetched bases assemble
+    /// to exactly `parent_hi - parent_lo + 1` of them.
+    ///
+    /// Returns `None` when any parent coordinate in the window has no
+    /// chromosome image: it lies outside the placed span, or inside a
+    /// [`ParentOnly`](AlignmentGapKind::ParentOnly) run whose bases the
+    /// chromosome simply does not carry (so they cannot be synthesized and the
+    /// caller must decline rather than slice across them). Both are detected by
+    /// the covered-count check: the aligned blocks intersecting the window must
+    /// account for *every* one of its coordinates.
+    ///
+    /// Each `(nc_lo, nc_hi)` is a 1-based inclusive **ascending** chromosome
+    /// range. On the minus strand a range's chromosome bases run antiparallel
+    /// to the parent, so the caller reverse-complements each range's bases; the
+    /// ranges themselves are returned in parent-ascending order regardless of
+    /// strand, matching the block-iteration order.
+    pub(crate) fn parent_window_nc_ranges(
+        &self,
+        parent_lo: u64,
+        parent_hi: u64,
+    ) -> Option<Vec<(u64, u64)>> {
+        if parent_hi < parent_lo {
+            return Some(Vec::new());
+        }
+        let want = (parent_hi - parent_lo).checked_add(1)?;
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+        let mut covered: u64 = 0;
+        for block in self.blocks() {
+            let block_last = block.parent_start.checked_add(block.len)?.checked_sub(1)?;
+            let intersect_lo = parent_lo.max(block.parent_start);
+            let intersect_hi = parent_hi.min(block_last);
+            if intersect_lo > intersect_hi {
+                continue;
+            }
+            let consumed_lo = block
+                .nc_consumed
+                .checked_add(intersect_lo - block.parent_start)?;
+            let consumed_hi = block
+                .nc_consumed
+                .checked_add(intersect_hi - block.parent_start)?;
+            // On the minus strand ascending parent maps to descending
+            // chromosome, so order the endpoints into an ascending fetch range.
+            let a = self.nc_at(consumed_lo)?;
+            let b = self.nc_at(consumed_hi)?;
+            ranges.push((a.min(b), a.max(b)));
+            covered = covered.checked_add(intersect_hi - intersect_lo + 1)?;
+        }
+        (covered == want).then_some(ranges)
+    }
 }
 
 /// Trait for providing reference sequence data
@@ -1247,6 +1305,57 @@ mod placement_tests {
                 assert_eq!(mapped, 9 - parent_only, "{strand:?} {gaps:?}");
             }
         }
+    }
+
+    #[test]
+    fn parent_window_nc_ranges_walks_the_gap_list_instead_of_slicing_across_it() {
+        // No gaps: one contiguous range, exactly the old single-slice behaviour
+        // — this is what keeps every gapless placement byte-identical (#1926).
+        assert_eq!(
+            placement(Strand::Plus).parent_window_nc_ranges(2, 5),
+            Some(vec![(1001, 1004)])
+        );
+
+        // A chromosome-only run inside the window is dropped: two ranges that
+        // skip nc 1004..=1006, together covering all 9 parent coordinates.
+        let cg = gapped(
+            Strand::Plus,
+            vec![AlignmentGap::chromosome_only(4, 3)],
+            1011,
+        );
+        assert_eq!(
+            cg.parent_window_nc_ranges(1, 9),
+            Some(vec![(1000, 1003), (1007, 1011)])
+        );
+
+        // A window crossing a parent-only run declines — those parent bases
+        // have no chromosome image to synthesize from.
+        let pg = gapped(Strand::Plus, vec![AlignmentGap::parent_only(5, 3)], 1008);
+        assert_eq!(pg.parent_window_nc_ranges(1, 12), None);
+        // …but a window wholly on one side of it maps fine.
+        assert_eq!(pg.parent_window_nc_ranges(1, 4), Some(vec![(1000, 1003)]));
+        assert_eq!(pg.parent_window_nc_ranges(8, 12), Some(vec![(1004, 1008)]));
+
+        // Minus strand: ranges come back in parent-ascending block order (the
+        // low-parent block's HIGH chromosome range first), and each is still an
+        // ascending fetch range for the caller to reverse-complement.
+        let cg_minus = gapped(
+            Strand::Minus,
+            vec![AlignmentGap::chromosome_only(4, 3)],
+            1011,
+        );
+        assert_eq!(
+            cg_minus.parent_window_nc_ranges(1, 9),
+            Some(vec![(1008, 1011), (1000, 1004)])
+        );
+
+        // A window past the placed extent declines rather than fabricating.
+        assert_eq!(placement(Strand::Plus).parent_window_nc_ranges(1, 10), None);
+        // An empty window is an empty plan, never an error.
+        assert_eq!(
+            placement(Strand::Plus).parent_window_nc_ranges(5, 4),
+            Some(Vec::new())
+        );
     }
 
     #[test]
