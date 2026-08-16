@@ -961,6 +961,20 @@ mod tests {
     /// Brute-force oracle: an edge is a dominator iff deleting it disconnects
     /// the source from the sink. `O(E)` per edge — correct but far too slow for
     /// production, which is exactly why it belongs in the tests.
+    ///
+    /// **What it establishes, and what it does not (#1959).** Every term here —
+    /// `dag.cells()`, `dag.out_edges(..)`, the reachability walk — is read from
+    /// the DAG; nothing is re-derived from the two sequences. So it proves only
+    /// that [`AlignmentDag::dominators`] agrees with edge-banned reachability
+    /// *over this graph*. It **cannot** detect a DAG that is uniformly too small
+    /// — one missing cells that every minimal alignment of the sequences
+    /// actually occupies — because a shrunken graph is internally consistent and
+    /// both sides read the same missing cells. It catches asymmetric or
+    /// inconsistent damage; it is blind to uniform shrinkage. What does catch
+    /// that is the independent [`full_grid_build`], diffed against the shipped
+    /// `build` by the `the_band_agrees_with_the_full_grid_*` tests. See
+    /// [`the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag`], which
+    /// pins both halves.
     fn dominators_by_brute_force(dag: &AlignmentDag) -> (Vec<(u32, u32)>, Vec<u32>) {
         let sink = (dag.ref_len(), dag.alt_len());
         let mut matched = Vec::new();
@@ -1070,6 +1084,195 @@ mod tests {
             checked > 3000,
             "expected a large exhaustive sweep, ran {checked}"
         );
+    }
+
+    /// Build the DAG confined to the band for a caller-supplied `k`, with **no**
+    /// doubling search — the one thing [`AlignmentDag::build`] does that would
+    /// correct a too-narrow band. When `k` is smaller than the true edit
+    /// distance the band cannot hold every minimal alignment, so the returned
+    /// DAG is *uniformly too small*: it is internally consistent (source reaches
+    /// sink, `on_optimal_path` and `out` agree with its own `total`), yet it is
+    /// missing cells the true DAG retains.
+    ///
+    /// This exists only to manufacture that artefact for
+    /// [`the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag`],
+    /// reproducing the #1959 sabotage exactly ("narrowing the band by one
+    /// doubling step, accepting a band-confined distance where only a smaller
+    /// one is sound"). It deliberately mirrors `build`'s banded fill so the
+    /// shrunk DAG is a faithful narrowing rather than a hand-corrupted one; it
+    /// is NOT an independent oracle — that role is [`full_grid_build`]'s.
+    fn build_confined_to_band(ref_block: &[u8], alt_block: &[u8], k: usize) -> AlignmentDag {
+        let n = ref_block.len();
+        let m = alt_block.len();
+        let (lo, hi) = band_for(n, m, k);
+        let band = BandLayout::new(n, m, lo, hi);
+        let mut prefix = vec![0u16; band.len()];
+        fill_edit_grid_banded(ref_block, alt_block, &band, &mut prefix);
+        let total = prefix[band.index(n, m)];
+        let ref_rev: Vec<u8> = ref_block.iter().rev().copied().collect();
+        let alt_rev: Vec<u8> = alt_block.iter().rev().copied().collect();
+        let mut suffix_grid = vec![0u16; band.len()];
+        fill_edit_grid_banded(&ref_rev, &alt_rev, &band, &mut suffix_grid);
+        let suffix = |i: usize, j: usize| suffix_grid[band.index(n - i, m - j)];
+        let mut on_optimal_path = vec![false; band.len()];
+        for i in 0..=n {
+            let (first, last) = band.row_span(i);
+            let base = band.row_base(i);
+            for j in first..=last {
+                on_optimal_path[base + j] = prefix[base + j].saturating_add(suffix(i, j)) == total;
+            }
+        }
+        let mut out = vec![0u8; band.len()];
+        // `i` is a grid coordinate here, not a slice cursor — the loop runs the
+        // grid's `n + 1` rows while `ref_block` holds `n` bases — so the
+        // `needless_range_loop` suggestion silently drops the sink row, exactly
+        // as it does on the same loop in `build`.
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..=n {
+            let (first, last) = band.row_span(i);
+            let base = band.row_base(i);
+            for j in first..=last {
+                if !on_optimal_path[base + j] {
+                    continue;
+                }
+                let here = prefix[base + j];
+                if i < n && j < m {
+                    let cost = u16::from(ref_block[i] != alt_block[j]);
+                    let next = band.index(i + 1, j + 1);
+                    if on_optimal_path[next] && here + cost == prefix[next] {
+                        out[base + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
+                    }
+                }
+                if i < n && band.contains(i + 1, j) {
+                    let next = band.index(i + 1, j);
+                    if on_optimal_path[next] && here + 1 == prefix[next] {
+                        out[base + j] |= OUT_DEL;
+                    }
+                }
+                if j < m && band.contains(i, j + 1) {
+                    let next = band.index(i, j + 1);
+                    if on_optimal_path[next] && here + 1 == prefix[next] {
+                        out[base + j] |= OUT_INS;
+                    }
+                }
+            }
+        }
+        AlignmentDag {
+            ref_len: n as u32,
+            alt_len: m as u32,
+            total: u32::from(total),
+            band,
+            on_optimal_path,
+            out,
+        }
+    }
+
+    /// #1959. The brute-force oracle
+    /// ([`dominators_by_brute_force`]) is computed **from the DAG it is handed**
+    /// — its cell set, its edges, its reachability — and re-derives nothing from
+    /// the two sequences. So it establishes only that
+    /// [`AlignmentDag::dominators`] agrees with edge-banned reachability *over
+    /// that graph*, and it cannot see the graph itself being uniformly too
+    /// small: a shrunken DAG is internally consistent, so both sides read the
+    /// same missing cells and the comparison is satisfied.
+    ///
+    /// This pins the limitation as an executable fact and pins what closes it:
+    ///
+    /// 1. **The blind spot is real.** On the issue's own `AC -> CA`, a band one
+    ///    doubling too narrow retains 3 of the true DAG's 7 cells, and the
+    ///    oracle still agrees with `dominators()` on it — the same agreement
+    ///    [`dominators_agree_with_brute_force_on_exhaustive_small_inputs`]
+    ///    treats as a pass. The shrinkage can even leave the dominator output
+    ///    *correct* (`AC -> CA`) or make it *wrong* (`CAG -> AGA` loses every
+    ///    dominator); the oracle cannot tell either from the truth.
+    /// 2. **What closes it is the INDEPENDENT implementation, not the oracle.**
+    ///    [`full_grid_build`] recomputes the DAG from the sequences, and the
+    ///    `the_band_agrees_with_the_full_grid_*` tests diff the shipped `build`
+    ///    against it cell by cell. That comparison detects the shrinkage the
+    ///    oracle misses — which is why a DAG-construction change that lands
+    ///    without such a second implementation to diff against would not be
+    ///    protected (issue suggestion 3).
+    #[test]
+    fn the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag() {
+        // (reference, alt, too-narrow `k`, the shrunk DAG is a strict SUBSET of
+        // the truth, `dominators()` on it still MATCHES the truth).
+        for (r, a, k, subset_of_truth, dominators_stay_correct) in [
+            // The issue's verbatim example. At k = 1 the band holds only the
+            // two-substitution diagonal, a strict subset of the seven cells the
+            // true (k = 2) DAG spans — and with the SAME distance (2) and the
+            // SAME (empty) dominators, so nothing derived from the DAG alone,
+            // not even `dominators()`, reveals the shrinkage. The subtlest form.
+            (&b"AC"[..], &b"CA"[..], 1usize, true, true),
+            // The dangerous form: at k = 1 the band collapses to the
+            // all-substitution diagonal (distance 3, not the true 2), so
+            // `dominators()` comes back EMPTY where the truth is
+            // {(1,0),(2,1)} + forced junction 3 — a wrong answer the oracle
+            // nonetheless blesses. Not a subset (its cells lie off every
+            // minimal alignment), so only its size is compared below.
+            (&b"CAG"[..], &b"AGA"[..], 1, false, false),
+        ] {
+            let shrunk = build_confined_to_band(r, a, k);
+            let truth = full_grid_build(r, a);
+            let label = format!(
+                "{} -> {}",
+                String::from_utf8_lossy(r),
+                String::from_utf8_lossy(a)
+            );
+
+            // (1) It really is too small: fewer retained cells than the truth,
+            // and — for the issue's own case — a strict subset of them.
+            let shrunk_cells: Vec<_> = shrunk.cells().collect();
+            let true_cells: Vec<_> = truth.cells().collect();
+            assert!(
+                shrunk_cells.len() < true_cells.len(),
+                "{label}: the manufactured DAG must retain fewer cells than the truth \
+                 ({} vs {})",
+                shrunk_cells.len(),
+                true_cells.len()
+            );
+            if subset_of_truth {
+                assert!(
+                    shrunk_cells.iter().all(|c| true_cells.contains(c)),
+                    "{label}: the shrunk cells must be a strict subset of the true ones"
+                );
+            }
+
+            // (2) THE BLIND SPOT. The brute-force oracle, reading only the
+            // shrunk DAG, agrees with `dominators()` on it: both are pure
+            // functions of the DAG, so the oracle is SATISFIED by a graph it
+            // should reject. This is exactly the check
+            // `dominators_agree_with_brute_force_on_exhaustive_small_inputs`
+            // runs, reproduced on a deliberately shrunken graph.
+            let (oracle_matched, oracle_ins) = dominators_by_brute_force(&shrunk);
+            let produced = shrunk.dominators();
+            assert_eq!(
+                (
+                    produced.matched.clone(),
+                    produced.forced_ins_junctions.clone()
+                ),
+                (oracle_matched, oracle_ins),
+                "{label}: the brute-force oracle must AGREE with dominators() on the \
+                 shrunk DAG — that agreement IS the blind spot"
+            );
+
+            // (3) And yet the shrunk dominator answer may be correct (AC -> CA)
+            // or wrong (CAG -> AGA). Either way (2) held, so the oracle could
+            // not distinguish it from the truth.
+            assert_eq!(
+                shrunk.dominators() == truth.dominators(),
+                dominators_stay_correct,
+                "{label}: unexpected dominator (dis)agreement with the truth"
+            );
+
+            // (4) WHAT CLOSES THE GAP. The independent full-grid implementation
+            // disagrees with the shrunk DAG over the retained cell set — the
+            // comparison `the_band_agrees_with_the_full_grid_*` make, and the
+            // only thing that catches uniform shrinkage.
+            assert_ne!(
+                shrunk_cells, true_cells,
+                "{label}: full_grid_build must disagree with the shrunk DAG"
+            );
+        }
     }
 
     /// #1970. The `u16` narrowing's bound must be a refusal, pinned from **both**
