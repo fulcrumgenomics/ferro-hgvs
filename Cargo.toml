@@ -84,7 +84,7 @@ noodles-gtf = "0.52"
 smol_str = { version = "0.3", features = ["serde"] }
 flate2 = "1.0"
 ahash = { version = "0.8", optional = true }
-pyo3 = { version = "0.28", features = ["abi3-py310", "extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["abi3-py310"], optional = true }
 memmap2 = "0.9"
 memchr = "2.7"
 ureq = { version = "2.9", optional = true }
@@ -117,6 +117,29 @@ validation = ["dep:ahash"]
 # The Python batch API parallelizes across a rayon pool, so the `parallel`
 # (rayon) feature is pulled in whenever the bindings are built.
 python = ["dep:pyo3", "parallel"]
+# `pyo3/extension-module` makes the compiled cdylib importable as a CPython
+# extension: it SUPPRESSES linking against libpython, because the interpreter
+# supplies those symbols at import time. That is required for the wheel, and it
+# is NOT folded into `python` because doing so breaks the one thing #2046 fixes:
+# `cargo test --features python --lib` builds a plain executable, and with
+# `extension-module` set PyO3 links no libpython for non-Windows/-Android/-iOS
+# targets (`is_linking_libpython_for_target` in pyo3-build-config), so on Linux
+# CI that binary fails to link its undefined Python symbols and src/python.rs's
+# #[test]s can never run. Split out, `cargo test --features python` links
+# libpython and runs them — see ci.yml's "Run src/python.rs unit tests" step.
+#
+# EVERY WHEEL/DEVELOP BUILD MUST THEREFORE ASK FOR THIS FEATURE BY NAME, and the
+# ones in this repo do. It is tempting to believe `[tool.maturin] features` in
+# pyproject.toml supplies it for free; it does not. Measured with maturin
+# 1.13.3: a `--features` flag on the maturin command line REPLACES that list
+# rather than merging with it, so `maturin build --features python` hands cargo
+# `--features python` alone. Such a build still produces a working extension
+# module today, because maturin also sets `PYO3_BUILD_EXTENSION_MODULE=1` and
+# pyo3 0.28's `is_extension_module()` honours that env var independently of the
+# Cargo feature (whose doc comment there calls it "(deprecated)") — but that
+# makes the linkage a property of the maturin version rather than of this
+# manifest, so the feature is named at each call site instead.
+extension-module = ["dep:pyo3", "pyo3/extension-module"]
 # memmap2 is now an unconditional dependency (used by the cdot rkyv loader);
 # this feature is retained as a no-op for compatibility with callers that
 # still pass `--features mmap`.

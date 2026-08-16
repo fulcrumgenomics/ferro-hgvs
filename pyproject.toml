@@ -42,7 +42,20 @@ dev = [
 ]
 
 [tool.maturin]
-features = ["python"]
+# `extension-module` is intentionally NOT part of Cargo.toml's `python` feature
+# (it suppresses libpython linkage, which would stop `cargo test --features
+# python --lib` from linking on Linux CI — see #2046 and the Cargo.toml note).
+#
+# THIS LIST IS A DEFAULT, NOT AN ADDITION. Measured with maturin 1.13.3: a
+# `--features` flag on the maturin command line REPLACES this list rather than
+# merging with it, so `maturin build --features python` hands cargo
+# `--features python` alone and this entry is never consulted. It is therefore
+# load-bearing for exactly the builds that pass no `--features` of their own —
+# the PEP 517 backend above, i.e. `pip install .`, `python -m build`, `uv` — and
+# every invocation that does pass one must name `extension-module` itself. They
+# all do; see ci.yml's "Build release wheel" step, release-wheels.yml's three
+# `maturin-action` blocks, and the two tasks below.
+features = ["python", "extension-module"]
 python-source = "python"
 module-name = "ferro_hgvs"
 
@@ -71,8 +84,10 @@ ignore = [
 known-first-party = ["ferro_hgvs"]
 
 [tool.poe.tasks]
-build-dev          = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin develop --features python", help = "build the native extension in development mode"}
-build-wheel        = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin build --features python",   help = "build a distributable wheel of the native extension"}
+# `--features` on the maturin command line replaces `[tool.maturin] features`
+# rather than merging with it, so `extension-module` is named here explicitly.
+build-dev          = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin develop --features python,extension-module", help = "build the native extension in development mode"}
+build-wheel        = {cmd = "bash -c 'unset CONDA_PREFIX' && maturin build --features python,extension-module",   help = "build a distributable wheel of the native extension"}
 
 check-format = {cmd = "ruff format --check --diff python/ tests/python/", help = "check Python code formatting"}
 check-lint   = {cmd = "ruff check python/ tests/python/",                 help = "lint Python sources"}

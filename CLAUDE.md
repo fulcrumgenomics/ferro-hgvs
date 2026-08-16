@@ -20,42 +20,71 @@ cargo build --features benchmark     # Build ferro-benchmark binary
 ```bash
 cargo check --features python        # Typecheck the bindings (fast; does NOT link)
 cargo clippy --features python       # Lint the bindings (also does NOT link)
-maturin develop --features python    # Build and install locally for development
-maturin build --features python      # Build wheel
+# Run src/python.rs's own Rust #[test]s (#2046). SCOPED, and nextest not
+# `cargo test` — see "Why the binding tests are scoped" below.
+cargo nextest run --features python --lib --no-tests=fail -E 'test(python::tests::)'
+maturin develop --features python,extension-module  # Build an importable module
+maturin build   --features python,extension-module  # Build wheel
 ```
 
-**Do not use `cargo build --features python`** — on macOS it cannot link. `pyo3` is declared with
-`features = ["abi3-py310", "extension-module"]`, and `extension-module` deliberately does *not*
-link against libpython: the CPython symbols are meant to resolve against the host interpreter
-when the module is imported. Maturin supplies the linker allowance that makes that legal
-(`-undefined dynamic_lookup`); a plain `cargo build` does not, so it compiles the whole crate and
-only then dies linking the cdylib:
+**`extension-module` is a SEPARATE Cargo feature, not part of `python` (#2046).** `pyo3` is
+declared with `features = ["abi3-py310"]`, and `pyo3/extension-module` is pulled in by the
+`extension-module` feature instead.
 
-```
-error: linking with `cc` failed: exit status: 1
-  = note: Undefined symbols for architecture arm64:
-            "_PyBaseObject_Type", referenced from: ...
-          ld: symbol(s) not found for architecture arm64
-error: could not compile `ferro-hgvs` (lib) due to 1 previous error
-```
+The split exists because `extension-module` deliberately does *not* link against libpython (the
+CPython symbols resolve against the host interpreter at import time). With it enabled, PyO3 emits
+no libpython link line on Linux/macOS (`is_linking_libpython_for_target` in `pyo3-build-config`),
+so a plain test/bin executable fails to link its undefined Python symbols — which is exactly why
+`src/python.rs`'s pure-Rust `#[cfg(test)]` tests ran nowhere in CI. Keeping `extension-module`
+out of `python` lets `cargo test/nextest --features python --lib` link libpython and actually run
+them; CI does this in the `Python Wheel Test` job (which has a shared-library Python available).
 
-Compilation had already succeeded at that point, so the failure says nothing about the code —
-it just costs a full build cycle to find out. Use `cargo check --features python` (and
-`cargo clippy --features python`) to verify the bindings compile, and `maturin develop
---features python` whenever you need a module you can actually import (e.g. to run
+**So every wheel/develop build must ask for `extension-module` BY NAME — `[tool.maturin]
+features` does not supply it for free.** That list in `pyproject.toml` is a **default**, not an
+addition: measured with maturin 1.13.3, a `--features` flag on the maturin command line
+**replaces** it rather than merging with it, so `maturin build --features python` hands cargo
+`--features python` alone and the pyproject entry is never consulted. The entry is therefore
+load-bearing only for builds that pass no `--features` of their own (the PEP 517 backend — `pip
+install .`, `python -m build`, `uv`), and every explicit invocation in this repo names the feature
+itself: `ci.yml`'s "Build release wheel", `release-wheels.yml`'s three `maturin-action` blocks,
+`pyproject.toml`'s two `build-*` tasks, and `CONTRIBUTING.md`.
+
+Do not "simplify" those call sites back to `--features python` on the grounds that the wheel
+still works without it. It does still work — maturin sets `PYO3_BUILD_EXTENSION_MODULE=1`, and
+pyo3 0.28's `is_extension_module()` honours that env var independently of the Cargo feature,
+whose doc comment there calls it *"(deprecated)"*. Measured: wheels built both ways are
+indistinguishable (no libpython link line, 99 undefined `_Py` symbols each). But that makes the
+linkage a property of **which maturin ran**, and `ci.yml` installs an unpinned
+`maturin>=1.0,<2.0` while `release-wheels.yml` takes `maturin-action`'s default — so a maturin
+predating that env var would build a libpython-linked wheel silently. Naming the feature restores
+exactly the cargo feature resolution this repo had before the split, and costs no version floor.
+
+#### Why the binding tests are scoped
+
+The `Python Wheel Test` job reports a **required** status check, and the lib suite is not safe to
+run in one process. `cargo test --features python --lib` runs all 4240 lib tests under libtest's
+thread pool, where `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
+asserts deltas on process-global `AtomicU64` counters (`SEQFIRST_*` in `src/normalize/merge.rs`)
+that any concurrent test reaching `partition_block_for_rule` corrupts, and
+`parallel::tests::test_stress_concurrent_throughput` is a timing test sensitive to
+oversubscription. Measured at `--test-threads=32`: **4 of 6 runs failed** — i.e. an unrelated PR's
+required check flaking. nextest is process-per-test, so the corruption is not expressible at any
+thread count (10/10 green at the same thread count), and the selection keeps the job to the tests
+it exists to run: 10 tests in 0.02s against 4240 in ~14s.
+
+`--no-tests=fail` is the non-vacuity guard, and the other reason this is nextest. A selection
+matching nothing exits **4** here (`error: no tests to run`); `cargo test -- python::tests`
+reports `ok. 0 passed; 4240 filtered out` and exits **0**, so a typo in the filter would silently
+delete the coverage without reddening anything.
+
+**Still use `maturin`, not `cargo build --features python`, for an importable module.** A plain
+`cargo build` produces a cdylib that is not a wheel-ready abi3 extension, and historically dies
+linking on macOS unless `-undefined dynamic_lookup` is passed — PyO3 ships those flags in
+`pyo3_build_config::add_extension_module_link_args()` (Darwin-only) but a crate must call them
+from its own `build.rs`, and this crate has none. Maturin passes them itself. Use
+`cargo check`/`cargo clippy --features python` to verify the bindings compile, and `maturin
+develop --features python` whenever you need a module you can import (e.g. to run
 `pytest tests/python/`).
-
-The hard failure above is macOS-specific: `ld` there refuses undefined symbols in a dylib unless
-`-undefined dynamic_lookup` is passed. Two things could pass it and neither does under a plain
-`cargo build`. PyO3 ships the flags in
-`pyo3_build_config::add_extension_module_link_args()` — Darwin-only, by design — but a crate has
-to call that from its own `build.rs`, and this crate has no `build.rs`. Maturin passes them
-itself, which is why the `maturin` commands above work. So `cargo build` gets them from nowhere
-and the link dies.
-
-Linkers that do permit undefined symbols in a shared object get no such error, but the advice is
-unchanged everywhere: `cargo build` still produces no importable extension module, so reach for
-`maturin` rather than treating a quiet link as success.
 
 ## Testing
 

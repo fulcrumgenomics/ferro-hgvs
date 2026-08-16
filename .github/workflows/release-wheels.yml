@@ -109,7 +109,13 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist --features python
+          # `extension-module` named explicitly: a `--features` flag here
+          # REPLACES `[tool.maturin] features` rather than merging with it, so
+          # without it cargo never sees the feature and the wheel's linkage
+          # would depend on the maturin version (which sets
+          # `PYO3_BUILD_EXTENSION_MODULE=1`) rather than on Cargo.toml.
+          # See pyproject.toml and #2046.
+          args: --release --out dist --features python,extension-module
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
@@ -151,7 +157,13 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_deployment_target }}
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features python
+          # `extension-module` named explicitly: a `--features` flag here
+          # REPLACES `[tool.maturin] features` rather than merging with it, so
+          # without it cargo never sees the feature and the wheel's linkage
+          # would depend on the maturin version (which sets
+          # `PYO3_BUILD_EXTENSION_MODULE=1`) rather than on Cargo.toml.
+          # See pyproject.toml and #2046.
+          args: --release --out dist --features python,extension-module
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-macos-${{ matrix.target }}
@@ -176,7 +188,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64-pc-windows-msvc
-          args: --release --out dist --features python
+          # `extension-module` named explicitly: a `--features` flag here
+          # REPLACES `[tool.maturin] features` rather than merging with it, so
+          # without it cargo never sees the feature and the wheel's linkage
+          # would depend on the maturin version (which sets
+          # `PYO3_BUILD_EXTENSION_MODULE=1`) rather than on Cargo.toml.
+          # See pyproject.toml and #2046.
+          args: --release --out dist --features python,extension-module
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-windows

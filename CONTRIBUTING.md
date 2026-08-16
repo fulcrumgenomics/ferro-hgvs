@@ -38,7 +38,7 @@ failing. See [Testing](#testing) for the flag that turns that into a failure, an
 
 ```bash
 uv sync --group dev
-uv run maturin develop --features python
+uv run maturin develop --features python,extension-module
 uv run pytest
 ```
 
