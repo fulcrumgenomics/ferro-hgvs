@@ -1302,6 +1302,76 @@ class EquivalenceChecker:
         """
         ...
 
+    def check_confluence(
+        self,
+        variants: list[HgvsVariant],
+        relation: Literal["cross_axis", "spdi"] = "cross_axis",
+    ) -> dict[str, Any]:
+        """Run the opt-in confluence self-check over a corpus of variants.
+
+        Groups the inputs into equivalence classes under ``relation`` and reports
+        every class whose members normalize to more than one distinct output — a
+        non-confluence witness. A diagnostic: it reports, and never emits a
+        pass/fail release verdict.
+
+        Args:
+            variants: The variants to check.
+            relation: ``"cross_axis"`` (default) is apply-equality on every
+                determined axis — the relation that establishes variant identity.
+                ``"spdi"`` groups by same denoted bases on the description's own
+                axis; it is weaker and insufficient for identity. Typed as a
+                ``Literal`` so a misspelling is a type error rather than a
+                runtime ``ValueError``; the binding still validates at runtime,
+                for callers that are not type-checked.
+
+                ``"cross_axis"`` has no key and so compares every pair, which is
+                quadratic in the corpus size; ``"spdi"`` keys each input once and
+                is linear. Batch by accession or sample for a large call set —
+                classes never span accessions under either relation.
+
+        Returns:
+            A dict with keys ``relation`` (str), ``is_confluent`` (bool),
+            ``is_complete`` (bool), ``classes_checked`` (int),
+            ``undecided_pairs`` (int), ``violations`` (list of
+            ``{"inputs": list[str], "outputs": list[str]}``), and ``skipped``
+            (list of ``{"input": str, "kind": str, "reason": str,
+            "decline_class": str | None, "decline_site": str | None}``).
+
+            ``is_confluent`` is an observation about this corpus under this
+            relation, not a release gate, and it is a statement about the *whole*
+            corpus only when ``is_complete`` is true — nothing skipped, and no
+            comparison undecidable. ``undecided_pairs`` counts comparisons that
+            came back undecidable rather than deciding a pair apart; such a pair
+            fails to merge exactly as a decided-apart pair does, so a non-zero
+            count means the classes are coarser than reported and violations
+            inside them are invisible. It is always 0 for ``"spdi"``, which
+            compares keys rather than pairs.
+
+            A skip's ``kind`` is ``"unplaceable"`` (the relation never placed it,
+            so it is in no class) or ``"normalization_declined"`` (it was placed,
+            and its class is counted, but it contributed no output). Coverage is
+            therefore ``classes_checked`` plus the ``"unplaceable"`` skips —
+            never ``classes_checked + len(skipped)``, which double-counts.
+
+            ``decline_class`` and ``decline_site`` are the skip's refusal as
+            machine-readable names rather than prose: the class is
+            ``"reference_unavailable"`` (the reference could not serve the bases,
+            so the description is not at fault) or ``"unrepresentable"`` (it
+            denotes no single sequence SPDI can address), and the site names
+            which check refused — ``"multi_molecule_allele"``,
+            ``"null_or_unknown_allele"``, ``"empty_allele"``,
+            ``"member_conversion"``, ``"cross_accession"`` or
+            ``"unresolved_accession"``. Compare these rather than searching
+            ``reason`` for a keyword; ``reason`` is a rendering of them and its
+            wording is not API. Both are ``None`` where there is no such refusal
+            to report: a ``"normalization_declined"`` skip, and the ``"spdi"``
+            first-pass mismatch (keyless here, yet its triples project).
+
+        Raises:
+            ValueError: If ``relation`` is not ``"cross_axis"`` or ``"spdi"``.
+        """
+        ...
+
 # ============================================================================
 # Effect Prediction Classes
 # ============================================================================

@@ -1,5 +1,8 @@
 //! Equivalence checker implementation.
 
+use super::confluence::{
+    ConfluenceGroup, ConfluenceRelation, ConfluenceReport, ConfluenceSkip, ConfluenceSkipKind,
+};
 use crate::convert::CoordinateMapper;
 use crate::error::FerroError;
 use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, RepeatCount};
@@ -1125,17 +1128,23 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 // A single resulting sequence is only well-defined for a cis
                 // allele — all edits applied to the same molecule.
                 if allele.phase != AllelePhase::Cis {
-                    return Err(TripleDecline::Unrepresentable);
+                    return Err(TripleDecline::Unrepresentable(
+                        DeclineSite::MultiMoleculeAllele {
+                            phase: allele.phase,
+                        },
+                    ));
                 }
                 allele.variants.iter().collect()
             }
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
-                return Err(TripleDecline::Unrepresentable)
+                return Err(TripleDecline::Unrepresentable(
+                    DeclineSite::NullOrUnknownAllele,
+                ))
             }
             single => vec![single],
         };
         if members.is_empty() {
-            return Err(TripleDecline::Unrepresentable);
+            return Err(TripleDecline::Unrepresentable(DeclineSite::EmptyAllele));
         }
 
         let mut accession: Option<String> = None;
@@ -1145,14 +1154,23 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 .map_err(TripleDecline::from_conversion_error)?;
             match &accession {
                 None => accession = Some(spdi.sequence.clone()),
-                Some(acc) if *acc != spdi.sequence => return Err(TripleDecline::Unrepresentable),
+                Some(acc) if *acc != spdi.sequence => {
+                    return Err(TripleDecline::Unrepresentable(
+                        DeclineSite::CrossAccession {
+                            first: acc.clone(),
+                            second: spdi.sequence,
+                        },
+                    ))
+                }
                 Some(_) => {}
             }
             triples.push(spdi);
         }
         accession
             .map(|acc| (acc, triples))
-            .ok_or(TripleDecline::Unrepresentable)
+            .ok_or(TripleDecline::Unrepresentable(
+                DeclineSite::UnresolvedAccession,
+            ))
     }
 
     /// Fetch reference bases for the 0-based half-open interval
@@ -1252,6 +1270,252 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
         Ok(groups)
     }
+
+    /// Run the opt-in confluence self-check over `variants` (#1892).
+    ///
+    /// Groups the inputs into equivalence classes under `relation` and reports
+    /// every class whose members normalize to more than one distinct output — a
+    /// non-confluence witness. It is a **diagnostic**: it reports, it never emits
+    /// a pass/fail release verdict, and it does not decide which relation gates a
+    /// release (that is the deferred adjudication in #1890 — the caller chooses
+    /// `relation`).
+    ///
+    /// The grouping never consults the normalizer, so it cannot collapse into the
+    /// outputs it checks:
+    ///
+    /// * [`ConfluenceRelation::CrossAxisSequenceMatch`] groups pairwise via
+    ///   [`Self::compare_denotations`], greedily against each class's first
+    ///   member. Apply-equality is a true equivalence relation over decided
+    ///   pairs, so a greedy pass is sound for them.
+    /// * [`ConfluenceRelation::Spdi`] groups by
+    ///   [`spdi_key`](super::key::spdi_key), via the public
+    ///   [`group_by_spdi_key`](super::key::group_by_spdi_key), so there is one
+    ///   grouping rule rather than two spellings of it.
+    ///
+    /// # What the run could not cover, and why it is never silence
+    ///
+    /// Under **either** relation an input whose denotation is not computable
+    /// against this reference is
+    /// [`skipped`](ConfluenceReport::skipped) as
+    /// [`Unplaceable`](super::ConfluenceSkipKind::Unplaceable), carrying the
+    /// underlying refusal. Placing such an input as a singleton would be a false
+    /// claim that the relation had placed it, and a singleton can never be a
+    /// violation, so the corpus would read cleaner than it was examined.
+    ///
+    /// A member the normalizer declines is skipped as
+    /// [`NormalizationDeclined`](super::ConfluenceSkipKind::NormalizationDeclined)
+    /// and excluded from its class's output set, so one bad input never aborts
+    /// the run. Its class *was* formed and is counted in
+    /// [`classes_checked`](ConfluenceReport::classes_checked) — the two skip
+    /// kinds are excluded from the accounting differently, which is why they are
+    /// distinguishable.
+    ///
+    /// Under [`ConfluenceRelation::CrossAxisSequenceMatch`] a *pair* whose
+    /// comparison came back undecidable — over the checker's window cap, or a
+    /// shape the relation errors on — does not merge, which is byte-identical to
+    /// what a pair decided *apart* does. Left there, a class the checker could
+    /// not examine would be split into singletons and reported exactly like a
+    /// clean corpus. Each such comparison is therefore counted in
+    /// [`undecided_pairs`](ConfluenceReport::undecided_pairs), and
+    /// [`is_complete`](ConfluenceReport::is_complete) is the one predicate that
+    /// says the report covers everything it was handed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ferro_hgvs::equivalence::{ConfluenceRelation, EquivalenceChecker};
+    /// use ferro_hgvs::{parse_hgvs, MockProvider};
+    ///
+    /// let mut provider = MockProvider::new();
+    /// provider.add_genomic_sequence("NC_KEY.1", "GGATTACAGGCATTAGCCTGA");
+    /// let checker = EquivalenceChecker::new(provider);
+    ///
+    /// let corpus = [
+    ///     parse_hgvs("NC_KEY.1:g.13_14insT").unwrap(),
+    ///     parse_hgvs("NC_KEY.1:g.14dup").unwrap(),
+    /// ];
+    /// let report =
+    ///     checker.check_confluence(&corpus, ConfluenceRelation::CrossAxisSequenceMatch);
+    /// assert!(report.is_confluent());
+    /// ```
+    pub fn check_confluence(
+        &self,
+        variants: &[HgvsVariant],
+        relation: ConfluenceRelation,
+    ) -> ConfluenceReport {
+        let mut skipped: Vec<ConfluenceSkip> = Vec::new();
+        let (classes, undecided_pairs) = match relation {
+            ConfluenceRelation::CrossAxisSequenceMatch => {
+                self.group_by_cross_axis(variants, &mut skipped)
+            }
+            // Key equality is exact: there is no pair to fail to decide.
+            ConfluenceRelation::Spdi => (self.group_by_spdi(variants, &mut skipped), 0),
+        };
+
+        let mut violations = Vec::new();
+        let classes_checked = classes.len();
+        for class in &classes {
+            let mut members = Vec::with_capacity(class.len());
+            for variant in class {
+                let input = variant.to_string();
+                match self.normalizer.normalize(variant) {
+                    Ok(normalized) => members.push((input, normalized.to_string())),
+                    Err(error) => skipped.push(ConfluenceSkip {
+                        input,
+                        kind: ConfluenceSkipKind::NormalizationDeclined,
+                        reason: format!("normalization failed: {error}"),
+                        // The normalizer refused, not the projection — this input
+                        // *was* placed. There is no `TripleDecline` to report.
+                        decline: None,
+                    }),
+                }
+            }
+            if let Some(group) = ConfluenceGroup::from_class(members) {
+                violations.push(group);
+            }
+        }
+
+        ConfluenceReport::new(
+            relation,
+            violations,
+            classes_checked,
+            skipped,
+            undecided_pairs,
+        )
+    }
+
+    /// Group inputs into equivalence classes under
+    /// [`ConfluenceRelation::CrossAxisSequenceMatch`], greedily: each variant
+    /// joins the first class whose representative it is apply-equal to on every
+    /// determined axis, or starts a new one. Uses [`Self::compare_denotations`],
+    /// which never normalizes, so the grouping is independent of the outputs the
+    /// caller will compare.
+    ///
+    /// Returns the classes and **how many comparisons came back undecidable**.
+    /// That second number is the whole reason this is not a two-line function.
+    /// A greedy pass is sound over *decided* pairs, and apply-equality is only
+    /// an equivalence relation over those; a pair the checker could not examine
+    /// does not merge, and a non-merge is what a decided negative looks like
+    /// too. Reporting only the classes would therefore present a corpus the
+    /// checker could not read as one it read and found clean. So the three
+    /// outcomes are kept apart:
+    ///
+    /// * **merge** — the pair is at least
+    ///   [`EquivalenceLevel::CrossAxisSequenceMatch`];
+    /// * **decided apart** — the checker examined the pair and reported a
+    ///   verdict ([`is_decided`](EquivalenceLevel::is_decided)) that is not at
+    ///   that rung: two different variants, two accession versions, or agreement
+    ///   on the own axis only;
+    /// * **undecidable** — [`EquivalenceLevel::Indeterminate`], or an `Err` for
+    ///   a shape the relation refuses to answer about. Counted.
+    ///
+    /// Inputs with no computable denotation are screened out **before** the
+    /// pairwise pass, once each rather than once per comparison: every
+    /// comparison involving one of them declines, so leaving them in would both
+    /// inflate the undecidable count quadratically and place, as a singleton
+    /// class, an input the relation never placed. They are reported as
+    /// [`Unplaceable`](super::ConfluenceSkipKind::Unplaceable) skips instead —
+    /// the same treatment [`ConfluenceRelation::Spdi`] already gives a keyless
+    /// input.
+    fn group_by_cross_axis<'v>(
+        &self,
+        variants: &'v [HgvsVariant],
+        skipped: &mut Vec<ConfluenceSkip>,
+    ) -> (Vec<Vec<&'v HgvsVariant>>, usize) {
+        let mut groups: Vec<Vec<&'v HgvsVariant>> = Vec::new();
+        let mut undecided_pairs = 0usize;
+        for variant in variants {
+            if let Err(decline) = self.edit_triples(variant) {
+                skipped.push(ConfluenceSkip {
+                    input: variant.to_string(),
+                    kind: ConfluenceSkipKind::Unplaceable,
+                    reason: decline.clone().into_reason(variant),
+                    decline: Some(decline),
+                });
+                continue;
+            }
+            let mut placed = false;
+            for group in &mut groups {
+                let representative = group[0];
+                match self.compare_denotations(representative, variant) {
+                    Ok(result)
+                        if result
+                            .level
+                            .is_at_least(EquivalenceLevel::CrossAxisSequenceMatch) =>
+                    {
+                        group.push(variant);
+                        placed = true;
+                        break;
+                    }
+                    // Examined and not equal at the required rung. A real
+                    // non-merge; nothing is lost by it.
+                    Ok(result) if result.level.is_decided() => {}
+                    // Nothing examined the pair. It does not merge either, and
+                    // that is exactly the outcome that must not pass as a
+                    // decision.
+                    Ok(_) | Err(_) => undecided_pairs += 1,
+                }
+            }
+            if !placed {
+                groups.push(vec![variant]);
+            }
+        }
+        (groups, undecided_pairs)
+    }
+
+    /// Group inputs under [`ConfluenceRelation::Spdi`], by
+    /// [`spdi_key`](super::key::spdi_key). An input with no key cannot be placed
+    /// and is recorded in `skipped` rather than grouped, because two keyless
+    /// inputs say nothing about each other. Buckets are returned in a
+    /// deterministic (key) order.
+    ///
+    /// Delegates to the public [`group_by_spdi_key`](super::key::group_by_spdi_key)
+    /// rather than re-deriving the buckets, so this module cannot drift from the
+    /// crate's one SPDI grouping rule. What it adds is the *reason* for each
+    /// refusal, which the grouping does not carry: `spdi_key` answers `None`
+    /// both for a description that denotes no single resolvable sequence to
+    /// anyone **and** for reference bases this provider could not serve, and
+    /// telling a consumer with a partly-provisioned reference that its own
+    /// well-formed descriptions were at fault is a misdiagnosis. The reason is
+    /// recovered from [`canonical_spdi`](crate::spdi::canonical_spdi), which
+    /// `spdi_key` documents as the route to it — paid only on the inputs that
+    /// were refused.
+    fn group_by_spdi<'v>(
+        &self,
+        variants: &'v [HgvsVariant],
+        skipped: &mut Vec<ConfluenceSkip>,
+    ) -> Vec<Vec<&'v HgvsVariant>> {
+        let grouping = super::key::group_by_spdi_key(variants.iter(), self.normalizer.provider());
+        let (buckets, unkeyable) = grouping.into_parts();
+        for variant in unkeyable {
+            // Ask the *classifier* for the reason, not `canonical_spdi`'s
+            // `FerroError`. Both answer "this input has no SPDI denotation here",
+            // but only `edit_triples` splits that into the two readings a consumer
+            // acts on differently, so this is what gives the SPDI relation the
+            // same derived reference-vs-description split the cross-axis relation
+            // has — rather than leaving it to be recovered by sniffing an error
+            // string for the word "reference".
+            let decline = self.edit_triples(variant).err();
+            let reason = match &decline {
+                Some(decline) => decline.clone().into_reason(variant),
+                // The two routes disagree: `spdi_key` is `canonical_spdi().ok()`,
+                // which shifts against the reference, while `edit_triples` converts
+                // in place — so an input can be keyless here and still project. It
+                // is genuinely unplaceable (the grouping refused it) and there is no
+                // classified refusal to report, which is what `decline: None` says.
+                None => format!(
+                    "{variant}: no SPDI key on the first pass, though its triples do project"
+                ),
+            };
+            skipped.push(ConfluenceSkip {
+                input: variant.to_string(),
+                kind: ConfluenceSkipKind::Unplaceable,
+                reason,
+                decline,
+            });
+        }
+        buckets.into_values().collect()
+    }
 }
 
 /// What a sequence-level comparison concluded.
@@ -1326,18 +1590,125 @@ enum SequenceVerdict {
 /// same distinction one step earlier, at the per-member HGVS→SPDI conversion,
 /// which the ordinary short forms (`g.2del`, `g.2dup`) must run against the
 /// provider.
-enum TripleDecline {
+///
+/// # Scope: this covers ONE of the three reference-failure routes
+///
+/// A reference-level obstacle reaches the checker by three distinct routes, at
+/// three different stages, and this type is the vocabulary for exactly one of
+/// them. Filing a decline under the wrong one is the mistake to avoid:
+///
+/// 1. **Projection** — a member's HGVS→SPDI conversion needs bases the provider
+///    cannot serve (#2056). **This type**, as
+///    [`ReferenceUnavailable`](Self::ReferenceUnavailable) with site
+///    [`DeclineSite::MemberConversion`]. It is a property of a *single input*, so
+///    it is the only one of the three that can become a
+///    [`ConfluenceSkip`](super::ConfluenceSkip).
+/// 2. **Window fetch** — both sides convert, but the union window cannot be
+///    served (#1989/#2053). [`SequenceVerdict::ReferenceUnavailable`], raised in
+///    [`compare_triples`].
+/// 3. **Application** — the window is served, and a triple's stated bases
+///    contradict the bases it actually carries (#2075). Also
+///    [`SequenceVerdict::ReferenceUnavailable`].
+///
+/// Routes 2 and 3 are properties of a *pair*, decided after projection, so they
+/// are deliberately absent here: they make a comparison undecidable rather than
+/// making an input unplaceable, and the confluence report counts them in
+/// [`undecided_pairs`](super::ConfluenceReport::undecided_pairs) rather than
+/// skipping anything. **Do not add a route-2 or route-3 variant to
+/// [`DeclineSite`]** — no `edit_triples` call site could construct it, which
+/// would make the exhaustive match in [`Self::into_reason`] guard nothing.
+///
+/// If an apply-stage decline is ever surfaced to a consumer, note that route 3
+/// is a **third class**, not a third site: the description is well formed *and*
+/// the reference is available *and* they contradict each other, which a consumer
+/// acts on differently from either arm below (fix the input, versus provision the
+/// reference). It would be a new [`TripleDecline`] variant — or, better, its own
+/// type — never a re-use of one of these two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TripleDecline {
     /// A member's HGVS→SPDI conversion needed reference bases the provider could
     /// not serve ([`ConversionError::MissingReferenceData`] or
     /// [`ConversionError::ProviderRequired`]). "Want of reference data", not a
     /// representation limit — resolves to [`EquivalenceLevel::Indeterminate`].
-    ReferenceUnavailable,
+    ReferenceUnavailable(DeclineSite),
     /// No single resulting sequence exists to compare: an edit SPDI cannot
     /// carry, a position SPDI cannot address
     /// ([`ConversionError::UnrepresentableInSpdi`] — an intronic `c.`/`n.`/`r.`
     /// offset), a null/unknown or multi-molecule allele, an empty member list,
     /// or members spanning more than one accession. Read as a decided negative.
-    Unrepresentable,
+    Unrepresentable(DeclineSite),
+}
+
+/// **Which** of [`EquivalenceChecker::edit_triples`]' refusal sites declined,
+/// with the detail only that site can state.
+///
+/// This is the machine-readable half of a decline. [`TripleDecline`] says which
+/// *class* the refusal is in — the distinction that decides a verdict, and the
+/// one a consumer with a partly-provisioned reference most needs — and this says
+/// which *site* produced it. Neither is prose: the sentence a
+/// [`ConfluenceSkip`](super::ConfluenceSkip) carries is rendered from the pair by
+/// [`TripleDecline::into_reason`], in one place, so a consumer can `match` on why
+/// grouping declined instead of parsing English.
+///
+/// Note the two axes are not independent in practice: every site except
+/// [`MemberConversion`](Self::MemberConversion) is reached only by a direct
+/// `Unrepresentable` construction, because only a [`ConversionError`] can be
+/// "want of reference data". So six sites yield **seven** reachable
+/// `(class, site)` pairs, which is what
+/// `every_reachable_decline_renders_a_distinct_message` enumerates.
+///
+/// `#[non_exhaustive]` is for downstream crates only — within this crate the
+/// attribute has no effect, which is exactly what makes
+/// [`TripleDecline::into_reason`]'s wildcard-free match a compile error when a
+/// seventh site is added. That is deliberate and is the same reasoning
+/// [`TripleDecline::from_conversion_error`] records for [`ConversionError`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeclineSite {
+    /// The description is an allele whose phase names more than one molecule
+    /// (trans / mosaic / chimeric / and-or / products / unknown).
+    MultiMoleculeAllele {
+        /// The phase that said so.
+        phase: AllelePhase,
+    },
+    /// The description is `0` or `?` — it states no sequence at all.
+    NullOrUnknownAllele,
+    /// The description is an allele with no members.
+    EmptyAllele,
+    /// A member's HGVS→SPDI conversion refused. **The only site that can be
+    /// either class**, since it is the only one holding a [`ConversionError`].
+    MemberConversion {
+        /// The conversion's own refusal, kept rather than discarded.
+        error: ConversionError,
+    },
+    /// The allele's members do not all act on one accession.
+    CrossAccession {
+        /// The accession the earlier members fixed.
+        first: String,
+        /// The differing accession a later member named.
+        second: String,
+    },
+    /// No member fixed an accession, so there is nothing to act on.
+    UnresolvedAccession,
+}
+
+impl DeclineSite {
+    /// The stable name this site is spelled with outside Rust — the
+    /// `decline_site` field of a rendered report.
+    ///
+    /// Wildcard-free for the same reason
+    /// [`TripleDecline::into_reason`] is: a seventh site must be a compile error
+    /// here rather than silently borrowing a sixth site's name.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeclineSite::MultiMoleculeAllele { .. } => "multi_molecule_allele",
+            DeclineSite::NullOrUnknownAllele => "null_or_unknown_allele",
+            DeclineSite::EmptyAllele => "empty_allele",
+            DeclineSite::MemberConversion { .. } => "member_conversion",
+            DeclineSite::CrossAccession { .. } => "cross_accession",
+            DeclineSite::UnresolvedAccession => "unresolved_accession",
+        }
+    }
 }
 
 impl TripleDecline {
@@ -1355,24 +1726,106 @@ impl TripleDecline {
     /// [`ConversionError`] is a compile error at exactly the site that has to
     /// decide what it means.
     fn from_conversion_error(err: ConversionError) -> Self {
+        let site = DeclineSite::MemberConversion { error: err.clone() };
         match err {
             // Answerable by a better-provisioned provider: "could not tell".
             ConversionError::MissingReferenceData { .. }
-            | ConversionError::ProviderRequired { .. } => TripleDecline::ReferenceUnavailable,
+            | ConversionError::ProviderRequired { .. } => TripleDecline::ReferenceUnavailable(site),
             // Decided by the description alone; no provider changes the answer.
             ConversionError::UnrepresentableInSpdi { .. }
             | ConversionError::UnsupportedVariantType { .. }
             | ConversionError::UnsupportedEditType { .. }
             | ConversionError::InvalidPosition { .. }
-            | ConversionError::InvalidAccession { .. } => TripleDecline::Unrepresentable,
+            | ConversionError::InvalidAccession { .. } => TripleDecline::Unrepresentable(site),
         }
+    }
+
+    /// The refusal site this decline came from.
+    pub fn site(&self) -> &DeclineSite {
+        match self {
+            TripleDecline::ReferenceUnavailable(site) | TripleDecline::Unrepresentable(site) => {
+                site
+            }
+        }
+    }
+
+    /// The stable name this decline's **class** is spelled with outside Rust —
+    /// the `decline_class` field of a rendered report. It is the same split
+    /// [`Self::class_clause`] renders in prose, in a form a caller can compare
+    /// without parsing English.
+    pub fn class_str(&self) -> &'static str {
+        match self {
+            TripleDecline::ReferenceUnavailable(_) => "reference_unavailable",
+            TripleDecline::Unrepresentable(_) => "unrepresentable",
+        }
+    }
+
+    /// The class-level clause, which is what separates the two readings a
+    /// consumer acts on differently. Kept as a `&'static str` so a test can key
+    /// on **this constant** rather than on a literal it retypes — rewording it
+    /// moves the assertion with it, while misclassifying a site emits the other
+    /// clause and fails.
+    fn class_clause(&self) -> &'static str {
+        match self {
+            TripleDecline::ReferenceUnavailable(_) => {
+                "the reference could not serve the bases its SPDI conversion needs, so this is \
+                 not a fault in the description"
+            }
+            TripleDecline::Unrepresentable(_) => {
+                "it denotes no single resulting sequence SPDI can address"
+            }
+        }
+    }
+
+    /// Render this decline as the sentence a [`ConfluenceSkip`] carries for `v`.
+    ///
+    /// **The only place decline prose exists.** The call sites construct typed
+    /// [`DeclineSite`]s and state no message, so there is one wording per
+    /// `(class, site)` pair and no second copy to drift from it. The sentence is
+    /// a *rendering* of the pair — a consumer that needs to act on the reason
+    /// matches on [`TripleDecline`] and [`DeclineSite`] instead of reading this.
+    ///
+    /// **The site match is deliberately wildcard-free.** A `_ =>` arm would let a
+    /// seventh refusal site compile and render as whichever generic sentence sat
+    /// in it, telling the consumer "could not group" with no way to tell a site
+    /// we understand from one we forgot — the same shape as a check that cannot
+    /// distinguish "examined and fine" from "never examined". Spelled out, adding
+    /// a site is a compile error here, at the one place that has to decide what
+    /// it means.
+    ///
+    /// Rendering is deliberately **not** done at the decline site. `edit_triples`
+    /// runs on the ladder's `O(n²)` pairwise path, where every decline would then
+    /// pay a `Display` of the whole variant and an allocation for a string
+    /// nothing reads. Here it is paid once, only when a skip is actually
+    /// recorded.
+    pub fn into_reason(self, v: &HgvsVariant) -> String {
+        let clause = self.class_clause();
+        let detail = match self.site() {
+            DeclineSite::MultiMoleculeAllele { phase } => {
+                format!("a {phase} allele names more than one molecule")
+            }
+            DeclineSite::NullOrUnknownAllele => {
+                "a null or unknown allele states no sequence at all".to_string()
+            }
+            DeclineSite::EmptyAllele => "an allele with no members states no sequence".to_string(),
+            DeclineSite::MemberConversion { error } => {
+                format!("a member's HGVS→SPDI conversion refused: {error}")
+            }
+            DeclineSite::CrossAccession { first, second } => {
+                format!("its members span more than one accession ({first} and {second})")
+            }
+            DeclineSite::UnresolvedAccession => {
+                "no accession could be resolved for its members".to_string()
+            }
+        };
+        format!("{v}: {clause} — {detail}")
     }
 
     /// The [`SequenceVerdict`] this decline maps to at the sequence rung.
     fn into_sequence_verdict(self) -> SequenceVerdict {
         match self {
-            TripleDecline::ReferenceUnavailable => SequenceVerdict::ReferenceUnavailable,
-            TripleDecline::Unrepresentable => SequenceVerdict::Declined,
+            TripleDecline::ReferenceUnavailable(_) => SequenceVerdict::ReferenceUnavailable,
+            TripleDecline::Unrepresentable(_) => SequenceVerdict::Declined,
         }
     }
 }

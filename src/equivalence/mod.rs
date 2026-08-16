@@ -120,7 +120,13 @@
 //! - [Variant Normalization](https://www.ncbi.nlm.nih.gov/variation/notation/)
 
 mod checker;
+mod confluence;
 mod key;
 
-pub use checker::{EquivalenceChecker, EquivalenceLevel, EquivalenceResult};
+pub use checker::{
+    DeclineSite, EquivalenceChecker, EquivalenceLevel, EquivalenceResult, TripleDecline,
+};
+pub use confluence::{
+    ConfluenceGroup, ConfluenceRelation, ConfluenceReport, ConfluenceSkip, ConfluenceSkipKind,
+};
 pub use key::{group_by_spdi_key, spdi_key, SpdiKey, SpdiKeyGrouping};

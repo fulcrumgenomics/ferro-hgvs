@@ -114,6 +114,7 @@ mod compound_cross_reference;
 mod comprehensive_edge_case_tests;
 mod comprehensive_external_tests;
 mod con_conversion_audit;
+mod confluence_self_check_tests;
 mod conformance_census_instrument;
 mod conformance_summary_generated;
 mod convert_gff_library_parity;
