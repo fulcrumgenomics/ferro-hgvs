@@ -296,25 +296,38 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// only oracle is `apply`, and their second member is always a single-base `dup`,
 /// exactly the length at which `len - 1` is zero and the over-clamp disappears.
 ///
-/// The third member is what keeps the property visible. `15del` stops the
-/// *merge* without touching the shift: the block is no longer one run of change,
-/// so the derivation declines to collapse the allele and the per-member pipeline
-/// decides the output again, which is where the barrier lives. The `dup` then
+/// A third member is what keeps the property visible: it has to stop the
+/// *merge* without touching the shift, so that the per-member pipeline — which
+/// is where the barrier lives — decides the output again. The `dup` then
 /// reaches `4_5dup` and the spelling is observable.
 ///
-/// **Distance measured, not assumed.** Sweeping every third-member position on
-/// `DUP_RUN`: at `10del` and `11del` the member joins the block and the allele
-/// merges again (to `g.[4_5insC;10_11insT]`) — a test written there would be
-/// vacuous in a new way, pinning a merged form while claiming to pin a barrier.
-/// `12del` and `13del` are clear but only 1-2 nt past the tract; at `14del` and
-/// `18del` the third member itself 5'-shifts, which muddies the row. `15del` is
-/// 4 nt clear, stays exactly where it is written, and reaches the tie.
+/// # The fixture moved, because distance stopped being what blocks the merge
 ///
-/// **Fails both ways.** Deleting `.filter(|_| a.junction.is_none())` from the 5'
-/// branch of `clamp_sibling_crossing_shifts` turns this output into
-/// `g.[4_5insC;5_6dup;15del]`; restoring it turns it back. (Removing the whole
-/// 5' `across_junctions` barrier instead leaves this row green — that half is
-/// guarded by `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
+/// This row used to read `DUP_RUN` with `15del` as the third member, on the
+/// reasoning that a member 4 nt clear of the tract broke the block into more
+/// than one run of change and made the derivation decline. The partition
+/// default flip (**#1835**) ended that: the whole allele is now derived from the
+/// resulting sequence and collapses to `g.[3_4insACT;15del]`, which
+/// [`the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`]
+/// below pins as the adjudicated answer. **At that fixture this row became
+/// vacuous** — with no `dup` in the output at all, deleting
+/// `.filter(|_| a.junction.is_none())` cannot change what it asserts.
+///
+/// So the decline this row needs is a **structural** one rather than a distance
+/// one. A third member past `MAX_CANONICAL_WINDOW` (4096) refuses the window
+/// before any alignment runs, so the per-member pipeline decides, exactly as it
+/// did before — and nothing about that refusal can be undone by a better
+/// alignment. The reference is built rather than drawn from `sweep_sequences`
+/// for the same reason: those are 20-mers, and 20 nt cannot express a 4 kb
+/// separation.
+///
+/// **Fails both ways, re-measured on this fixture.** Deleting
+/// `.filter(|_| a.junction.is_none())` from the 5' branch of
+/// `clamp_sibling_crossing_shifts` strands the member at its input position and
+/// turns this output into `g.[4_5insC;5_6dup;4300del]`; restoring it turns it
+/// back. (Removing the whole 5' `across_junctions` barrier instead leaves this
+/// row green — that half is guarded by
+/// `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
 ///
 /// **The pinned string is where the barrier puts the member, NOT an adjudicated
 /// canonical form.** Read only as a barrier assertion it is exactly right; read
@@ -323,51 +336,44 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// [`the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`]
 /// below, which is the row to read before re-blessing this one.
 ///
-/// # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), AND IT NO LONGER BOUNDS
-/// THE BARRIER
-///
-/// The paragraph directly above said to read the adjudication row before
-/// re-blessing this one. That row's gap is now **closed**: under the
-/// `canonical-coalesced` default the three-member spelling is re-derived rather
-/// than handed back, so this input reaches `TEMPLATE:g.[3_4insACT;15del]` — one
-/// insertion and the distant deletion — and there is no `dup` in the output at
-/// all.
-///
-/// **So this row has taken exactly the fate its own sibling took**, and the
-/// warning is worth repeating rather than re-learning. The doc on
-/// [`a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence`]
-/// records that when *that* row's pair merged it stopped bounding anything —
-/// "the output contains no duplication at all, so the property in its old name is
-/// not exercised here" — and moved the coverage here, to the row with a third
-/// member blocking the merge. The third member no longer blocks it, so the same
-/// thing has now happened to this row.
-///
-/// **THE OVER-CLAMP GUARD IS THEREFORE UNCOVERED BY THIS FILE.** The "fails both
-/// ways" paragraph above is stale as a claim about the *current* default:
-/// deleting `.filter(|_| a.junction.is_none())` from the 5' branch of
-/// `clamp_sibling_crossing_shifts` cannot change an output that contains no
-/// `dup`. That is a real coverage loss, not a re-pin, and it is recorded here
-/// rather than papered over — the guard is still reachable under
-/// `FERRO_PARTITION=live`, which is why the arm remains selectable by name, but
-/// no test in this file exercises it on the default arm. Re-establishing it needs
-/// a shape whose members survive the derivation; this core no longer supplies
-/// one.
-///
 /// Licensed by the same two records as its sibling:
 /// `contiguous-insertion-split-by-a-blocked-derivation` (the locus carries one
 /// variant, so `general.md:34` never reached it) and
 /// `duplication-must-ranks-the-label-not-the-partition` (decided 2026-08-13,
-/// which names this test by its full path and classes the move as a gap closing).
+/// which names this test by its full path).
 #[test]
 fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
     assert_normalizes_preserving_in(
-        DUP_RUN,
-        "TEMPLATE:g.[4_5insC;5_6dup;15del]",
-        // #1835: was `TEMPLATE:g.[4_5insC;4_5dup;15del]` — see above, and note
-        // the name of this test now describes what it USED to assert.
-        "TEMPLATE:g.[3_4insACT;15del]",
+        &window_refusing_reference(),
+        "TEMPLATE:g.[4_5insC;5_6dup;4300del]",
+        "TEMPLATE:g.[4_5insC;4_5dup;4300del]",
         ShuffleDirection::FivePrime,
     );
+}
+
+/// `DUP_RUN`'s tract, then filler out past `MAX_CANONICAL_WINDOW`'s 4096.
+///
+/// The tract is the head of the sequence so the `ins`/`dup` pair keeps the exact
+/// coordinates the sibling rows use; only the third member is far away.
+///
+/// **The property that matters is about position 4300, not about the filler.**
+/// `CGGT` is *not* run-free — it carries a `GG` pair, so 4298 and 4299 are a
+/// two-base run and a deletion written there would 5'-shift. What makes the
+/// pinned `4300del` stable is that 4300 is the `T` of a `…GGT|C…` boundary,
+/// i.e. a run of one, flanked by `G` and `C`. So the third member's position is
+/// **not** freely movable: moving it by one or two lands it inside the `GG` and
+/// silently changes what this row measures. Re-derive the run before moving it.
+///
+/// (`synthetic::extended_core` does the same job with an `ACGT` filler, which
+/// genuinely has no adjacent repeat; the four sibling rows re-fixtured alongside
+/// this one use it. This helper stays local only because its tract must sit at
+/// the head of the sequence rather than inside `padded`'s 256-base pad.)
+fn window_refusing_reference() -> String {
+    let mut reference = String::from(DUP_RUN);
+    while reference.len() < 4400 {
+        reference.push_str("CGGT");
+    }
+    reference
 }
 
 /// ADJUDICATED 2026-08-09 — one variant, two stable normalized strings.
