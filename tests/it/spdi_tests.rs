@@ -152,21 +152,17 @@ fn test_hgvs_to_spdi_parsing() {
 
     // The fixture's aggregate header counts must agree with the actual data so
     // they cannot silently drift: `total` is the number of recorded conversions,
-    // and `successful` is the number that carry an SPDI result.
+    // and `successful` is the number that carry a *successful* SPDI result (an
+    // `spdi_result` that is present and reports no error).
     assert_eq!(
         fixture.hgvs_conversions.total,
         fixture.hgvs_conversions.variants.len(),
         "hgvs_conversions.total must equal the number of recorded conversions"
     );
-    let hgvs_with_spdi_result = fixture
-        .hgvs_conversions
-        .variants
-        .iter()
-        .filter(|conversion| conversion.spdi_result.is_some())
-        .count();
+    let hgvs_with_spdi_result = count_successful_conversions(&fixture.hgvs_conversions.variants);
     assert_eq!(
         fixture.hgvs_conversions.successful, hgvs_with_spdi_result,
-        "hgvs_conversions.successful must equal the number of conversions with an SPDI result"
+        "hgvs_conversions.successful must equal the number of conversions with a successful SPDI result"
     );
 
     let mut report = SpdiTestReport {
@@ -248,6 +244,67 @@ fn test_hgvs_to_spdi_parsing() {
     assert_eq!(
         report.roundtrip_verified, report.hgvs_with_spdi,
         "every variant with an SPDI should pass the exact HGVS<->SPDI roundtrip"
+    );
+}
+
+/// Regression guard for issue #2017: a failed HGVS->SPDI conversion is recorded
+/// by `scripts/fetch_ncbi_variation.py` as a *non-null* `spdi_result` carrying
+/// an `error` field (the API's error body is stored inline), not as null. The
+/// `successful` header counts only genuine successes, so the fixture
+/// self-consistency check must too. Counting `spdi_result.is_some()` treats the
+/// errored row as successful and makes the assertion fail on any nightly whose
+/// live fetch hits an upstream API error — exactly the reported failure
+/// (`successful` = 19 vs 25 `spdi_result` present). This pins the fetch harness'
+/// two failure representations (null and error-object) against the counter.
+#[test]
+fn errored_conversions_are_excluded_from_the_successful_count() {
+    // Shape emitted by a live fetch: one genuine success, one API error stored
+    // as a non-null `spdi_result` (the case that broke the nightly), and one
+    // failure stored as null (the committed fixture's convention). Only the
+    // first is a success, so `successful` is 1.
+    let json = r#"{
+        "total": 3,
+        "successful": 1,
+        "variants": [
+            {
+                "input_hgvs": "NC_000017.11:g.7674220C>T",
+                "spdi_result": {"data": {"spdis": [
+                    {"seq_id": "NC_000017.11", "position": 7674219,
+                     "deleted_sequence": "C", "inserted_sequence": "T"}
+                ]}}
+            },
+            {
+                "input_hgvs": "NM_000546.6:c.215C>G",
+                "spdi_result": {"error": "HTTP 500", "input": "NM_000546.6:c.215C>G"}
+            },
+            {
+                "input_hgvs": "NM_000492.4:c.1521_1523del",
+                "spdi_result": null
+            }
+        ]
+    }"#;
+    let conversions: HgvsConversions =
+        serde_json::from_str(json).expect("regression fixture JSON should deserialize");
+
+    // Both the errored row and the null row are excluded; only the error-free
+    // result counts, matching the `successful` header.
+    assert_eq!(count_successful_conversions(&conversions.variants), 1);
+    assert_eq!(
+        count_successful_conversions(&conversions.variants),
+        conversions.successful,
+        "successful header must equal the count of error-free spdi_result objects"
+    );
+
+    // Guard against the guard passing vacuously: the errored row really is
+    // present and non-null, so a naive is_some() count would (wrongly) be 2.
+    let non_null = conversions
+        .variants
+        .iter()
+        .filter(|c| c.spdi_result.is_some())
+        .count();
+    assert_eq!(
+        non_null, 2,
+        "the errored conversion must be stored as a non-null spdi_result"
     );
 }
 
@@ -368,6 +425,30 @@ fn expected_spdi_from_genomic_substitution(input_hgvs: &str) -> SpdiVariant {
         ref_base.to_string(),
         alt.to_string(),
     )
+}
+
+/// Count the conversions that carry a *successful* SPDI result — an
+/// `spdi_result` object that is present and reports no error.
+///
+/// This mirrors exactly how `scripts/fetch_ncbi_variation.py` computes the
+/// `hgvs_conversions.successful` header (`spdi_result` present and no `error`
+/// key), so the self-consistency check tolerates either way the fetch harness
+/// records a failed conversion: as a null `spdi_result` (the committed fixture's
+/// convention) or as an `spdi_result` carrying an `error` field (the live
+/// fetch's convention — the API's error body is stored inline). Counting merely
+/// `spdi_result.is_some()` conflates the two and over-counts whenever a live
+/// fetch hits any upstream API errors, which is the failure reported in issue
+/// #2017 (`successful` = 19 vs 25 `spdi_result` present).
+fn count_successful_conversions(conversions: &[HgvsConversion]) -> usize {
+    conversions
+        .iter()
+        .filter(|conversion| {
+            conversion
+                .spdi_result
+                .as_ref()
+                .is_some_and(|result| result.error.is_none())
+        })
+        .count()
 }
 
 /// Load the synthetic, committed NCBI variation fixture. The fixture is a
