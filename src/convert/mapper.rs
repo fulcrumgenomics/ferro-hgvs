@@ -853,9 +853,10 @@ mod tests {
     ///
     /// Sequence is 12bp, cds_start = 1, cds_end = 100.
     ///
-    /// Do not reuse this fixture with `validate_cds_pos`: its
-    /// `transcript.sequence_length() - cds_end` is unchecked `u64`
-    /// subtraction, and `12 - 100` here underflows and panics in debug.
+    /// Safe to reuse with `validate_cds_pos`: its 3'UTR guard computes
+    /// `transcript.sequence_length().checked_sub(cds_end)`, so `12 - 100` here
+    /// declines with a malformed-transcript `ConversionError` rather than
+    /// underflowing and panicking in debug (#1909).
     fn make_cds_end_past_sequence_transcript() -> Transcript {
         Transcript {
             id: "NM_SHORTSEQ.1".to_string(),

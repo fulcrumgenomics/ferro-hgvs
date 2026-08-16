@@ -29,8 +29,23 @@ pub fn validate_cds_pos(pos: &CdsPos, transcript: &Transcript) -> Result<(), Fer
     let cds_length = (cds_end - cds_start + 1) as i64;
 
     if pos.utr3 {
-        // 3' UTR position
-        let utr3_length = transcript.sequence_length() - cds_end;
+        // 3' UTR position. `sequence_length()` and `cds_end` are both `u64`, so
+        // a `cds_end` past the sequence end underflows this subtraction and
+        // panics in debug (`attempt to subtract with overflow`). That is a
+        // malformed transcript, not a caller error: cdot's `stop_codon` is
+        // taken verbatim by the loader with no clamp, and 44 of 425,565 shipped
+        // transcripts (all RefSeq GRCh37) have one past their exon-derived
+        // length (#1909). Report it as such rather than aborting the process.
+        let utr3_length = transcript
+            .sequence_length()
+            .checked_sub(cds_end)
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Malformed transcript: CDS end {} is past the sequence end ({})",
+                    cds_end,
+                    transcript.sequence_length()
+                ),
+            })?;
         if pos.base < 1 || pos.base > utr3_length as i64 {
             return Err(FerroError::InvalidCoordinates {
                 msg: format!(
@@ -232,6 +247,46 @@ mod tests {
         assert!(
             validate_cds_pos(&past_negative_limit, &tx).is_err(),
             "offset -1_000_001 is past it"
+        );
+    }
+
+    /// A malformed transcript whose `cds_end` (100) lies past its 12-base
+    /// sequence, the shape #1909 measured on 44 of 425,565 shipped cdot
+    /// transcripts (all RefSeq GRCh37). The loader takes cdot's `stop_codon`
+    /// verbatim with no clamp, so such a `cds_end` reaches `validate_cds_pos`
+    /// unmodified. Mirrors `mapper.rs`'s helper of the same name, kept local
+    /// so this module's tests do not reach into another module's test scope.
+    fn make_cds_end_past_sequence_transcript() -> Transcript {
+        Transcript {
+            id: "NM_SHORTSEQ.1".to_string(),
+            sequence: Some("ATGTTTCTGATT".to_string()), // 12 bases
+            cds_start: Some(1),
+            cds_end: Some(100),
+            exons: vec![Exon::new(1, 1, 12)],
+            ..Default::default()
+        }
+    }
+
+    /// A 3'UTR position (`*N`) against a transcript whose `cds_end` runs past
+    /// the sequence end must return the malformed-transcript error, not panic.
+    ///
+    /// The 3'UTR guard computes `sequence_length() - cds_end`; both operands
+    /// are `u64`, so `12 - 100` underflows and panics (`attempt to subtract
+    /// with overflow`) in debug rather than reporting the malformed transcript
+    /// (#1909). Reaching the `is_err()` assertion at all proves the
+    /// subtraction is checked; asserting the variant proves it returns the
+    /// established `ConversionError` rather than some coordinate-range error
+    /// that would misattribute the fault to the caller's `*N` instead of to
+    /// the transcript.
+    #[test]
+    fn cds_end_past_sequence_end_is_a_malformed_transcript_not_a_panic() {
+        let tx = make_cds_end_past_sequence_transcript();
+
+        let err = validate_cds_pos(&CdsPos::utr3(1), &tx)
+            .expect_err("*1 against a cds_end past the sequence must be an error");
+        assert!(
+            matches!(err, FerroError::ConversionError { .. }),
+            "expected a malformed-transcript ConversionError, got {err:?}"
         );
     }
 
