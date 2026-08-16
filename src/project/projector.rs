@@ -595,6 +595,21 @@ fn combine_cis_substitutions_by_codon(
         }
     }
 
+    // A combined codon that becomes a terminator ends translation: no residue
+    // downstream of it is expressed, so none may appear in the consequence.
+    // `frameshift.md:22` — an immediate stop is the nonsense substitution
+    // `p.(<aa><pos>Ter)`, never a delins or bracket naming a residue past the
+    // stop the same change introduces (`p.[(Val2Ter);(Lys3=)]`, #1905). `changed`
+    // is in ascending residue order (built from the ascending `by_codon`
+    // BTreeMap), so truncating after the first introduced `Ter` drops exactly the
+    // downstream residues while keeping any changed residue 5' of it. A reference
+    // stop that stays a stop is synonymous and never enters `changed`; a
+    // stop-loss already returned `None` above, so the only `Ter` here is a
+    // premature one this combination introduced.
+    if let Some(stop_index) = changed.iter().position(|s| s.alt_aa == AminoAcid::Ter) {
+        changed.truncate(stop_index + 1);
+    }
+
     // No residue changed: the combined product is synonymous, so name every codon
     // the members rewrote — `p.(Leu2=)`, the range `p.(Leu2_Arg3=)`, or the
     // bracket `p.[(Leu2=);(Ala5=)]` when an untouched codon separates them
@@ -14510,6 +14525,61 @@ mod tests {
         use crate::hgvs::edit::Base;
         let s = combine_by_codon_str("ATGGATTATTGCTAA", &[(4, Base::T), (11, Base::A)]);
         assert_eq!(s.as_deref(), Some("NP_X.1:p.[(Asp2Tyr);(Cys4Tyr)]"));
+    }
+
+    /// #1905 (unit): a combined codon that becomes a terminator suppresses every
+    /// downstream residue, because nothing is translated past a stop codon
+    /// (`frameshift.md:22`). Here codon 2 `GAT`→`TAA` (Asp2Ter) via `c.4G>T` +
+    /// `c.6T>A`, and codon 3 `TAT`→`AAT` (Tyr3Asn) via `c.7T>A`. The naive
+    /// combined-codon walk names both — `p.(Asp2_Tyr3delinsTerAsn)`, a delins
+    /// naming Asn3 past the Ter the same change introduces — but the correct
+    /// consequence is the nonsense substitution `p.(Asp2Ter)`.
+    ///
+    /// Asserted at this arm (unit-level) rather than through `project_variant`
+    /// because the public projector normalizes same-codon substitutions before
+    /// they reach this path: two adjacent subs coalesce to a `delins` and a
+    /// separated sub takes the residue-level combiner
+    /// (`combine_cis_members_by_residue`), which already builds the
+    /// terminator-moved product (#1899). This
+    /// arm is reached with raw single-base subs only where DNA-level coalescing
+    /// cannot — e.g. a codon split across an intron — so the invariant "no residue
+    /// past an introduced terminator" is pinned here, on the function that owns it.
+    #[test]
+    fn combine_by_codon_drops_residues_past_an_introduced_terminator() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str(
+            "ATGGATTATTGCTAA",
+            &[(4, Base::T), (6, Base::A), (7, Base::A)],
+        );
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2Ter)"));
+    }
+
+    /// #1905 (unit): the same suppression when the downstream change sits in a
+    /// codon SEPARATED from the terminator by an unchanged residue — the naive
+    /// walk brackets it as `p.[(Asp2Ter);(Cys4Tyr)]`, naming Cys4 past the Ter.
+    /// codon 2 `GAT`→`TAA` (Asp2Ter) via `c.4G>T` + `c.6T>A`, codon 4 `TGC`→`TAC`
+    /// (Cys4Tyr) via `c.11G>A`, codon 3 unchanged.
+    #[test]
+    fn combine_by_codon_drops_separated_residue_past_an_introduced_terminator() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str(
+            "ATGGATTATTGCTAA",
+            &[(4, Base::T), (6, Base::A), (11, Base::A)],
+        );
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2Ter)"));
+    }
+
+    /// #1905 (unit): a residue changed 5' of the introduced terminator is KEPT —
+    /// truncation drops only what lies past the stop, never a residue before it.
+    /// codon 2 `GAT`→`AAT` (Asp2Asn) via `c.4G>A`, codon 3 `TAT`→`TAA` (Tyr3Ter)
+    /// via `c.9T>A`; the stop is the 3'-most changed residue, so the whole
+    /// missense-then-nonsense run survives as `p.(Asp2_Tyr3delinsAsnTer)`. Guards
+    /// against an over-eager `truncate` that would also swallow the 5' change.
+    #[test]
+    fn combine_by_codon_keeps_a_change_before_an_introduced_terminator() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTGCTAA", &[(4, Base::A), (9, Base::A)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2_Tyr3delinsAsnTer)"));
     }
 
     /// #1076 (unit): a same-codon group that stays synonymous drops out while a
