@@ -120,3 +120,6 @@ manuscript/
 
 # Local scratch working directory (ad hoc scripts, offline tooling)
 /scratch/
+
+# mdBook build output
+docs/book/

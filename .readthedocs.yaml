@@ -1,0 +1,14 @@
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    rust: "latest"  # RTD has no 1.x selector; rust-toolchain.toml pins the real version.
+  commands:
+    # Pinned to match .github/workflows/docs.yml — keep the two in lockstep.
+    - cargo install mdbook --version 0.5.2 --locked
+    - cargo install mdbook-linkcheck2 --version 0.12.2 --locked
+    - cd docs && mdbook build
+    # With the linkcheck2 backend configured, mdBook writes HTML to book/html/.
+    - mkdir -p _readthedocs/html
+    - cp -r docs/book/html/. _readthedocs/html/

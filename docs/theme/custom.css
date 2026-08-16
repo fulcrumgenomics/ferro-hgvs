@@ -1,0 +1,50 @@
+/* ferro-hgvs docs — light touch over mdBook's navy theme.
+   A teal accent (the shadow-spec palette) and readable measure; nothing heavy. */
+
+:root {
+  --ferro-accent: #0f766e;
+  --ferro-accent-light: #4fd1c5;
+}
+
+.menu-title {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* Accent links and the active sidebar item with ferro's teal. */
+.content a:not(.header),
+.content a:not(.header):visited {
+  color: var(--ferro-accent-light);
+}
+.chapter li.chapter-item a.active {
+  color: var(--ferro-accent-light);
+  font-weight: 600;
+}
+
+/* Comfortable reading measure; wide content scrolls in its own box. */
+.content main {
+  max-width: 46rem;
+}
+.content pre,
+.content .table-wrapper {
+  overflow-x: auto;
+}
+
+/* Tables read as data: tight, ruled, monospaced first column for spellings. */
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.content table td,
+.content table th {
+  padding: 0.4rem 0.7rem;
+}
+.content table td code {
+  white-space: nowrap;
+}
+
+/* Blockquotes carry spec text; give them the accent rail. */
+.content blockquote {
+  border-inline-start: 3px solid var(--ferro-accent);
+}

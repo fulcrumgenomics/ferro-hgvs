@@ -1,0 +1,50 @@
+name: Docs
+
+# Builds the mdBook user docs as a PR gate. Read the Docs does the actual hosting/deploy
+# via .readthedocs.yaml; this job only validates that the book builds and has no dead
+# internal links (mdbook-linkcheck2). Tool versions are pinned in lockstep with
+# .readthedocs.yaml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - name: Cache mdBook tools
+        id: cache-tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            ~/.cargo/bin/mdbook
+            ~/.cargo/bin/mdbook-linkcheck2
+          key: mdbook-0.5.2-linkcheck2-0.12.2
+
+      - name: Install mdBook + linkcheck2
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install mdbook --version 0.5.2 --locked
+          cargo install mdbook-linkcheck2 --version 0.12.2 --locked
+
+      - name: Build the book (fails on dead internal links)
+        run: cd docs && mdbook build

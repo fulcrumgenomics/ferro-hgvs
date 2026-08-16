@@ -1,0 +1,33 @@
+[book]
+title = "ferro-hgvs"
+description = "HGVS variant nomenclature parser and normalizer — user documentation"
+authors = ["Fulcrum Genomics"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+additional-css = ["theme/custom.css"]
+git-repository-url = "https://github.com/fulcrumgenomics/ferro-hgvs"
+edit-url-template = "https://github.com/fulcrumgenomics/ferro-hgvs/edit/main/docs/{path}"
+no-section-label = true
+default-theme = "navy"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = false
+runnable = false
+
+# Broken-link checker (mdbook-linkcheck2, the fork tracking mdBook 0.5). Configured as an
+# output backend so `mdbook build` FAILS on internal dead links — mdBook alone only warns.
+[output.linkcheck2]
+follow-web-links = false
