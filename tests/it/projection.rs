@@ -290,3 +290,41 @@ fn transcript_cache_collapses_repeat_lookups() {
         "expected exactly one get_transcript call across 3 variants (got {calls})"
     );
 }
+
+/// The transcript cache reaches the normalizer, not only the projector's own
+/// derivations (issue #1860).
+///
+/// `transcript_cache_collapses_repeat_lookups` above counts fetches on the
+/// *projection* side (protein prediction). This counts the axis the projector
+/// re-derives by handing a variant to its held normalizer: projecting a
+/// transcript-coordinate (`c.`) input runs `normalize_core_checked` on it,
+/// which fetches the transcript to resolve the CDS frame — and before #1860
+/// the normalizer ran on a provider view *beside* the projector's cache, so
+/// each of the three variants re-paid that fetch (measured: 19 `get_transcript`
+/// calls across the three). Sharing one transcript cache below both sides
+/// collapses it to a single fetch for the transcript's whole lifetime.
+///
+/// The pin is deliberately exact so a regression that re-splits the cache is
+/// not silent.
+#[test]
+fn normalizer_shares_the_projectors_transcript_cache() {
+    let (projector, provider) = fixture();
+    let counting = CountingProvider::new(provider);
+    let counter = counting.transcript_calls.clone();
+    let vp = VariantProjector::new(projector, counting);
+
+    // Three coding substitutions on the same transcript. Each is self-projected
+    // (`project(c_variant, "NM_TEST.1")`), so each drives one normalizer
+    // re-derivation of the `c.` input in addition to the projection.
+    for s in ["NM_TEST.1:c.4C>A", "NM_TEST.1:c.5G>A", "NM_TEST.1:c.6C>A"] {
+        vp.project(s, "NM_TEST.1")
+            .expect("projection should succeed");
+    }
+
+    let calls = counter.load(Ordering::SeqCst);
+    assert_eq!(
+        calls, 1,
+        "expected exactly one get_transcript call across 3 c. variants \
+         (normalizer + projector sharing one cache); got {calls}"
+    );
+}
