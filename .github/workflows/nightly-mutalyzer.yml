@@ -354,15 +354,25 @@ jobs:
         # continue-on-error), but not when an earlier infra step (checkout,
         # prepare, missing manifest) skipped it — that failure is `report-failure`'s.
         if: always() && (steps.reference-aware-tests.outcome == 'success' || steps.reference-aware-tests.outcome == 'failure')
+        # `shell: bash` is REQUIRED here, not cosmetic. GitHub's default step
+        # shell is `bash -e {0}`, which does NOT set pipefail; without it the
+        # `tee` below (whose exit is 0) masks a non-zero exit from the Python
+        # script, so drift would print but the step would stay green — the gate
+        # could never go red (#2082). `shell: bash` expands to
+        # `bash --noprofile --norc -eo pipefail {0}`; `set -euo pipefail` as the
+        # first run line makes the guarantee explicit and independent of that.
+        shell: bash
         env:
           JUNIT: target/nextest/nightly-xfail/junit.xml
           BASELINE: tests/fixtures/nightly-reference-aware/xfail-baseline.txt
         run: |
+          set -euo pipefail
           # Keep the JUnit report in the uploaded artifact for offline triage.
           mkdir -p /tmp/ferro-xfail
           if [ -f "$JUNIT" ]; then cp "$JUNIT" /tmp/ferro-xfail/junit.xml; fi
-          # `set -o pipefail` (GitHub's bash default) propagates the script's
-          # exit code through the `tee`, so drift fails the step.
+          # With pipefail set, the script's non-zero exit (1 on drift, 2 on a
+          # missing/unparseable JUnit) propagates through the `tee` and fails
+          # the step; `tee` still writes the report to the job summary.
           python3 scripts/diff_nightly_xfail_baseline.py \
             --junit "$JUNIT" --baseline "$BASELINE" | tee -a "$GITHUB_STEP_SUMMARY"
 
