@@ -6208,12 +6208,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
             )?;
 
             let seq_len = ref_seq.len() as u64;
+            // #2036: a repeat minted here states an *extent* — the reference
+            // tract's `<first>_<last>` — and `insertion_to_repeat` discovers that
+            // tract by walking whole units of the reference. A window boundary
+            // that falls part-way through a unit therefore truncates the
+            // recognized tract by up to `unit_len - 1` bases: the dangling
+            // partial unit at the edge is not counted, so the recognized endpoint
+            // sits one *unit* short of the window edge rather than one *base*.
+            // With the plain `<= 1` / `>= seq_len` edge tests such a repeat looks
+            // window-interior even though its true tract runs past the edge, so
+            // the loop returns a repeat whose 5' start is short by a copy. That
+            // output is not a fixed point: re-normalizing it (a repeat input,
+            // handled without this window truncation) walks the full tract and
+            // reports the longer extent. Widen the edge margin to one unit for a
+            // minted repeat so the loop grows the window until the tract's true
+            // boundary is inside it.
+            //
+            // Only `NaEdit::Repeat` is affected; every other edit keeps the
+            // exact `<= 1` / `>= seq_len` test (`margin == 1`).
+            let repeat_unit_len = match &new_edit {
+                NaEdit::Repeat {
+                    sequence: Some(seq),
+                    ..
+                } if !seq.is_empty() => seq.len() as u64,
+                _ => 1,
+            };
             // The 3' edge is artificial only where the contig is known to
             // continue past it; the 5' edge only where the window did not start
             // at the contig's first base.
-            let ran_to_three_prime_edge = new_rel_end >= seq_len
+            let ran_to_three_prime_edge = new_rel_end + repeat_unit_len > seq_len
                 && contig_len.is_some_and(|len| window_start.saturating_add(seq_len) < len);
-            let ran_to_five_prime_edge = new_rel_start <= 1 && window_start > 0;
+            let ran_to_five_prime_edge = new_rel_start <= repeat_unit_len && window_start > 0;
 
             if !ran_to_three_prime_edge && !ran_to_five_prime_edge {
                 return Ok(Some(WindowedNormalization {

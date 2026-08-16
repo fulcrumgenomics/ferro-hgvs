@@ -3760,14 +3760,20 @@ mod tests {
     /// rows the gate is allowed to be indifferent about.** Each is filed, each is
     /// labelled `high`/`bug`, and each names the oracle it trips:
     ///
-    /// - **#2036** — `FERRO_ASSERT_IDEMPOTENT`. Normalizing a long tract is not a
-    ///   fixed point: every pass walks three more bases 5' and increments the copy
-    ///   count (`g.558_559insACGACG` -> `g.460_558ACG[35]` -> `g.457_558ACG[36]`).
-    ///   Found by `long_tract_window_provenance` on its first armed run, which is
-    ///   the window-provenance defect that family was built to find.
     /// - **#2037** — `FERRO_ASSERT_IN_BOUNDS`. Combining two members at `c.1` shifts
     ///   the insertion point 5' off the coordinate space
     ///   (`c.[1dup;1T>A]` -> `c.-1_1insA`, naming position 0 of a 20-base transcript).
+    ///
+    /// **#2036 was here and is now fixed**, so its five rows have been removed per the
+    /// shrink-only rule below rather than left as a silent exemption. It was the
+    /// window-provenance defect this family was built to find: minting a repeat from
+    /// an insertion at a tract junction under-reported the tract's 5' extent when the
+    /// tract outran the shuffle window, so `g.558_559insACGACG` -> `g.460_558ACG[35]`
+    /// -> `g.457_558ACG[36]` grew by a copy on every pass. The growth loop's edge
+    /// detector now widens its margin to one repeat unit, so a minted repeat whose
+    /// tract is truncated by a window boundary grows the window and reaches the
+    /// maximal-tract fixed point in one pass. Pinned by
+    /// `tests/it/issue_2036_long_tract_idempotent.rs`.
     ///
     /// **Why an exclusion here rather than a weakened oracle.** The oracles panic
     /// *inside* `normalize`, so a row that trips one takes the whole test binary with
@@ -3783,11 +3789,6 @@ mod tests {
     /// fixed and re-admits its row — fails here instead of rotting into a blanket
     /// exemption.
     const ORACLE_TRIPPING_INPUTS: &[(&str, &str)] = &[
-        ("NC_TEST.1:g.456_457insACGACG", "#2036"),
-        ("NC_TEST.1:g.558_559insACGACG", "#2036"),
-        ("NC_TEST.1:g.582_583insACGACG", "#2036"),
-        ("NC_TEST.1:g.585_586insACGACG", "#2036"),
-        ("NC_TEST.1:g.756_757insACGACG", "#2036"),
         ("NM_TEST.1:c.[1dup;1T>A]", "#2037"),
         ("NM_TEST.1:c.[1dup;1C>A]", "#2037"),
     ];
@@ -3886,7 +3887,7 @@ mod tests {
     /// | genomic-frame members at least as wide as the widest witnessed window | reported |
     /// | members with no rebuildable reference | reported |
     /// | rows using a frame `mint_reference_for` does not model | reported |
-    /// | held out (#2036, #2037) | 7 rows |
+    /// | held out (#2037) | 2 rows |
     ///
     /// **Every asserted figure is identical with the three `FERRO_ASSERT_*` flags set
     /// and unset, measured both ways** — same 2209 rows compared, same zero
@@ -3912,8 +3913,8 @@ mod tests {
     /// the transcript frame is the *same* whole transcript and for the genomic frame
     /// is folded into the same maximum.
     ///
-    /// Seven rows are held out; see [`ORACLE_TRIPPING_INPUTS`], which names the issue
-    /// behind each.
+    /// A small set of rows is held out; see [`ORACLE_TRIPPING_INPUTS`], which names
+    /// the issue behind each.
     #[test]
     fn the_render_time_reference_matches_what_the_pipeline_was_given() {
         use ferro_hgvs::normalize::{
