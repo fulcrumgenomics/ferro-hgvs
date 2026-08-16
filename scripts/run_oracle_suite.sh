@@ -7,14 +7,28 @@
 #     FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
 #
 # -- CANNOT PASS on `main`, and has not been able to for as long as the spec
-# corpus has existed. It fails 7 tests, and all 7 are in modules `ci.yml` names
-# in `ORACLE_EXCLUDE` precisely so that the armed job never runs them:
+# corpus has existed. The failures are in modules `ci.yml` names in
+# `ORACLE_EXCLUDE` precisely so that the armed job never runs them. The count was
+# 7 before #1650 closed the idempotency half; it is not restated here as a number
+# because it is a moving figure that nothing checks -- read it off a run.
 #
-#   * defect_non_idempotent_outputs (4 tests) and
-#     spec_corpus_regressions::an_insertion_at_the_cds_end_is_not_a_fixed_point
-#     ASSERT the non-idempotency the oracle PANICS on. `c.*1delinsCTT` ->
-#     `c.72_*1insCT` -> `c.72delinsCCT` is a pinned defect; a test that pins it
-#     and an oracle that aborts on it cannot both run.
+#   * defect_non_idempotent_outputs and
+#     spec_corpus_regressions::an_insertion_at_the_cds_end_is_a_fixed_point
+#     USED TO ASSERT the non-idempotency the oracle PANICS on:
+#     `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` was a pinned defect,
+#     and a test that pins it and an oracle that aborts on it cannot both run.
+#     #1650 FIXED that class -- the chain collapses to
+#     `c.*1delinsCTT` -> `c.72delinsCCT`, `non_idempotent_outputs` reads 0 in
+#     both directions, and both tests now assert the fixed point. So this bullet
+#     no longer describes a reason to exclude those two.
+#
+#     THE EXCLUSION IS KEPT ANYWAY, and deliberately: `spec_corpus_regressions`
+#     still pins rows the DENOTED-SEQUENCE oracle aborts on (see the note at the
+#     end of this header), and both modules build their own references and sweep
+#     them, so an armed run that started panicking mid-sweep would EMPTY the
+#     sweep rather than redden it -- the same instrument-destroys-instrument
+#     failure, differently sourced. Narrowing it needs that measured, with
+#     `tests/it/oracle_exclude_invariant.rs` updated in the same change.
 #   * spec_conformance_axis's two censuses COUNT it. The corpus wraps
 #     normalization in `catch_unwind`, so a panicking row is filed `declined`
 #     and its output never reaches the family's output set -- which does not

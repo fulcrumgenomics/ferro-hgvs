@@ -470,8 +470,13 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // the reference, and only `lower_repeat_edits` reads it), so this pass —
     // which reasons purely about spans — could not use one even if it wanted
     // to.
-    let Some(mut edits) = collect_canonical_edits(&variants, kind, body, &template_accession)
-    else {
+    let Some(mut edits) = collect_canonical_edits(
+        &variants,
+        kind,
+        body,
+        &template_accession,
+        ExtendedBody::OFF,
+    ) else {
         return variants;
     };
     if edits
@@ -785,9 +790,110 @@ pub(crate) fn cis_axis_parts(
     v: &HgvsVariant,
     kind: CisKind,
 ) -> Option<(&Accession, Region, i64, i64, &NaEdit)> {
+    cis_axis_parts_on(v, kind, ExtendedBody::OFF)
+}
+
+/// How far the sequence-first pass's body region reaches past `cds_end`.
+///
+/// The `c.` axis relabels itself at `cds_end` — `c.<cds_len>` and `c.*1` name
+/// two adjacent bases of one contiguous reference string (`refseq.md`) — and
+/// [`simple_cds_pos`] reports each side under its own [`Region`]. That is right
+/// for a *renderer* and wrong for the window arithmetic in
+/// [`canonicalize_from_sequence`], which needs one line of comparable integers:
+/// `edit_span_union`, `w_lo`/`w_hi` and every offset derived from them cannot be
+/// computed across two axes that do not share an origin. The consequence was
+/// #1650 — a cis allele whose members straddle the CDS end was refused outright
+/// by [`collect_canonical_edits`], so it and its `inv` spelling were two fixed
+/// points for one variant while the identical design inside the CDS converged.
+///
+/// This folds `c.*N` onto **`cds_len + N`**, the coordinate it already has on
+/// the transcript once `frame.delta` (`cds_start - 1`) is added — so the fold is
+/// exact rather than an approximation, and `frame.delta` keeps working
+/// unchanged for the whole extended range. [`unfold_extended_body`] is the
+/// inverse, applied to the rebuilt members.
+///
+/// Deliberately one-sided: it reaches the 3'UTR and **not** the 5'UTR. `c.-N`
+/// would need the origin itself to move, which makes `w_lo`'s `.max(1)` clamp
+/// stop meaning "at or after the CDS start" and changes behaviour for every
+/// CDS-start-adjacent variant — #1650 names that as needing its own measurement,
+/// and it is left to #1816 rather than inherited here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExtendedBody(Option<i64>);
+
+impl ExtendedBody {
+    /// No extension: every member must sit wholly inside the positive body, the
+    /// behaviour every caller outside [`canonicalize_from_sequence`] keeps.
+    const OFF: Self = Self(None);
+
+    /// Extend the body to `cds_len + 3'UTR`, where `cds_end_axis` is the CDS end
+    /// expressed on the member axis (`cds_end - frame.delta`, i.e. the CDS
+    /// length). `None` wherever there is no CDS to change axis at.
+    fn to_cds_end(cds_end_axis: Option<i64>) -> Self {
+        Self(cds_end_axis)
+    }
+
+    /// Fold one endpoint onto the extended body axis, leaving every other region
+    /// alone so a member outside the CDS/3'UTR pair is refused exactly as before.
+    fn fold(self, endpoint: (Region, i64), body: Region) -> Option<(Region, i64)> {
+        // `OFF` must be a pass-through, **not** a refusal, and writing it as
+        // `self.0?` instead cost a debugging session: it made `cis_axis_parts`
+        // itself start declining every 3'UTR member, which silently switched off
+        // `collapse_overlapping_cis_edits` for them and regressed #1284's
+        // `c.[*10dup;*11dup]` to `c.[*11dup;*11dup]` — a failure with no
+        // syntactic connection to the extension, in a test the extension never
+        // reaches. The single most reachable value of this type is `OFF`; it has
+        // to mean "unchanged".
+        let Some(cds_end_axis) = self.0 else {
+            return Some(endpoint);
+        };
+        let (region, pos) = endpoint;
+        if region != Region::ThreePrimeUtr {
+            return Some(endpoint);
+        }
+        // `*N` is 1-based from the base after the stop codon, so `*1` is
+        // `cds_len + 1`. A non-positive `N` never reaches here — `simple_cds_pos`
+        // refuses it — but the checked add is what keeps an authored `c.*<huge>`
+        // from wrapping into the CDS instead of failing the width test (#1487).
+        Some((body, cds_end_axis.checked_add(pos)?))
+    }
+}
+
+/// [`cis_axis_parts`], with the 3'UTR optionally folded onto the extended body.
+fn cis_axis_parts_on(
+    v: &HgvsVariant,
+    kind: CisKind,
+    extended: ExtendedBody,
+) -> Option<(&Accession, Region, i64, i64, &NaEdit)> {
     let (accession, start, end, edit) = member_axis_endpoints(v, kind)?;
-    let (region, s, e) = join_pos(Some(start), Some(end))?;
+    let body = body_region(kind);
+    let (region, s, e) = join_pos(
+        Some(extended.fold(start, body)?),
+        Some(extended.fold(end, body)?),
+    )?;
     Some((accession, region, s, e, edit))
+}
+
+/// Render an axis position on the extended body back onto the region that names
+/// it, the inverse of [`ExtendedBody::fold`].
+///
+/// **Infallible, and deliberately so.** This returned `Option` in review, with a
+/// doc claiming `None` for "the 3'UTR half arriving with no `cds_end_axis`" — a
+/// state that cannot occur, since [`ExtendedBody`] is *built* from
+/// `cds_end_axis`, so nothing is ever folded when it is absent. Every arm
+/// returned `Some`, and the `?` at the call site read as a guard that was not
+/// one. A refusal that can never fire is worse than none: it invites the next
+/// reader to believe the case is handled.
+///
+/// With no `cds_end_axis` this is the identity on `body`, which is exactly the
+/// unextended behaviour.
+///
+/// A span that *straddles* the boundary IS a real refusal, and it belongs to the
+/// caller, which holds both endpoints — see [`render_on_its_own_region`].
+fn unfold_extended_body(pos: i64, body: Region, cds_end_axis: Option<i64>) -> (Region, i64) {
+    match cds_end_axis {
+        Some(end) if pos > end => (Region::ThreePrimeUtr, pos - end),
+        _ => (body, pos),
+    }
 }
 
 /// Whether a merged anchor restates the reference bases under its own span —
@@ -3278,11 +3384,66 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     //   clamp is applied here, by `boundary_delins_anchor`. (It used to be
     //   *deferred* here, by refusing every derivation that collapsed to one pure
     //   insertion; that refusal is gone — see where it stood, below.)
+    //
+    // **That third bullet is why the 3'UTR extension below is not a free
+    // relaxation.** The body-region check is named there as the mechanism
+    // enforcing the `cds_end` clamp, so admitting a `c.*N` member removes the
+    // enforcement point along with the refusal. `pinned_to_footprint` re-supplies
+    // it: with the pad at zero the derivation cannot reach a base no member
+    // already spans, so nothing can be *carried* across `cds_end` — only cut at
+    // it. That is #1651's own argument for its carve-out ("re-typing … reads the
+    // reference under the member's own span and moves nothing") applied to the
+    // partition instead of to the typing.
     let body = body_region(kind);
-    let (template_accession, _, _, _, _) = cis_axis_parts(&variants[0], kind)?;
+    // Read from `member_axis_endpoints` rather than `cis_axis_parts`, because the
+    // latter joins the two ends through `join_pos` and so refuses the straddling
+    // member this function is about — before `cds_end_axis`, the thing that makes
+    // it readable, has been resolved. Nothing but the accession is wanted here.
+    let (template_accession, _, _, _) = member_axis_endpoints(&variants[0], kind)?;
     let template_accession = template_accession.clone();
 
-    let mut edits = collect_canonical_edits(variants, kind, body, &template_accession)?;
+    let frame = axis_frame(kind, &template_accession, provider)?;
+    let accession = template_accession.transcript_accession_smol();
+
+    // The CDS end on the member axis: `cds_end - (cds_start - 1)`, i.e. the CDS
+    // length, which is both the last coordinate of the extended body and the
+    // anchor `cds_end_delins_anchor` clamps a terminal insertion onto. `None`
+    // wherever there is no CDS to change axis at — every genomic kind, and a
+    // non-coding transcript — which makes both inert there.
+    //
+    // `CisKind::Cds` only: `r.` reaches the same junction, but `normalize_cds`'s
+    // #387 clamp is gated on `AxisRegion::Cds`, so claiming the `r.` case here
+    // would make the derivation *disagree* with the per-member pipeline in the
+    // opposite direction — the very fault this fixes. Left for its own evidence.
+    let cds_end_axis = if matches!(kind, CisKind::Cds) {
+        provider
+            .get_transcript(&accession)
+            .ok()
+            .and_then(|tx| tx.cds_end)
+            .and_then(|end| i64::try_from(end).ok())
+            .map(|end| end - frame.delta)
+    } else {
+        None
+    };
+    let extended = ExtendedBody::to_cds_end(cds_end_axis);
+
+    let mut edits = collect_canonical_edits(variants, kind, body, &template_accession, extended)?;
+    // Did the extension actually admit something the unextended body would have
+    // refused? Asked by re-running the unextended reader rather than by inspecting
+    // positions, so the two readings cannot drift apart.
+    //
+    // The `cds_end_axis.is_some()` short-circuit is **exactly equivalent**, not an
+    // approximation, and it is there for cost: with no CDS end resolved `extended`
+    // IS `OFF`, so the call above already ran the unextended reader and succeeded,
+    // and re-running it could only succeed again. Without the guard every genomic,
+    // mitochondrial, `n.` and non-coding-`r.` derivation lowered its whole member
+    // list twice for an answer fixed at `false`. The remaining double read is on
+    // coding groups only; removing that one needs `collect_canonical_edits` to
+    // report whether it folded, which is a wider signature change than this fix
+    // wants.
+    let uses_extension = cds_end_axis.is_some()
+        && collect_canonical_edits(variants, kind, body, &template_accession, ExtendedBody::OFF)
+            .is_none();
 
     // A **lone** repeat is not what the lockout is about, and re-deriving one
     // can only cost. Its whole change is a single contiguous tract, so there is
@@ -3310,14 +3471,33 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // both saturations land on the refusal the width test already gives an
     // over-wide window. A debug build panicked; a release build wrapped `w_hi`
     // negative and derived against a nonsense window, which is the worse half.
-    let mut w_lo = c_lo.saturating_sub(CANONICAL_PAD).max(1);
-    let mut w_hi = c_hi.saturating_add(CANONICAL_PAD);
+    //
+    // The extension reaches a group whose footprint **crosses** `cds_end`, and no
+    // other. A group sitting wholly in the 3'UTR keeps the refusal it has always
+    // had, which is not a scope decision made for tidiness — measured, admitting
+    // it regresses `issue_1284`'s `c.[*10dup;*11dup]` from `c.*10_*11A[4]` to
+    // `c.[*11dup;*11dup]`, two members claiming one base. That is #1281's shape,
+    // it round-trips through the sequence check (two `dup`s at one anchor insert
+    // the same two bases), and the per-member pipeline — which owns those rows
+    // today and answers them correctly — is the right place for them. #1650 is
+    // about a span the boundary *cuts*; nothing here is owed to a span it does
+    // not touch.
+    if uses_extension && !cds_end_axis.is_some_and(|end| c_lo <= end && end < c_hi) {
+        return None;
+    }
+    // For the groups that do cross, the pad goes to zero — see the note at the top
+    // of this function. The pad is the only room `shift_pieces` has, so with it
+    // gone a piece can be cut anywhere inside the members' own union and moved
+    // nowhere outside it; the `cds_end` clamp the body-region check used to supply
+    // is re-supplied by construction. It costs those groups the 3'-shift and
+    // `duplication_anchor`'s 5' lookback, which is a capability they have today
+    // only in the sense that they are refused outright.
+    let pad = if uses_extension { 0 } else { CANONICAL_PAD };
+    let mut w_lo = c_lo.saturating_sub(pad).max(1);
+    let mut w_hi = c_hi.saturating_add(pad);
     if w_hi - w_lo + 1 > MAX_CANONICAL_WINDOW {
         return None;
     }
-
-    let frame = axis_frame(kind, &template_accession, provider)?;
-    let accession = template_accession.transcript_accession_smol();
 
     // `general.md:44` exempts deletions and duplications around an exon/exon
     // junction from the 3' rule on the transcript axes, and the per-member
@@ -3397,7 +3577,7 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // canonicalization problem: strict mode must still reject it and lenient
     // mode must still warn. Both live in the per-member pipeline, so refuse and
     // let it run (#1052, #1097).
-    if !stated_reference_bases_match(variants, kind, &ref_bytes, w_lo) {
+    if !stated_reference_bases_match(variants, kind, &ref_bytes, w_lo, extended) {
         return None;
     }
     let result = apply_edits_to_window(&edits, &ref_bytes, w_lo)?;
@@ -3796,7 +3976,13 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         // partition, and running it first let a legitimate codon merge inflate the
         // weight and trip a refusal. With the bound deleted nothing weighs the
         // partition, so the order is kept as measured rather than as required.
-        apply_coding_codon_exception(pieces, frame.carries_translated_frame(), w_lo, &ref_bytes);
+        apply_coding_codon_exception(
+            pieces,
+            frame.carries_translated_frame(),
+            w_lo,
+            &ref_bytes,
+            cds_end_axis,
+        );
     };
 
     // The member count is a property of the sequence, so it may not depend on
@@ -3884,25 +4070,6 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         SequenceEnds::INTERIOR
     };
 
-    // The CDS end on the member axis, for `cds_end_delins_anchor`. `None`
-    // wherever there is no CDS to change axis at — every genomic kind, and a
-    // non-coding transcript — which makes that clamp inert there.
-    //
-    // `CisKind::Cds` only: `r.` reaches the same junction, but `normalize_cds`'s
-    // #387 clamp is gated on `AxisRegion::Cds`, so claiming the `r.` case here
-    // would make the derivation *disagree* with the per-member pipeline in the
-    // opposite direction — the very fault this fixes. Left for its own evidence.
-    let cds_end_axis = if matches!(kind, CisKind::Cds) {
-        provider
-            .get_transcript(&accession)
-            .ok()
-            .and_then(|tx| tx.cds_end)
-            .and_then(|end| i64::try_from(end).ok())
-            .map(|end| end - frame.delta)
-    } else {
-        None
-    };
-
     let rebuilt = rebuild_members(
         &pieces,
         &variants[0],
@@ -3936,7 +4103,8 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // cannot serve. Collapsing all three into one boolean would hide that case
     // among the other two, so it gets a `debug_assert` of its own — loud in
     // tests and development, with the runtime refusal still carrying release.
-    let rebuilt_edits = collect_canonical_edits(&rebuilt, kind, body, &template_accession)?;
+    let rebuilt_edits =
+        collect_canonical_edits(&rebuilt, kind, body, &template_accession, extended)?;
     let reapplied = apply_edits_to_window(&rebuilt_edits, &ref_bytes, w_lo)?;
     debug_assert_eq!(
         reapplied, result,
@@ -4020,10 +4188,11 @@ fn collect_canonical_edits(
     kind: CisKind,
     body: Region,
     template_accession: &Accession,
+    extended: ExtendedBody,
 ) -> Option<Vec<GEdit>> {
     let mut edits = Vec::with_capacity(variants.len());
     for v in variants {
-        let (accession, region, s, e, edit) = cis_axis_parts(v, kind)?;
+        let (accession, region, s, e, edit) = cis_axis_parts_on(v, kind, extended)?;
         if accession != template_accession || region != body {
             return None;
         }
@@ -4310,9 +4479,10 @@ fn stated_reference_bases_match(
     kind: CisKind,
     ref_bytes: &[u8],
     w_lo: i64,
+    extended: ExtendedBody,
 ) -> bool {
     for v in variants {
-        let Some((_, _, s, _, edit)) = cis_axis_parts(v, kind) else {
+        let Some((_, _, s, _, edit)) = cis_axis_parts_on(v, kind, extended) else {
             return false;
         };
         // Every `NaEdit` channel that can carry submitter-asserted reference
@@ -9298,10 +9468,28 @@ fn apply_coding_codon_exception(
     reading_frame: bool,
     w_lo: i64,
     ref_bytes: &[u8],
+    cds_end_axis: Option<i64>,
 ) {
     if !reading_frame {
         return;
     }
+    // The exception's second conjunct — "together affecting one amino acid" — is
+    // unstatable past the stop codon, so a triplet reaching into the 3'UTR is not
+    // the shape `general.md:35` describes and `general.md:34`'s plain rule governs
+    // it: described individually. This is the same reading
+    // `projection-codon-exception-is-decided-by-the-rendered-axis` (2026-08-11)
+    // gives for a genomic axis, applied to the coding axis's own 3' end rather
+    // than to a different prefix.
+    //
+    // **DEFENSIVE, and not currently demonstrated to change any answer.** Two
+    // inputs were built to reach it and neither does — both stay green with this
+    // predicate forced to `true`. The table and the reasoning are on
+    // `a_pair_whose_triplet_reaches_past_the_stop_codon_stays_two_members`
+    // (`tests/it/issue_1536_cds_boundary_delins.rs`); do not cite this line as
+    // guarded. It is kept because `same_codon` is `(a - 1) / 3` and so answers
+    // for a codon that does not exist, silently, the moment some later change
+    // makes the line reachable — the wrong direction to fail in.
+    let within_cds = |last: i64| cds_end_axis.is_none_or(|end| last <= end);
     // A single changed reference base replaced by a single alt base — the
     // `Substitution` the spec's "two variants" are.
     let is_substitution =
@@ -9332,6 +9520,7 @@ fn apply_coding_codon_exception(
         if separated_by_one
             && is_substitution(&pieces[index - 1])
             && starts_with_substitution
+            && within_cds(triplet_start + 2)
             && same_codon(triplet_start, triplet_start + 2)
         {
             let middle = ref_bytes[previous_end];
@@ -9857,7 +10046,10 @@ fn rebuild_members(
             cds_end_axis,
         )?;
         previous_ref_end = piece.ref_end;
-        members.push(build_merged(template, anchor));
+        members.push(build_merged(
+            template,
+            render_on_its_own_region(anchor, body, cds_end_axis)?,
+        ));
     }
     Some(members)
 }
@@ -10171,8 +10363,52 @@ pub(crate) fn denoted_bases(
     let (accession, _, _, _, _) = cis_axis_parts(members.first()?, kind)?;
     // Borrowed: both this and `members` come immutably out of the same slice, so
     // the clone satisfied no borrow and cost a `String` per derivation.
-    let edits = collect_canonical_edits(members, kind, body_region(kind), accession)?;
+    let edits = collect_canonical_edits(
+        members,
+        kind,
+        body_region(kind),
+        accession,
+        ExtendedBody::OFF,
+    )?;
     apply_edits_to_window(&edits, reference, w_lo)
+}
+
+/// Put an anchor built on the **extended body** back onto the region that names
+/// each of its endpoints — the rendering half of [`ExtendedBody`].
+///
+/// A no-op whenever the anchor sits inside the CDS, which is every group the
+/// extension did not admit, so this cannot move an existing row.
+///
+/// # A straddling anchor is refused, not truncated
+///
+/// [`Anchor`] carries **one** [`Region`] for both endpoints, so a piece running
+/// from `c.<cds_len-1>` to `c.*2` has no anchor to be. Refusing hands the group
+/// back to the per-member pipeline, which is exactly what happened to it before
+/// this extension existed — so the refusal is the status quo for that shape and
+/// not a new decline. Widening `Anchor` to a region per endpoint would let it be
+/// built and is left to #1816 with the 5'UTR half, because the two want the same
+/// change and measuring them together is cheaper than twice.
+///
+/// The insertion form is why the endpoints are read independently rather than
+/// through an ordering test: [`Anchor`]'s insertion shape is `start > end`
+/// (`build_naedit` reads the gap from the raw endpoints), so a `start <= end`
+/// precondition would silently exclude every derived insertion.
+fn render_on_its_own_region(
+    anchor: Anchor,
+    body: Region,
+    cds_end_axis: Option<i64>,
+) -> Option<Anchor> {
+    let (start_region, start) = unfold_extended_body(anchor.start, body, cds_end_axis);
+    let (end_region, end) = unfold_extended_body(anchor.end, body, cds_end_axis);
+    if start_region != end_region {
+        return None;
+    }
+    Some(Anchor {
+        region: start_region,
+        start,
+        end,
+        ..anchor
+    })
 }
 
 /// Build the [`Anchor`] for one piece, typing it under the spec's rules.
@@ -14369,7 +14605,13 @@ mod tests {
             HgvsVariant::Allele(allele) => allele.variants.clone(),
             single => vec![single],
         };
-        stated_reference_bases_match(&members, CisKind::Genome, reference.as_bytes(), 1)
+        stated_reference_bases_match(
+            &members,
+            CisKind::Genome,
+            reference.as_bytes(),
+            1,
+            ExtendedBody::OFF,
+        )
     }
 
     /// An identity spelling its base asserts that base, so a wrong assertion must

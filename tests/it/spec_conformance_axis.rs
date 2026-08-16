@@ -914,16 +914,36 @@ pub(crate) const THREE_PRIME: Census = Census {
     // what it excludes. The rule is now gated on the same carve-out, which
     // returns `guard_violations` to 0 and leaves every counter in this block
     // where #1621 left it.
-    converged: 11_016,
-    split_two: 674,
-    split_three: 164,
-    split_more: 28,
+    //
+    // # #1650 — the 3'UTR extension of the sequence-first body, on top of #1835
+    //           and #1610
+    //
+    // Families move out of the `split_*` buckets and into `converged`, and the
+    // three decreases sum exactly to `converged`'s increase. **That identity is
+    // a NET statement and is quoted as one** — the module's own warning is that
+    // the counters cannot tell net from gross. What is checked directly is the
+    // reported divergence set, whose family ids are byte-identical either side
+    // (all `s01-c1-m3-all-del-*`, none of them a `cds-end` row), so nothing
+    // that was divergent before is divergent for a different reason now. The
+    // four figures below are **re-measured on each rebase** rather than composed
+    // from the branches' deltas — and the move is the same 40 families it was on
+    // the pre-flip base, with the same 22 + 12 + 6 breakdown, so the flip, #1610
+    // and this change reach disjoint populations.
+    converged: 11_056,
+    split_two: 652,
+    split_three: 152,
+    split_more: 22,
     underdetermined: 0,
     // -- idempotency --
     //
-    // Re-blessed DOWN: the three `scale-c3p-sep{120,128,136}-del-del` rows now
-    // settle in one pass. The four `cds-end` families remain.
-    non_idempotent_outputs: 4,
+    // Re-blessed DOWN, **to zero**, by #1650. The three
+    // `scale-c3p-sep{120,128,136}-del-del` rows had already gone; the four
+    // `cds-end` families were the whole residual and they now settle in one
+    // pass, because the derivation can finally read a member on either side of
+    // `cds_end` and so answers in one step what it previously answered in two.
+    // `defect_non_idempotent_outputs` flips with this number, as its own failure
+    // messages instruct.
+    non_idempotent_outputs: 0,
     // -- sequence preservation --
     sequence_changed: 4,
     // -- refusal --
@@ -1006,7 +1026,13 @@ pub(crate) const FIVE_PRIME: Census = Census {
     //
     // #1610 does not move it: see the `#1610` block on [`THREE_PRIME`]'s
     // `converged` for the measurement and for why the rule takes the axis gate.
-    converged: 10_755,
+    //
+    // Re-blessed by #1650, the 5' half of the 3' re-bless above: families move
+    // into `converged` and the decreases sum to it exactly. Read as net, for the
+    // same reason stated there, and re-measured on each rebase rather than
+    // composed — the move is the same 48 families it was on the pre-flip base,
+    // with the same 22 + 26 + 0 breakdown.
+    converged: 10_803,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -1040,11 +1066,16 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // partition where that one merges and this one did not. On these two families
     // the 3' partition was already the merged one, so only 5' had anywhere to
     // move; convergence is what agreeing with 3' looks like from here.
-    split_two: 979,
-    split_three: 124,
+    //
+    // every entry above records, and both move the same way. #1650 then moves
+    // these on top of that, re-measured on the rebase: -22 and -26, with
+    // `split_more` untouched.
+    split_two: 957,
+    split_three: 98,
     split_more: 24,
     underdetermined: 0,
-    non_idempotent_outputs: 4,
+    // Re-blessed DOWN to zero by #1650, the same four `cds-end` families as at 3'.
+    non_idempotent_outputs: 0,
     sequence_changed: 0,
     conflicts_accepted: 72,
     // Re-blessed DOWN to zero by #1628 and #1789, by the same 32 rows as at 3'.

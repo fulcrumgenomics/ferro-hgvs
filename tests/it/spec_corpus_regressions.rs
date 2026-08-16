@@ -437,25 +437,42 @@ fn a_bare_transcript_accession_accepts_an_intronic_position() {
 
 /// **Question.** Is an insertion at the CDS/3'UTR boundary a fixed point?
 ///
-/// **No.** `c.*1delinsCTT` normalizes to `c.72_*1insCT`, which normalizes again to
-/// `c.72delinsCCT`. Idempotency is not a spec clause — it is an invariant of any
-/// normalizer, and `FERRO_ASSERT_IDEMPOTENT` exists to police it — so this is
-/// pinned as a defect with no citation to make.
+/// **Yes, since #1650 — this was the pinned defect and it is now the guard.**
+///
+/// It used to take two passes: `c.*1delinsCTT` normalized to `c.72_*1insCT`,
+/// which normalized *again* to `c.72delinsCCT`. Idempotency is not a spec clause
+/// — it is an invariant of any normalizer, and `FERRO_ASSERT_IDEMPOTENT` exists
+/// to police it — so it was pinned as a defect with no citation to make.
+///
+/// The cause was the sequence-first pass refusing every member on the far side
+/// of `cds_end`, so the second pass answered a question the first could not see.
+/// `merge::ExtendedBody` lets the first pass read both sides, and it now reaches
+/// `c.72delinsCCT` in **one** step. `spec_conformance_axis`'s
+/// `non_idempotent_outputs` goes 4 -> 0 with this, in both directions.
+///
+/// **Renamed with the flip**, from `..._is_not_a_fixed_point`. An earlier draft
+/// kept the old name on the ground that `ci.yml`'s `ORACLE_EXCLUDE` cites it —
+/// **it does not**: that variable excludes whole modules (`test(spec_corpus_regressions)`),
+/// so no rename can break it. The one real cross-reference is the header comment
+/// in `scripts/run_oracle_suite.sh`, which names this test explicitly and is
+/// updated in the same commit. A test whose name asserts the opposite of its
+/// body is the same defect class as an assertion weaker than its stated
+/// contract.
 ///
 /// The shape needs a transcript with a real 3'UTR, which a `CDS_START = 1`
 /// single-exon fixture cannot have (#1478). It reproduces on both strands.
 #[test]
-fn an_insertion_at_the_cds_end_is_not_a_fixed_point() {
+fn an_insertion_at_the_cds_end_is_a_fixed_point() {
     let core = acgt_core();
     for strand in [Strand::Plus, Strand::Minus] {
         let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
         let once = normalize_3prime(&frame, "NM_TEST.1:c.*1delinsCTT");
-        assert_eq!(once, "NM_TEST.1:c.72_*1insCT");
+        assert_eq!(once, "NM_TEST.1:c.72delinsCCT");
         let twice = normalize_3prime(&frame, &once);
         assert_eq!(
-            twice, "NM_TEST.1:c.72delinsCCT",
-            "PINNED DEFECT — normalization must be idempotent. `{once}` is not its own fixed \
-             point on the {strand:?} strand."
+            twice, once,
+            "`{once}` must be its own fixed point on the {strand:?} strand — this is \
+             the invariant the row used to violate, asserted rather than pinned."
         );
     }
 }
@@ -493,8 +510,13 @@ fn a_deletion_flush_against_an_insertion_at_the_cds_end_changes_the_sequence() {
         };
         let output = normalize_3prime(&frame, input);
         assert_eq!(
-            output, "NM_TEST.1:c.[72delinsTA;*2del]",
-            "PINNED DEFECT on the {strand:?} strand"
+            output, "NM_TEST.1:c.*1T>A",
+            "PINNED DEFECT on the {strand:?} strand. **Re-blessed by #1650, and the \
+             defect is NOT fixed** — only its spelling moved, from the two-member \
+             `c.[72delinsTA;*2del]` to this single substitution. Both denote the same \
+             wrong bases, which is why `spec_conformance_axis`'s `sequence_changed` \
+             is still 4 either side; what #1650 changed is that the wrong answer is \
+             now reached in one pass instead of two."
         );
         assert_ne!(
             denotation_of(frame.provider(), frame.served(), &output),
@@ -662,22 +684,39 @@ fn a_flush_deletion_and_insertion_preserves_the_sequence_in_every_run_but_one() 
 /// **Question.** Why does that one row change its sequence, when each of the two
 /// members is placed legally and the pair denotes an ordinary substitution?
 ///
-/// **Because ferro normalizes the members separately and concatenates the
-/// answers.** Measured on a core carrying `CCC` across `c.72`/`c.*1`/`c.*2`, so
-/// the deletion is ambiguous across the CDS/3'UTR boundary:
+/// **The answer CHANGED with #1650, and the old one is kept because it is what
+/// makes the new one legible.** Measured on a core carrying `CCC` across
+/// `c.72`/`c.*1`/`c.*2`, so the deletion is ambiguous across the CDS/3'UTR
+/// boundary:
 ///
 /// ```text
-/// c.72del            -> c.*2del         correct alone: 3'-most in the CCC run
-/// c.72_*1insG        -> c.72delinsCG    correct alone: collapses the flush pair
-/// c.[72del;72_*1insG] -> c.[72delinsCG;*2del]   <- exactly the two, side by side
+/// c.72del             -> c.*2del        correct alone: 3'-most in the CCC run
+/// c.72_*1insG         -> c.72delinsCG   correct alone: collapses the flush pair
+/// c.[72del;72_*1insG] -> c.[72delinsCG;*2del]   BEFORE #1650: exactly the two, side by side
+///                     -> c.*1C>G                AFTER  #1650: one re-derived member
 /// ```
 ///
-/// Each member's answer is right in isolation. Together they are wrong, because
-/// the deletion's 3' shift runs over a homopolymer that its sibling has already
-/// split: once `G` sits between `c.72` and `c.*1`, `CCC` is no longer a run in
-/// the derived sequence and the deletion is no longer ambiguous. The pair
-/// denotes `c.72C>G`; ferro's answer transposes the inserted base past the one
-/// it should have replaced.
+/// Before #1650 the explanation was **concatenation**: the sequence-first pass
+/// refused every group with a member past `cds_end`, so each member was
+/// normalized in isolation and the answers were placed side by side. Each is
+/// right alone and they are wrong together, because the deletion's 3' shift runs
+/// over a homopolymer its sibling has already split — once `G` sits between
+/// `c.72` and `c.*1`, `CCC` is no longer a run in the derived sequence.
+///
+/// #1650 lets the pass read both sides of `cds_end`, so the group **is** now
+/// re-derived rather than concatenated, and the concatenation identity below is
+/// asserted to have stopped holding. **The class did not move with it.** The
+/// pair denotes `c.72C>G` — `CCC` becomes `GCC` — and both the old answer and
+/// the new one denote `CGC`. `spec_conformance_axis`'s `sequence_changed` reads
+/// **4 either side**, which is the measurement that says so over the whole
+/// corpus rather than over this row.
+///
+/// **So the diagnosis this module shipped is now half wrong, and that is the
+/// finding.** "Ferro concatenates independently-normalized members" was never
+/// the root cause; it was the route. The root cause survives re-derivation,
+/// which localises it to how the boundary run is partitioned rather than to
+/// where the members came from. Tracked in the sibling test's own pin, which
+/// still fires.
 ///
 /// **This is the sequence-preservation class**, the one property no
 /// representation argument can excuse — `background/basics.md:38` puts
@@ -690,17 +729,18 @@ fn the_cds_end_flush_pair_is_its_two_members_normalized_separately() {
     let insertion_alone = normalize_3prime(&frame, "NM_TEST.1:c.72_*1insG");
     let pair = normalize_3prime(&frame, "NM_TEST.1:c.[72del;72_*1insG]");
 
-    // Each member is correct on its own.
+    // Each member is still correct on its own, and #1650 does not touch either —
+    // a lone member is not a group the extension can admit.
     assert_eq!(deletion_alone, "NM_TEST.1:c.*2del");
     assert_eq!(insertion_alone, "NM_TEST.1:c.72delinsCG");
 
-    // And the pair is precisely those two answers, side by side — which is the
-    // whole defect, stated as an equality rather than asserted in prose.
     assert_eq!(
-        pair, "NM_TEST.1:c.[72delinsCG;*2del]",
-        "PINNED DEFECT — the pair denotes c.72C>G. Ferro reaches this by shifting \
-         the deletion 3' through a run its sibling insertion has already split."
+        pair, "NM_TEST.1:c.*1C>G",
+        "PINNED DEFECT — the pair denotes c.72C>G (`CCC` -> `GCC`) and this answer \
+         denotes `CGC`. Re-blessed by #1650 from `c.[72delinsCG;*2del]`, which \
+         denotes the same wrong bases; the spelling moved and the class did not."
     );
+
     let concatenated = format!(
         "NM_TEST.1:c.[{};{}]",
         insertion_alone
@@ -710,9 +750,11 @@ fn the_cds_end_flush_pair_is_its_two_members_normalized_separately() {
             .strip_prefix("NM_TEST.1:c.")
             .expect("a c. description")
     );
-    assert_eq!(
+    assert_ne!(
         pair, concatenated,
-        "the pair's output IS the two members normalized independently"
+        "the pair is now RE-DERIVED, not concatenated — if this equality comes \
+         back, #1650's extension has stopped admitting the group and the \
+         explanation in this test's doc comment reverts with it"
     );
 }
 

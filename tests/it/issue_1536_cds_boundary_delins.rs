@@ -378,13 +378,29 @@ fn the_discriminator_is_the_cds_boundary_and_not_the_transcript_end() {
 /// # The input matters, and the first one chosen here did not reach the recursion
 ///
 /// This test asserted `once == twice` on `c.20_*7delinsCC`, and **passed with the
-/// recursion block disabled** — so it was pinning nothing. Measured: that input's
-/// `ref` (`GCTTACGG`) and payload (`CC`) share neither a prefix nor a suffix, so
-/// the trim removes nothing, the member is returned on the footprint it arrived on,
-/// and the recursion's `new_variant != *variant` gate never opens. The mechanism
-/// above was right; the demonstration was of a different shape.
-/// [`the_input_that_taught_us_this_test_can_be_vacuous`] pins that input as the
-/// decline it is, so it cannot be reached for again.
+/// recursion block disabled** — so it was pinning nothing, for two review rounds.
+/// Measured at the time: that input's `ref` (`GCTTACGG`) and payload (`CC`) shared
+/// neither a prefix nor a suffix, so the trim removed nothing, the member came back
+/// on the footprint it arrived on, and the recursion's `new_variant != *variant`
+/// gate never opened. The mechanism above was right; the demonstration was of a
+/// different shape.
+///
+/// **That input is no longer available as the demonstration it was, and the reason
+/// is this change.** It still shares no affix — but sharing no affix no longer
+/// implies standing still, because `merge::ExtendedBody` folds `c.*N` onto
+/// `cds_len + N`, so a footprint that *crosses* `cds_end` now reaches
+/// `canonicalize_from_sequence` and is partitioned from the bases instead of handed
+/// back: `c.20_*7delinsCC` -> `c.[20del;*2_*4del;*6_*7del]`.
+/// [`the_input_that_taught_us_this_test_can_be_vacuous`] keeps the finding and pins
+/// the new value rather than loosening to fit it.
+///
+/// **The trap it recorded has not gone away; it has moved to the side of the CDS
+/// this change deliberately does not reach.** `ExtendedBody`'s fold is one-sided —
+/// 3'UTR only, `c.-N` left to #1816 — so on the CDS-start side the shared-affix trim
+/// is still the only thing that can move a straddling member, and "untrimmable
+/// therefore declines" still holds there.
+/// [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`] is where that is
+/// now anchored, and it is the test to read before choosing an input for this one.
 ///
 /// `c.20_*4delinsG` does reach it. `ref` is `GCTTA` and the payload `G`, so the
 /// trim eats the one CDS-side base and leaves `c.*1_*4del` — wholly in the 3'UTR,
@@ -501,60 +517,221 @@ fn the_recursion_emits_no_stale_clamp_warning() {
     );
 }
 
-/// The input the test above used to run on, pinned as the decline it actually is.
+/// The input the test above used to run on — kept for the finding, re-pinned for
+/// the behaviour.
 ///
-/// Not a curiosity: it is the reason that test read as coverage for two review
-/// rounds while guarding nothing. `c.20_*7delinsCC` shares no affix between `ref`
-/// and payload, so the carve-out re-types nothing, the member comes back exactly as
-/// authored, and any `once == twice` assertion on it is satisfied by the decline
-/// rather than by the recursion. If this ever starts moving, the note on the test
-/// above needs rewriting rather than this pin loosening.
+/// **The finding is the valuable part and it is unchanged.** This input is the
+/// reason that test read as coverage for two review rounds while guarding nothing:
+/// `c.20_*7delinsCC` shares no affix between `ref` (`GCTTACGG`) and payload (`CC`),
+/// so the #1651 carve-out re-typed nothing, the member came back exactly as
+/// authored, and any `once == twice` assertion on it was satisfied by the decline
+/// rather than by the recursion.
+///
+/// **What this change falsifies is the premise, not the finding.** The assertion
+/// below used to read "an untrimmable straddling delins must be preserved", and that
+/// is the precise statement `merge::ExtendedBody` makes false: folding `c.*N` onto
+/// `cds_len + N` admits a footprint that *crosses* `cds_end` to
+/// `canonicalize_from_sequence`, which partitions it from the bases. Untrimmable no
+/// longer implies preserved on this side of the CDS — sharing no affix stopped being
+/// sufficient the moment something other than the trim could move the member.
+///
+/// The test's own standing instruction was that if this ever started moving, "the
+/// note on the test above needs rewriting rather than this pin loosening". Both
+/// notes are rewritten and the pin is kept, re-pointed at the derived split, so
+/// whatever moves it next is still visible here.
+///
+/// Verified by mutation rather than asserted: with the extension forced off
+/// (`ExtendedBody::OFF` in `canonicalize_from_sequence_with_rule`) this input goes
+/// straight back to being preserved and this test fails, while
+/// [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`] stays green — which
+/// is what says the two rows are on opposite sides of the one-sided fold.
+///
+/// The vacuity trap this test used to hold survives on the CDS-start side, and is
+/// re-anchored by [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`].
 #[test]
 fn the_input_that_taught_us_this_test_can_be_vacuous() {
     let provider = transcript_provider(WIDE_CORE, 11, 30);
-    let declined = "NM_TEST.1:c.20_*7delinsCC";
-    assert_eq!(
-        normalize(&provider, declined, ShuffleDirection::ThreePrime),
-        declined,
-        "an untrimmable straddling delins must be preserved, which is why it cannot \
-         demonstrate the recursion"
+    let taught_us = "NM_TEST.1:c.20_*7delinsCC";
+    // Untrimmable read off the bases, not trusted from the string: `c.20`..`c.*7`
+    // is transcript 30..=37 under `CDS 11..=30`.
+    let reference = &WIDE_CORE[29..37];
+    assert_eq!(reference, "GCTTACGG");
+    assert_ne!(reference.as_bytes()[0], b'C', "no shared prefix with `CC`");
+    assert_ne!(reference.as_bytes()[7], b'C', "no shared suffix with `CC`");
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, taught_us, direction),
+            "NM_TEST.1:c.[20del;*2_*4del;*6_*7del]",
+            "the 3'UTR extension partitions this straddling delins from the bases, so \
+             sharing no affix no longer keeps it still and it is no longer the decline \
+             that made the test above vacuous"
+        );
+    }
+}
+
+/// The vacuity trap, re-anchored on the side of the CDS this change does not reach.
+///
+/// [`the_input_that_taught_us_this_test_can_be_vacuous`] used to hold this role and
+/// cannot any more: its input now derives a three-member split. The trap itself is
+/// unchanged — a straddling `delins` that the sequence-first derivation cannot reach
+/// and whose affix trim removes nothing comes back exactly as authored, so an
+/// `once == twice` assertion on it is satisfied by the decline rather than by the
+/// recursion — so it needs an input the derivation still cannot reach.
+///
+/// **`merge::ExtendedBody`'s fold is deliberately one-sided**, 3'UTR only: `c.-N`
+/// would need the window origin itself to move, which changes behaviour for every
+/// CDS-start-adjacent variant, and #1650 leaves it to #1816 with its own
+/// measurement. So across `cds_start` the shared-affix trim in the #1651 carve-out
+/// is still the *only* mechanism that can move a straddling member, and the property
+/// the marker above recorded holds there exactly: preserved if and only if
+/// untrimmable.
+///
+/// That biconditional is what is asserted, over every straddling placement this
+/// fixture admits, rather than a count taken elsewhere and quoted here. Both classes
+/// are asserted non-empty, so a generator change that stopped producing either one
+/// cannot pass as a result.
+///
+/// **It has exactly one exception and the exception is excluded by name, not by
+/// shrinking the corpus around it.** A whole-span reverse complement is re-typed
+/// `delins` -> `inv` by the per-member single-span typing, which is region-blind and
+/// is the mechanism the module docs above spend their first section separating from
+/// #1536; on this fixture it is `c.-1_1delinsGA` over `TC`. Nothing else in the
+/// enumeration disagrees.
+///
+/// **Both named rows are asserted, in both directions, so this cannot go vacuous the
+/// way its predecessor did.** `c.-1_2delinsGG` shares neither affix with its
+/// reference `TCA` and must stand still; `c.-1_2delinsTG` shares its first base, so
+/// the trim eats it, the member stops straddling and it must move. A build in which
+/// the carve-out had stopped running altogether would satisfy the first assertion and
+/// fail the second.
+///
+/// When #1816 extends the fold to the 5'UTR this test is what will go red, and that
+/// is its point: the 3'UTR half of the same statement moved silently enough to sit in
+/// a committed pin for two review rounds.
+#[test]
+fn a_cds_start_straddle_is_the_surviving_untrimmable_decline() {
+    let provider = transcript_provider(WIDE_CORE, 11, 30);
+
+    // `c.-1`..`c.2` is transcript 10..=12 under `CDS 11..=30`. Read off the bases
+    // rather than trusted from the constant, for the same reason
+    // `the_payload_is_the_exact_reverse_complement_of_the_block` is its own test.
+    assert_eq!(&WIDE_CORE[9..12], "TCA");
+    let declined = "NM_TEST.1:c.-1_2delinsGG";
+    let trimmed = "NM_TEST.1:c.-1_2delinsTG";
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, declined, direction),
+            declined,
+            "`TCA` and `GG` share neither affix, so the trim removes nothing, the \
+             member comes back on the footprint it arrived on, and the recursion never \
+             runs — which is what makes an idempotency assertion on it vacuous"
+        );
+        assert_eq!(
+            normalize(&provider, trimmed, direction),
+            "NM_TEST.1:c.1_2delinsG",
+            "`TCA` and `TG` share a prefix, so the trim eats it and the member stops \
+             straddling — without this the assertion above would be satisfied by a \
+             carve-out that had stopped running at all"
+        );
+    }
+
+    // The property those two rows are instances of, over every placement across
+    // `cds_start` this fixture admits: preserved iff untrimmable. The contrast with
+    // `cds_end` is stated by the test above, which pins one row there that breaks it;
+    // it is not re-derived here.
+    let mut counterexamples = Vec::new();
+    let (mut untrimmable_rows, mut trimmable_rows) = (0usize, 0usize);
+    for start in 1..=10i64 {
+        for end in 11..=30i64 {
+            let reference = &WIDE_CORE[(start - 1) as usize..end as usize];
+            let s = cds_spelling(start, 11, 30);
+            let e = cds_spelling(end, 11, 30);
+            for payload in one_and_two_base_payloads() {
+                // The one mechanism beside the trim that moves a straddling member,
+                // excluded by name rather than by narrowing the corpus until it
+                // vanished. A whole-span reverse complement is re-typed `delins` ->
+                // `inv` by the per-member single-span typing, which is region-blind
+                // — the module docs above disentangle exactly that from #1536, with
+                // `c.*1_*8delinsACCGTAAG -> c.*1_*8inv` as the disproof. Here it is
+                // `c.-1_1delinsGA` over `TC`, the only placement on this fixture the
+                // biconditional below does not hold for.
+                if payload == reverse_complement(reference) {
+                    continue;
+                }
+                let untrimmable = reference.as_bytes()[0] != payload.as_bytes()[0]
+                    && reference.as_bytes()[reference.len() - 1]
+                        != payload.as_bytes()[payload.len() - 1];
+                if untrimmable {
+                    untrimmable_rows += 1;
+                } else {
+                    trimmable_rows += 1;
+                }
+                let input = format!("NM_TEST.1:c.{s}_{e}delins{payload}");
+                let preserved = normalize(&provider, &input, ShuffleDirection::ThreePrime) == input;
+                if preserved != untrimmable {
+                    counterexamples.push(format!(
+                        "  {input} (ref {reference}): untrimmable={untrimmable} \
+                         preserved={preserved}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        untrimmable_rows > 0 && trimmable_rows > 0,
+        "both classes must be populated, or the biconditional below is `0 of 0`: \
+         untrimmable={untrimmable_rows} trimmable={trimmable_rows}"
+    );
+    assert!(
+        counterexamples.is_empty(),
+        "across `cds_start` the shared-affix trim is the only mechanism that can move \
+         a straddling member, so preserved and untrimmable must agree on every \
+         placement. {} disagree:\n{}",
+        counterexamples.len(),
+        counterexamples.join("\n")
     );
 }
 
-/// STILL OPEN, and deliberately recorded as such: the multi-member spelling of
-/// one variant does not converge with its `inv` spelling once the members
-/// straddle the boundary.
+/// Every one- and two-base `delins` payload, for the enumeration above.
+fn one_and_two_base_payloads() -> Vec<String> {
+    let mut payloads = Vec::with_capacity(20);
+    for first in ['A', 'C', 'G', 'T'] {
+        payloads.push(first.to_string());
+        for second in ['A', 'C', 'G', 'T'] {
+            payloads.push(format!("{first}{second}"));
+        }
+    }
+    payloads
+}
+
+/// #1650, **closed**: the multi-member spelling of one variant converges with
+/// its `inv` spelling once the members straddle `cds_end`.
 ///
-/// This is the `merge::join_pos` / `collect_canonical_edits` refusal the module
+/// This was the `merge::join_pos` / `collect_canonical_edits` refusal the module
 /// docs above disentangle from #1536 — a real capability gap, and a genuine
 /// second pair of fixed points, but a different symptom with a different cause.
-/// Fixing it means doing the sequence-first window arithmetic in transcript
-/// coordinates and rendering each endpoint back onto its own region, which also
-/// reaches `apply_canonical_split`'s own `simple_cds_pos` (it refuses `*N` and
-/// `-N` outright). Out of scope here; tracked as #1650.
+/// It was `#[ignore]`d and red by design against #1650 until
+/// `merge::ExtendedBody` folded `c.*N` onto `cds_len + N`, giving the window
+/// arithmetic one line of comparable integers to run on.
 ///
 /// Measured on the 40-mer, `CDS 11..=26`, with the block at transcript 23..=30 —
-/// the placement whose CDS-interior twin *is* split into three members:
+/// the placement whose CDS-interior twin *is* split into three members. Before
+/// and after, so the guard records what moved rather than only that it is green:
 ///
 /// ```text
 /// CDS 11..=30  c.[13_15delinsCTA;18T>G;20G>T] -> itself
-///              c.13_20inv                     -> c.[13_15delinsCTA;18T>G;20G>T]   converges
-/// CDS 11..=26  c.[13_15delinsCTA;*2T>G;*4G>T] -> itself
-///              c.13_*4inv                     -> c.13_*4inv                       does NOT
+///              c.13_20inv                     -> c.[13_15delinsCTA;18T>G;20G>T]   converged
+/// CDS 11..=26  before  c.[13_15delinsCTA;*2T>G;*4G>T] -> itself
+///                      c.13_*4inv                     -> c.13_*4inv               did NOT
+/// CDS 11..=26  after   both                           -> c.[13_15delinsCTA;*2T>G;*4G>T]
 /// ```
 ///
-/// Ignored because it is unfixed, not because the assertion is wrong. An ignored
-/// red guard is a recorded defect; a weakened green one is a lie.
-///
-/// **Tracked as #1650**, which is what says when it comes back: un-ignore it in the
-/// change that makes `collect_canonical_edits` do its window arithmetic in
-/// transcript coordinates. "Tracked separately" without a number is what this line
-/// used to say, and an unnumbered deferral is indistinguishable from a forgotten
-/// one.
+/// The assertion is deliberately still **convergence**, not the string: which
+/// form a class converges on is derived, and
+/// `canonical-form-choice-when-both-legal` is what says it is derived rather than
+/// chosen. The string is pinned separately, next door, so a change that made both
+/// sides converge on the *wrong* form could not pass by satisfying this one.
 #[test]
-#[ignore = "unfixed, tracked as #1650: a cis allele whose members straddle a CDS boundary is \
-            refused by merge::collect_canonical_edits, so it does not converge with its inv \
-            spelling"]
 fn a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
     let provider = transcript_provider(WIDE_CORE, 11, 26);
     let allele = "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]";
@@ -566,6 +743,103 @@ fn a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
             "{allele} and {inv} denote one variant and must converge"
         );
     }
+}
+
+/// The form the class above converges **on**, measured rather than inferred, and
+/// with the third spelling #1650 names as the "lone-`delins` symptom" beside it.
+///
+/// #1651 left `c.13_*4delinsCTACGGAT` converging with `c.13_*4inv` while *neither*
+/// was split into the three members its CDS-interior twin is split into. All
+/// three spellings now reach one point, and it is the split — which is what
+/// `general.md:56` predicts once the derivation is allowed to run, since two of
+/// the three competing members are substitutions and substitution outranks
+/// inversion. (`inversion-vs-two-delins-76-83` is the record for the *other*
+/// case: a whole-block reverse complement stays `inv` when the members it
+/// competes with are all `delins`, which `:56` does not rank. Here they are not.)
+#[test]
+fn the_boundary_class_converges_on_the_split_its_cds_twin_gets() {
+    let provider = transcript_provider(WIDE_CORE, 11, 26);
+    let expected = "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]";
+    for spelling in [
+        "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]",
+        "NM_TEST.1:c.13_*4inv",
+        "NM_TEST.1:c.13_*4delinsCTACGGAT",
+    ] {
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            assert_eq!(
+                normalize(&provider, spelling, direction),
+                expected,
+                "{spelling} must derive to the split form"
+            );
+        }
+    }
+}
+
+/// A pair whose triplet reaches past `cds_end` does not merge — **recorded as a
+/// measurement, NOT as a demonstration of `merge::apply_coding_codon_exception`'s
+/// `within_cds` guard.**
+///
+/// The distinction is the whole value of this test, and it cost two attempts to
+/// get right. `general.md:35`'s exception is a conjunction — "two variants
+/// separated by one nucleotide, **together affecting one amino acid**" — and the
+/// second conjunct is unstatable in the 3'UTR, so `within_cds` was added with the
+/// exception's own reasoning behind it. But a guard is only coverage if some
+/// input reaches it, and **neither input tried here does**:
+///
+/// | input | why it does not reach the guard |
+/// |---|---|
+/// | `c.[*1C>G;*3T>A]` under `CDS 11..=25` | sits wholly in the 3'UTR, so the straddle gate in `canonicalize_from_sequence` declines the group before any partition exists |
+/// | `c.[16C>G;*2T>A]` under `CDS 11..=26` | crosses `cds_end` and IS admitted, yet still does not merge with the guard forced open |
+///
+/// **Both were checked against the sabotage — `within_cds` forced to `true` — and
+/// both stayed green.** So `within_cds` is defensive: correct by the clause's own
+/// reading, and not currently demonstrated to change any answer. It is left in
+/// place rather than removed because `same_codon` is defined for every positive
+/// integer and would silently answer for a codon that does not exist the moment
+/// some other change makes the line reachable; but it must not be described
+/// anywhere as guarded, and this test must not be read as guarding it.
+///
+/// What the assertion below *is* worth: it pins that the boundary-crossing pair
+/// stays two members, which is `general.md:34`'s plain rule and the answer the
+/// extension must not disturb.
+///
+/// Whoever makes the line reachable owes this test a real sabotage check.
+#[test]
+fn a_pair_whose_triplet_reaches_past_the_stop_codon_stays_two_members() {
+    let provider = transcript_provider(WIDE_CORE, 11, 26);
+    // `c.16` is the last CDS base (tx 26) and `c.*2` is tx 28, with tx 27
+    // unchanged between them — so the group crosses `cds_end`.
+    let split = "NM_TEST.1:c.[16C>G;*2T>A]";
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, split, direction),
+            split,
+            "a pair whose triplet reaches past the stop codon affects no single amino \
+             acid, so `general.md:34` governs and the members stay individual"
+        );
+    }
+}
+
+/// The in-CDS positive control: the identical bases at the identical transcript
+/// positions, with only the stop codon moved so all three land inside the CDS,
+/// **do** merge.
+///
+/// This one is not vacuous — it fails if the codon exception stops firing at all
+/// — which is why it is kept while its sibling above is downgraded to a
+/// measurement.
+#[test]
+fn the_same_pair_one_codon_earlier_still_merges() {
+    let provider = transcript_provider(WIDE_CORE, 11, 30);
+    // tx 26..28 is `c.16`..`c.18` here, and 16..18 is one codon.
+    assert_eq!(
+        normalize(
+            &provider,
+            "NM_TEST.1:c.[16C>G;18T>A]",
+            ShuffleDirection::ThreePrime
+        ),
+        "NM_TEST.1:c.16_18delinsGGA",
+        "inside the CDS the same pair is `general.md:35`'s exception and merges"
+    );
 }
 
 /// The control for the guard above, so its `#[ignore]` cannot quietly become
