@@ -1,0 +1,51 @@
+[book]
+title = "ferro-hgvs"
+description = "HGVS variant nomenclature parser and normalizer — user documentation"
+authors = ["Fulcrum Genomics"]
+language = "en"
+text-direction = "ltr"
+src = "src"
+
+[build]
+build-dir = "book"
+# Fail the build when SUMMARY.md references a page that does not exist, instead of
+# mdBook's default of inventing a stub ("# Ghost page") and exiting 0. Pages are
+# added to the Interpretation section one at a time via a SUMMARY edit, so a
+# misspelled path or a forgotten `git add` must be a hard error — not a published
+# nav chapter whose body is its own title.
+create-missing = false
+
+[output.html]
+additional-css = ["theme/custom.css"]
+additional-js = ["theme/sidebar-brand.js"]
+git-repository-url = "https://github.com/fulcrumgenomics/ferro-hgvs"
+edit-url-template = "https://github.com/fulcrumgenomics/ferro-hgvs/edit/main/docs/{path}"
+no-section-label = true
+default-theme = "navy"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true
+
+[output.html.fold]
+enable = true
+# level = 0 -> every nested section starts collapsed; mdBook's runtime JS expands
+# only the section containing the current page. Matches the fgumi/bwa-mem3 docs.
+level = 0
+
+[output.html.playground]
+editable = false
+runnable = false
+
+# NOTE: no [preprocessor.mermaid] yet. The fgumi/bwa-mem3 docs use mermaid diagrams
+# and wire it in (bwa-mem3 via this stanza + an mdbook-mermaid install in CI/RTD;
+# fgumi via its xtask). ferro's docs currently contain zero mermaid diagrams, so we
+# deliberately do not declare the preprocessor — it would force an mdbook-mermaid
+# dependency into CI/RTD for dead config. When the first diagram lands (e.g. a
+# confluence graph in a shadow-spec page), add the stanza, the theme JS/CSS assets,
+# and the pinned install to .readthedocs.yaml + .github/workflows/docs.yml together.
+
+# Broken-link checker (mdbook-linkcheck2, the fork tracking mdBook 0.5). Configured as an
+# output backend so `mdbook build` FAILS on internal dead links — mdBook alone only warns.
+[output.linkcheck2]
+follow-web-links = false

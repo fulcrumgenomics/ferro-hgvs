@@ -1,0 +1,61 @@
+name: Docs
+
+# Builds the mdBook user docs on pull requests. Read the Docs does the actual hosting/deploy
+# via .readthedocs.yaml; this job validates that the book builds and that internal links
+# resolve to real pages (mdbook-linkcheck2 — link targets, not fragment anchors). It is
+# advisory unless added to the branch ruleset. Tool versions are pinned in lockstep with
+# .readthedocs.yaml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".readthedocs.yaml"
+      - ".github/workflows/docs.yml"
+  # Run on merge_group so this context still reports if it is ever added to the
+  # branch ruleset as required — a required check that never runs on merge_group
+  # hangs the first merge-queue entry forever (#1769).
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Names the status-check context `Docs` rather than the default `build`, which
+    # would collide with ci.yml's already-required `Build` in a ruleset that matches
+    # context strings exactly (differing only in case).
+    name: Docs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - name: Cache mdBook tools
+        id: cache-tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: |
+            ~/.cargo/bin/mdbook
+            ~/.cargo/bin/mdbook-linkcheck2
+          key: mdbook-0.5.2-linkcheck2-0.12.2
+
+      - name: Install mdBook + linkcheck2
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install mdbook --version 0.5.2 --locked
+          cargo install mdbook-linkcheck2 --version 0.12.2 --locked
+
+      - name: Build the book (fails on dead internal links)
+        run: cd docs && mdbook build
