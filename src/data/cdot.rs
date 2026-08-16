@@ -574,7 +574,8 @@ impl RawCdotTranscript {
         // surfacing the corruption (#1924; the drop was documented at
         // `reference/validate.rs`). Refusal is checkable; a displaced coordinate
         // is not. Every one of the 12,207,712 exon rows across 1,254,949
-        // cdot-0.2.32 GRCh38 builds carries all six fields, so a shorter or
+        // builds — the three shipped cdot-0.2.32 files (RefSeq and Ensembl
+        // GRCh38, plus GRCh37) — carries all six fields, so a shorter or
         // non-numeric row is malformed input, not a supported shape.
         //
         // The `gap_info` field (index 5) is deliberately *not* required: a valid
