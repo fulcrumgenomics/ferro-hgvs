@@ -7795,7 +7795,7 @@ mod tests {
         fs::write(
             d.join("cdot-grch37.json"),
             r#"{"transcripts":{"NM_TEST.1":{"gene_name":"COL1A1","genome_builds":{"GRCh37":{
-                "contig":"NC_000017.10","strand":"+","exons":[[48263025,48263098,0,73,"M73"]],
+                "contig":"NC_000017.10","strand":"+","exons":[[48263025,48263098,0,1,73,"M73"]],
                 "cds_start":48263035,"cds_end":48263085}}}}}"#,
         )
         .unwrap();

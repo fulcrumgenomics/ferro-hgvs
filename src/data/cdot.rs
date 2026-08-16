@@ -563,45 +563,78 @@ impl RawCdotTranscript {
             .is_some_and(crate::reference::transcript::tags_mark_cds_start_nf);
 
         // Parse exons: [genomic_start, genomic_end, exon_num, tx_start, tx_end, gap_info]
-        let mut exon_pairs: Vec<([u64; 4], Option<Vec<CigarOp>>)> = build
-            .exons
-            .iter()
-            .filter_map(|e| {
-                if e.len() >= 5 {
-                    // cdot stores genomic bounds 0-based half-open (`alt_start`
-                    // 0-based inclusive, `alt_end` 0-based exclusive) and cDNA
-                    // bounds 1-based **inclusive** (`cds_start_i`/`cds_end_i`).
-                    // `Exon` + every mapping primitive (and the fixtures) use the
-                    // *HGVS* convention: genome 1-based (`genome_start` inclusive,
-                    // `genome_end` exclusive) and tx 0-based half-open. Convert
-                    // here so the in-memory layout matches that contract — leaving
-                    // it raw made the two off-by-ones cancel only for exon-interior
-                    // positions, mis-mapping the last cDNA base of each exon and
-                    // dropping the first base of the next (#742).
-                    let exon = [
-                        e[0].as_u64()? + 1,               // genome_start: 0-based incl → 1-based incl
-                        e[1].as_u64()? + 1,               // genome_end: 0-based excl → 1-based excl
-                        e[3].as_u64()?.saturating_sub(1), // tx_start: 1-based incl → 0-based incl
-                        e[4].as_u64()?, // tx_end: 1-based incl → 0-based excl (same value)
-                    ];
-                    // Parse CIGAR gap info from index 5 if present
-                    let cigar = if e.len() > 5 {
-                        e[5].as_str().and_then(|s| match parse_cigar(s) {
-                            Ok(ops) => Some(ops),
-                            Err(err) => {
-                                log::warn!("Malformed CIGAR string '{}': {}", s, err);
-                                None
-                            }
-                        })
-                    } else {
-                        None
-                    };
-                    Some((exon, cigar))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        //
+        // A row that cannot yield all four placement coordinates — because it is
+        // truncated (fewer than the five leading fields) or carries a non-numeric
+        // value where a coordinate belongs — is *malformed input*, and the whole
+        // transcript is refused rather than the row silently dropped. Dropping it
+        // (the prior `filter_map` behaviour) removes an exon from the table, which
+        // opens a gap and displaces the derived CDS bounds *forward* — a
+        // well-formed, in-bounds-looking, silently-wrong coordinate — instead of
+        // surfacing the corruption (#1924; the drop was documented at
+        // `reference/validate.rs`). Refusal is checkable; a displaced coordinate
+        // is not. Every one of the 12,207,712 exon rows across 1,254,949
+        // cdot-0.2.32 GRCh38 builds carries all six fields, so a shorter or
+        // non-numeric row is malformed input, not a supported shape.
+        //
+        // The `gap_info` field (index 5) is deliberately *not* required: a valid
+        // exon may legitimately omit it (no CIGAR), and a malformed CIGAR string
+        // in a present sixth field is handled locally (warn + no CIGAR) rather
+        // than refusing the transcript.
+        let mut exon_pairs: Vec<([u64; 4], Option<Vec<CigarOp>>)> =
+            Vec::with_capacity(build.exons.len());
+        for e in &build.exons {
+            // cdot stores genomic bounds 0-based half-open (`alt_start`
+            // 0-based inclusive, `alt_end` 0-based exclusive) and cDNA
+            // bounds 1-based **inclusive** (`cds_start_i`/`cds_end_i`).
+            // `Exon` + every mapping primitive (and the fixtures) use the
+            // *HGVS* convention: genome 1-based (`genome_start` inclusive,
+            // `genome_end` exclusive) and tx 0-based half-open. Convert
+            // here so the in-memory layout matches that contract — leaving
+            // it raw made the two off-by-ones cancel only for exon-interior
+            // positions, mis-mapping the last cDNA base of each exon and
+            // dropping the first base of the next (#742).
+            let coords = (
+                e.first().and_then(serde_json::Value::as_u64),
+                e.get(1).and_then(serde_json::Value::as_u64),
+                e.get(3).and_then(serde_json::Value::as_u64),
+                e.get(4).and_then(serde_json::Value::as_u64),
+            );
+            let (
+                Some(genome_start_0based),
+                Some(genome_end_0based),
+                Some(tx_start_1based),
+                Some(tx_end),
+            ) = coords
+            else {
+                log::warn!(
+                    "Refusing malformed transcript (gene {:?}, contig {}): cdot exon \
+                     row {:?} lacks the required genomic/transcript coordinates",
+                    self.gene_name,
+                    build.contig,
+                    e
+                );
+                return None;
+            };
+            let exon = [
+                genome_start_0based + 1, // genome_start: 0-based incl → 1-based incl
+                genome_end_0based + 1,   // genome_end: 0-based excl → 1-based excl
+                tx_start_1based.saturating_sub(1), // tx_start: 1-based incl → 0-based incl
+                tx_end,                  // tx_end: 1-based incl → 0-based excl (same value)
+            ];
+            // Parse CIGAR gap info from index 5 if present
+            let cigar =
+                e.get(5)
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|s| match parse_cigar(s) {
+                        Ok(ops) => Some(ops),
+                        Err(err) => {
+                            log::warn!("Malformed CIGAR string '{}': {}", s, err);
+                            None
+                        }
+                    });
+            exon_pairs.push((exon, cigar));
+        }
 
         // Sort exons by transcript position, keeping CIGARs in sync
         exon_pairs.sort_by_key(|(e, _)| e[2]);
@@ -3792,6 +3825,124 @@ mod tests {
         let raw = raw_cdot_transcript_for_tag_test();
         let tx = raw.from_genome_build(&build).expect("builds transcript");
         assert!(!tx.cds_start_incomplete);
+    }
+
+    /// Builds a plus-strand `RawGenomeBuild` with three contiguous exons whose
+    /// middle row (`101..200`, exon 1) is replaced by `middle_row`, and a genomic
+    /// CDS spanning the outer exons. Used to exercise the malformed-row refusal in
+    /// `from_genome_build` (#1924): with the intact six-field middle row the whole
+    /// well-formed table loads, and any malformed substitute must refuse the
+    /// transcript rather than drop the row and serve a two-exon table.
+    fn raw_genome_build_with_middle_row(middle_row: Vec<serde_json::Value>) -> RawGenomeBuild {
+        use serde_json::json;
+        RawGenomeBuild {
+            contig: "NC_000001.11".to_string(),
+            strand: Some("+".to_string()),
+            exons: vec![
+                vec![
+                    json!(1000),
+                    json!(1100),
+                    json!(0),
+                    json!(1),
+                    json!(100),
+                    json!(null),
+                ],
+                middle_row,
+                vec![
+                    json!(1200),
+                    json!(1300),
+                    json!(2),
+                    json!(201),
+                    json!(300),
+                    json!(null),
+                ],
+            ],
+            cds_start: Some(1010),
+            cds_end: Some(1250),
+            tag: None,
+        }
+    }
+
+    /// The well-formed three-exon table loads with all three exons and a CDS
+    /// derived from the genomic fallback. This is the control the two refusal
+    /// cases below are measured against — it must stay green so the refusal is
+    /// shown to be specific to malformed rows, not a blanket rejection (#1924).
+    #[test]
+    fn well_formed_exon_table_loads_with_every_exon() {
+        use serde_json::json;
+        let build = raw_genome_build_with_middle_row(vec![
+            json!(1100),
+            json!(1200),
+            json!(1),
+            json!(101),
+            json!(200),
+            json!(null),
+        ]);
+        let raw = raw_cdot_transcript_for_tag_test();
+        let tx = raw
+            .from_genome_build(&build)
+            .expect("a well-formed cdot exon table must load");
+        assert_eq!(tx.exons.len(), 3, "every exon row must be kept");
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(10), Some(250)));
+    }
+
+    /// A row that legitimately omits only the optional `gap_info` field (five
+    /// fields, not six) is still well-formed and must load — the refusal keys on
+    /// the *placement* coordinates, not on a full six-field count, so a missing
+    /// CIGAR slot is not malformed (#1924).
+    #[test]
+    fn exon_row_without_gap_info_field_still_loads() {
+        use serde_json::json;
+        let build = raw_genome_build_with_middle_row(vec![
+            json!(1100),
+            json!(1200),
+            json!(1),
+            json!(101),
+            json!(200),
+        ]);
+        let raw = raw_cdot_transcript_for_tag_test();
+        let tx = raw
+            .from_genome_build(&build)
+            .expect("a five-field row (no gap_info) is well-formed and must load");
+        assert_eq!(tx.exons.len(), 3);
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(10), Some(250)));
+    }
+
+    /// A truncated exon row (fewer than the five leading placement fields) must
+    /// refuse the whole transcript. Before #1924 it was silently dropped, leaving
+    /// a two-exon table with a synthetic gap and a displaced-looking CDS derived
+    /// from the partial table — corruption that looks well-formed and in-bounds.
+    #[test]
+    fn truncated_exon_row_refuses_the_transcript() {
+        use serde_json::json;
+        let build = raw_genome_build_with_middle_row(vec![json!(1100), json!(1200), json!(1)]);
+        let raw = raw_cdot_transcript_for_tag_test();
+        assert!(
+            raw.from_genome_build(&build).is_none(),
+            "a truncated exon row must refuse the transcript, not drop the row"
+        );
+    }
+
+    /// The same refusal covers an *inconsistent* row: a full six-field row whose
+    /// placement coordinate is non-numeric cannot be parsed into an exon and used
+    /// to be silently dropped by the `?`-in-`filter_map`, opening the same gap as
+    /// a truncated row. It must refuse the transcript too (#1924).
+    #[test]
+    fn non_numeric_exon_coordinate_refuses_the_transcript() {
+        use serde_json::json;
+        let build = raw_genome_build_with_middle_row(vec![
+            json!(1100),
+            json!(1200),
+            json!(1),
+            json!("not-a-number"),
+            json!(200),
+            json!(null),
+        ]);
+        let raw = raw_cdot_transcript_for_tag_test();
+        assert!(
+            raw.from_genome_build(&build).is_none(),
+            "a non-numeric exon coordinate must refuse the transcript, not drop the row"
+        );
     }
 
     fn sample_transcript() -> CdotTranscript {
