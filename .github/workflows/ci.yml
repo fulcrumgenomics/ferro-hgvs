@@ -141,6 +141,7 @@ env:
   CENSUS_FILTER: >-
     test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
     + test(spec_conformance_axis) + test(clinvar_hgvs_tests)
+    + test(conformance_census_runs)
 
   # Negated from `test` ONLY. These run in `test-oracle` with the three seam
   # oracles armed, and an armed run strictly subsumes an un-armed one — the
@@ -273,6 +274,7 @@ env:
     + test(defect_non_idempotent_outputs)
     + test(issue_1715_rna_alignment_symbol_reach)
     + test(conformance_census_instrument)
+    + test(conformance_census_runs)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
 # 360-minute default, so a wedged runner holds a PR for six hours: observed on
@@ -2056,14 +2058,16 @@ jobs:
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving) + test(clinvar_hgvs_tests)"
-      - name: Run the census that may not be measured with an oracle armed
-        # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: this
-        # module builds its corpus in code (`conformance::spec_corpus`) and
-        # reads nothing from disk.
+      - name: Run the censuses that may not be measured with an oracle armed
+        # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: these
+        # modules build their corpus in code (`conformance::spec_corpus`) and
+        # read nothing from disk. `conformance_census_runs` (#2094) joins
+        # `spec_conformance_axis` here because `run_census` refuses outright
+        # with a seam oracle armed, which would fail the armed step below.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
-            -E "test(spec_conformance_axis)"
+            -E "test(spec_conformance_axis) + test(conformance_census_runs)"
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
