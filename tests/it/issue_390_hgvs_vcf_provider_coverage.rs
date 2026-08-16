@@ -694,3 +694,195 @@ mod allele_branch {
         }
     }
 }
+
+// =============================================================================
+// SECTION 6 — A range payload never reaches the ALT allele as its own spelling
+// =============================================================================
+
+/// Closes the gap `tests/it/issue_261_hgvs_vcf_coverage.rs` declares in its own
+/// header — "the full path uses `HgvsToVcfConverter` with a provider; pinning
+/// that here would require a transcript fixture". That sentence is why nothing
+/// caught the defect these tests pin: the provider-backed REF/ALT construction
+/// was unpinned for every `NaEdit` arm whose payload is an
+/// [`InsertedSequence`] rather than a plain [`Sequence`].
+///
+/// `build_vcf_record` used to build the ALT allele as
+/// `format!("{}{}", anchor_base, sequence)`, and `Display for InsertedSequence`
+/// renders a range payload as its **HGVS spelling** (`212_221inv`), not as
+/// bases. A `g.221_222ins212_221inv` therefore emitted `ALT=C212_221inv` — a
+/// VCF allele field holding an HGVS description.
+///
+/// This mattered only for user-authored input until the `ins<range>inv`
+/// derivation landed. On `origin/main` every construction site of
+/// `InsertedSequence::PositionRangeInv` / `InsertedPart::PositionRangeInv` is
+/// in the parser (`src/hgvs/parser/edit.rs`); `src/normalize/rules.rs` only
+/// ever *destructures* the variant, in two arms that resolve it away to a
+/// `Literal`, and `src/normalize/mod.rs` did not mention it at all. The
+/// derivation makes the normalizer mint the shape, so ferro's own normalized
+/// output began flowing into this construction.
+///
+/// The converter **declines** rather than resolving the span. `build_vcf_record`
+/// is the shared trunk for `convert_cds` / `convert_tx` / `convert_rna` /
+/// `convert_genome`, and it receives the edit in the *description's own*
+/// coordinate frame while `get_reference_sequence` reads the genomic contig by
+/// chromosome name. Resolving a `c.`-frame range against genomic coordinates
+/// would return the wrong bases silently, which is worse than the visible
+/// corruption it replaces; resolving correctly needs the axis-aware lookup
+/// `src/normalize/rules.rs::fetch_position_range_bases` has and this converter
+/// does not. Callers that want VCF can convert the literal spelling, which the
+/// normalizer preserves as an equally legal form.
+mod range_payload_never_reaches_alt {
+    use super::*;
+
+    /// Every emitted allele must be nucleotides. A VCF REF/ALT field admits
+    /// only `[ACGTN]` (plus the symbolic and breakend forms this converter
+    /// never produces), so any other byte is a malformed record.
+    fn assert_alleles_are_bases(record: &ferro_hgvs::vcf::VcfRecord, what: &str) {
+        for allele in std::iter::once(&record.reference).chain(record.alternate.iter()) {
+            assert!(
+                !allele.is_empty()
+                    && allele.bytes().all(|b| matches!(
+                        b.to_ascii_uppercase(),
+                        b'A' | b'C' | b'G' | b'T' | b'N'
+                    )),
+                "{what}: VCF allele {allele:?} is not nucleotides — an HGVS payload spelling \
+                 was spliced into the allele field"
+            );
+        }
+    }
+
+    fn genomic_insertion(start: u64, end: u64, sequence: InsertedSequence) -> HgvsVariant {
+        HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::new(GenomePos::new(start), GenomePos::new(end)),
+                NaEdit::Insertion { sequence },
+            ),
+        })
+    }
+
+    /// The exact shape the `ins<range>inv` derivation now mints: an inverted
+    /// copy of the ten bases immediately 5' of the junction.
+    #[test]
+    fn inverted_range_insertion_declines_instead_of_emitting_its_spelling() {
+        let tx = fixture_transcript();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        let variant = genomic_insertion(
+            1050,
+            1051,
+            InsertedSequence::PositionRangeInv {
+                start: 1041,
+                end: 1050,
+            },
+        );
+
+        match converter.convert(&variant) {
+            Err(FerroError::UnsupportedVariant { variant_type }) => {
+                assert!(
+                    variant_type.contains("1041_1050inv"),
+                    "the decline must name the payload it could not spell, got {variant_type:?}"
+                );
+            }
+            Err(other) => panic!("expected UnsupportedVariant, got {other:?}"),
+            Ok(result) => {
+                assert_alleles_are_bases(&result.record, "ins<range>inv");
+                panic!(
+                    "converting a range payload must decline; it emitted ALT={:?}",
+                    result.record.alternate
+                );
+            }
+        }
+    }
+
+    /// The un-inverted sibling is equally unspellable and was equally broken
+    /// (`ALT=C1041_1050`). Pinned alongside so a future fix to one cannot
+    /// leave the other emitting a description.
+    #[test]
+    fn forward_range_insertion_declines_instead_of_emitting_its_spelling() {
+        let tx = fixture_transcript();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        let variant = genomic_insertion(
+            1050,
+            1051,
+            InsertedSequence::PositionRange {
+                start: 1041,
+                end: 1050,
+            },
+        );
+
+        match converter.convert(&variant) {
+            Err(FerroError::UnsupportedVariant { .. }) => {}
+            Err(other) => panic!("expected UnsupportedVariant, got {other:?}"),
+            Ok(result) => panic!(
+                "converting a range payload must decline; it emitted ALT={:?}",
+                result.record.alternate
+            ),
+        }
+    }
+
+    /// A `delins` carries the same [`InsertedSequence`] and reached the same
+    /// construction, so it is pinned on the same guard.
+    #[test]
+    fn range_payload_delins_declines() {
+        let tx = fixture_transcript();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        let variant = HgvsVariant::Genome(GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::new(GenomePos::new(1050), GenomePos::new(1052)),
+                NaEdit::Delins {
+                    sequence: InsertedSequence::PositionRangeInv {
+                        start: 1041,
+                        end: 1050,
+                    },
+                    deleted: None,
+                    deleted_length: None,
+                    substitution_reference: None,
+                },
+            ),
+        });
+
+        match converter.convert(&variant) {
+            Err(FerroError::UnsupportedVariant { .. }) => {}
+            Err(other) => panic!("expected UnsupportedVariant, got {other:?}"),
+            Ok(result) => panic!(
+                "a delins range payload must decline; it emitted ALT={:?}",
+                result.record.alternate
+            ),
+        }
+    }
+
+    /// The control: the literal spelling of the very same edit still converts,
+    /// and its alleles are bases. Without this, the guard above would be
+    /// satisfied by a converter that declined every insertion.
+    #[test]
+    fn the_literal_spelling_of_the_same_edit_still_converts() {
+        let tx = fixture_transcript();
+        let provider = fixture_provider();
+        let converter = HgvsToVcfConverter::new(&tx, &provider);
+        // `fixture_provider` lays `ATGCATGC` from 1-based 1000, so
+        // 1-based 1041..=1050 is `ATGCATGCAT`; its reverse complement is
+        // `ATGCATGCAT` read back — the pin only needs *a* literal payload.
+        let variant = genomic_insertion(
+            1050,
+            1051,
+            InsertedSequence::Literal(Sequence::from_str("ATGCATGCAT").unwrap()),
+        );
+
+        let result = converter
+            .convert(&variant)
+            .expect("a literal insertion payload must still convert");
+        assert_alleles_are_bases(&result.record, "literal insertion");
+        assert_eq!(result.record.pos, 1050);
+        assert_eq!(
+            result.record.alternate,
+            vec![format!("{}ATGCATGCAT", result.record.reference)],
+            "ALT must be the anchor base followed by the inserted bases"
+        );
+    }
+}

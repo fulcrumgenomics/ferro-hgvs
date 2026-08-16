@@ -111,8 +111,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 33 records, 30 decided / 3 undecided
-//! 114 clause lines, of which 39 are named by more than one record
+//! 34 records, 31 decided / 3 undecided
+//! 116 clause lines, of which 40 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -288,8 +288,9 @@
 //! docs/recommendations/DNA/delins.md:89  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
-//! docs/recommendations/DNA/duplication.md:5
+//! docs/recommendations/DNA/duplication.md:5  [MULTI]
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:17  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
@@ -321,6 +322,7 @@
 //! docs/recommendations/DNA/inversion.md:5  [MULTI]
 //!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (governing)
 //! docs/recommendations/DNA/inversion.md:16
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
@@ -330,6 +332,8 @@
 //! docs/recommendations/DNA/inversion.md:34  [MULTI]
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//! docs/recommendations/DNA/inversion.md:69
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (governing)
 //! docs/recommendations/DNA/repeated.md:23
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:16
@@ -347,6 +351,8 @@
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //! docs/recommendations/RNA/delins.md:70
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/RNA/insertion.md:18
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //! docs/recommendations/RNA/repeated.md:20
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited, via docs/recommendations/RNA/repeated.md:20-21)
 //! docs/recommendations/RNA/repeated.md:21
@@ -417,6 +423,7 @@
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:56
@@ -533,6 +540,9 @@
 //! docs/recommendations/DNA/delins.md:89
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:5
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:17
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
@@ -554,6 +564,7 @@
 //! docs/recommendations/DNA/inversion.md:5
 //!     `inversion-vs-a-mixed-member-competitor` — decided (governing)
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (governing)
 //! docs/recommendations/DNA/inversion.md:33
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
@@ -605,6 +616,7 @@
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:57
@@ -932,7 +944,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (33, 30, 3),
+        (34, 31, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1096,7 +1108,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        39,
+        40,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

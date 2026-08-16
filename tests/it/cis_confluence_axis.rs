@@ -127,16 +127,16 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **100.0% of designed classes converge** (11 271 of 11 272). The 1 that does
-/// not is the measurement this module exists to make: nothing in the repo could
+/// **100.0% of designed classes converge** (11 270 of 11 272). The 2 that do
+/// not are the measurement this module exists to make: nothing in the repo could
 /// state that number before, because only 650 real rows reach the partitioner at
 /// all — and `multi_member_cis_axis` measures convergence over the respellable
 /// ones of those, which is what a corpus of far-apart members looks like.
 ///
-/// **Read the percentage as rounded, not as exact.** 11 271 of 11 272 is
-/// 99.991 %, and the guard below rounds to the nearest tenth, so the headline
-/// says 100.0 while one class still diverges. The residual is named in the
-/// re-bless section below; a reader who needs "all of them" should read the
+/// **Read the percentage as rounded, not as exact.** 11 270 of 11 272 is
+/// 99.982 %, and the guard below rounds to the nearest tenth, so the headline
+/// says 100.0 while two classes still diverge. The residuals are named in the
+/// re-bless sections below; a reader who needs "all of them" should read the
 /// count, which is the figure the guard actually asserts.
 ///
 /// # This headline was wrong for four movements of the pin
@@ -357,7 +357,9 @@ const CDS_END: u64 = 63;
 /// the tract count or beside it. Neither spelling is a partition this change
 /// touches; `delins-adjacent-members-when-both-consume-reference` already
 /// records the adjacent repeat-expansion shape as outside its reach, and the
-/// same holds here. The 5' direction has no residue at all.
+/// same holds here. The 5' direction had no residue at all at the time of that
+/// flip; the `ins<range>inv` section below records the one it has since
+/// gained.
 ///
 /// # Re-blessed again by #1542's direction-symmetric coalesce
 ///
@@ -370,14 +372,50 @@ const CDS_END: u64 = 63;
 /// converged / -2 `split 2`; the figures below are **re-measured on the rebase
 /// onto #1835**, where that pin has only one divergent class left to reach, not
 /// composed from the two branches' deltas.
+/// # Re-blessed by the `ins<range>inv` derivation, and it COSTS a class
+///
+/// `converged` goes DOWN by one in both directions, which the ratchet above
+/// forbids without a re-bless — hence this section, and the PR says so.
+///
+/// The class is `s03-g-m4-sep1-p8-all-ins`, and it is the same class in both
+/// directions. Its two spellings settle on
+///
+/// ```text
+/// g.[264_265insA;266_267insAGTAATTGAGTAA;267_268insGGAGTAACGCAGTAACGA]
+/// g.[264_265insATGAGTAA;265_266insTGAGTAAC;266_267insGAGTAACG;267_268ins268_275inv]
+/// ```
+///
+/// — three members against four, so they differ in member geometry and not only
+/// in how the last member is spelled. The derivation reaches one and not the
+/// other.
+///
+/// **The mechanism is not established.** These two spellings converge on
+/// `origin/main`, so the derivation changes a trajectory rather than merely
+/// re-spelling a settled member, and exactly where is not traced. Recorded as an
+/// open question rather than explained, because a wrong explanation here is
+/// worse than none — see #1946, whose thesis is that a presentational form
+/// minted per member, before the member set is final, cannot be made consistent
+/// downstream.
+///
+/// **One hypothesis was raised and refuted; recorded so it is not re-raised.**
+/// The suggestion was that members resting at different places were being judged
+/// against different base-composition estimates — plausible while the
+/// coincidence floor keyed on the whole normalization window, whose extent is a
+/// caller-set config field. Fixing that (`rules::COMPOSITION_HALF_WIDTH`, which
+/// makes the estimate a fixed window centred on the junction) does **not**
+/// restore the class: both censuses still measure exactly the values pinned
+/// here. Whatever moves `s03-g-m4-sep1-p8-all-ins`, it is not the window-extent
+/// dependence.
+///
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
     // #1835: the partition default flip, then #1542's direction-symmetric
-    // coalesce — see the two sections above.
-    converged: 11_271,
-    split_two: 1,
+    // coalesce, then the `ins<range>inv` derivation's one-class cost — see
+    // the three sections above, which between them account for this value.
+    converged: 11_270,
+    split_two: 2,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,
@@ -471,8 +509,8 @@ const FIVE_PRIME: Census = Census {
     spellings: 47_392,
     declined: 0,
     // #1835: the partition default flip — see `THREE_PRIME`.
-    converged: 11_272,
-    split_two: 0,
+    converged: 11_271,
+    split_two: 1,
     split_three: 0,
     split_more: 0,
     underdetermined: 0,

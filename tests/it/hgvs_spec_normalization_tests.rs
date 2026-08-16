@@ -824,6 +824,18 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // edit distance 2, so its two middle bases are unchanged and
     // `general.md:34` describes the changes individually.
     ("unchanged-is-read-over-every-minimal-alignment", "decided"),
+    // `DNA/inversion.md:69` selects `ins<range>inv` for an inverted
+    // duplication BY NAME, giving both spellings (source span starting at the
+    // junction, and ending at it), so this is a defect ruling and not a
+    // `canonical-form-choice-when-both-legal` tie-break. The coincidence floor
+    // that stops a short reverse-complement match minting a spurious inverted
+    // duplication is **house policy** — the spec supplies no minimum length —
+    // and its 8-declines/9-fires boundary is pinned in
+    // `recommended_form_pins.rs`, not left to the constant's derivation.
+    (
+        "inverted-duplication-is-derived-as-ins-range-inv",
+        "decided",
+    ),
     // `DNA/delins.md:42`'s codon carve-out against `DNA/delins.md:17`'s
     // default, on the axis a PROJECTION renders. **Decided by operator ruling
     // (2026-08-11)**: `:42` reaches only an axis that declares a reading

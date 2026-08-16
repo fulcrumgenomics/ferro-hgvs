@@ -6270,6 +6270,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
             },
         );
 
+        // The `DNA/inversion.md:69` `ins<range>inv` re-spell for an inverted duplication.
+        // See `rules::inverted_adjacent_copy_span` for the three conditions, and
+        // `rules::MAX_CHANCE_MATCH_PROBABILITY` for why the coincidence floor is a
+        // probability rather than a length.
+        if new_rel_end == new_rel_start + 1 {
+            if let NaEdit::Insertion {
+                sequence: crate::hgvs::edit::InsertedSequence::Literal(literal),
+            } = &new_edit
+            {
+                let payload = literal.to_string();
+                if let Some((span_start, span_end)) = rules::inverted_adjacent_copy_span(
+                    ref_seq.as_bytes(),
+                    new_rel_start,
+                    payload.as_bytes(),
+                ) {
+                    new_edit = NaEdit::Insertion {
+                        sequence: crate::hgvs::edit::InsertedSequence::PositionRangeInv {
+                            start: span_start + window_start,
+                            end: span_end + window_start,
+                        },
+                    };
+                }
+            }
+        }
+
         // Adjust back to genomic coordinates
         let new_start = new_rel_start + window_start;
         let new_end = new_rel_end + window_start;
