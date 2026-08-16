@@ -85,16 +85,15 @@
 //! second time. `rna-axis-alignment-only-symbol-reach` was the delta named here
 //! in its turn and has landed as well, which is the third instance.
 //! `c-and-n-positions-are-flat-transcript-offsets` was the fourth, named here as
-//! this branch's whole delta and since landed on `main` as #1619. Measured
-//! against the merge base, what this branch adds is one record:
-//!
-//! - `coding-axis-merges-are-a-disclosed-general-34-deviation` — ruled
-//!   2026-08-13, deviating from `docs/recommendations/general.md:34` and its
-//!   axis-local twin `DNA/delins.md:17`, with `DNA/delins.md:81` governing as
-//!   the clause whose "**preferably**" carries the force. The roles are split
-//!   that way because `common::rulings` refuses one clause being both the
-//!   authority and the departure, which is the shape a disclosed deviation
-//!   otherwise wants; the record says so in its own rationale
+//! this branch's whole delta and since landed on `main` as #1619.
+//! `coding-axis-merges-are-a-disclosed-general-34-deviation` was the fifth,
+//! named here as this branch's whole delta and since landed on `main` as #1899 —
+//! the same rot a fifth time. The lesson has now been paid for often enough to
+//! act on: a named delta is a copy of a moving base's state, and it rots on
+//! every rebase exactly as a restated count does (the sibling module says so at
+//! length, and the prediction paragraph below was retired for the same reason).
+//! So this paragraph no longer names one. Read what a branch adds off
+//! `git diff origin/main` — never off a copy kept here.
 //!
 //! This paragraph used to predict that the pins below "will move once more on
 //! the next rebase", naming `codon-carve-out-shape-restriction` and
