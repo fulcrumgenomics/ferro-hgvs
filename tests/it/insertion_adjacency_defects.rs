@@ -307,7 +307,21 @@ fn policy_duplication_md_90_publishes_a_dup_with_an_insertion_at_its_junction() 
     );
 }
 
-/// The normalizer emits a form its own **normalizer** then refuses.
+/// The normalizer must not emit a form its own **normalizer** then refuses.
+///
+/// **This was a live defect and the junction ruling fixed it.** Measured by A/B:
+/// with `origin/main`'s `overlap.rs` and `merge.rs` substituted in, this test
+/// fails with
+///
+/// ```text
+/// strict mode emitted NC_TESTWIN.1:g.[200_203T[6];203_204insT] and then
+/// refused it: ... 2 coincident cis-allele edits (repeat, ins) ...
+/// ```
+///
+/// The refusal was the `(repeat, ins)` coincident-junction conflict, which is
+/// exactly what `duplication.md:90` orders and this ruling now accepts. Kept as
+/// a guard rather than deleted: the emitted form is *parseable*, so a re-parse
+/// check cannot see this class and only an idempotence check catches it.
 ///
 /// Found by `adjacency_confluence_proptest::normalization_is_idempotent`;
 /// pinned here deterministically so it survives any later narrowing of that
@@ -329,7 +343,7 @@ fn policy_duplication_md_90_publishes_a_dup_with_an_insertion_at_its_junction() 
 /// parseable, so it needs an idempotence check rather than a re-parse check to
 /// catch at all.
 #[test]
-fn defect_emitted_form_is_refused_by_its_own_normalizer() {
+fn an_emitted_form_is_accepted_by_its_own_normalizer() {
     let once = normalize_g("[202_203insTT;203dup]").expect("this allele is accepted");
     let stripped = once
         .strip_prefix(&format!("{LOCAL_CONTIG}:g."))
