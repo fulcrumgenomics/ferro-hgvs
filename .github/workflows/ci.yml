@@ -1473,7 +1473,7 @@ jobs:
         # wreck shard balance: measured locally, the shard holding them took
         # 66.6s against 8.8-13.5s for its siblings.
         run: |
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/6 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER) and not ($ORACLE_ONLY_FILTER)"
@@ -1718,7 +1718,7 @@ jobs:
           # As in `test` above: an absent bulk fixture fails rather than skips.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/4 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER)"
@@ -1826,7 +1826,7 @@ jobs:
         # determine behavior", and a job that runs a million cases must not be
         # one default-change or one profile setting away from a green no-op.
         run: |
-          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail -E 'test(proptest)'
 
   # The three exhaustive-sweep modules, moved off the `test` / `test-oracle`
@@ -1939,7 +1939,7 @@ jobs:
         # module is therefore run twice on purpose: unarmed in `test`, armed
         # here. It is ~10 cheap unit tests, no sweep and no provider corpus.
         run: |
-          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "$SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)"
 
@@ -2020,7 +2020,7 @@ jobs:
         # this step names its modules explicitly, so a rename is exactly the
         # edit that would drop a census from CI silently.
         run: |
-          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving) + test(clinvar_hgvs_tests)"
       - name: Run the census that may not be measured with an oracle armed
@@ -2028,7 +2028,7 @@ jobs:
         # module builds its corpus in code (`conformance::spec_corpus`) and
         # reads nothing from disk.
         run: |
-          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+          scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(spec_conformance_axis)"
 
