@@ -8,6 +8,12 @@ src = "src"
 
 [build]
 build-dir = "book"
+# Fail the build when SUMMARY.md references a page that does not exist, instead of
+# mdBook's default of inventing a stub ("# Ghost page") and exiting 0. Pages are
+# added to the Interpretation section one at a time via a SUMMARY edit, so a
+# misspelled path or a forgotten `git add` must be a hard error — not a published
+# nav chapter whose body is its own title.
+create-missing = false
 
 [output.html]
 additional-css = ["theme/custom.css"]

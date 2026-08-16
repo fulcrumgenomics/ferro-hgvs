@@ -38,7 +38,7 @@ ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 ```python
 import ferro_hgvs
 
-normalizer = ferro_hgvs.Normalizer(reference_json="ferro-reference/cdot.json")
+normalizer = ferro_hgvs.Normalizer.from_manifest("ferro-reference/manifest.json")
 print(normalizer.normalize("NM_000088.3:c.459del"))
 ```
 
@@ -52,7 +52,7 @@ and was accepted anyway (`REFSEQ_MISMATCH`).
 
 These are reported as `warning[CODE]: message` on **stderr** (and in the `warnings` array under
 `--format json`, the `detail` column under `--format tsv`), so a pipeline reading only stdout will
-not see them. Run `ferro explain <CODE>` for what any code means.
+not see them. The `message` on each `warning[CODE]:` line says what the code means.
 
 ## Next steps
 

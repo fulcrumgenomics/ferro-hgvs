@@ -63,5 +63,5 @@ ferro normalize -i variants.txt --reference ferro-reference/ -f tsv > normalized
 Regardless of mode, normalization may *repair* a description in a way the output string does not
 record. Those repairs are reported as `warning[CODE]: message` on **stderr** (and in the `warnings`
 array under `-f json`, the `detail` column under `-f tsv`). A pipeline reading only stdout will not
-see them, so capture stderr or use `-f json`/`-f tsv`. Run `ferro explain <CODE>` to learn what a
-code means; use `--ignore` / `--reject` to tune specific codes.
+see them, so capture stderr or use `-f json`/`-f tsv`. The `message` on each `warning[CODE]:` line
+says what the code means; use `--ignore` / `--reject` to tune specific codes.

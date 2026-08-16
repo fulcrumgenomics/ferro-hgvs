@@ -41,6 +41,7 @@ authoritative options of any one — this page is a map, not a substitute.
 
 ## Common options
 
-Most commands accept `-i/--input <file>` (one description per line), `-o/--output <file>`, and
-`-f/--format <text|json|tsv>`. Commands that normalize also accept `--reference <dir>` and
-`--error-mode <strict|lenient|silent>`.
+Most commands accept `-i/--input <file>` (one description per line) and `-o/--output <file>`. The
+output format is set with `-f/--format`, and the accepted values depend on the command: `text|json`
+for `parse` and `project`, `text|json|tsv` for `normalize`, and `text|json|markdown` for `explain`.
+Commands that normalize also accept `--reference <dir>` and `--error-mode <strict|lenient|silent>`.

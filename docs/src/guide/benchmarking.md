@@ -47,7 +47,7 @@ ferro-benchmark normalize mutalyzer -i patterns.txt -o mutalyzer.json \
 ferro-benchmark compare results normalize ferro.json mutalyzer.json -o comparison.json
 ```
 
-Supported tools: `ferro-hgvs`, `mutalyzer`, `biocommons/hgvs`, `hgvs-rs`.
+Supported tool values: `ferro`, `mutalyzer`, `biocommons`, `hgvs-rs`, and `all`.
 
 The Python-based tools (mutalyzer, biocommons/hgvs, seqrepo) run in a [pixi](https://pixi.sh)
 environment defined by the repository's `pixi.toml`; run `pixi shell` to activate it before
