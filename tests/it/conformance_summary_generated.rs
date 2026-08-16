@@ -13,8 +13,10 @@ use ferro_hgvs::conformance::{biocommons, mutalyzer, summary};
 
 #[test]
 fn mutalyzer_failure_patterns_is_current() {
-    let content = std::fs::read_to_string("tests/fixtures/mutalyzer-normalize/cases.json")
-        .expect("read mutalyzer cases.json");
+    let content = std::fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/mutalyzer-normalize/cases.json",
+    ))
+    .expect("read mutalyzer cases.json");
     let fixture: mutalyzer::Fixture =
         serde_json::from_str(&content).expect("parse mutalyzer cases.json");
     fixture
@@ -29,8 +31,10 @@ fn mutalyzer_failure_patterns_is_current() {
 
 #[test]
 fn biocommons_failure_patterns_is_current() {
-    let content = std::fs::read_to_string("tests/fixtures/biocommons-normalize/cases.json")
-        .expect("read biocommons cases.json");
+    let content = std::fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/biocommons-normalize/cases.json",
+    ))
+    .expect("read biocommons cases.json");
     let fixture: biocommons::Fixture =
         serde_json::from_str(&content).expect("parse biocommons cases.json");
     fixture

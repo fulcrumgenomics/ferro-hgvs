@@ -108,8 +108,10 @@ impl DbsnpTestReport {
 // ============================================================================
 
 fn load_dbsnp_fixtures() -> DbsnpFixture {
-    let content = fs::read_to_string("tests/fixtures/validation/dbsnp_rsid.json")
-        .expect("Failed to read dbsnp_rsid.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/validation/dbsnp_rsid.json",
+    ))
+    .expect("Failed to read dbsnp_rsid.json");
     serde_json::from_str(&content).expect("Failed to parse dbsnp_rsid.json")
 }
 

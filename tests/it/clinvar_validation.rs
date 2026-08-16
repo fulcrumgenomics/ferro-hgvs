@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader};
 
 #[test]
 fn test_clinvar_validation() {
-    let file = File::open("tests/fixtures/bulk/hgvs4variation.txt.gz")
+    let file = File::open(crate::common::fixture_gen::fixture_path("tests/fixtures/bulk/hgvs4variation.txt.gz"))
         .expect("ClinVar data not found. Run: curl -o tests/fixtures/bulk/hgvs4variation.txt.gz https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/hgvs4variation.txt.gz");
     let decoder = GzDecoder::new(file);
     let reader = BufReader::new(decoder);

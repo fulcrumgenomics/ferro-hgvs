@@ -119,6 +119,7 @@ mod corpus_prohibited_inputs;
 mod coverage_gap_tests;
 mod cross_doc_adjacent_changes;
 mod cross_doc_compliance;
+mod cwd_relative_fixture_paths;
 mod dbsnp_tests;
 mod defect_371_transcript_exit;
 mod defect_non_idempotent_outputs;

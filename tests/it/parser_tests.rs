@@ -33,8 +33,10 @@ struct ParsingTestCase {
 }
 
 fn load_parsing_fixtures() -> ParsingFixtures {
-    let content = fs::read_to_string("tests/fixtures/grammar/parsing.json")
-        .expect("Failed to read parsing fixtures");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/grammar/parsing.json",
+    ))
+    .expect("Failed to read parsing fixtures");
     serde_json::from_str(&content).expect("Failed to parse fixtures JSON")
 }
 

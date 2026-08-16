@@ -42,8 +42,10 @@ struct Pattern {
 }
 
 fn load_mutalyzer_grammar_fixtures() -> MutalyzerGrammarFixture {
-    let content = fs::read_to_string("tests/fixtures/grammar/mutalyzer_github.json")
-        .expect("Failed to read mutalyzer_github.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/grammar/mutalyzer_github.json",
+    ))
+    .expect("Failed to read mutalyzer_github.json");
     serde_json::from_str(&content).expect("Failed to parse mutalyzer_github.json")
 }
 

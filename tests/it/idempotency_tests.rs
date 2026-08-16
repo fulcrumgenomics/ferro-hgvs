@@ -61,8 +61,10 @@ struct SpecExample {
 
 #[allow(clippy::unnecessary_lazy_evaluations)]
 fn load_edge_cases() -> Vec<String> {
-    let content = fs::read_to_string("tests/fixtures/comprehensive_edge_cases.json")
-        .unwrap_or_else(|_| "{}".to_string());
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/comprehensive_edge_cases.json",
+    ))
+    .unwrap_or_else(|_| "{}".to_string());
     let fixture: EdgeCaseFixture =
         serde_json::from_str(&content).unwrap_or_else(|_| EdgeCaseFixture {
             mutalyzer_edge_cases: None,
@@ -100,8 +102,10 @@ fn load_edge_cases() -> Vec<String> {
 
 fn load_spec_examples() -> Vec<String> {
     crate::common::spec_fixture::ensure_spec_fixture();
-    let content = fs::read_to_string("tests/fixtures/grammar/hgvs_spec_normalization.json")
-        .expect("failed to read hgvs_spec_normalization.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/grammar/hgvs_spec_normalization.json",
+    ))
+    .expect("failed to read hgvs_spec_normalization.json");
     let fixture: HgvsSpecFixture =
         serde_json::from_str(&content).expect("failed to parse hgvs_spec_normalization.json");
 

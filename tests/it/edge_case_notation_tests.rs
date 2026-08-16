@@ -86,14 +86,18 @@ struct ProteinStats {
 }
 
 fn load_unusual_notation_fixtures() -> UnusualNotationFixture {
-    let content = fs::read_to_string("tests/fixtures/edge_cases/unusual_notation.json")
-        .expect("Failed to read unusual_notation.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/edge_cases/unusual_notation.json",
+    ))
+    .expect("Failed to read unusual_notation.json");
     serde_json::from_str(&content).expect("Failed to parse unusual_notation.json")
 }
 
 fn load_protein_notation_fixtures() -> ProteinNotationFixture {
-    let content = fs::read_to_string("tests/fixtures/edge_cases/protein_notation.json")
-        .expect("Failed to read protein_notation.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/edge_cases/protein_notation.json",
+    ))
+    .expect("Failed to read protein_notation.json");
     serde_json::from_str(&content).expect("Failed to parse protein_notation.json")
 }
 
@@ -451,8 +455,10 @@ struct ReferenceSeqStats {
 }
 
 fn load_reference_seq_fixtures() -> ReferenceSeqFixture {
-    let content = fs::read_to_string("tests/fixtures/edge_cases/reference_sequences.json")
-        .expect("Failed to read reference_sequences.json");
+    let content = fs::read_to_string(crate::common::fixture_gen::fixture_path(
+        "tests/fixtures/edge_cases/reference_sequences.json",
+    ))
+    .expect("Failed to read reference_sequences.json");
     serde_json::from_str(&content).expect("Failed to parse reference_sequences.json")
 }
 
