@@ -2935,42 +2935,152 @@ mod repeat_position_tests {
     }
 }
 
-/// Integration test to check real repeat normalization behavior
-/// This test requires the benchmark-output directory with reference data
+/// Integration test to check real repeat normalization behavior.
+///
+/// The reference is located through `FERRO_MANIFEST`, falling back to
+/// `benchmark-output/manifest.json` — the convention every reference-aware
+/// module here uses. Without one this guard stands down; under
+/// `FERRO_REQUIRE_MANIFEST` standing down is a failure, whether the manifest is
+/// absent or does not carry the transcript the guard names.
+///
+/// This guard used to be `#[ignore]`d *and* gated on the relative path alone,
+/// so it was hidden from the manifest census twice over (#1862). It was also an
+/// investigation script — zero assertions, `println!` only — which per #1858 is
+/// no better than a skip: it "passed" without checking anything. It now pins
+/// what the reference measurably produces (#1858's "assert the answer" option).
+///
+/// It deliberately does **not** assert the property that script's own comment
+/// named — that a repeat unit not carried by the reference is preserved rather
+/// than read as a deletion. That property is false twice over on this locus:
+/// the reference does carry the `CA` unit here (twice), and a genuinely
+/// non-matching unit is refused before normalization ever runs, so no ferro
+/// output could witness it. The measurements are on the assertions below.
 #[cfg(test)]
 mod real_repeat_tests {
-    use ferro_hgvs::{parse_hgvs, MultiFastaProvider, Normalizer};
-    use std::path::Path;
+    use ferro_hgvs::{parse_hgvs, MultiFastaProvider, Normalizer, ReferenceProvider};
+    use std::path::{Path, PathBuf};
+
+    /// This module's name, as it appears in a `FERRO_REQUIRE_MANIFEST` failure.
+    const MODULE: &str = "normalize_tests::real_repeat_tests";
+
+    /// The prepared manifest: `FERRO_MANIFEST` authoritative when set, with the
+    /// well-known `benchmark-output/manifest.json` fallback.
+    fn manifest_path() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var(crate::common::manifest::MANIFEST_ENV) {
+            let path = PathBuf::from(path);
+            return path.exists().then_some(path);
+        }
+        let fallback = Path::new("benchmark-output/manifest.json");
+        fallback.exists().then(|| fallback.to_path_buf())
+    }
+
+    /// The provider, or `None` when there is no manifest to build one from. A
+    /// manifest that is present but will not load panics rather than returning
+    /// `None`, so a stand-down is never confused with a broken reference.
+    fn get_provider() -> Option<MultiFastaProvider> {
+        let path = manifest_path()?;
+        Some(
+            MultiFastaProvider::from_manifest(&path)
+                .unwrap_or_else(|e| panic!("from_manifest({}) failed: {e}", path.display())),
+        )
+    }
 
     #[test]
-    #[ignore] // Requires reference data
     fn test_real_repeat_pattern() {
-        let ref_path = Path::new("benchmark-output/manifest.json");
-        if !ref_path.exists() {
-            eprintln!("Skipping test - benchmark-output not available");
+        let Some(provider) = get_provider() else {
+            crate::common::manifest::absent(MODULE);
+            return;
+        };
+
+        // A manifest that does not carry this transcript leaves the assertion
+        // unreached — the same coverage loss an absent manifest causes, and
+        // promoted by the same `FERRO_REQUIRE_MANIFEST`.
+        let accession = "NM_001407936.1";
+        if let Err(error) = provider.get_transcript(accession) {
+            crate::common::manifest::unserved(MODULE, accession, &error.to_string());
             return;
         }
 
-        let provider = MultiFastaProvider::from_manifest(ref_path).unwrap();
         let normalizer = Normalizer::new(provider);
+        let normalize = |input: &str| {
+            let variant =
+                parse_hgvs(input).unwrap_or_else(|error| panic!("parse {input}: {error}"));
+            let normalized = normalizer.normalize(&variant).unwrap_or_else(|error| {
+                panic!("normalize {input} against the prepared reference: {error}")
+            });
+            format!("{normalized}")
+        };
 
-        // Parse the variant
-        let variant = parse_hgvs("NM_001407936.1:c.4261_4262CA[1]").unwrap();
-        println!("Parsed: {:?}", variant);
+        // WHAT THE REFERENCE ACTUALLY READS HERE, because the whole point of
+        // this guard is that it runs against real bases. Probed base by base
+        // with `ferro normalize --reference <dir>` over the prepared reference
+        // (cdot-0.2.32): `c.4261C>T`, `c.4262A>T`, `c.4263C>T`, `c.4264A>T` and
+        // `c.4265G>T` all normalize, while `c.4260C>T`, `c.4261A>T` and
+        // `c.4265C>T` are refused at the reference check (`expected A, found C`
+        // / `expected C, found G`). So `NM_001407936.1` reads **CACAG** at
+        // c.4261-4265, preceded by `G`: the `CA` unit DOES match at 4261, and
+        // the tract is exactly two copies wide, ending at 4264.
+        //
+        // Three descriptions over that tract are pinned, because any one alone
+        // misleads about what the others do.
 
-        // Normalize
-        let result = normalizer.normalize(&variant);
-        match result {
-            Ok(normalized) => {
-                println!("Normalized: {}", normalized);
-                // If the repeat unit doesn't match at the position,
-                // we should get back the original (or c.=)
-                // NOT a deletion
-            }
-            Err(e) => {
-                println!("Error: {:?}", e);
-            }
-        }
+        // (1) THE CASE WITH TEETH — a count BELOW the reference's own copy
+        // number. The tract holds two copies of `CA` and one is asked for, so
+        // one copy goes, and ferro emits the deletion of the 3'-most one.
+        //
+        // **That deletion is correct**, and it is pinned here so that a
+        // maintainer meeting `c.4261_4264CA[1]` -> `c.4263_4264del` in the wild
+        // does not file it as a regression or "fix" it away. A shrunk repeat
+        // count denotes the removal of the surplus copies; there is no reading
+        // under which asking for one copy of a two-copy tract leaves the tract
+        // untouched.
+        //
+        // Note what is NOT reachable, since it is the property this guard's
+        // prose used to claim: a repeat unit that genuinely does not match the
+        // reference never reaches normalization at all. `c.4261_4262GT[1]` is
+        // refused up front with `Reference mismatch at 4461-4462: expected
+        // GT[1] (GT), found CA`, so "a non-matching unit is preserved rather
+        // than read as a deletion" is not a statement about any outcome ferro
+        // can produce.
+        assert_eq!(
+            normalize("NM_001407936.1:c.4261_4264CA[1]"),
+            "NM_001407936.1:c.4263_4264del",
+            "a repeat count below the reference's own copy number denotes the deletion of the \
+             surplus copies, not a preserved repeat"
+        );
+
+        // (2) THE NO-OP. Span equal to exactly ONE unit, count 1: the
+        // description asks for precisely what the reference already carries
+        // over c.4261-4262, so there is nothing to change and ferro returns it
+        // as it stands.
+        //
+        // The expected value is written out rather than compared against the
+        // input, deliberately. `c.4261_4262=` also normalizes to itself over
+        // this span, so two legal spellings of "no change" survive here, and
+        // `canonical-form-choice-when-both-legal` derives the emitted form from
+        // the RESULTING SEQUENCE rather than preserving what the caller wrote.
+        // An `assert_eq!(rendered, input)` would therefore pin
+        // spelling-preservation as though it were policy; this pins the string
+        // ferro measurably produces today. A future ruling that re-derives the
+        // no-op form has to re-pin this line on purpose, and cannot satisfy it
+        // by echoing whatever it was handed.
+        assert_eq!(
+            normalize("NM_001407936.1:c.4261_4262CA[1]"),
+            "NM_001407936.1:c.4261_4262CA[1]",
+            "a repeat description asking for the copy number the reference already carries over \
+             its own span is a no-op"
+        );
+
+        // (3) NON-VACUITY FOR (2). The preservation above is a property of that
+        // one description, not of repeats: the same one-unit span with count 2
+        // moves. So (2) is not "ferro leaves `CA[n]` alone", which is the
+        // reading it would otherwise invite.
+        assert_eq!(
+            normalize("NM_001407936.1:c.4261_4262CA[2]"),
+            "NM_001407936.1:c.4263_4264dup",
+            "the same span at a count ABOVE the reference's own is re-derived, so (2) is not \
+             repeat descriptions being passed through untouched"
+        );
     }
 }
 
