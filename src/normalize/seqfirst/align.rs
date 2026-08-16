@@ -1101,6 +1101,12 @@ mod tests {
     /// one is sound"). It deliberately mirrors `build`'s banded fill so the
     /// shrunk DAG is a faithful narrowing rather than a hand-corrupted one; it
     /// is NOT an independent oracle — that role is [`full_grid_build`]'s.
+    ///
+    /// "Mirrors" is a claim, and a hand copy has no mechanism of its own to keep
+    /// it true, so it is pinned rather than asserted:
+    /// [`the_hand_copied_band_confined_build_still_matches_build`] requires that
+    /// at a band wide enough to hold every minimal alignment this reproduces
+    /// `build` exactly.
     fn build_confined_to_band(ref_block: &[u8], alt_block: &[u8], k: usize) -> AlignmentDag {
         let n = ref_block.len();
         let m = alt_block.len();
@@ -1195,29 +1201,46 @@ mod tests {
     #[test]
     fn the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag() {
         // (reference, alt, too-narrow `k`, the shrunk DAG is a strict SUBSET of
-        // the truth, `dominators()` on it still MATCHES the truth).
-        for (r, a, k, subset_of_truth, dominators_stay_correct) in [
+        // the truth, `dominators()` on it still MATCHES the truth, the edit
+        // DISTANCE on it still matches the truth).
+        for (r, a, k, subset_of_truth, dominators_stay_correct, distance_stays_correct) in [
             // The issue's verbatim example. At k = 1 the band holds only the
             // two-substitution diagonal, a strict subset of the seven cells the
             // true (k = 2) DAG spans — and with the SAME distance (2) and the
             // SAME (empty) dominators, so nothing derived from the DAG alone,
             // not even `dominators()`, reveals the shrinkage. The subtlest form.
-            (&b"AC"[..], &b"CA"[..], 1usize, true, true),
+            (&b"AC"[..], &b"CA"[..], 1usize, true, true, true),
             // The dangerous form: at k = 1 the band collapses to the
             // all-substitution diagonal (distance 3, not the true 2), so
             // `dominators()` comes back EMPTY where the truth is
             // {(1,0),(2,1)} + forced junction 3 — a wrong answer the oracle
             // nonetheless blesses. Not a subset (its cells lie off every
             // minimal alignment), so only its size is compared below.
-            (&b"CAG"[..], &b"AGA"[..], 1, false, false),
+            (&b"CAG"[..], &b"AGA"[..], 1, false, false, false),
+            // The two rows above demonstrate the oracle's agreement as
+            // `empty == empty`: `dominators()` is `{}` on both sides of the
+            // first, and `{}` on the shrunk side of the second. A `dominators()`
+            // that returned nothing at all, for any reason, would satisfy both.
+            // These two rows carry NON-EMPTY dominator sets, so the agreement
+            // has content.
+            //
+            // The first is `AC -> CA`'s shape at a size that has dominators:
+            // 12 of the truth's 15 cells, same distance (4), and the same
+            // non-empty `{(0,0)}` on both sides — every derived quantity agrees
+            // and the graph is still too small.
+            (&b"AAAC"[..], &b"ACCCAA"[..], 2, true, true, true),
+            // The second is `CAG -> AGA`'s shape with a non-empty WRONG answer,
+            // and the only fixture here that exercises `forced_ins_junctions`
+            // at all: 8 of the truth's 14 cells, and `dominators()` invents both
+            // a matched dominator `{(2,2)}` and a forced insertion junction
+            // `{4}` where the truth has NEITHER. Unlike `CAG -> AGA` the
+            // distance does not give it away — 4 on both sides — so this is a
+            // wrong non-empty answer with no tell anywhere in the DAG.
+            (&b"AACA"[..], &b"CCCAAC"[..], 2, true, false, true),
         ] {
             let shrunk = build_confined_to_band(r, a, k);
             let truth = full_grid_build(r, a);
-            let label = format!(
-                "{} -> {}",
-                String::from_utf8_lossy(r),
-                String::from_utf8_lossy(a)
-            );
+            let label = label_for(r, a);
 
             // (1) It really is too small: fewer retained cells than the truth,
             // and — for the issue's own case — a strict subset of them.
@@ -1264,14 +1287,103 @@ mod tests {
                 "{label}: unexpected dominator (dis)agreement with the truth"
             );
 
-            // (4) WHAT CLOSES THE GAP. The independent full-grid implementation
-            // disagrees with the shrunk DAG over the retained cell set — the
-            // comparison `the_band_agrees_with_the_full_grid_*` make, and the
-            // only thing that catches uniform shrinkage.
-            assert_ne!(
-                shrunk_cells, true_cells,
-                "{label}: full_grid_build must disagree with the shrunk DAG"
+            // (4) WHAT CLOSES THE GAP — and, more usefully, WHICH ARM of it
+            // does the closing.
+            //
+            // The comparison that catches uniform shrinkage is the shipped
+            // `build` against the independent [`full_grid_build`], which
+            // `the_band_agrees_with_the_full_grid_*` make. Run it here, on these
+            // very inputs: it is green, so the closing comparison is genuinely
+            // available at the locus where the oracle above is blind.
+            assert_band_matches_full_grid(r, a);
+
+            // That comparison has three arms — the edit distance, the retained
+            // cell set with its out-edges, and `dominators()` — and the rows
+            // above are chosen so that on some of them two arms are blind. (3)
+            // has already pinned the dominator arm as blind wherever
+            // `dominators_stay_correct`; this pins the distance arm the same
+            // way, which the prose above claims ("the SAME distance (2)") and
+            // nothing asserted.
+            //
+            // On the two rows where both flags are `true` — `AC -> CA` and
+            // `AAAC -> ACCCAA` — that leaves the retained-cell/out-edge arm as
+            // the ONLY one that can see the narrowing, and (1) has already
+            // shown it does. Which is why a DAG-construction change landing
+            // without a second implementation to diff against would be
+            // unprotected (issue suggestion 3).
+            //
+            // This replaces an `assert_ne!(shrunk_cells, true_cells)` that could
+            // never fail: (1) asserts the two lengths differ, and `Vec`'s
+            // equality compares lengths first, so the inequality was already
+            // established by the assertion above it.
+            assert_eq!(
+                shrunk.edit_distance() == truth.edit_distance(),
+                distance_stays_correct,
+                "{label}: unexpected edit-distance (dis)agreement with the truth ({} vs {})",
+                shrunk.edit_distance(),
+                truth.edit_distance()
             );
+        }
+    }
+
+    /// [`build_confined_to_band`] is a hand copy of [`AlignmentDag::build`]'s
+    /// post-loop body, kept so the shrunk DAG in
+    /// [`the_brute_force_oracle_is_blind_to_a_uniformly_too_small_dag`] is a
+    /// faithful narrowing rather than a hand-corrupted one. **Nothing about that
+    /// role makes the copy track the original**: it asserts properties of the
+    /// *shrunk* DAG — fewer cells than the truth, particular dominators — and
+    /// never agreement with `build`, so if `build`'s fill, its `out`-bit
+    /// semantics or `BandLayout` change, whether that test notices is incidental.
+    ///
+    /// **Do not read that as "it would stay green".** Three deliberate drifts
+    /// were applied to the copy — dropping its `OUT_INS` arm, truncating its
+    /// `out` loop from `0..=n` to `0..n`, and swapping its `OUT_DEL`/`OUT_INS`
+    /// bits — and it reddened on all three. What it did *not* do on any of them
+    /// is say why: it reports `a single crossing must be this cell's only
+    /// out-edge`, `out_edges(5, 4) is off-grid (4 x 6)` or a dominator
+    /// disagreement, every one of which reads as `dominators()` or the DAG being
+    /// wrong rather than as the copy having drifted. This pin answers with
+    /// `out-edges differ at (1, 2)`, which is the actual fault.
+    ///
+    /// So the value here is attribution plus a guarantee the other test does not
+    /// offer — not coverage of a hole measured open.
+    ///
+    /// The guarantee: handed a band wide enough to contain every minimal
+    /// alignment, the copy must produce exactly what the shipped `build`
+    /// produces. `n + m` is that band — it is `build`'s own `widest`, the width
+    /// at which its doubling loop terminates unconditionally — so the two are
+    /// being asked the same question and only a drift in the shared post-loop
+    /// body can separate them.
+    ///
+    /// Deliberately compared against `build` and not against
+    /// [`full_grid_build`]: `full_grid_build` is the *pre-band* implementation,
+    /// so a copy that agreed with it could still have drifted from every
+    /// band-specific detail the copy exists to reproduce.
+    #[test]
+    fn the_hand_copied_band_confined_build_still_matches_build() {
+        for (r, a) in [
+            // Every fixture the blind-spot test above narrows, so a drift is
+            // caught at exactly the inputs that test depends on.
+            (&b"AC"[..], &b"CA"[..]),
+            (&b"CAG"[..], &b"AGA"[..]),
+            (&b"AAAC"[..], &b"ACCCAA"[..]),
+            (&b"AACA"[..], &b"CCCAAC"[..]),
+            // Plus the shapes a band is most likely to get wrong, since the
+            // copy carries its own `band.contains` / `row_span` arithmetic:
+            // both blocks empty, either block empty, and a length ratio far
+            // from one so `|delta|` and not the divergence sets the band.
+            (&b""[..], &b""[..]),
+            (&b""[..], &b"ACGT"[..]),
+            (&b"ACGT"[..], &b""[..]),
+            (&b"A"[..], &b"ACGTACGT"[..]),
+            (&b"ACGTACGT"[..], &b"A"[..]),
+            (&b"AAAAA"[..], &b"AAAAA"[..]),
+        ] {
+            let widest = (r.len() + a.len()).max(1);
+            let copy = build_confined_to_band(r, a, widest);
+            let shipped =
+                AlignmentDag::build(r, a).expect("these fixtures are far below MAX_ALIGNMENT_SPAN");
+            assert_dags_agree(&copy, &shipped, &label_for(r, a));
         }
     }
 
@@ -1432,37 +1544,74 @@ mod tests {
         let banded = AlignmentDag::build(r, a)
             .expect("differential fixtures are far below MAX_ALIGNMENT_SPAN");
         let full = full_grid_build(r, a);
-        let label = format!(
+        assert_dags_agree(&banded, &full, &label_for(r, a));
+        banded.total
+    }
+
+    /// `"<reference>" -> "<alternate>"`, the label every differential assertion
+    /// in this module reports a failure against.
+    fn label_for(r: &[u8], a: &[u8]) -> String {
+        format!(
             "{:?} -> {:?}",
             String::from_utf8_lossy(r),
             String::from_utf8_lossy(a)
+        )
+    }
+
+    /// Assert two DAGs agree on everything the type exposes: the distance, the
+    /// retained cell set, every out-edge mask, the topological walk, and
+    /// `dominators()`.
+    ///
+    /// Extracted from [`assert_band_matches_full_grid`] so the same comparison
+    /// can be aimed at a second pair of builds
+    /// ([`the_hand_copied_band_confined_build_still_matches_build`]) without a
+    /// second copy of the sweep — a copied comparison drifting from the one it
+    /// was copied from is the very failure that test exists to prevent.
+    ///
+    /// Everything is read **through the public accessors, over every cell of the
+    /// full `(n + 1) x (m + 1)` grid**, rather than by diffing the backing
+    /// `Vec`s. The two sides need not share a layout — since #1988 the banded
+    /// and full-grid builds do not — so a `Vec` diff would compare storage
+    /// rather than content and would report a difference for a narrowing that
+    /// lost nothing. Reading every grid cell is the stronger question anyway: it
+    /// additionally pins that a cell either band excludes answers `false` and
+    /// yields no edges, which a `Vec` diff never asked.
+    fn assert_dags_agree(left: &AlignmentDag, right: &AlignmentDag, label: &str) {
+        assert_eq!(left.total, right.total, "edit distance differs on {label}");
+        assert_eq!(
+            left.ref_len(),
+            right.ref_len(),
+            "ref_len differs on {label}"
         );
-        assert_eq!(banded.total, full.total, "edit distance differs on {label}");
-        for i in 0..=banded.ref_len() {
-            for j in 0..=banded.alt_len() {
+        assert_eq!(
+            left.alt_len(),
+            right.alt_len(),
+            "alt_len differs on {label}"
+        );
+        for i in 0..=left.ref_len() {
+            for j in 0..=left.alt_len() {
                 assert_eq!(
-                    banded.contains_cell(i, j),
-                    full.contains_cell(i, j),
+                    left.contains_cell(i, j),
+                    right.contains_cell(i, j),
                     "retained cell set differs at ({i}, {j}) on {label}"
                 );
                 assert_eq!(
-                    banded.out_edges(i, j).collect::<Vec<_>>(),
-                    full.out_edges(i, j).collect::<Vec<_>>(),
+                    left.out_edges(i, j).collect::<Vec<_>>(),
+                    right.out_edges(i, j).collect::<Vec<_>>(),
                     "out-edges differ at ({i}, {j}) on {label}"
                 );
             }
         }
         assert_eq!(
-            banded.cells().collect::<Vec<_>>(),
-            full.cells().collect::<Vec<_>>(),
+            left.cells().collect::<Vec<_>>(),
+            right.cells().collect::<Vec<_>>(),
             "topological cell walk differs on {label}"
         );
         assert_eq!(
-            banded.dominators(),
-            full.dominators(),
+            left.dominators(),
+            right.dominators(),
             "dominators differ on {label}"
         );
-        banded.total
     }
 
     /// Deterministic pseudo-random stream; no RNG dependency, so any failure
