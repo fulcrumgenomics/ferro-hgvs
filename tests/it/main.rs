@@ -88,6 +88,7 @@ mod cis_junction_crossing_shift;
 mod cis_spelling_confluence_gap;
 mod civic_validation;
 mod claude_md_adjudication_tables;
+mod claude_md_clause_anchors;
 mod clause_ruling_index;
 mod cli_build_transcript;
 mod cli_check_transcripts_json;
