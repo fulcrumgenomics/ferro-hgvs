@@ -35,5 +35,5 @@ mutalyzer-hgvs-parser = "==0.4.0"
 hgvs = ">=1.5.7, <2"
 
 # biocommons.seqrepo - local sequence repository for offline biocommons/hgvs
-# Used by setup-seqrepo command to download and manage sequence data
+# Used by the `setup seqrepo` command to download and manage sequence data
 biocommons-seqrepo = ">=0.6"

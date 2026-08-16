@@ -10,7 +10,7 @@
 //! 1. **UTA (Universal Transcript Archive)** - PostgreSQL database with transcript data
 //! 2. **SeqRepo** - Local sequence repository for nucleotide/protein sequences
 //!
-//! Use the CLI commands `setup-uta` and `setup-seqrepo` to configure these.
+//! Use the CLI commands `setup uta` and `setup seqrepo` to configure these.
 
 #![allow(clippy::type_complexity)]
 
@@ -488,7 +488,7 @@ pub fn setup_uta(
             );
             eprintln!("     (Complete any human verification in your browser)");
             eprintln!(
-                "  2. Run: ferro-benchmark setup-uta --uta-dump /path/to/{}.pgd.gz\n",
+                "  2. Run: ferro-benchmark setup uta --uta-dump /path/to/{}.pgd.gz\n",
                 config.uta_image_tag
             );
             return Err(FerroError::Io {

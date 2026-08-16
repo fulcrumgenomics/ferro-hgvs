@@ -28,7 +28,7 @@ Run this a few times a year when refreshing the published numbers, or when tooli
 | Docker | Running daemon required; used for the UTA PostgreSQL container |
 | PostgreSQL client | `psql` + `pg_isready`; `setup uta` probes the UTA database over the published host port. Install e.g. `postgresql-client` (Debian/Ubuntu), `libpq` (Homebrew), or `postgresql` (conda/pixi) |
 | pixi | Manages the Python tool environment (mutalyzer, biocommons/hgvs, hgvs-rs) |
-| Rust toolchain | `cargo build --release` for the ferro-benchmark binary |
+| Rust toolchain | `cargo build --release` for the `ferro-benchmark` binary |
 | System build libraries | The `benchmark` / `hgvs-rs` features link native C libraries, so a fresh machine needs a C toolchain plus dev headers. In particular the `benchmark` feature's `rusqlite` links **system SQLite** — without it the build fails at link time with `rust-lld: error: unable to find library -lsqlite3`. Install: **RHEL / Amazon Linux 2023** — `gcc gcc-c++ make cmake sqlite-devel zlib-devel bzip2-devel xz-devel openssl-devel`; **Debian / Ubuntu** — `build-essential cmake libsqlite3-dev zlib1g-dev libbz2-dev liblzma-dev libssl-dev`; **macOS** — Xcode Command Line Tools plus Homebrew `sqlite`. |
 
 ### Reference Stack

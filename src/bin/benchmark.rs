@@ -237,7 +237,7 @@ fn main() {
                         println!("  Container: {}", result.container_name);
                         println!("  Port: {}", result.port);
                         println!("  UTA URL: {}", result.uta_db_url);
-                        println!("\nTo use: ferro-benchmark compare normalize --validator biocommons --uta-db-url '{}'", result.uta_db_url);
+                        println!("\nTo use: ferro-benchmark benchmark normalize --validator biocommons --uta-db-url '{}'", result.uta_db_url);
                         Ok(())
                     }
                     Err(e) => {
@@ -723,10 +723,11 @@ fn run_extract_protein_accessions(
     println!("  LRG protein: {}", lrg_count);
     println!("  UniProt: {}", uniprot_count);
 
-    println!("\nTo populate protein cache:");
+    println!("\nTo populate the protein cache, prepare the mutalyzer reference");
+    println!("(it derives and caches protein sequences from ClinVar or the ferro reference):");
     println!(
-        "  ferro-benchmark populate-protein-cache -i {} -o protein_cache",
-        output_path.display()
+        "  ferro-benchmark prepare mutalyzer --clinvar {}",
+        input_path.display()
     );
 
     Ok(())
@@ -2378,7 +2379,7 @@ fn run_parse_tool(
             msg: format!(
                 "Input file not found: {}\n\n\
                  Create a patterns file with one HGVS expression per line, or extract from ClinVar:\n\
-                 ferro-benchmark extract-clinvar -i clinvar/hgvs4variation.txt.gz -o patterns.txt",
+                 ferro-benchmark extract clinvar -i clinvar/hgvs4variation.txt.gz -o patterns.txt",
                 input.display()
             ),
         });
@@ -2681,7 +2682,7 @@ fn run_normalize_tool(
             msg: format!(
                 "Input file not found: {}\n\n\
                  Create a patterns file with one HGVS expression per line, or extract from ClinVar:\n\
-                 ferro-benchmark extract-clinvar -i clinvar/hgvs4variation.txt.gz -o patterns.txt",
+                 ferro-benchmark extract clinvar -i clinvar/hgvs4variation.txt.gz -o patterns.txt",
                 input.display()
             ),
         });
@@ -3723,9 +3724,9 @@ fn run_check_tool(
             } else {
                 println!("✗ NOT connected ({})", uta_url);
                 if uta_db_url.is_some() {
-                    println!("  Check that UTA is running: ferro-benchmark start-uta");
+                    println!("  Check that UTA is running: ferro-benchmark setup start-uta");
                 } else {
-                    println!("  For local UTA: ferro-benchmark setup-uta");
+                    println!("  For local UTA: ferro-benchmark setup uta");
                 }
                 all_ok = false;
             }
@@ -3741,7 +3742,7 @@ fn run_check_tool(
                 }
             } else {
                 println!("not specified (use --seqrepo-path)");
-                println!("  For local SeqRepo: ferro-benchmark setup-seqrepo --seqrepo-dir <path>");
+                println!("  For local SeqRepo: ferro-benchmark setup seqrepo --output-dir <path>");
                 all_ok = false;
             }
 
