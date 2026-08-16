@@ -26,6 +26,24 @@ pub fn validate_cds_pos(pos: &CdsPos, transcript: &Transcript) -> Result<(), Fer
             msg: "Transcript has no CDS end".to_string(),
         })?;
 
+    // Refuse an inverted record (`cds_end < cds_start`) before computing a CDS
+    // length from it. The bare `cds_end - cds_start` below is on two `u64`s, so
+    // an inverted record underflows it: a panic in debug, and in release a wrap
+    // to a vast `cds_length` that admits nearly any `pos.base` as in-range. More
+    // fundamentally, an inverted record's 5'UTR and 3'UTR halves overlap, so no
+    // CDS-relative position is well-defined (#1894). `CoordinateMapper` refuses
+    // the same condition up front for the same reason, as does `merge.rs`'s
+    // `ordered_cds_bounds`.
+    if cds_end < cds_start {
+        return Err(FerroError::InvalidCoordinates {
+            msg: format!(
+                "transcript has inverted CDS bounds (cds_start {cds_start} > \
+                 cds_end {cds_end}); its c. axis is incoherent, so a CDS position \
+                 cannot be validated"
+            ),
+        });
+    }
+
     let cds_length = (cds_end - cds_start + 1) as i64;
 
     if pos.utr3 {
@@ -331,5 +349,46 @@ mod tests {
                 "{label} must not be refused as a mere magnitude; got: {msg}"
             );
         }
+    }
+
+    /// A record whose CDS bounds are inverted (`cds_end < cds_start`). Nothing
+    /// on the load path rejects one: the loader adopts cdot's `start_codon` /
+    /// `stop_codon` verbatim, and `reference/validate.rs`'s ordering test is a
+    /// report-only pass that gates nothing — the same shape `mapping.rs`'s
+    /// `create_inverted_cds_mapper` builds for the coordinate mapper.
+    fn make_inverted_cds_transcript() -> Transcript {
+        Transcript {
+            id: "NM_INVERTED.1".to_string(),
+            sequence: Some("ATGTTTCTGATTAAACCCGGG".to_string()), // 21 bases
+            // The CDS "ends" 14 bases before it starts.
+            cds_start: Some(20),
+            cds_end: Some(6),
+            exons: vec![Exon::new(1, 1, 21)],
+            ..Default::default()
+        }
+    }
+
+    /// `validate_cds_pos` must refuse an inverted-CDS record rather than compute
+    /// a CDS length from it (#1894).
+    ///
+    /// The length is `cds_end - cds_start + 1` on two `u64`s, so `6 - 20`
+    /// underflows: a panic in debug, and in release a wrap to a vast positive
+    /// `cds_length` that then admits nearly any `pos.base` as "in range". More
+    /// fundamentally, an inverted record's 5'UTR and 3'UTR halves overlap, so no
+    /// CDS-relative position is well-defined — the mapper refuses the same
+    /// condition up front for the same reason. Reaching the assertion at all
+    /// proves the subtraction no longer underflows; asserting the message proves
+    /// the refusal comes from the inverted-bounds guard rather than from a
+    /// coordinate-range check the wrapped length happened to trip.
+    #[test]
+    fn inverted_cds_bounds_are_refused_not_computed_on() {
+        let tx = make_inverted_cds_transcript();
+        let err = validate_cds_pos(&CdsPos::new(1), &tx)
+            .expect_err("an inverted-CDS record must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("inverted CDS bounds"),
+            "the refusal must come from the inverted-bounds guard; got: {msg}"
+        );
     }
 }
