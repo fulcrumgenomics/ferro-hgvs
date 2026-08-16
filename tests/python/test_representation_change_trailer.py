@@ -560,6 +560,92 @@ def test_a_real_disclosure_is_not_a_contradiction() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A decline may not hide a move on a continuation line (#1854)
+#
+# `TRAILER_RE` stops the value at the first newline, and this repo's trailers
+# are routinely multi-line with UNINDENTED continuation lines, so reading only
+# the first line let a decline on line 1 hide a `<n> rows move` on line 2 — the
+# contradiction the tripwire exists to catch, evaded by a newline. The value
+# runs to the next thing it cannot own: a column-0 trailer token, a Markdown
+# heading, or the HTML comment GitHub appends (CodeRabbit's summary).
+# ---------------------------------------------------------------------------
+
+
+def test_full_declaration_value_reads_continuation_lines() -> None:
+    """The whole value, not just the first clause."""
+    body = "Representation-Change: none.\n  150 rows of 85,642 move, all 3'-direction.\n"
+    assert (
+        check_representation_change.full_declaration_value(body)
+        == "none.\n  150 rows of 85,642 move, all 3'-direction."
+    )
+
+
+def test_full_declaration_value_stops_at_the_next_trailer_token() -> None:
+    """A following column-0 `Token: ` line ends the value; it is not part of the decline."""
+    body = "Representation-Change: none. Tests only.\nCloses: #1854\n"
+    assert check_representation_change.full_declaration_value(body) == "none. Tests only."
+
+
+def test_full_declaration_value_stops_at_an_appended_coderabbit_summary() -> None:
+    """GitHub appends CodeRabbit's summary after the trailer; it must not be scavenged."""
+    body = (
+        "Representation-Change: none. Tests only.\n"
+        "  and here is why it is safe.\n"
+        "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\n"
+        "## Summary by CodeRabbit\n"
+        "- Tests: added coverage.\n"
+    )
+    assert (
+        check_representation_change.full_declaration_value(body)
+        == "none. Tests only.\n  and here is why it is safe."
+    )
+
+
+def test_full_declaration_value_is_none_without_a_trailer() -> None:
+    assert check_representation_change.full_declaration_value("Just a body.\n") is None
+
+
+def test_a_decline_that_moves_on_a_continuation_line_fails() -> None:
+    """The #1854 reproducer: a decline on line 1, a move on the continuation line.
+
+    `find_declarations` truncates the value at the newline, so before the fix `check` read
+    `none.`, found no movement claim, and passed the contradicted decline green — the
+    disclosure filed as `none`, never reaching the changelog, nobody told. That is the one
+    direction this mechanism must never fail in.
+    """
+    body = "Representation-Change: none.\n  150 rows of 85,642 move, all 3'-direction.\n"
+    ok, message = check(["src/normalize/merge.rs"], body)
+    assert not ok, "a decline that describes a move on a continuation line must be refused"
+    assert "declines and then describes a move" in message
+    assert "150 rows of 85,642 move" in message, "the message must quote the hidden move"
+
+
+def test_a_multiline_decline_with_only_a_reason_still_passes() -> None:
+    """The continuation is an ordinary reason, not a move — so it is still a clean decline.
+
+    The discriminator: extending the value must not turn a legitimate multi-line decline
+    into a false contradiction.
+    """
+    body = (
+        "Representation-Change: none.\n"
+        "  Comments and one new test module only; no watched file changes behaviour.\n"
+    )
+    ok, _ = check(["src/normalize/merge.rs"], body)
+    assert ok, "a multi-line decline whose continuation is a reason must pass"
+
+
+def test_a_real_multiline_disclosure_still_passes() -> None:
+    """A move declared on line 1 with detail on the continuation is not a contradiction."""
+    body = (
+        "Representation-Change: 577 rows move, 360 merge / 205 split / 12 respell.\n"
+        "  Previously-accepted inputs, so a real migration for the consumer.\n"
+    )
+    ok, message = check(["src/spdi/mod.rs"], body)
+    assert ok
+    assert "577 rows move" in message
+
+
+# ---------------------------------------------------------------------------
 # #1647: the count is the count, never the denominator
 #
 # The guard used to read "the number immediately before `rows`" as the moving
@@ -705,6 +791,13 @@ def test_the_two_decline_rules_agree_value_by_value() -> None:
         "no rows move",
         "none, except two rows that merge",
         "nothing moves",
+        # Multi-line values (#1854). The checker now reads the whole trailer, and git-cliff
+        # matches its footer rule against the whole footer, so both must reach the same
+        # verdict on a value that spans lines — a decline with a continued reason, and a
+        # move with a continued detail. `none.` opens the exclusion rule's `[.;:—–][\s\S]*`
+        # tail, so the continuation does not change the verdict for either side.
+        "none.\n  Comments and one new test module only; no watched file changes behaviour.",
+        "577 rows move, 360 merge.\n  Previously-accepted inputs, so a real migration.",
     ]
     for value in values:
         by_changelog = changelog_rule.search(f"Representation-Change: {value}") is not None
