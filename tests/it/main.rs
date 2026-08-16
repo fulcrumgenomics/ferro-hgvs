@@ -49,6 +49,7 @@ mod issue_1916_intron_distance_underflow;
 mod issue_1917_reversed_range_window;
 mod issue_1970_u16_cost_grid_bound;
 mod issue_1989_declined_is_indeterminate;
+mod issue_2036_long_tract_idempotent;
 mod issue_2056_edit_triples_reference_failure;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
