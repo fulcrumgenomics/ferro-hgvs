@@ -2717,8 +2717,10 @@ const _: () = assert!(DERIVED_BLOCK_PARTITION_RULE.cuts_with_canonical());
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
-/// Unset and empty yield [`PartitionRule::Live`], the shipped rule. Anything
-/// else that is not an arm name is an **error**, not a fallback.
+/// Unset and empty yield [`DEFAULT_PARTITION_RULE`], the shipped rule —
+/// [`PartitionRule::CanonicalCoalesced`] since #1835's flip, and
+/// [`PartitionRule::Live`] up to and including v0.14.0. Anything else that is
+/// not an arm name is an **error**, not a fallback.
 ///
 /// # Why this refuses rather than warning
 ///
@@ -2780,8 +2782,9 @@ fn partition_rule_from_env(value: Option<&str>) -> Result<PartitionRule, String>
 /// # Why this is not `.ok()`
 ///
 /// [`std::env::var`] returns `Err` for two unrelated reasons and `.ok()`
-/// collapses both to `None` — but `None` is the **unset** case, which is
-/// legitimately `live`. So a value that *was* set, to bytes that are not UTF-8,
+/// collapses both to `None` — but `None` is the **unset** case, which
+/// legitimately selects the default ([`DEFAULT_PARTITION_RULE`]). So a value
+/// that *was* set, to bytes that are not UTF-8,
 /// selected the shipped rule and said nothing: exactly the silent fallback the
 /// rejection in [`partition_rule_from_env`] exists to remove, reachable through
 /// a door that function never sees. A bake-off whose `FERRO_PARTITION` was
@@ -2886,7 +2889,7 @@ fn partition_rule_outcome() -> &'static Result<PartitionRule, String> {
 /// # The residual, stated rather than hidden
 ///
 /// An embedder that neither calls this nor runs a debug build gets
-/// [`PartitionRule::Live`] for a refused value. That is the shipped rule under
+/// [`DEFAULT_PARTITION_RULE`] for a refused value. That is the shipped rule under
 /// no name at all rather than under a candidate's, and it is strictly safer than
 /// the abort it replaces — but it is only *reported* if somebody asks. Every
 /// binary **and every example** in this repository asks, and
@@ -3017,7 +3020,7 @@ pub fn partition_decline_counts() -> PartitionDeclineCounts {
 /// `examples/measure_spec_conformance_per_arm.rs` does.
 ///
 /// **Debug builds only**, like the four normalization oracles and for the same
-/// reason: the shipped `Live` path must not grow a per-block atomic to serve a
+/// reason: the shipped path must not grow a per-block atomic to serve a
 /// measurement. Release builds do not have this function.
 ///
 /// **Unstable, like the switch it measures.** It is expected to be removed with
@@ -7457,8 +7460,10 @@ fn partition_block_sequence_first(
 /// passes the first while failing the second (#1970). Either way the caller
 /// falls back to [`partition_block`].
 ///
-/// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
-/// example; it does not decide any shipped result.
+/// Reached under `FERRO_PARTITION=canonical` or `canonical-coalesced` — the
+/// latter the shipped default since #1835 — and from the `dump_partitions`
+/// example. So it decides **every** shipped result except the blocks it declines
+/// on (an oversized grid or span, above), which fall back to [`partition_block`].
 fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
     partition_block_canonical_within(reference, result, MAX_SEQFIRST_GRID_CELLS)
 }
@@ -8036,8 +8041,11 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// whose every spelling moves together stays converged, so those zeros are a
 /// statement about confluence and emphatically not about representation
 /// stability — the 1,471 / 1,304 figure above is the one that measures that.
-/// Shipped output does not move at all: `FERRO_PARTITION` unset is
-/// [`PartitionRule::Live`], which never reached this pass.
+/// When this was measured, shipped output did not move at all, because an unset
+/// `FERRO_PARTITION` selected [`PartitionRule::Live`], which never reached this
+/// pass. #1835 has since made [`PartitionRule::CanonicalCoalesced`] the default —
+/// a canonical arm this pass does run on ([`PartitionRule::cuts_with_canonical`])
+/// — so it now reaches the shipped path.
 ///
 /// # A narrower cut was looked for, and the search FAILED
 ///
@@ -8272,7 +8280,11 @@ pub mod dev_partitioners {
             .collect()
     }
 
-    /// The shipped rule: `partition_block`'s single-gap alignment search.
+    /// The `live` rule: `partition_block`'s single-gap alignment search.
+    ///
+    /// The shipped default up to and including v0.14.0; opt-in via
+    /// `FERRO_PARTITION=live` since #1835 flipped the default to
+    /// `PartitionRule::CanonicalCoalesced`.
     ///
     /// Never declines — an unsplittable block comes back as one spanning member.
     ///
@@ -15701,8 +15713,13 @@ mod tests {
             "an arm that answered must not be recorded as having declined"
         );
 
-        // `Live` has no decline path, so it is not counted at all — the shipped
-        // configuration pays no atomic per block.
+        // `Live` has no decline path, so it is not counted at all. That is no
+        // longer a statement about the shipped configuration: #1835 flipped
+        // `DEFAULT_PARTITION_RULE` to `CanonicalCoalesced`, which is one of the
+        // arms that *does* decline, so the shipped path bumps
+        // `SEQFIRST_ATTEMPTED` on every block and `SEQFIRST_DECLINED` on every
+        // fallback. The uncounted arm is now reached only by
+        // `FERRO_PARTITION=live`.
         let live = partition_block_for_rule(
             PartitionRule::Live,
             b"ACGTACGT",
@@ -16063,7 +16080,7 @@ mod tests {
         /// surfaces agree", which is a stronger guarantee than it gives.
         ///
         /// Fails by design during a deliberate `FERRO_PARTITION=…` run, for the
-        /// reason `the_suite_runs_on_the_live_rule` gives. The environment
+        /// reason `the_suite_runs_on_the_default_rule` gives. The environment
         /// guard is repeated here so that failure names its cause rather than
         /// reading as a drifted pin.
         #[test]
