@@ -35,6 +35,43 @@ find_trailers_as_git_cliff_would = check_representation_change.find_trailers_as_
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _read_config() -> str:
+    return (_REPO_ROOT / "release-plz.toml").read_text(encoding="utf-8")
+
+
+def _decline_preprocessor_pattern() -> str:
+    """Return `release-plz.toml`'s declining-trailer regex, ready to `re.compile`.
+
+    #1557 moved this rule from a `{ footer = ..., group = "Other" }` parser to a
+    `{ pattern = ..., replace = "Representation-Change-Declined:..." }` commit_preprocessor:
+    a declining trailer's key is now renamed *before* grouping, so the commit falls through
+    to its conventional-type parser (a declining `fix:` -> Fixed) instead of being routed to
+    `Other`. As a *search* regex the pattern classifies declines exactly as the old footer
+    rule did, which is why the parity tests below still compile and run it.
+    """
+    rules = re.findall(
+        r'\{ pattern = "([^"]*Representation-Change[^"]*)", '
+        r'replace = "Representation-Change-Declined',
+        _read_config(),
+    )
+    assert rules, "no declining-trailer commit_preprocessor found in release-plz.toml"
+    # A TOML basic string escapes its backslashes; undo that to recover the regex source.
+    return rules[0].replace("\\\\", "\\")
+
+
+def _inclusion_footer_rule() -> str:
+    """Return the sole footer parser — the inclusion rule for real declarations (#1557).
+
+    After #1557 the only footer parser is the inclusion rule; declines are handled by the
+    preprocessor above, so a second footer parser would be the pre-#1557 shape returning.
+    """
+    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', _read_config())
+    assert len(rules) == 1, (
+        f"expected exactly one Representation-Change footer parser, found {rules}"
+    )
+    return rules[0]
+
+
 # ---------------------------------------------------------------------------
 # The two states the whole check exists to separate
 # ---------------------------------------------------------------------------
@@ -302,22 +339,21 @@ _TWO_TRAILERS = (
 
 
 def test_two_trailers_are_refused() -> None:
-    """Neither half of the machinery can resolve two trailers the same way, so refuse.
+    """Two trailers cannot be resolved unambiguously, so refuse.
 
-    Measured against git-cliff 2.13.1 with the real config: this message groups under
-    **Other**, because git-cliff matches its footer rule against *every* footer and takes
-    the first rule that matches any of them, so a decline wins wherever it sits. This
-    checker reads the *first* trailer and calls the same message a real disclosure. The
-    commit then passes CI as a disclosure and is filed as a decline, and the disclosure
-    disappears from the changelog — the under-reporting direction of #1522, one commit at
-    a time.
+    This checker reads the *first* trailer and calls this message a real disclosure. What
+    git-cliff does with the second one depends on the config and has moved: before #1557 a
+    declining footer routed the whole commit to **Other** (a decline won wherever it sat),
+    so the checker and the changelog disagreed outright — the under-reporting direction of
+    #1522. Since #1557 the declining trailer's key is neutralized by a `commit_preprocessor`
+    and the surviving real footer groups the commit under **Representation changes**
+    (measured against git-cliff 2.13.1 with the real config), so the two now happen to
+    agree on *this* ordering.
 
-    It is not an anchoring bug and #1573's `m` does not reach it: the shape reproduces
-    identically under `(?i)`, `(?im)` and `(?im)\\A`, because the second line is parsed as
-    its own footer and the rule matches at *that* footer's start.
-
-    Refusing rather than picking a winner keeps the rule that a decline must be *stated*,
-    never inferred from a message that also says the opposite.
+    That agreement is coincidental and order-dependent, which is the reason to refuse rather
+    than lean on it: a corrected trailer appended below a superseded one leaves the checker
+    reading the stale first line while the changelog keys on whichever footer survives. A
+    decline must be *stated*, never inferred from a message that also says the opposite.
     """
     ok, message = check(["src/normalize/merge.rs"], _TWO_TRAILERS)
     assert not ok, "two trailers must not pass; the changelog and this check disagree on them"
@@ -347,9 +383,9 @@ def test_an_indented_second_trailer_is_a_continuation_not_a_second_trailer() -> 
     """The escape hatch the refusal message names must actually work.
 
     Indenting makes the line a continuation of the value above it, which is also how
-    git-cliff sees it — measured, the indented form groups under **Representation
-    changes** where the column-0 form groups under **Other**. So the fix the message
-    recommends is the one that makes both halves agree.
+    git-cliff sees it, so only the real disclosure is read and the commit groups under
+    **Representation changes**. So the fix the message recommends is the one that leaves a
+    single, unambiguous trailer for both halves to read.
     """
     body = (
         "Representation-Change: 577 rows move, 360 merge.\n"
@@ -456,7 +492,7 @@ def test_both_streams_on_stdin_is_rejected() -> None:
 
 
 def test_decline_vocabulary_matches_the_changelog_config() -> None:
-    """`release-plz.toml`'s exclusion rule and `NONE_VALUES` must accept the same words.
+    """`release-plz.toml`'s decline rule and `NONE_VALUES` must accept the same words.
 
     They are two halves of one decision and they drift silently. If the checker accepts a
     decline the changelog rule does not, that PR passes CI and then renders under
@@ -464,16 +500,13 @@ def test_decline_vocabulary_matches_the_changelog_config() -> None:
     was written for. If the changelog excludes a word the checker rejects, a contributor
     is told to declare something the changelog then hides.
     """
-    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    # `[a-z]*i[a-z]*` rather than `[a-z]+`: the flag group gained `m` in #1573, so matching
-    # `(?i)` literally would read as a rename -- but dropping the `i` requirement entirely
-    # would let this find a case-*sensitive* rule while asserting it found the opposite.
-    match = re.search(
-        r'footer = "\(\?[a-z]*i[a-z]*\)\^Representation-Change:[^"]*?\(([^)]+)\)', config
-    )
+    regex = _decline_preprocessor_pattern()
+    # The vocabulary is the first non-capturing group `(?:none|no|n/a|na)`; the enclosing
+    # capture group holds the whole value for the rename's `${1}`, and the leading `(?im)`
+    # flag group is `(?im)` not `(?:`, so the first `(?:...)` found is the vocabulary.
+    match = re.search(r"\(\?:([^)]+)\)", regex)
     assert match is not None, (
-        "no case-insensitive Representation-Change exclusion rule found in release-plz.toml; "
-        "the decline vocabulary cannot be checked"
+        "no decline vocabulary group in the preprocessor pattern; the vocabulary cannot be checked"
     )
     configured = frozenset(match.group(1).split("|"))
     assert configured == check_representation_change.NONE_VALUES, (
@@ -806,18 +839,12 @@ def test_the_two_decline_rules_agree_value_by_value() -> None:
     rendered as a representation change. A word-list comparison cannot see that; only
     running both rules over the same values can.
     """
-    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    # Anchored on the trailer name, not on `{ footer = "`: the first such literal in the file
-    # is git-cliff's `^changelog: ?ignore` example, quoted in a comment.
-    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
-    assert rules, "no Representation-Change exclusion rule found in release-plz.toml"
-    # The rule is a TOML basic string, so its backslashes are escaped in the file.
-    #
-    # Compiled with NO flags of our own: whatever the rule needs it must declare inline,
-    # because git-cliff adds none either. Passing `re.MULTILINE` here -- as this test did
-    # until #1573 -- makes the harness kinder than production and hides exactly the class
-    # of anchoring bug it exists to catch.
-    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"))
+    # The rule is a TOML basic string, so its backslashes are escaped in the file; the
+    # helper undoes that. Compiled with NO flags of our own: whatever the rule needs it must
+    # declare inline, because git-cliff adds none either. Passing `re.MULTILINE` here -- as
+    # this test did until #1573 -- makes the harness kinder than production and hides exactly
+    # the class of anchoring bug it exists to catch.
+    changelog_rule = re.compile(_decline_preprocessor_pattern())
 
     values = [
         "none",
@@ -905,11 +932,8 @@ def test_a_trailer_keeps_its_verdict_when_text_is_appended_after_it(
     Every other guard in this file inspects the config as a *string* — vocabulary, casing,
     ordering — and all of them passed throughout the bug, because anchoring is a behaviour.
     """
-    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
-    assert rules, "no Representation-Change exclusion rule found in release-plz.toml"
     # No flags of our own: git-cliff supplies none, so the rule must declare what it needs.
-    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"))
+    changelog_rule = re.compile(_decline_preprocessor_pattern())
 
     footer = f"Representation-Change: {value}{_APPENDED_BLOCK}"
     assert (changelog_rule.search(footer) is not None) == is_a_decline, (
@@ -952,12 +976,15 @@ def test_the_ordering_prefix_is_stripped_from_rendered_headings() -> None:
 
 
 def test_both_representation_change_rules_are_case_insensitive() -> None:
-    """A case-sensitive *inclusion* rule drops a lowercase `representation-change:` — a real
-    disclosure — silently into `Other`, since the checker accepts any casing."""
-    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
-    assert len(rules) == 2, f"expected an exclusion and an inclusion rule, found {rules}"
-    for rule in rules:
+    """Both rules must be case-insensitive, since the checker accepts any casing.
+
+    A case-sensitive *inclusion* rule drops a lowercase `representation-change:` — a real
+    disclosure — silently into `Other`; a case-sensitive *decline preprocessor* leaves an
+    uppercase `NONE` untouched, so it reaches the inclusion rule and is filed as a real
+    change. The two rules are now the inclusion footer parser and the decline preprocessor
+    (#1557).
+    """
+    for rule in (_inclusion_footer_rule(), _decline_preprocessor_pattern()):
         # Read the inline flag group rather than matching `(?i)` literally, so that adding
         # another flag -- `m`, in #1573 -- does not read as "the rule became case-sensitive".
         flags = re.match(r"\(\?([a-z]+)\)", rule)
@@ -1212,25 +1239,31 @@ def test_the_1838_body_is_refused_by_the_check_it_slipped_past() -> None:
     assert "`Representation-Change: none`" in message
 
 
-def test_the_decline_exclusion_precedes_the_inclusion() -> None:
-    """git-cliff takes the FIRST matching parser, so swapping these two lines silently
-    restores #1526 in full.
+def test_a_decline_is_neutralized_before_the_parsers_and_inclusion_leads_them() -> None:
+    """The two ordering facts the #1557 design rests on.
 
-    Verified against git-cliff 2.13.1 rather than assumed: with the exclusion second, all
-    four trailers -- `none`, `NONE`, and both real disclosures -- group under
-    **Representation changes**. Every other guard in this file still passes in that state,
-    which is why the ordering needs one of its own.
+    1. A decline is handled by a `commit_preprocessor`, which git-cliff always applies before
+       any parser — so a declining trailer never reaches the inclusion footer rule, and the
+       commit falls through to its conventional-type parser (a declining `fix:` -> Fixed).
+       If that preprocessor were dropped, every decline would match the inclusion rule and be
+       filed under **Representation changes** — #1526 in full.
+    2. The inclusion footer rule must precede the `message = "^fix"` type parser, or a `fix:`
+       carrying a REAL declaration would match `^fix` first and land under **Fixed** instead
+       of **Representation changes**. git-cliff takes the first matching parser.
     """
-    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
-    assert len(rules) == 2, f"expected an exclusion and an inclusion rule, found {rules}"
-    exclusion, inclusion = rules
-    assert any(word in exclusion for word in check_representation_change.NONE_VALUES), (
-        f"the first Representation-Change rule is {exclusion!r}, which does not name a decline "
-        "value; the exclusion must come first or every decline is grouped as a real change"
+    config = _read_config()
+    # 1. The decline preprocessor exists (the helper asserts it) and names decline words.
+    decline = _decline_preprocessor_pattern()
+    assert any(word in decline for word in check_representation_change.NONE_VALUES), (
+        f"the decline preprocessor {decline!r} names no decline value; without it every "
+        "decline is grouped as a real change"
     )
-    assert not any(word in inclusion for word in check_representation_change.NONE_VALUES), (
-        f"the second rule is {inclusion!r}, which looks like the exclusion -- the two are reversed"
+    # 2. The inclusion footer rule precedes the type parsers.
+    inclusion_at = config.index('{ footer = "')
+    fix_parser_at = config.index('{ message = "^fix"')
+    assert inclusion_at < fix_parser_at, (
+        "the Representation-Change inclusion rule must come before the `^fix` type parser, or "
+        "a declaring `fix:` is filed under Fixed instead of Representation changes"
     )
 
 

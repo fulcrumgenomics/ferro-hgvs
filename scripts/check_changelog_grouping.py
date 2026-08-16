@@ -142,10 +142,16 @@ def _toml_value(value: object) -> str:
 
 
 def write_cliff_config(changelog: dict[str, Any], destination: Path) -> None:
-    """Write a git-cliff config carrying the real parsers and postprocessors.
+    """Write a git-cliff config carrying the real parsers, preprocessors and postprocessors.
 
     Only the fields that decide *grouping* are copied. The body is this module's own, so
     that the rendered output is a list of commit ids rather than prose.
+
+    `commit_preprocessors` is copied because grouping now depends on it: a declining
+    `Representation-Change:` trailer is neutralized there (its key is renamed) so the commit
+    falls through to its conventional-type group instead of the "Representation changes"
+    section (#1557). Rendering without it would file every decline as a real change and the
+    audit would report a decline in the section it is meant to keep clean.
     """
     lines = ["[changelog]", 'header = ""', "trim = true", f"body = {_toml_value(BODY_TEMPLATE)}"]
     if "postprocessors" in changelog:
@@ -155,8 +161,10 @@ def write_cliff_config(changelog: dict[str, Any], destination: Path) -> None:
         "[git]",
         "conventional_commits = true",
         "filter_unconventional = false",
-        f"commit_parsers = {_toml_value(changelog['commit_parsers'])}",
     ]
+    if "commit_preprocessors" in changelog:
+        lines.append(f"commit_preprocessors = {_toml_value(changelog['commit_preprocessors'])}")
+    lines.append(f"commit_parsers = {_toml_value(changelog['commit_parsers'])}")
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

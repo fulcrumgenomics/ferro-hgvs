@@ -666,6 +666,17 @@ jobs:
         with:
           python-version: "3.12"
       - uses: taiki-e/install-action@a8fb21b85430c7a58551cf7ea87b03f355b826d9  # git-cliff
+      - name: Test the changelog grouping (renders through git-cliff)
+        # This is where `tests/python/test_changelog_grouping.py`'s end-to-end tests actually
+        # run: they render throwaway repos through the real `release-plz.toml` and assert
+        # where each commit lands (e.g. a declining `fix:` under Fixed, #1557), which needs
+        # git-cliff. The Python Wheel Test job has no git-cliff, so those tests skip there —
+        # they must not be left to skip everywhere. No wheel is needed; the tests import the
+        # script by path.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pytest tests/python/test_changelog_grouping.py -v
       - name: Require each Representation changes entry to carry its disclosure
         # The audit below asks whether the right commits are in the section. This asks
         # whether each entry in the *committed* changelog says what it moved (#1556): the
