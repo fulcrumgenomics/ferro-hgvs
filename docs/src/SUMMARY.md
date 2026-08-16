@@ -12,6 +12,7 @@
 
 - [Normalize variants](guide/normalize-variants.md)
 - [Reference data](guide/reference-data.md)
+- [Benchmarking](guide/benchmarking.md)
 
 # Reference
 

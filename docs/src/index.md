@@ -19,6 +19,7 @@ Use it as a Python package, a Rust crate, or a command-line tool. API docs are o
 - **[Normalize variants](guide/normalize-variants.md)** — batches, files, formats, error modes.
 - **[Reference data](guide/reference-data.md)** — what `ferro prepare` downloads, and the optional
   Ensembl / RefSeqGene data.
+- **[Benchmarking](guide/benchmarking.md)** — timing ferro and comparing it against other HGVS tools.
 - **[CLI reference](cli/overview.md)** — every subcommand.
 
 ## Shadow Spec
