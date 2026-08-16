@@ -29,7 +29,7 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/fulcrumgenomics/ferro-hgvs"
 Repository = "https://github.com/fulcrumgenomics/ferro-hgvs"
-Documentation = "https://github.com/fulcrumgenomics/ferro-hgvs#readme"
+Documentation = "https://ferro-hgvs.readthedocs.io/en/stable/"
 
 [dependency-groups]
 dev = [
