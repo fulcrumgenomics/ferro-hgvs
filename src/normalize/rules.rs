@@ -358,6 +358,19 @@ pub fn insertion_to_repeat(
         return None;
     }
 
+    // #1846: the same early exit `insertion_to_duplication` carries, for the
+    // same reason. This loop rotates and rebuilds a `base_unit.len()`-byte `Vec`
+    // once per base of the unit; when the unit outgrows `ref_seq` every
+    // rotation's `find_tandem_extent` returns `None`, so `best` is already
+    // `None` and the Θ(unit²) work is guaranteed futile. An aperiodic payload
+    // returns above (`added_copies == 1` routes to the dup path), so this fires
+    // only for a payload that really is 2+ copies of an oversized unit — e.g.
+    // two copies of a multi-megabase unit — which the `added_copies` guard does
+    // not bound. See the fuller note on `insertion_to_duplication`.
+    if base_unit.len() > ref_seq.len() {
+        return None;
+    }
+
     // The c.-context codon gate (repeated.md: unit_len % 3 == 0) is applied
     // inside `normalize_repeat` below, not here — see the delegation note.
 
@@ -742,6 +755,23 @@ pub(crate) fn insertion_to_duplication(
     let added_copies = inserted_seq.len() / base_unit.len();
     if added_copies != 1 {
         // 2+-copy insertions are handled by `insertion_to_repeat`.
+        return None;
+    }
+
+    // #1846: bail before the rotation scan when the unit cannot fit the window.
+    // Every rotation below has length `base_unit.len()`, and `find_tandem_extent`
+    // skips every anchor once `anchor + unit.len() > ref_seq.len()` — so a unit
+    // longer than `ref_seq` matches no anchor in any rotation, and `best` is
+    // already determined to stay `None`. Without this exit the loop still runs
+    // `base_unit.len()` iterations, each allocating and filling a
+    // `base_unit.len()`-byte `Vec`, i.e. Θ(L²) bytes copied to reach that fixed
+    // `None`. A spec-legal `ins[ACC:g.A_B]` expands to a payload of the named
+    // range's length (a 38-char cross-reference named 10.8 MB), so an unbounded
+    // scan here never terminates on such input; the early exit makes it O(L).
+    // `ref_seq` is the fetched shuffle window (default 100 bases, grown by
+    // `normalize_in_grown_window`), so this fires only far above any window the
+    // normalizer actually uses and cannot change which inputs convert to a dup.
+    if base_unit.len() > ref_seq.len() {
         return None;
     }
 
@@ -6493,6 +6523,121 @@ mod tests {
         assert_eq!(
             (got.unit.as_slice(), got.start, got.end),
             (&b"TCC"[..], 6, 8)
+        );
+    }
+
+    /// #1846: a payload whose smallest repeat unit is longer than the reference
+    /// window cannot convert — no rotation can match a tract that does not fit —
+    /// so both conversions decline. Pins the *output* the linear early exit
+    /// preserves, on inputs small enough to read at a glance.
+    #[test]
+    fn insertion_conversions_decline_when_the_unit_outgrows_the_window_1846() {
+        // Window shorter than the (aperiodic, single-copy) payload: dup path.
+        let ref_seq = b"ACGT";
+        assert!(
+            insertion_to_duplication(ref_seq, 1, b"ACGTAC", ShuffleDirection::ThreePrime).is_none()
+        );
+        assert!(
+            insertion_to_duplication(ref_seq, 1, b"ACGTAC", ShuffleDirection::FivePrime).is_none()
+        );
+        // Two copies of a 6-base unit that is itself longer than the window:
+        // repeat path (`added_copies == 2`).
+        assert!(insertion_to_repeat(
+            ref_seq,
+            1,
+            b"ACGTAAACGTAA",
+            false,
+            None,
+            ShuffleDirection::ThreePrime
+        )
+        .is_none());
+    }
+
+    /// #1846 boundary guard: a unit whose length exactly EQUALS the reference
+    /// window must still convert — `find_tandem_extent` accepts anchor 0 there
+    /// (`0 + unit.len() == ref_seq.len()`, not `>`). This pins that the early
+    /// exit is strict `>` and not `>=`; a `>=` would silently decline this real
+    /// single-copy duplication while passing every other test.
+    #[test]
+    fn insertion_to_duplication_converts_when_the_unit_exactly_fills_the_window_1846() {
+        // `ACGT` inserted at the 3' end duplicates the whole 4-base window.
+        let ref_seq = b"ACGT";
+        let got = insertion_to_duplication(ref_seq, 3, b"ACGT", ShuffleDirection::ThreePrime)
+            .expect("a single-copy dup of the whole window must still convert");
+        assert_eq!(got.unit, b"ACGT");
+        assert_eq!((got.start, got.end), (1, 4));
+    }
+
+    /// #1846: `insertion_to_duplication` must not scan every rotation of the
+    /// expanded insert payload. When the smallest repeat unit is longer than the
+    /// reference window, `find_tandem_extent` skips every anchor (it needs
+    /// `anchor + unit.len() <= ref_seq.len()`), so no rotation can match and the
+    /// result is *determined* to be `None` — but the pre-#1846 loop still
+    /// allocated and filled a payload-sized `Vec` on each of `payload.len()`
+    /// iterations, i.e. Θ(L²) bytes copied to reach a `None` already fixed. A
+    /// spec-legal `ins[ACC:g.A_B]` expands to that whole named range, so this
+    /// never terminated on a megabase cross-reference insert.
+    ///
+    /// Measured on the unfixed code, this doubled from ~1.0 s at L=200 kb to
+    /// ~5.7 s at L=400 kb (≈4-6x per doubling); the early exit makes it O(L).
+    /// The wall-clock bound is a loud backstop against a quadratic regression,
+    /// generous by ~three orders of magnitude over the linear cost (a few ms) so
+    /// it cannot flake on a loaded machine.
+    #[test]
+    fn insertion_to_duplication_does_not_rescan_a_megabase_payload_1846() {
+        let ref_seq = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        // Aperiodic, single-copy: `smallest_repeat_unit` returns the whole
+        // payload, so `added_copies == 1` and the rotation loop is the hot path.
+        let mut payload = vec![b'A'; 2_000_000];
+        payload[0] = b'C';
+        let start = std::time::Instant::now();
+        let got = insertion_to_duplication(ref_seq, 30, &payload, ShuffleDirection::ThreePrime);
+        let elapsed = start.elapsed();
+        assert!(
+            got.is_none(),
+            "a payload longer than the reference window cannot be a duplication"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "insertion_to_duplication took {elapsed:?} on a 2 Mb payload — the O(payload^2) \
+             rotation scan is back"
+        );
+    }
+
+    /// #1846 sibling: `insertion_to_repeat` carries the identical rotation loop,
+    /// reached when the payload is two or more copies of its unit. Two copies of
+    /// a 1 Mb aperiodic unit exercises it, and the same early exit applies — the
+    /// unit outgrows the window, so every rotation's `find_tandem_extent`
+    /// returns `None` and the result is a determined `None` in O(unit) rather
+    /// than Θ(unit²).
+    #[test]
+    fn insertion_to_repeat_does_not_rescan_a_megabase_payload_1846() {
+        let ref_seq = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        // Two copies of a 1 Mb aperiodic unit: `smallest_repeat_unit` returns the
+        // 1 Mb unit and `added_copies == 2`, so the rotation loop runs.
+        let unit_len = 1_000_000;
+        let mut unit = vec![b'A'; unit_len];
+        unit[0] = b'C';
+        let mut payload = unit.clone();
+        payload.extend_from_slice(&unit);
+        let start = std::time::Instant::now();
+        let got = insertion_to_repeat(
+            ref_seq,
+            30,
+            &payload,
+            false,
+            None,
+            ShuffleDirection::ThreePrime,
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            got.is_none(),
+            "a repeat unit longer than the reference window cannot match a tract"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "insertion_to_repeat took {elapsed:?} on a 2 Mb payload — the O(payload^2) \
+             rotation scan is back"
         );
     }
 
