@@ -2054,6 +2054,69 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(spec_conformance_axis)"
 
+  # src/benchmark/hgvs_rs.rs carries 3 pure-Rust `#[cfg(test)]` tests
+  # (`benchmark::hgvs_rs::tests::*`) that only compile under the `hgvs-rs`
+  # feature — and, before #2080, ran NOWHERE. `dev` does not include `hgvs-rs`,
+  # so the sharded `test` jobs never compiled them, and the only two `hgvs-rs`
+  # invocations anywhere in CI are build-only: `clippy-all-features`'s
+  # `--all-features --all-targets` compiles the `#[cfg(test)]` module but does
+  # not execute it (its own comment names `hgvs-rs` as a feature it exists to
+  # keep compiling), and `deploy-local.yml` builds the `ferro-web` binary. A
+  # break in any of the three passed every check — the #1505 / #1372 / #2046
+  # dead-coverage family, one feature over.
+  #
+  # The tests are hermetic — URL parsing and a default-config constructor, with
+  # no UTA database or SeqRepo checkout — so this job only has to compile and run
+  # them. No spec submodule is needed: the scoped selection touches nothing that
+  # reads `assets/hgvs-nomenclature` at runtime, and no `include_str!`/
+  # `include_bytes!` under `src/` names it, so `submodules` is left at its
+  # checkout default (off).
+  #
+  # SCOPED with `-E 'test(benchmark::hgvs_rs::)'`, and run under nextest rather
+  # than `cargo test`, for the same reason #2046's `python::tests` step is:
+  # `--features hgvs-rs` pulls in `benchmark`, so a bare `--lib` run would
+  # execute the whole lib suite (4000+ tests) in one process, which is not safe
+  # — e.g. `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
+  # asserts deltas on process-global `AtomicU64` counters that any concurrent
+  # test reaching `partition_block_for_rule` corrupts. nextest is
+  # process-per-test, and the selection keeps the job to the three tests it
+  # exists to run.
+  #
+  # `--no-tests=fail` is the non-vacuity guard, and the other reason this is
+  # nextest (same reasoning as #2046's `python::tests` step and the `soak` job).
+  # If the module is renamed or the tests are deleted, an empty selection exits 4
+  # here (`error: no tests to run`) rather than reporting `0 passed` and exiting
+  # 0 — so the coverage this job exists to provide cannot silently stop running.
+  #
+  # This job's name is NOT one of the repository-required contexts (the ruleset
+  # names a fixed set — see the `test-required` comment below), so it is wired
+  # into the `Test` rollup's `needs` to gate the merge. The compile cost it buys
+  # is real and deliberate: `hgvs-rs` pulls `hgvs`, `postgres`, `seqrepo`,
+  # `biocommons-bioutils` and `indexmap`, a dependency tree no other test job
+  # builds — which is why #2080 was split out of #2072 rather than folded in.
+  hgvs-rs-tests:
+    name: hgvs-rs Rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: hgvs-rs-tests
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - name: Run src/benchmark/hgvs_rs.rs unit tests
+        run: |
+          cargo nextest run --features hgvs-rs --lib --no-tests=fail \
+            -E 'test(benchmark::hgvs_rs::)'
+
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
   # Aggregator that reports the `Test` status context.
@@ -2072,7 +2135,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [test, test-oracle, soak, sweeps, censuses]
+    needs: [test, test-oracle, soak, sweeps, censuses, hgvs-rs-tests]
     # `always()` so a failed or cancelled dependency still reports a conclusion
     # rather than leaving the required context pending forever.
     if: always()
@@ -2084,11 +2147,13 @@ jobs:
           echo "soak            = ${{ needs.soak.result }}"
           echo "sweeps          = ${{ needs.sweeps.result }}"
           echo "censuses        = ${{ needs.censuses.result }}"
+          echo "hgvs-rs-tests   = ${{ needs.hgvs-rs-tests.result }}"
           if [ "${{ needs.test.result }}" != "success" ] \
             || [ "${{ needs.test-oracle.result }}" != "success" ] \
             || [ "${{ needs.soak.result }}" != "success" ] \
             || [ "${{ needs.sweeps.result }}" != "success" ] \
-            || [ "${{ needs.censuses.result }}" != "success" ]; then
+            || [ "${{ needs.censuses.result }}" != "success" ] \
+            || [ "${{ needs.hgvs-rs-tests.result }}" != "success" ]; then
             echo "::error::one or more test jobs did not succeed"
             exit 1
           fi
