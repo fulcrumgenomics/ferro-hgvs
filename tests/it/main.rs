@@ -48,6 +48,7 @@ mod issue_1870_cds_less_transcript_refusal;
 mod issue_1916_intron_distance_underflow;
 mod issue_1917_reversed_range_window;
 mod issue_1970_u16_cost_grid_bound;
+mod issue_1989_declined_is_indeterminate;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
