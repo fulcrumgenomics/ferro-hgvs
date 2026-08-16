@@ -1056,16 +1056,55 @@ derived from `MAX_CANONICAL_WINDOW`), raised from `1024` by #1899. The corpus's 
 between". The cap moved, both cores landed on the same side, and `1100 > 1024` kept the guard
 green. It even carries a comment instructing the reader to update the literal if the constant
 moves; **that comment is the defect, not a mitigation.** A guard that restates the value it guards
-cannot observe that value changing. Import the constant. If it is private, make it `pub(crate)` —
-that is cheaper than the class of failure it buys out of. Filed as #1925.
+cannot observe that value changing. Import the constant. `dump_normalized_corpus` is a genuine
+`[[example]]`, so it links the library as an **external crate** (`use ferro_hgvs::…`) and can see
+only the library's `pub` API — **`pub(crate)` is unreachable from there.** A private item must be
+made `pub`, with `#[doc(hidden)]` on the re-export to keep it off the public documentation
+surface; `src/lib.rs`'s `ShuffleDirection` re-export is the worked pattern.
 
-**2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs`
-has now been blind six times — geometry (#1456), scale (#1460), sequence structure (#1517),
-transcript geometry (#1478), molecule type (#1606), and reversed ranges (#1917) — and its own
-header records the governing fact: **fixing one blindness does not reveal the next.** Each time,
-a `0` was available to quote as safety. So before quoting one, **name the property your change
-keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
+**Do not gate such a re-export behind `dev`.** The tree has already decided that, for this very
+constant, and `src/normalize/mod.rs` gives the reason in as many words: "**NOT gated on `dev`**:
+… a constant present in only some builds re-creates that gap for anyone building without the
+feature." A feature gate buys back the documentation surface at the price of reintroducing the
+restated literal wherever the feature is off — which is the failure this shape is about, moved
+rather than removed. Where a gate genuinely is unavoidable the consumer must **refuse** in a build
+that lacks the item rather than report a zero: `partition_blocks_cut` is `#[cfg(debug_assertions)]`
+and `measure_spec_conformance_per_arm.rs` does exactly that.
+
+Making the item `pub` is cheaper than the class of failure it buys out of. Filed as #1925, which
+made `MAX_CANONICAL_BLOCK` `pub` and imported it here.
+
+**2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs` has
+been blind in each of the ways below, and its own header records the governing fact: **fixing one
+blindness does not reveal the next.**
+
+This is the maintained list — the generator's header points here for it, and states no count of
+its own on purpose, because **a count of blindnesses is itself a number that goes stale every time
+the thing it counts happens** (#1947), which is the failure this whole section is about. So this
+list carries no total either. **Add a row; do not increment a number.**
+
+| blind to | issue | recorded in `dump_normalized_corpus.rs` |
+|---|---|---|
+| member geometry | #1456 | header item 3 |
+| scale — 20-mer cores never reach the split cap | #1460 | header item 4 |
+| sequence structure — a random core cannot be asked for a coincidence pattern | #1517 | header item 5 |
+| transcript geometry — a single exon with `CDS_START = 1` | #1478 | header, the chain under item 6 |
+| molecule type — no `p.` row at all until the protein axis | #1606 | header item 6 |
+| reversed ranges | #1917 | header, the #1947 correction |
+| a repeat placed beside a sibling it could collide with | #1749 | the `repeat_beside_a_sibling` family comment |
+| that family shipping able to build only *growing* repeats | #1752 | header, the #1947 correction |
+| direction — every lone `delins` was equal-length or a net insertion, so a net-deletion rule was structurally unreachable | #1610 | the `lone_net_deletion_delins` family comment |
+
+Each time, a `0` was available to quote as safety. So before quoting one, **name the property your
+change keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
 claim about the instrument. Report a structural zero *as* structural, in those words.
+
+**The ordinals written inside the generator disagree with each other and with this table, and that
+is settled rather than pending.** `PROTEIN_FAMILIES` calls itself "the fourth instance" and
+`repeat_beside_a_sibling` "the fifth", each counting a chain that omits #1517 and #1917;
+`lone_net_deletion_delins` then declines to claim an ordinal at all, on the stated ground that "a
+third restatement is how that drift got started". Do not renumber them into agreement — that is
+the increment this section forbids. Read those ordinals as prose and this table as the inventory.
 
 **3. A rule generalised from the one case you reproduced.** #1917 reported an underflow and stated
 the rule as "any reversed range whose span exceeds `window_size`". Measured, the failure is three
