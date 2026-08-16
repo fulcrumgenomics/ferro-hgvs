@@ -646,6 +646,50 @@ def test_a_real_multiline_disclosure_still_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A BARE decline may not hide a move on a continuation line either (#2031)
+#
+# #2027 (#1854) taught `check` to read the whole trailer value, but that fix
+# depends on TERMINATING PUNCTUATION: `DECLINE_RE` is not MULTILINE, so its
+# trailing `.*` (DOTALL) needs a `.;:—–` to start consuming before it can span
+# the continuation and reach `$` at end-of-string. Without a terminator there is
+# nothing to consume the continuation, so `$` never matches, `declines(full)`
+# returns False, and the contradiction tripwire — gated on `declines` — never
+# fires. A bare `none` with a `<n> rows move` continuation slips through, read as
+# a real change rather than as the contradicted decline it is. git-cliff's
+# footer rule is MULTILINE and reads the same bare decline off the trailer line,
+# so it files it under Other and the disclosure vanishes.
+#
+# The fix reads the decline verdict from the FIRST LINE (which is what git-cliff
+# sees) while the contradiction tripwire still scans the whole value.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("trailer", ["none", "no", "n/a", "na"])
+def test_a_bare_decline_that_moves_on_a_continuation_line_fails(trailer: str) -> None:
+    """A decline with NO terminating punctuation, then a move on the next line."""
+    body = f"Representation-Change: {trailer}\n150 rows of 85,642 move, all 3'-direction.\n"
+    ok, message = check(["src/normalize/merge.rs"], body)
+    assert not ok, f"bare {trailer!r} + a continuation-line move must be refused"
+    assert "declines and then describes a move" in message
+    assert "150 rows of 85,642 move" in message, "the message must quote the hidden move"
+
+
+@pytest.mark.parametrize("trailer", ["none", "no", "n/a", "na"])
+def test_a_bare_decline_with_a_reason_continuation_still_passes(trailer: str) -> None:
+    """A bare decline whose continuation is an ordinary reason stays a clean decline.
+
+    The discriminator for #2031: reading the verdict off the first line must not turn an
+    honest multi-line bare decline into a false contradiction.
+    """
+    body = (
+        f"Representation-Change: {trailer}\n"
+        "Comments and one new test module only; no watched file changes behaviour.\n"
+    )
+    ok, _ = check(["src/normalize/merge.rs"], body)
+    assert ok, f"a bare {trailer!r} whose continuation is a reason must pass"
+
+
+# ---------------------------------------------------------------------------
 # #1647: the count is the count, never the denominator
 #
 # The guard used to read "the number immediately before `rows`" as the moving
@@ -798,6 +842,18 @@ def test_the_two_decline_rules_agree_value_by_value() -> None:
         # tail, so the continuation does not change the verdict for either side.
         "none.\n  Comments and one new test module only; no watched file changes behaviour.",
         "577 rows move, 360 merge.\n  Previously-accepted inputs, so a real migration.",
+        # BARE declines with a continuation (#2031). This is the axis the parity test could
+        # not see: both multi-line values above carry a terminator, whose `[\s\S]*` tail
+        # spans the continuation for both rules. Without one, git-cliff still reads the
+        # decline off the trailer's own line (it is MULTILINE), so the verdict is a decline
+        # for it — and the checker must agree by reading the same first line. Before #2031
+        # the checker read the WHOLE value through a non-MULTILINE `DECLINE_RE`, so a bare
+        # `none` with any continuation was not a decline for it, disagreeing with git-cliff
+        # (the #1555 class) and — worse — leaving the contradiction tripwire ungated.
+        "none\n150 rows of 85,642 move, all 3'-direction.",
+        "no\nTests only; nothing under a watched directory moves.",
+        "n/a\nDocs only.",
+        "na\nGenerated artifact only.",
     ]
     for value in values:
         by_changelog = changelog_rule.search(f"Representation-Change: {value}") is not None
