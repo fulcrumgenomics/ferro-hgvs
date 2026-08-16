@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8fbdea1779d3ea27e74727230d5452791cac8508cdc002e948ee874a581cdcf3 # shrinks to case = AdjacencyCase { gap: 200, payload: "T", span_start: 200, span_end: 200, kind: Dup, placement: Interior, third: None }
+cc bb9c914aa4db2175b4a379b0f58531c13e082b4d7c7be1aa4d759eb6f1679817 # shrinks to case = AdjacencyCase { gap: 202, payload: "TT", span_start: 203, span_end: 203, kind: Dup, placement: FivePrimeEdge, third: None }

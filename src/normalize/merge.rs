@@ -358,17 +358,29 @@ pub(crate) fn has_same_gap_insertions(variants: &[HgvsVariant], phase: AllelePha
         HgvsVariant::Rna(_) => CisKind::Rna,
         _ => return false,
     };
-    let mut seen = std::collections::HashSet::new();
+    // Tallied per kind, not as one set. A gap hosting a lone `dup` and a lone
+    // `ins` is NOT order-ambiguous: `DNA/duplication.md:90` publishes that pair
+    // as a correct description and glosses it as a duplication "**followed by**"
+    // the insertion, and `collapse_overlapping_cis_edits` writes the dup's copy
+    // first accordingly. Reporting it here would send the allele down the
+    // preserve-as-authored path in `normalize_allele`, where the two spellings
+    // settle apart — which is the confluence break, not a conservative refusal.
+    //
+    // Two true insertions at one gap remain ambiguous (`[g insA; g insC]` is
+    // `...AC...` or `...CA...`, and `general.md:78` supplies `ins[A;B]` for that
+    // content), as do two `dup`s writing into one slot.
+    let mut ins_gaps = std::collections::HashSet::new();
+    let mut dup_gaps = std::collections::HashSet::new();
     for v in variants {
         let Some((_, _, s, e, edit)) = cis_axis_parts(v, kind) else {
             continue;
         };
-        let gap = match edit {
-            NaEdit::Insertion { .. } if e == s + 1 => s,
+        let (gap, seen) = match edit {
+            NaEdit::Insertion { .. } if e == s + 1 => (s, &mut ins_gaps),
             NaEdit::Duplication {
                 uncertain_extent: None,
                 ..
-            } => e,
+            } => (e, &mut dup_gaps),
             _ => continue,
         };
         if !seen.insert(gap) {
@@ -458,7 +470,8 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // the reference, and only `lower_repeat_edits` reads it), so this pass —
     // which reasons purely about spans — could not use one even if it wanted
     // to.
-    let Some(edits) = collect_canonical_edits(&variants, kind, body, &template_accession) else {
+    let Some(mut edits) = collect_canonical_edits(&variants, kind, body, &template_accession)
+    else {
         return variants;
     };
     if edits
@@ -511,18 +524,46 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // matches the conservative all-or-nothing philosophy and preserves the
     // member-order invariance the collapse otherwise guarantees. A `Dup { s, e }`
     // attaches at gap `e` (the 3' copy) and reads its source span `[s, e]`.
-    let mut seen_insertion_gaps = std::collections::HashSet::new();
+    //
+    // **A lone `dup` and a lone `ins` at one gap are the exception**, because
+    // their order is not undetermined: `DNA/duplication.md:90` publishes such a
+    // pair as a correct description and glosses it as a duplication "**followed
+    // by**" the insertion. So the tally is kept per kind — two true insertions
+    // at one gap is still order-ambiguous and still refused, as is a second
+    // `dup` — and the apply loop below writes the dup's copy first whatever
+    // order the members were authored in.
+    let mut ins_gaps: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut dup_gaps: std::collections::HashSet<i64> = std::collections::HashSet::new();
     for e in &edits {
-        let gap = match e {
-            GEdit::Ins { gap, .. } => *gap,
-            GEdit::Dup { e, .. } => *e,
+        let (gap, seen) = match e {
+            GEdit::Ins { gap, .. } => (*gap, &mut ins_gaps),
+            GEdit::Dup { e, .. } => (*e, &mut dup_gaps),
             _ => continue,
         };
         if gap < c_lo - 1 || gap > c_hi {
             return variants;
         }
-        if !seen_insertion_gaps.insert(gap) {
+        if !seen.insert(gap) {
             return variants;
+        }
+    }
+
+    // Fix the composition order at any junction hosting both, so the collapse
+    // does not concatenate into `after[idx(gap)]` in member order — which is
+    // what would make `[g dup; g insT]` settle apart from `[g insT; g dup]`.
+    // The guard above caps each kind at one per gap, so at most one pair moves.
+    let shared_gaps: Vec<i64> = dup_gaps.intersection(&ins_gaps).copied().collect();
+    for gap in shared_gaps {
+        let dup_at = edits
+            .iter()
+            .position(|e| matches!(e, GEdit::Dup { e: end, .. } if *end == gap));
+        let ins_at = edits
+            .iter()
+            .position(|e| matches!(e, GEdit::Ins { gap: g, .. } if *g == gap));
+        if let (Some(d), Some(i)) = (dup_at, ins_at) {
+            if d > i {
+                edits.swap(d, i);
+            }
         }
     }
 

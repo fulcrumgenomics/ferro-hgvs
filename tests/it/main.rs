@@ -11,11 +11,16 @@
 //! nextest still addresses individual tests by name
 //! (`it::<module>::<test>`); filters by test name are unaffected.
 
+mod adjacency_confluence;
+mod adjacency_confluence_proptest;
 mod common;
+mod copy_range_payload_corpus;
 mod five_prime_boundary_delins_unification;
 mod five_prime_insertion_dup_boundary_anchor;
 mod five_prime_public_surface_removed;
 mod five_prime_tandem_repeat_dup_rotation;
+mod insertion_adjacency_corpus;
+mod insertion_adjacency_defects;
 mod issue_1282_position_zero;
 mod issue_1450_derivation_exon_junction;
 mod issue_1453_noncoding_rna_repeated_member;
@@ -42,6 +47,7 @@ mod issue_1870_cds_less_transcript_refusal;
 mod issue_1916_intron_distance_underflow;
 mod issue_1917_reversed_range_window;
 mod issue_1970_u16_cost_grid_bound;
+mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;

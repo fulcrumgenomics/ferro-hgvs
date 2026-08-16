@@ -29,6 +29,10 @@
 //! - `fixture_gen`: the shared on-demand regeneration flow (locking,
 //!   subprocess, atomic rename) that `spec_fixture` and `spec_enumeration`
 //!   both wrap.
+//! - `hg38_window`: a verbatim GRCh38 slice, so the adjacency and copy-range
+//!   suites edit real bases at real coordinates without needing a prepared
+//!   reference (which CI does not have, and whose absence would make those
+//!   suites skip green).
 //! - `rulings`: reads the adjudication ledger's `rulings` section into typed
 //!   records, so the citation-currency scan and the clause index share one
 //!   definition of what a record is.
@@ -48,6 +52,7 @@ pub mod bulk_fixtures;
 pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;
+pub mod hg38_window;
 pub mod manifest;
 pub mod minimal_alignment;
 pub mod rulings;
