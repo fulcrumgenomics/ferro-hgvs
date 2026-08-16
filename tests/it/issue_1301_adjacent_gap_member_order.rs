@@ -21,14 +21,20 @@
 //! discriminator — a member adding at its span's *start* sorts before one acting
 //! across the whole span.
 
-use crate::common::synthetic::{padded, SyntheticBuilder};
+use crate::common::synthetic::{extended_core, padded, SyntheticBuilder};
 use ferro_hgvs::spdi::hgvs_to_spdi;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, Normalizer};
 
 const CORE: &str = "GCATGAAAAT";
 
 fn normalize(input: &str) -> String {
-    let provider = SyntheticBuilder::genomic(CORE).build();
+    normalize_in(CORE, input)
+}
+
+/// [`normalize`] over a caller-supplied core, so a row can place a member past
+/// `merge::MAX_CANONICAL_WINDOW` — see [`extended_core`].
+fn normalize_in(core: &str, input: &str) -> String {
+    let provider = SyntheticBuilder::genomic(core).build();
     Normalizer::new(provider)
         .normalize(&parse_hgvs(input).expect("parse"))
         .expect("normalize")
@@ -38,7 +44,12 @@ fn normalize(input: &str) -> String {
 /// The interbase start of each member, in rendered order, via `hgvs_to_spdi` —
 /// a different code path from the ordering key under test.
 fn member_starts(descriptor: &str) -> Vec<u64> {
-    let provider = SyntheticBuilder::genomic(CORE).build();
+    member_starts_in(CORE, descriptor)
+}
+
+/// [`member_starts`] over a caller-supplied core.
+fn member_starts_in(core: &str, descriptor: &str) -> Vec<u64> {
+    let provider = SyntheticBuilder::genomic(core).build();
     let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).expect("parse") {
         HgvsVariant::Allele(allele) => allele.variants.clone(),
         single => vec![single],
@@ -56,8 +67,13 @@ fn member_starts(descriptor: &str) -> Vec<u64> {
 /// Assert the output denotes the input's bases, so an ordering test cannot pass
 /// by rendering a *wrong* pair tidily.
 fn assert_preserving(input: &str, output: &str) {
-    let provider = SyntheticBuilder::genomic(CORE).build();
-    let reference = padded(CORE);
+    assert_preserving_in(CORE, input, output)
+}
+
+/// [`assert_preserving`] over a caller-supplied core.
+fn assert_preserving_in(core: &str, input: &str, output: &str) {
+    let provider = SyntheticBuilder::genomic(core).build();
+    let reference = padded(core);
     let denote = |descriptor: &str| -> Option<String> {
         let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
             HgvsVariant::Allele(allele) => allele.variants.clone(),
@@ -132,47 +148,25 @@ fn an_insertion_still_sorts_before_a_duplication_sharing_its_span_beside_a_third
     // its copy after its last base, at 265. Both span `264_265`, so start and
     // end tie and only `junction_rank` separates them.
     //
-    // The deletion at 270 is what keeps the pair from being derived into one
+    // The third member is what keeps the pair from being derived into one
     // insertion (see `an_insertion_sorts_before_a_duplication_sharing_its_span`
-    // above, whose two-member form now merges). It sits clear of the A-run the
-    // payloads shift through — a deletion at 266 or 267 would block the shift
-    // and the pair would never reach the tie at all — so the members still
-    // re-spell exactly as they did, and the tie is still broken by the key.
+    // above, whose two-member form now merges), so the members still re-spell
+    // exactly as they did and the tie is still broken by the key.
     //
-    // # RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835)
-    //
-    // Was `NC_TEST.1:g.[264_265insCA;264_265dup;270del]`; now
-    // `NC_TEST.1:g.[264_265insCAAA;270del]` — the same single insertion the
-    // two-member case above already reaches, so the third member has stopped
-    // blocking the derivation.
-    //
-    // LICENSED BY `duplication-must-ranks-the-label-not-the-partition` (decided,
-    // operator ruling 2026-08-13), which names this test by its full path. The
-    // record classes it as inside `contiguous-insertion-split-by-a-blocked-derivation`'s
-    // STATED reach: that record's REPRESENTATION EFFECT paragraph predicted this
-    // geometry by description in advance — a junction-adjacent `ins`+`dup` pair
-    // beside a third member far enough away to block the derivation, moving "to a
-    // single insertion".
-    //
-    // `duplication.md:18`'s MUST is not being ignored. Under that ruling it ranks
-    // the *label* for a change rather than requiring a partition that exposes
-    // one, and it is applied per piece of the partition re-derived from the
-    // resulting sequence; the single `CAAA` insertion is not a copy of the
-    // reference bases immediately 5' of its insertion point, so the clause does
-    // not reach it.
-    //
-    // WHAT THIS TEST NO LONGER EXERCISES, stated because the whole file is about
-    // it: with one member there is no `junction_rank` tie left to break here. The
-    // tie is still broken and still asserted on the protein cases below, where
-    // both members tie on start and end — the same fallback the two-member case
-    // above already records. The interbase-order assertion below is kept and is
-    // now trivially satisfied.
-    let input = "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]";
-    let output = normalize(input);
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCAAA;270del]");
-    assert_preserving(input, &output);
+    // It sits past `MAX_CANONICAL_WINDOW` (4096), which refuses the window
+    // before any alignment runs. `270del` used to do the job by being 4 nt clear
+    // of the A-run; the partition default flip (**#1835**) ended that, because
+    // the derivation answers the whole allele however distant that member is —
+    // this row read `g.[264_265insCAAA;270del]`, with no tie left to break. The
+    // near end is still a trap: a deletion at 266 or 267 blocks the shift and the pair
+    // never reaches the tie at all.
+    let core = extended_core(CORE, 4400);
+    let input = "NC_TEST.1:g.[263_264insAC;264_265insAA;4500del]";
+    let output = normalize_in(&core, input);
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;4500del]");
+    assert_preserving_in(&core, input, &output);
 
-    let starts = member_starts(&output);
+    let starts = member_starts_in(&core, &output);
     assert!(
         starts.windows(2).all(|pair| pair[0] <= pair[1]),
         "`{output}` renders its members out of interbase order: {starts:?}"

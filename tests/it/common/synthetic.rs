@@ -38,6 +38,35 @@ pub fn padded(core: &str) -> String {
     format!("{}{}{}", PAD, core, PAD)
 }
 
+/// `core` followed by `ACGT` filler, out to at least `len` bases.
+///
+/// The filler continues the pad's own period-4 `ACGT` rotation, and the pad's
+/// first base is `A`, so the bases immediately either side of `core` are
+/// byte-identical to the ones [`padded`] gives it — only the distance to the far
+/// end grows. Nothing about a variant inside `core` can therefore change.
+///
+/// It exists to place a **third cis member past `merge::MAX_CANONICAL_WINDOW`**
+/// (4096). The sequence-first derivation refuses a window that wide before it
+/// aligns anything, so the per-member pipeline decides the output — which is
+/// where the sibling barriers and `cis_member_order_key` live, and the only
+/// state in which they are observable. A merely *distant* member no longer
+/// serves: since the partition default flip (**#1835**) the whole allele is
+/// derived from the resulting sequence however far apart its members sit, so
+/// every row that leaned on distance to block the derivation went vacuous. Each
+/// of those rows records the exact merged string it read once that happened.
+///
+/// A single-base deletion inside the filler is stable in both directions:
+/// every base of a period-4 tandem differs from both its neighbours, so there is
+/// no run for it to shift along.
+#[allow(dead_code)]
+pub fn extended_core(core: &str, len: usize) -> String {
+    let mut extended = core.to_string();
+    while extended.len() < len {
+        extended.push_str("ACGT");
+    }
+    extended
+}
+
 /// Builder for synthetic `MockProvider` fixtures across HGVS coord systems.
 ///
 /// All builders pad the input core sequence with 256 bases on each side so

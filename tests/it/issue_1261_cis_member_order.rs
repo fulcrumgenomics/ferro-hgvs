@@ -33,6 +33,7 @@
 //! only, so every assertion below pairs the order check with the apply oracle.
 
 use crate::common::cis_apply_oracle::{apply, assert_members_ascending, normalize};
+use crate::common::synthetic::extended_core;
 
 /// `("ACGT" x 64) + core + ("ACGT" x 64)`, so `core[i]` is at 1-based position
 /// `257 + i`. Padding keeps every shift well away from a contig boundary.
@@ -84,12 +85,18 @@ fn two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_memb
     // first — and with the descriptor tie-break it did not, since
     // `"258_259dup" < "258dup"`.
     //
-    // The deletion at 268 is what keeps the pair from being derived into one
-    // insertion (the shape above): it sits well clear of the A-run the payloads
-    // shift through, so it does not move them, but the derivation declines the
-    // three-member group and the two duplications survive to be sorted. This is
-    // the same device `issue_1304_junction_barrier_snapshot`'s
-    // `a_moved_sibling_still_bars_the_crossing_it_started_at` uses.
+    // The third member is what keeps the pair from being derived into one
+    // insertion (the shape above): the derivation declines the three-member
+    // group and the two duplications survive to be sorted. This is the same
+    // device `issue_1304_junction_barrier_snapshot` uses.
+    //
+    // It sits past `MAX_CANONICAL_WINDOW` (4096), which refuses the window
+    // before any alignment runs. A merely distant member — this row used
+    // `268del` — stopped working at the partition default flip (**#1835**): the
+    // whole allele derives however far off that member is, and this read
+    // `g.[258_259insAGA;268del]`, which is the row above with a deletion
+    // attached. `synthetic::extended_core` records why extending the core
+    // cannot disturb the pair.
     //
     // Without it the shared-start tie would be pinned only on the protein axis
     // (`protein_members_sharing_a_start_render_in_end_order`), which cannot
@@ -132,10 +139,10 @@ fn two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_memb
     // recorded here rather than papered over; closing it needs a nucleotide shape
     // whose members survive the derivation, which this core no longer supplies.
     let output = assert_ordered_and_preserving(
-        "CAGTATGCAGGCAA",
-        "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
+        &extended_core("CAGTATGCAGGCAA", 4400),
+        "TEMPLATE:g.[258_259insA;259_260insAG;4500del]",
     );
-    assert_eq!(output, "TEMPLATE:g.[258_259insAGA;268del]");
+    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup;4500del]");
 }
 
 #[test]
@@ -143,12 +150,12 @@ fn the_shared_start_order_beside_a_third_member_is_authored_order_independent() 
     // The sort must be total on the three-member shape too, or the tie above is
     // being decided by input order rather than by the key.
     let forward = assert_ordered_and_preserving(
-        "CAGTATGCAGGCAA",
-        "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
+        &extended_core("CAGTATGCAGGCAA", 4400),
+        "TEMPLATE:g.[258_259insA;259_260insAG;4500del]",
     );
     let reverse = assert_ordered_and_preserving(
-        "CAGTATGCAGGCAA",
-        "TEMPLATE:g.[268del;259_260insAG;258_259insA]",
+        &extended_core("CAGTATGCAGGCAA", 4400),
+        "TEMPLATE:g.[4500del;259_260insAG;258_259insA]",
     );
     assert_eq!(forward, reverse);
 }
