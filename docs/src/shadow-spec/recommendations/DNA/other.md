@@ -79,16 +79,18 @@ in a table (`|` is not a markdown-table-safe character).
 
 Ferro: the mosaic operator `/` joins two members of a single mixed sample; the recommendations
 write the reference member first, in the compact form `<pos>=/<edit>` where the `=` identity
-carries the position and the bare edit inherits it. The reference-first ordering is not enforced
-against a variant-first input — ferro's non-reordering of the variant-first shorthand is tracked by
-[#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034), governed on
-`substitution.md:47-49`.
+carries the position and the bare edit inherits it. Ferro reorders a variant-first input to that
+form ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)), governed on
+`substitution.md:47-49`, but only for an exactly two-member mixture whose first member is a certain
+substitution and whose second is a certain identity it can absorb without loss: a whole-entity `=`,
+or a position-bound `=` at the substitution's own position, accession and axis. Any other identity — a
+screened region such as `c.85T>C/c.60_70=` — stays in authored order.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `LRG_199t1:c.85=/T>C` | recommended | — | the spec's own mosaic example, reference-first (parse-only) |
 | `NM_004006.3:c.123=/C>T` | recommended | self | executable mosaic-substitution twin — reference `=` written first per the NOTE, single-base member so no shift |
-| `NM_004006.3:c.123C>T/=` | conformant | self | valid, but the reference should be written first (NOTE); ferro does not reorder the variant-first shorthand to `c.123=/C>T` (same limitation as `substitution.md:49`, tracked by [#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
+| `NM_004006.3:c.123C>T/=` | recommended | `NM_004006.3:c.123=/C>T` | variant-first shorthand; ferro reorders it reference-first, as the NOTE and `substitution.md:49` write it ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
 
 ## `other.md:49` — a mosaic whose `del` member 3'-shifts (the finding)
 
@@ -115,11 +117,13 @@ the last row is the finding — the `del` member shifts off the shared range.
 
 Ferro: identical in structure and jurisdiction to mosaicism — `//` joins two members of a mix of
 cell populations, governed by the same `substitution.md` authority as `/`. Ferro accepts and
-preserves the compact chimeric form; the variant-first shorthand is again not reordered (tracked by
-[#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)).
+preserves the compact chimeric form, and reorders the variant-first substitution shorthand to it
+([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) under the same two-member,
+lossless-identity limits as `/`; a non-co-located identity such as `c.85T>C//c.60_70=`, or one
+stating a base such as `c.85T>C//c.85A=`, stays in authored order.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.2:c.85=//T>C` | recommended | — | the spec's own chimeric example (parse-only) |
 | `NM_004006.3:c.123=//C>T` | recommended | self | executable chimeric-substitution twin — reference `=` written first per the NOTE |
-| `NM_004006.3:c.123C>T//=` | conformant | self | valid, but the reference should be written first (NOTE); ferro does not reorder the variant-first shorthand to `c.123=//C>T` (tracked by [#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
+| `NM_004006.3:c.123C>T//=` | recommended | `NM_004006.3:c.123=//C>T` | variant-first shorthand; ferro reorders it reference-first, as the NOTE writes it ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |

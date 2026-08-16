@@ -237,13 +237,13 @@
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:31-38","input":"NM_004006.3:c.[123=;124=]","verdict":"recommended","normalizes_to":"NM_004006.3:c.[123=;124=]"}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:50-52","input":"LRG_199t1:c.85=/T>C","verdict":"recommended","normalizes_to":null}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:50-52","input":"NM_004006.3:c.123=/C>T","verdict":"recommended","normalizes_to":"NM_004006.3:c.123=/C>T"}
-{"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:50-52","input":"NM_004006.3:c.123C>T/=","verdict":"conformant","normalizes_to":"NM_004006.3:c.123C>T/="}
+{"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:50-52","input":"NM_004006.3:c.123C>T/=","verdict":"recommended","normalizes_to":"NM_004006.3:c.123=/C>T"}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:49-49","input":"NM_004006.3:c.5695_5697=/del","verdict":"recommended","normalizes_to":"NM_004006.3:c.5695_5697=/del"}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:49-49","input":"NM_004006.3:c.5695_5697=//del","verdict":"recommended","normalizes_to":"NM_004006.3:c.5695_5697=//del"}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:49-49","input":"NM_004006.3:c.5690_5692=/del","verdict":"conformant","normalizes_to":"NM_004006.3:c.5690_5692=/NM_004006.3:c.5695_5697del"}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:55-57","input":"NM_004006.2:c.85=//T>C","verdict":"recommended","normalizes_to":null}
 {"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:55-57","input":"NM_004006.3:c.123=//C>T","verdict":"recommended","normalizes_to":"NM_004006.3:c.123=//C>T"}
-{"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:55-57","input":"NM_004006.3:c.123C>T//=","verdict":"conformant","normalizes_to":"NM_004006.3:c.123C>T//="}
+{"page":"recommendations/DNA/other.md","anchor":"recommendations/DNA/other.md:55-57","input":"NM_004006.3:c.123C>T//=","verdict":"recommended","normalizes_to":"NM_004006.3:c.123=//C>T"}
 {"page":"recommendations/DNA/repeated.md","anchor":"recommendations/DNA/repeated.md:18-18","input":"NC_000012.11:g.112036755_112036823CTG[9]TTG[1]CTG[13]","verdict":"recommended","normalizes_to":null}
 {"page":"recommendations/DNA/repeated.md","anchor":"recommendations/DNA/repeated.md:19-20","input":"NM_000044.3:c.171_239GCA[34]","verdict":"recommended","normalizes_to":null}
 {"page":"recommendations/DNA/repeated.md","anchor":"recommendations/DNA/repeated.md:19-20","input":"NM_000044.3:c.(92_331)insN[33]","verdict":"recommended","normalizes_to":null}
@@ -302,7 +302,7 @@
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:42-46","input":"LRG_199t1:c.94-23_188+33=","verdict":"recommended","normalizes_to":null}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85=/T>C","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=/T>C"}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85=//T>C","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=//T>C"}
-{"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85T>C/=","verdict":"conformant","normalizes_to":"NM_004006.3:c.85T>C/="}
+{"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85T>C/=","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=/T>C"}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:57-60","input":"NM_004006.3:c.(76A>G)","verdict":"recommended","normalizes_to":"NM_004006.3:c.(76A>G)"}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:61-69","input":"NM_004006.1 3G>T","verdict":"refused","normalizes_to":null}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:61-69","input":"GJB2 76A>C","verdict":"refused","normalizes_to":null}
@@ -571,7 +571,7 @@
 {"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:47-54","input":"NM_004006.3:r.?","verdict":"recommended","normalizes_to":"NM_004006.3:r.?"}
 {"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:56-62","input":"NM_004006.3:r.85=/u>c","verdict":"recommended","normalizes_to":"NM_004006.3:r.85=/u>c"}
 {"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:56-62","input":"NM_004006.3:r.85=//u>c","verdict":"recommended","normalizes_to":"NM_004006.3:r.85=//u>c"}
-{"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:56-62","input":"NM_004006.3:r.85u>c/=","verdict":"conformant","normalizes_to":"NM_004006.3:r.85u>c/="}
+{"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:56-62","input":"NM_004006.3:r.85u>c/=","verdict":"recommended","normalizes_to":"NM_004006.3:r.85=/u>c"}
 {"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:71-73","input":"NM_004006.3:r.76a>g","verdict":"recommended","normalizes_to":"NM_004006.3:r.76a>g"}
 {"page":"recommendations/RNA/substitution.md","anchor":"recommendations/RNA/substitution.md:71-73","input":"NM_004006.3:r.76a/g","verdict":"refused","normalizes_to":null}
 {"page":"recommendations/checklist.md","anchor":"recommendations/checklist.md:24-26","input":"NM_004006.3:c.IVS4-2A>G","verdict":"refused","normalizes_to":null}
@@ -595,7 +595,7 @@
 {"page":"recommendations/general.md","anchor":"recommendations/general.md:55-57","input":"NM_004006.3:c.[762_768del;767_774dup]","verdict":"refused","normalizes_to":null}
 {"page":"recommendations/general.md","anchor":"recommendations/general.md:90-91","input":"NM_004006.3:c.76=","verdict":"recommended","normalizes_to":"NM_004006.3:c.76="}
 {"page":"recommendations/general.md","anchor":"recommendations/general.md:90-91","input":"NM_004006.3:c.76=/A>G","verdict":"recommended","normalizes_to":"NM_004006.3:c.76=/A>G"}
-{"page":"recommendations/general.md","anchor":"recommendations/general.md:90-91","input":"NM_004006.3:c.76A>G/=","verdict":"conformant","normalizes_to":"NM_004006.3:c.76A>G/="}
+{"page":"recommendations/general.md","anchor":"recommendations/general.md:90-91","input":"NM_004006.3:c.76A>G/=","verdict":"recommended","normalizes_to":"NM_004006.3:c.76=/A>G"}
 {"page":"recommendations/general.md","anchor":"recommendations/general.md:95-95","input":"NM_004006.3:c.76A>G","verdict":"recommended","normalizes_to":"NM_004006.3:c.76A>G"}
 {"page":"recommendations/general.md","anchor":"recommendations/general.md:95-95","input":"NM_004006.3:c.76 A>G","verdict":"refused","normalizes_to":null}
 {"page":"recommendations/protein/alleles.md","anchor":"recommendations/protein/alleles.md:17-17","input":"NP_003997.1:p.[Ser68Arg;Asn594del]","verdict":"recommended","normalizes_to":"NP_003997.1:p.[Ser68Arg;Asn594del]"}
