@@ -5,7 +5,7 @@
 
 use pyo3::exceptions::{PyDeprecationWarning, PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -17,7 +17,9 @@ use crate::batch::{BatchProcessor, BatchProgress, BatchResult, ItemResult, BATCH
 use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::effect::{Consequence, EffectPredictor, Impact, ProteinEffect};
-use crate::equivalence::{EquivalenceChecker, EquivalenceLevel, EquivalenceResult};
+use crate::equivalence::{
+    ConfluenceRelation, EquivalenceChecker, EquivalenceLevel, EquivalenceResult,
+};
 use crate::error_handling::{
     ferro_to_mutalyzer, CorrectionWarning, ErrorConfig, ErrorMode, ErrorOverride, ErrorType,
 };
@@ -3962,6 +3964,109 @@ impl PyEquivalenceChecker {
                     &e,
                 )
             })
+    }
+
+    /// Run the opt-in confluence self-check over a corpus of variants (#1892).
+    ///
+    /// Groups the inputs into equivalence classes under `relation` and reports
+    /// every class whose members normalize to more than one distinct output — a
+    /// non-confluence witness. This is a diagnostic; it reports, and never emits
+    /// a pass/fail release verdict.
+    ///
+    /// Args:
+    ///     variants: The variants to check.
+    ///     relation: The equivalence relation to group by. ``"cross_axis"``
+    ///         (default) is apply-equality on every determined axis — the
+    ///         relation that establishes variant identity. ``"spdi"`` groups by
+    ///         same denoted bases on the description's own axis; it is weaker and
+    ///         insufficient for identity, offered for counting distinct edits.
+    ///
+    /// Returns:
+    ///     A dict with keys ``relation`` (str), ``is_confluent`` (bool),
+    ///     ``is_complete`` (bool), ``classes_checked`` (int),
+    ///     ``undecided_pairs`` (int), ``violations`` (list of
+    ///     ``{"inputs": [...], "outputs": [...]}``), and ``skipped`` (list of
+    ///     ``{"input": str, "kind": str, "reason": str, "decline_class": str |
+    ///     None, "decline_site": str | None}``).
+    ///
+    ///     ``decline_class`` and ``decline_site`` are the skip's refusal as
+    ///     machine-readable names rather than prose — compare these instead of
+    ///     searching ``reason`` for a keyword, whose wording is not API. Both
+    ///     are ``None`` where there is no such refusal to report. See
+    ///     `TripleDecline` for the two classes and the six sites.
+    ///
+    ///     ``is_confluent`` is an observation about this corpus under this
+    ///     relation, not a release gate, and it is only a statement about the
+    ///     *whole* corpus when ``is_complete`` is true — that is, when nothing
+    ///     was skipped and no comparison came back undecidable. A skip's
+    ///     ``kind`` is ``"unplaceable"`` (never placed in a class) or
+    ///     ``"normalization_declined"`` (placed, then contributed no output), so
+    ///     coverage is ``classes_checked`` plus the ``"unplaceable"`` skips and
+    ///     never ``classes_checked + len(skipped)``.
+    ///
+    ///     ``undecided_pairs`` is always 0 for ``"spdi"``, which compares keys
+    ///     rather than pairs.
+    ///
+    /// Raises:
+    ///     ValueError: If ``relation`` is not ``"cross_axis"`` or ``"spdi"``.
+    #[pyo3(signature = (variants, relation="cross_axis"))]
+    fn check_confluence<'py>(
+        &self,
+        py: Python<'py>,
+        variants: Vec<PyRef<PyHgvsVariant>>,
+        relation: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        // Both directions of the name mapping live on `ConfluenceRelation`, so
+        // a relation added to the enum cannot be half-wired here.
+        let chosen = ConfluenceRelation::from_name(relation).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown relation {relation:?}: expected \"cross_axis\" or \"spdi\""
+            ))
+        })?;
+        let rust_variants: Vec<HgvsVariant> = variants.iter().map(|v| v.inner.clone()).collect();
+        // Detached like the sibling entry points (#1455): grouping and
+        // normalizing a whole corpus reads reference windows.
+        let report = py.detach(|| self.checker.check_confluence(&rust_variants, chosen));
+
+        let dict = PyDict::new(py);
+        dict.set_item("relation", report.relation().as_str())?;
+        dict.set_item("is_confluent", report.is_confluent())?;
+        dict.set_item("is_complete", report.is_complete())?;
+        dict.set_item("classes_checked", report.classes_checked())?;
+        dict.set_item("undecided_pairs", report.undecided_pairs())?;
+
+        let violations = PyList::empty(py);
+        for group in report.violations() {
+            let entry = PyDict::new(py);
+            entry.set_item("inputs", group.inputs.clone())?;
+            entry.set_item("outputs", group.outputs.clone())?;
+            violations.append(entry)?;
+        }
+        dict.set_item("violations", violations)?;
+
+        let skipped = PyList::empty(py);
+        for skip in report.skipped() {
+            let entry = PyDict::new(py);
+            entry.set_item("input", &skip.input)?;
+            entry.set_item("kind", skip.kind.as_str())?;
+            entry.set_item("reason", &skip.reason)?;
+            // The typed refusal, as two stable names. `reason` renders these for
+            // a human; these are what a caller compares, so a partly-provisioned
+            // reference is told apart from an unrepresentable description without
+            // sniffing the sentence for a keyword.
+            entry.set_item(
+                "decline_class",
+                skip.decline.as_ref().map(|d| d.class_str()),
+            )?;
+            entry.set_item(
+                "decline_site",
+                skip.decline.as_ref().map(|d| d.site().as_str()),
+            )?;
+            skipped.append(entry)?;
+        }
+        dict.set_item("skipped", skipped)?;
+
+        Ok(dict)
     }
 }
 
