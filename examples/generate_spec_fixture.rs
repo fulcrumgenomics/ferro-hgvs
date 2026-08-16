@@ -310,6 +310,17 @@ mod overrides {
         /// Why. For an undecided record: what the project has and has not
         /// established, and what would settle it.
         pub rationale: String,
+        /// A one-sentence, end-user-facing statement of the ruling, transcluded
+        /// into the shadow spec's "Why" blocks so the reasoning is rendered for a
+        /// human reader without a second copy of it (the full [`Self::rationale`]
+        /// stays for agents). Optional: a record only needs one once a shadow-spec
+        /// page cites it. The consuming checker
+        /// (`tests/it/shadow_spec.rs`) fails a cited ruling that has none.
+        // Deserialized only so `deny_unknown_fields` accepts the ledger; the
+        // shadow-spec checker reads it, this generator does not.
+        #[allow(dead_code)]
+        #[serde(default)]
+        pub summary: Option<String>,
         /// Row inputs the ruling bears on. Every one must exist as a row.
         #[serde(default)]
         pub applies_to: Vec<String>,
@@ -1488,6 +1499,7 @@ mod decisions {
                 deviates_from: deviates_from.iter().map(|c| c.to_string()).collect(),
                 house_choice: None,
                 rationale: "because".to_string(),
+                summary: None,
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
                 guard: Some(guard_citing(&[

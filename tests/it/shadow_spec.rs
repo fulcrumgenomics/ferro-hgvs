@@ -56,6 +56,110 @@ fn collapse(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// GitHub URL of the rendered ledger, linked from each transcluded "Why" block.
+const CONTRACT_URL: &str =
+    "https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md";
+
+/// Ledger ruling ids -> `summary` (None where the record has no summary yet).
+fn ledger_summaries() -> BTreeMap<String, Option<String>> {
+    let text = read(&repo_root().join(LEDGER));
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse ledger json");
+    let mut out = BTreeMap::new();
+    for r in v["rulings"].as_array().expect("rulings array") {
+        let id = r["id"].as_str().expect("ruling id").to_string();
+        let summary = r["summary"].as_str().map(|s| s.to_string());
+        out.insert(id, summary);
+    }
+    out
+}
+
+/// The rendered "Why" body for a comma-separated list of ruling ids: one blockquote line
+/// per ruling, each carrying the ledger's own `summary` and a link to the full record.
+/// Returns `Err(id)` for the first cited id that is missing or has no summary.
+fn render_why_body(
+    ids: &[String],
+    summaries: &BTreeMap<String, Option<String>>,
+) -> Result<String, String> {
+    let mut lines = Vec::new();
+    for id in ids {
+        match summaries.get(id) {
+            Some(Some(summary)) => {
+                lines.push(format!("> **[{id}]({CONTRACT_URL})** — {summary}"));
+            }
+            _ => return Err(id.clone()),
+        }
+    }
+    Ok(lines.join("\n>\n"))
+}
+
+/// Transclude every `<!-- why:START -->…<!-- why:END:id,id -->` block in `text` from the
+/// ledger summaries. In bless mode the returned text has each block's body rewritten; otherwise
+/// the text is unchanged and a stale/missing block is reported in `errors`.
+fn transclude_why_blocks(
+    text: &str,
+    rel: &str,
+    summaries: &BTreeMap<String, Option<String>>,
+    bless: bool,
+    errors: &mut Vec<String>,
+) -> String {
+    let start = "<!-- why:START -->";
+    let end_prefix = "<!-- why:END:";
+    let end_suffix = "-->";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(s) = rest.find(start) {
+        out.push_str(&rest[..s]);
+        out.push_str(start);
+        rest = &rest[s + start.len()..];
+
+        let Some(e) = rest.find(end_prefix) else {
+            errors.push(format!("{rel}: `why:START` without a matching `why:END`"));
+            out.push_str(rest);
+            return out;
+        };
+        let body = &rest[..e];
+        let after_prefix = &rest[e + end_prefix.len()..];
+        let Some(sfx) = after_prefix.find(end_suffix) else {
+            errors.push(format!("{rel}: `why:END` marker is not closed with `-->`"));
+            out.push_str(rest);
+            return out;
+        };
+        let ids: Vec<String> = after_prefix[..sfx]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let end_marker = format!("{end_prefix}{}{end_suffix}", &after_prefix[..sfx]);
+
+        match render_why_body(&ids, summaries) {
+            Err(id) => {
+                errors.push(format!(
+                    "{rel}: `why` block cites '{id}', which is missing from the ledger or has no `summary`"
+                ));
+                out.push_str(body);
+            }
+            Ok(rendered) => {
+                let want = format!("\n{rendered}\n");
+                if bless {
+                    out.push_str(&want);
+                } else {
+                    if body != want {
+                        errors.push(format!(
+                            "{rel}: `why` block for [{}] is stale — regenerate with BLESS_SHADOW_CORPUS=1",
+                            ids.join(", ")
+                        ));
+                    }
+                    out.push_str(body);
+                }
+            }
+        }
+        out.push_str(&end_marker);
+        rest = &after_prefix[sfx + end_suffix.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Ledger ruling ids -> status.
 fn ledger_ids() -> BTreeMap<String, String> {
     let text = read(&repo_root().join(LEDGER));
@@ -398,6 +502,8 @@ fn shadow_spec_pages_are_current() {
         )
     });
     let require_manifest = std::env::var("FERRO_REQUIRE_MANIFEST").is_ok();
+    let bless = std::env::var("BLESS_SHADOW_CORPUS").is_ok();
+    let summaries = ledger_summaries();
 
     let mut errors: Vec<String> = Vec::new();
     let mut examples_run = 0usize;
@@ -414,7 +520,14 @@ fn shadow_spec_pages_are_current() {
             .parent()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
-        let text = read(page);
+        let raw = read(page);
+        // Transclude the "Why" blocks from the ledger summaries. In bless mode the file is
+        // rewritten in place; otherwise a stale or missing block is reported.
+        let rel_str = rel.display().to_string();
+        let text = transclude_why_blocks(&raw, &rel_str, &summaries, bless, &mut errors);
+        if bless && text != raw {
+            std::fs::write(page, &text).expect("write transcluded page");
+        }
         let anchors = parse_page(&text, &spec_dir_rel);
         // A page with no `path:line` anchor headings is a prose landing page (e.g. the
         // section `index.md`), not a shadow of a spec page — nothing to check.
