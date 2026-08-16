@@ -1,0 +1,177 @@
+name: Build and publish CLI binaries
+
+# Prebuilt `ferro` CLI binaries as GitHub Release assets (issue #1529). The
+# Python bindings already ship as wheels (`release-wheels.yml`) and the crate is
+# published to crates.io (`publish.yml`), but the compiled CLI was only reachable
+# through bioconda. This workflow builds `ferro` for a cross-platform target
+# matrix and attaches the archives (plus per-archive SHA-256 sums) to the
+# release, for users outside the pixi/conda ecosystem and for the window between
+# the GitHub release and the downstream bioconda build.
+#
+# Why not cargo-dist (which the issue floats): releases here are driven by
+# release-plz (`publish.yml`) and the wheel matrix (`release-wheels.yml`), both
+# of which already own the tag format, the `release: published` trigger and the
+# `gh release upload` step. cargo-dist would generate its own release workflow
+# and expect to own that flow, duplicating (and fighting) the tagging and upload
+# conventions those two files pin. A plain matrix build modelled on
+# `release-wheels.yml` slots into the existing flow with one source of truth.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to upload binaries to (leave blank to build without uploading — dry-run)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-binaries-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+# The version-tag gate mirrors `release-wheels.yml`. `release: published` carries
+# no tag filter of its own, so without this guard *any* release (e.g. the
+# `test-fixtures-v1` data release) would fire the whole build matrix. The pinned
+# tag format (`v{version}`) lives in `release-plz.toml`'s `git_tag_name`.
+#
+# THE GATE IN THIS FILE IS NOT YET CHECKED BY ANYTHING.
+# `tests/it/release_tag_gate.rs` binds that pin to a gate, but only to
+# `release-wheels.yml`'s: it hardcodes that path and that workflow's job names,
+# so this workflow is invisible to it — deleting the `if:` from the `build` job
+# below leaves all four of its tests passing. #2060 generalises the guard to
+# derive its workflow set from `.github/workflows/`, which brings this gate under
+# it. Until that lands, keep this gate as narrow as the pin BY HAND — do not
+# widen it to `contains(…, 'v')`.
+#
+# `workflow_dispatch` is not gated: its dry-run form takes a blank tag, and the
+# `upload` job below already requires a release event or a non-empty tag input
+# before it will publish anything.
+#
+# Every job carries `timeout-minutes` so it cannot inherit GitHub's 360-minute
+# default and hold a runner slot for six hours on a hang (see #1994 / #2004).
+# 60 for the builds (a cold cross-compile compiles the whole dependency tree),
+# 15 for the upload (download artifacts + one `gh release upload`).
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            musl: true
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # The `ferro` binary needs neither the `assets/hgvs-nomenclature`
+          # submodule (only the spec generators read it, and `assets/` is
+          # `exclude`d from the crate) nor the persisted checkout credentials.
+          persist-credentials: false
+      # musl-libc statically-linked builds: install the musl toolchain so the
+      # target can link. The crate is pure Rust with no C system dependencies
+      # (the wheel builds install no apt packages), so this is the only extra
+      # system dep the matrix needs.
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      # rustup is preinstalled on the runners. `rustup toolchain install` with no
+      # argument installs the toolchain pinned in `rust-toolchain.toml` (single
+      # source of truth, rather than duplicating the version into this file);
+      # doing it explicitly avoids relying on `target add`'s implicit auto-install
+      # side effect. Adding the target is a no-op for a runner's native host
+      # target and installs the std library for the musl targets.
+      - name: Install Rust toolchain and target
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+      - name: Build ferro
+        shell: bash
+        run: cargo build --release --bin ferro --target "${{ matrix.target }}"
+      # Package the binary into a tarball (Unix) or zip (Windows) named
+      # `ferro-<tag-or-sha>-<target>.<ext>`, alongside a `.sha256` sidecar so
+      # downloaders can verify the asset. `shell: bash` runs on every OS (Git
+      # Bash on the Windows runner), which keeps one packaging path.
+      - name: Package
+        id: package
+        shell: bash
+        # The tag name / input are passed through `env` rather than expanded
+        # into the script, so an attacker-controllable release name cannot inject
+        # shell code (zizmor template-injection). `matrix.target` is defined in
+        # this file and is safe to interpolate.
+        env:
+          VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag || github.sha }}
+          TARGET: ${{ matrix.target }}
+          RUNNER_OS: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          name="ferro-${VERSION}-${TARGET}"
+          staging="$name"
+          mkdir "$staging"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bin="target/${TARGET}/release/ferro.exe"
+            cp "$bin" README.md LICENSE "$staging/"
+            archive="${name}.zip"
+            7z a "$archive" "$staging" >/dev/null
+          else
+            bin="target/${TARGET}/release/ferro"
+            cp "$bin" README.md LICENSE "$staging/"
+            archive="${name}.tar.gz"
+            tar czf "$archive" "$staging"
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" > "${archive}.sha256"
+          else
+            shasum -a 256 "$archive" > "${archive}.sha256"
+          fi
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+
+  upload:
+    name: Upload to GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # Only publish on a real release, or a workflow_dispatch that named a tag.
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload archives to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG_NAME" dist/* --repo "$REPO" --clobber
