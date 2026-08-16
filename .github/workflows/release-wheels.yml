@@ -32,6 +32,25 @@ concurrency:
 # into `env:` — a job-level `if:` cannot read the `env` context. Everything
 # downstream (`check-metadata`, the two smoke matrices, `upload`, `publish-pypi`,
 # `verify-pypi`) reaches these four through `needs:` and so skips with them.
+#
+# The tag format this gate matches is PINNED, in `release-plz.toml`'s
+# `git_tag_name`. It has to be, because release-plz's default is a function of
+# the workspace and not of anything a releaser sets: it tags a single-package
+# workspace `v{version}` and a multi-package one `{package}-v{version}`. #1977
+# added the `tests-soak` driver as a workspace member to buy a CI compile-time
+# saving — release-plz counts a member by whether it has release metadata, not by
+# whether it is publishable, so a `publish = false` test harness still flipped the
+# format — and the very next release was tagged `ferro-hgvs-v0.14.0`. It did not
+# start with `v`, so all ten jobs below skipped, including `verify-pypi`, whose
+# whole purpose is to catch a missing publish; `publish.yml` reported success, and
+# v0.14.0 reached crates.io and never reached PyPI.
+#
+# So the gate is deliberately NARROW: it admits the pinned format and nothing
+# else, and `tests/it/release_tag_gate.rs` fails if the pin and this gate ever
+# disagree again. That narrowness is the point — a gate widened to accept a format
+# the pin cannot mint is a gate that cannot notice the pin drifting back, or being
+# deleted. Widening this to something like `contains(…, 'v')` would additionally
+# re-admit `test-fixtures-v1`, which is what the paragraph above is about.
 
 jobs:
   # abi3 wheels: one wheel per (OS, arch) tagged `cp310-abi3`, runs on
