@@ -219,29 +219,6 @@ fn inserted_sequence_to_string(seq: &InsertedSequence) -> Option<String> {
     }
 }
 
-/// A same-reference position-range insert, decomposed to `(start, end, invert)`
-/// 1-based inclusive coordinates, or `None` when `seq` is not one.
-///
-/// Recognises the bare `PositionRange`/`PositionRangeInv` variants and the
-/// single-part `Complex([PositionRange | PositionRangeInv])` shape the parser
-/// produces for range inserts — both denote one contiguous slice of the same
-/// accession. Multi-part `Complex` payloads, external references and every
-/// non-range variant return `None`, so the caller keeps its existing handling
-/// for them.
-fn position_range_insert(seq: &InsertedSequence) -> Option<(u64, u64, bool)> {
-    use crate::hgvs::edit::InsertedPart;
-    match seq {
-        InsertedSequence::PositionRange { start, end } => Some((*start, *end, false)),
-        InsertedSequence::PositionRangeInv { start, end } => Some((*start, *end, true)),
-        InsertedSequence::Complex(parts) => match parts.as_slice() {
-            [InsertedPart::PositionRange { start, end }] => Some((*start, *end, false)),
-            [InsertedPart::PositionRangeInv { start, end }] => Some((*start, *end, true)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Translate one insert-payload coordinate from the axis it is **written** on
 /// onto the transcript axis the SPDI is emitted on.
 ///
@@ -422,7 +399,7 @@ fn resolve_position_range_insert<P>(
 where
     P: ReferenceProvider + ?Sized,
 {
-    let Some((start, end, invert)) = position_range_insert(seq) else {
+    let Some((start, end, invert)) = seq.as_position_range() else {
         return Ok(None);
     };
     read_reference_span(accession, start, end, invert, alphabet, kind, provider).map(Some)
