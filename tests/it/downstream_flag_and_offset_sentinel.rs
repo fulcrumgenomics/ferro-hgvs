@@ -20,24 +20,37 @@
 //! axis" is not "every renderer", and "the conversion seam" is not "every
 //! caller that flattens a position".
 //!
-//! # A THIRD drop route is KNOWN, MEASURED, AND DELIBERATELY LEFT OPEN
+//! # A THIRD drop route was KNOWN, MEASURED AND DEFERRED — and is now CLOSED
 //!
 //! `CoordinateMapper::tx_to_genomic` — the direct sibling of the `tx_to_cds`
-//! this file's first section fixes, on the same type — reads `tx_pos.base` and
-//! screens only `base < 1`. It never consults `downstream`. Measured on a
-//! single exon at tx 1..10 / genome 1000..1009:
+//! this file's first section fixes, on the same type — read `tx_pos.base` and
+//! screened only `base < 1`. It never consulted `downstream`. Measured on a
+//! single exon at tx 1..10 / genome 1000..1009, as this file first recorded it:
 //!
 //! ```text
 //! tx_to_genomic(n.5)  = Ok(Some(1004))
 //! tx_to_genomic(n.*5) = Ok(Some(1004))     <- collapse, same as the two fixed here
 //! ```
 //!
-//! It is **not fixed here** because its blast radius is not the service layer's:
-//! it has production callers in `vcf/from_hgvs.rs` (`convert_tx`, the library's
-//! own n.→VCF path), `normalize/mod.rs`, `equivalence/checker.rs` and three more
-//! inside `mapper.rs` itself, and its return type (`Result<Option<u64>, _>`)
-//! makes "decline" and "error" two different answers that want their own
-//! decision. That is a change owing its own measurement and disclosure.
+//! It was **deliberately not fixed here**, because its blast radius is not the
+//! service layer's: it has production callers in `vcf/from_hgvs.rs`
+//! (`convert_tx`, the library's own n.→VCF path), `normalize/mod.rs`,
+//! `equivalence/checker.rs` and three more inside `mapper.rs` itself, and its
+//! return type (`Result<Option<u64>, _>`) makes "decline" and "error" two
+//! different answers that wanted their own decision. That deferral is kept here
+//! as provenance, not as a live statement: the change it was owed is **#1950**,
+//! and it took the decline.
+//!
+//! **So the collapse above is history.** `tx_to_genomic` now returns `Ok(None)`
+//! for a `downstream`-flagged position — the exact 3' mirror of the `base < 1`
+//! decline it already made 5' of the transcript — so `n.5` keeps its exonic
+//! coordinate and `n.*5` resolves to none. The guards that pin it live beside
+//! that method rather than in this file, in `src/convert/mapper.rs`'s own
+//! `mod tests`:
+//! `tx_to_genomic_does_not_collapse_downstream_onto_its_in_transcript_sibling`
+//! (plus strand — `Some(1004)` against `None`, and the two asserted distinct)
+//! and `tx_to_genomic_declines_downstream_on_minus_strand` (the same on the
+//! minus strand — `Some(3005)` against `None`).
 //!
 //! Recorded here rather than left to be re-found: an earlier census of this
 //! defect enumerated **13** other marker-consulting sites and concluded the two

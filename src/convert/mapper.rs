@@ -528,12 +528,15 @@ impl<'a> CoordinateMapper<'a> {
     /// `c.`/`n.` number.
     ///
     /// `None` is not exclusively that answer, though, so do not read it as
-    /// "unaligned" without ruling the other two out: it is also returned for a
-    /// non-positive `tx_pos.base`, and for a `Strand::Unknown` transcript,
-    /// whose bases are all reported unaligned however complete its exon table
-    /// is. A caller using `tx_to_genomic(..).is_some()` as its definition of
-    /// "aligned" — `tests/it/axis_frame_disagreement.rs`'s genome-frame walk
-    /// does — is relying on the transcript having a known strand.
+    /// "unaligned" without ruling the others out: it is also returned for a
+    /// non-positive `tx_pos.base` (5' of the transcript), for an `n.*N`
+    /// downstream position (`TxPos::downstream`, 3' of the transcript — the two
+    /// termini decline symmetrically, #1950), and for a `Strand::Unknown`
+    /// transcript, whose bases are all reported unaligned however complete its
+    /// exon table is. A caller using `tx_to_genomic(..).is_some()` as its
+    /// definition of "aligned" — `tests/it/axis_frame_disagreement.rs`'s
+    /// genome-frame walk does — is relying on the transcript having a known
+    /// strand.
     pub fn tx_to_genomic(&self, tx_pos: &TxPos) -> Result<Option<u64>, FerroError> {
         // Check if transcript has genomic coordinates
         if !self.transcript.has_genomic_coords() {
@@ -545,6 +548,21 @@ impl<'a> CoordinateMapper<'a> {
         // Find which exon contains this transcript position
         // Only positive transcript positions can be in exons
         if tx_pos.base < 1 {
+            return Ok(None);
+        }
+
+        // `n.*N` (`TxPos::downstream`) names a base past the transcript's last
+        // one, so it is covered by no exon — the exact 3' mirror of the `base < 1`
+        // decline just above, which covers positions 5' of the transcript. Reading
+        // only `base` here collapsed `n.5` and `n.*5` onto one coordinate (#1950);
+        // decline instead, via this method's existing `Ok(None)` "not covered by
+        // an exon" channel rather than an error. The signature difference is why
+        // this differs from the sibling `tx_to_cds`, which has no `Option` and so
+        // must `Err` on the same input. `background/numbering.md:52` numbers the
+        // `n.` axis only n.1..n.<length> and `:54` forbids describing a base
+        // beyond a transcript against that transcript, so there is no in-frame
+        // genomic coordinate to answer with.
+        if tx_pos.downstream {
             return Ok(None);
         }
         let tx_base = tx_pos.base as u64;
@@ -721,7 +739,29 @@ impl<'a> CoordinateMapper<'a> {
             return self
                 .tx_to_genomic(tx_pos)?
                 .ok_or_else(|| FerroError::ConversionError {
-                    msg: format!("Position {} not found in exons", tx_pos.base),
+                    // `tx_to_genomic` declines for four distinct reasons (see its
+                    // doc comment), and only one of them is "no exon covers this
+                    // base". Naming the exon lookup unconditionally mis-diagnosed
+                    // the others — most visibly `n.*N`, where the base itself sits
+                    // squarely inside an exon and the `*` is what makes it
+                    // unmappable, so `n.*5` reported "Position 5 not found in
+                    // exons" about a position that is in one. Report the position
+                    // as it is spelled, and say only what is actually known: no
+                    // genomic coordinate could be derived.
+                    msg: if tx_pos.downstream {
+                        format!(
+                            "Position n.*{} is 3' of the transcript's last base, so it has no \
+                             genomic coordinate",
+                            tx_pos.base
+                        )
+                    } else {
+                        format!(
+                            "Position {} has no genomic coordinate: no exon carrying genomic \
+                             coordinates covers it, it lies 5' of the transcript, or the \
+                             transcript's strand is unknown",
+                            tx_pos.base
+                        )
+                    },
                 });
         }
 
@@ -1366,6 +1406,60 @@ mod tests {
         assert_eq!(mapper.tx_to_genomic(&TxPos::new(1)).unwrap(), Some(3009));
         // tx 10 -> genomic 3000
         assert_eq!(mapper.tx_to_genomic(&TxPos::new(10)).unwrap(), Some(3000));
+    }
+
+    /// `n.5` and `n.*5` are different positions — the second names a base five
+    /// nucleotides 3' of the transcript's last base — and must not collapse onto
+    /// one genomic coordinate. `tx_to_genomic` previously read only `TxPos.base`
+    /// and never `TxPos.downstream`, so both answered the exon-5 coordinate 1004.
+    ///
+    /// The in-transcript position keeps its coordinate; the downstream position
+    /// declines (`Ok(None)`), the same 3'-mirror answer the method already gives
+    /// for a position 5' of the transcript (`base < 1`). See #1950.
+    #[test]
+    fn tx_to_genomic_does_not_collapse_downstream_onto_its_in_transcript_sibling() {
+        let tx = make_genomic_transcript_plus();
+        let mapper = CoordinateMapper::new(&tx);
+
+        // n.5 is exon-1 base 5 -> genomic 1000 + (5 - 1) = 1004.
+        let in_transcript = mapper.tx_to_genomic(&TxPos::new(5)).unwrap();
+        assert_eq!(
+            in_transcript,
+            Some(1004),
+            "n.5 maps to its exonic coordinate"
+        );
+
+        // n.*5 lies past the transcript's last base and is covered by no exon.
+        let downstream = mapper.tx_to_genomic(&TxPos::downstream(5)).unwrap();
+        assert_eq!(
+            downstream, None,
+            "n.*5 is 3' of the transcript and must not resolve to an exon coordinate"
+        );
+
+        assert_ne!(
+            in_transcript, downstream,
+            "n.5 and n.*5 are distinct positions and must not share a genomic coordinate"
+        );
+    }
+
+    /// The collapse and its fix are strand-independent: on a minus-strand
+    /// transcript `n.5` and `n.*5` must likewise not share a coordinate.
+    #[test]
+    fn tx_to_genomic_declines_downstream_on_minus_strand() {
+        let tx = make_genomic_transcript_minus();
+        let mapper = CoordinateMapper::new(&tx);
+
+        // Minus strand: n.5 is exon-1 base 5 -> genomic 3009 - (5 - 1) = 3005.
+        let in_transcript = mapper.tx_to_genomic(&TxPos::new(5)).unwrap();
+        assert_eq!(
+            in_transcript,
+            Some(3005),
+            "n.5 maps to its exonic coordinate"
+        );
+
+        let downstream = mapper.tx_to_genomic(&TxPos::downstream(5)).unwrap();
+        assert_eq!(downstream, None, "n.*5 is past the transcript and declines");
+        assert_ne!(in_transcript, downstream);
     }
 
     #[test]
