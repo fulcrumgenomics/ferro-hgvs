@@ -1325,6 +1325,48 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "c-description-against-an-unresolvable-cds-is-refused",
         "decided",
     ),
+    // `general.md:34` / `DNA/delins.md:17` against `DNA/delins.md:47`, asked at
+    // the **partitioner** rather than at a coalesce pass. **Decided for `:47`
+    // by operator ruling (2026-08-14, amended 2026-08-15)**, and **scoped to the
+    // coding DNA axis**.
+    //
+    // The ground is that for an unequal-length block the decomposition is not
+    // recoverable, so `:34`'s antecedent — "two variants separated by one or
+    // more nucleotides" — is not established but manufactured by whichever
+    // alignment was picked, leaving a rule 6 choice among conformant forms. Do
+    // NOT re-derive this from a contrast with equal-length blocks: #1937 deleted
+    // that claim from `README.md` as false, per
+    // `unchanged-is-read-over-every-minimal-alignment`.
+    //
+    // Four conditions, each with its own negative control: net deletion (the
+    // direction scope of `delins-merge-vs-individual-gap-two-or-more`, which
+    // also keeps #422/#999 out), every separation exactly one unchanged base,
+    // some member supplies bases (W58's all-deletion split stays split), and
+    // every other member renders as a `delins` (a substitution is a rank-1 type
+    // the split buys).
+    //
+    // **It is gated on `delins-payload-coincidence-carve-out-is-coding-dna-scoped`,
+    // not exempt from it.** An earlier revision shipped it axis-blind, arguing
+    // that record reaches only the terminal coalesce passes. #1899 had already
+    // applied the carve-out inside `partition_block` itself, so that reading was
+    // factually wrong, and ungated the rule took `guard_violations` 0 -> 5 (the
+    // rejected SVD-WG010 shape on the frameless axes) — a rank-1 regression that
+    // rule 2 outranks.
+    //
+    // **Consequence to know before citing it: #1610's own reproduction is NOT
+    // closed.** It is spelled `n.`, which is out of scope, so
+    // `NM_TEST.1:n.2_5delinsAAC` still returns `n.[2_3delinsAA;9del]`.
+    //
+    // **Moves rows, and no confluence.** `spec_conformance_axis` `converged`,
+    // every `split_*` bucket and `multi_member_cis_axis` are unmoved; the one
+    // census figure that moves is `coding_axis_separation_two_or_more_merges`
+    // 3 -> 5, adjudicated row by row. Over the synthetic corpus 1 798 of 95 614
+    // rows move, **776 of them previously fixed points**, every one on a coding
+    // axis. Pinned by `tests/it/issue_1610_lone_unequal_length_delins.rs`.
+    (
+        "unequal-length-block-a-placed-gap-is-not-a-separation",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

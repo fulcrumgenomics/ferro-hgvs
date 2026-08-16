@@ -157,7 +157,7 @@
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never
-//! whether an output is *right*. Fifteen of the seventeen families cannot be asked:
+//! whether an output is *right*. Sixteen of the eighteen families cannot be asked:
 //! they are sets of descriptions with no record of what the description was meant
 //! to denote. `separated_revcomp_runs` is built the other way round, choosing the
 //! alternate first and deriving the reference around it, so `(reference,
@@ -349,7 +349,7 @@ enum SpdiVerdict {
 /// one panicking row must not take the whole dump with it.
 ///
 /// The provider is built from [`Row::core`] and **not** from `Row::reference`
-/// (#1624). Those two are the same string for fifteen of the seventeen families,
+/// (#1624). Those two are the same string for sixteen of the eighteen families,
 /// which is what made reading the wrong one survive review: the two families
 /// whose `reference` column is a *label* — `long_block_inversion` and
 /// `separated_revcomp_runs` — were verified against the label itself. On the
@@ -519,7 +519,7 @@ fn report_partition_declines() {
 /// re-running the old code.
 struct Row {
     /// The dump's `reference` column, and part of the row's identity. For
-    /// fifteen of the seventeen families this **is** the reference sequence; for
+    /// sixteen of the eighteen families this **is** the reference sequence; for
     /// the two that bring their own designed references it is a label, because a
     /// kilobase core repeated on every row is not a column anyone can read.
     reference: String,
@@ -648,6 +648,25 @@ const FAMILIES: &[(&str, &str)] = &[
         "#1749 — a ranged repeat, GROWING and SHRINKING, paired with a sibling that intersects \
          its tract or its junction",
     ),
+    // Another instance of the same corpus-blindness class, and the one #1610 hit.
+    // No ordinal is claimed for it: the header above and the `repeat_beside_a_sibling`
+    // comment already number this class differently, and a third restatement is how
+    // that drift got started.
+    //
+    // Every lone `delins` this file built before it is either **equal**-length
+    // (`delins_hiding_an_inversion`, `separated_revcomp_runs`) or a **net
+    // insertion** (`split_vs_spanning_delins`, whose spanning spelling is a
+    // six-base payload over a five-base span). #1610 is scoped to net
+    // *deletions*, so it measured a guaranteed structural zero: not one row of
+    // the corpus could reach the rule, whatever it did.
+    //
+    // Note it is the *direction* that was missing, not the shape — the corpus
+    // has built lone spanning `delins` rows since #1401. A family list read for
+    // shapes looks complete here, which is why the zero would have been quoted.
+    (
+        "lone_net_deletion_delins",
+        "#1610 — a lone minimal net-deletion delins whose payload partly coincides with the reference",
+    ),
 ];
 
 /// The shape families drawn against the **protein** cores (#1606).
@@ -692,7 +711,7 @@ const PROTEIN_FAMILIES: &[(&str, &str)] = &[
 /// The family drawn against the **long** cores, and the one shape in this file
 /// whose point is its size rather than its geometry (#1460).
 ///
-/// Kept out of `FAMILIES` on purpose. The fifteen families there are crossed with
+/// Kept out of `FAMILIES` on purpose. The sixteen families there are crossed with
 /// every short core, and crossing a kilobase core with all of them would multiply
 /// the dump cost while adding no coverage: `MAX_SPLIT_BLOCK` gates on the *length*
 /// of the block being partitioned, not on how its members are arranged.
@@ -1778,6 +1797,39 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                     }
                 }
             }
+            // A lone spanning `delins` over four reference bases whose payload is
+            // three: two novel bases followed by the reference base at `s + 2`, so
+            // the payload's last base *coincides* with a reference base the span
+            // still holds. That coincidence is the only interior match in the
+            // block, and it is what an aligner cuts at — `DNA/delins.md:46`'s
+            // construction, at its smallest.
+            //
+            // **Net deletion is the whole point of the family** (see `FAMILIES`).
+            // Four against three, never four against four: an equal-length block
+            // has a unique column correspondence and is a different regime, and a
+            // net insertion is outside #1610's direction scope. Both are already
+            // covered — by `delins_hiding_an_inversion` and by
+            // `split_vs_spanning_delins` respectively.
+            //
+            // The two-member spelling of the same variant is emitted beside it, so
+            // the family measures confluence as well as movement: the split writes
+            // the deletion at `s + 3` explicitly rather than letting the derivation
+            // place it.
+            "lone_net_deletion_delins" => {
+                let head = format!("{}{}", other(s), other(s + 1));
+                let coincident = base(s + 2);
+                out.push(format!(
+                    "{prefix}{}_{}delins{head}{coincident}",
+                    p(s),
+                    p(s + 3)
+                ));
+                out.push(format!(
+                    "{prefix}[{}_{}delins{head};{}del]",
+                    p(s),
+                    p(s + 1),
+                    p(s + 3)
+                ));
+            }
             _ => unreachable!("unknown family {family}"),
         }
     }
@@ -2159,7 +2211,7 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A row of one of the fifteen sequence-keyed families, where the
+    /// A row of one of the sixteen sequence-keyed families, where the
     /// `reference` column and the sequence are the same string.
     fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
         Row {
@@ -2257,7 +2309,7 @@ mod tests {
     /// Every row carries the reference **sequence** it was drawn against, which
     /// for two families is not what its `reference` column says (#1624).
     ///
-    /// The two views agree on fifteen of the seventeen families, and that is
+    /// The two views agree on sixteen of the eighteen families, and that is
     /// precisely what made the verify pass's confusion of them survive review —
     /// a bug that only manifests on `long_block_inversion` and
     /// `separated_revcomp_runs` is a bug in 286 rows out of 78,298. So this pins
@@ -3406,7 +3458,7 @@ mod tests {
     //
     // Everything above measures *movement*: two dumps, one diff, "did this change
     // the output". Nothing above ever asks whether an output is **right**, and for
-    // fifteen of the seventeen families it cannot — they are sets of descriptions,
+    // sixteen of the eighteen families it cannot — they are sets of descriptions,
     // with no record of what the description was meant to denote.
     //
     // `separated_revcomp_runs` is built the other way round: the generator picks

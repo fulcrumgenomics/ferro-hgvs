@@ -629,6 +629,44 @@
 //! So all three are accounted for and none is a `general.md:34` deviation. The
 //! figure is re-pinned at 3, not waived.
 //!
+//! # #1610 adds 2, re-pinning 3 -> 5 — named and adjudicated on the same terms
+//!
+//! Re-derived by the same method (the census instrumented to print every merging
+//! row, re-run armed against the prepared reference), not composed from the
+//! previous figure:
+//!
+//! ```text
+//! s01-c3m-pair-delins-del-p4-sep3  c.[24_27delinsGTCA;31_34del] -> c.24_34delinsGTCATTC
+//! s01-c3p-pair-delins-del-p4-sep3  c.[24_27delinsGTCA;31_34del] -> c.24_34delinsGTCATTC
+//! ```
+//!
+//! One variant, both shuffle directions, so the pair is one row's 3'/5' images
+//! rather than two independent findings. The three rows above are unmoved.
+//!
+//! **These are `split_is_a_placed_gap_coincidence`'s rows**, and they are the
+//! same shape as the `sep3` row already named above: the counter keys on the
+//! **authored** separation, which is 3, while the rule keys on the separation of
+//! the partition re-derived from the resulting sequence, which is 1
+//! (`separation-is-a-property-of-the-spelling-not-of-the-variant`, decided). The
+//! block is a net deletion whose derived split is one gap-bearing `delins` plus
+//! the residual placed gap, one unchanged base apart, so
+//! `unequal-length-block-a-placed-gap-is-not-a-separation` (decided) keeps it
+//! whole.
+//!
+//! All three scopes hold: the rows are `c.`
+//! (`delins-payload-coincidence-carve-out-is-coding-dna-scoped` — and this rule
+//! is gated on that carve-out, which is why the figure rises **only** here and
+//! `guard_violations` stays 0), the block loses length
+//! (`delins-merge-vs-individual-gap-two-or-more`'s direction scope), and some
+//! derived member supplies bases
+//! (`delins-recommendation-reach-when-the-input-arrives-split`).
+//!
+//! So these two are within the population
+//! `coding-axis-merges-are-a-disclosed-general-34-deviation` (decided
+//! 2026-08-13) governs, and that record's own instruction applies: a rise above
+//! its pinned figure must **name the clause that carried it**. The clause is
+//! `DNA/delins.md:47`, via the record named above. Re-pinned at 5, not waived.
+//!
 //! **#1616 is concurrently re-pinning this same counter to 8**, under a separate
 //! operator ruling, on the branch that deletes the input-relative weight bound.
 //! Two open PRs moving one counter to different values is a semantic conflict no
@@ -854,6 +892,28 @@ pub(crate) const THREE_PRIME: Census = Census {
     // land in `split_two` +1 and `split_more` -1, leaving `split_three` where
     // #1835 left it, and the divergent-bucket deltas sum to zero against
     // `converged`'s zero gain.
+    //
+    // # #1610 — the predicted fall DID NOT HAPPEN, and the rule now takes the axis gate
+    //
+    // This block previously re-pinned `converged` 11 016 -> 10 959 and
+    // `split_two` 673 -> 730, attributing the whole fall to
+    // `canonicalize_from_sequence`'s input-relative weight bound with the
+    // prediction that "disabling that bound returns `converged` to exactly
+    // 11 016". **#1899 deleted that bound**, and the prediction is confirmed:
+    // re-measured on this branch rebased onto it, `converged` and every
+    // `split_*` bucket read exactly the values pinned here, so the re-pins are
+    // reverted rather than carried forward. This change costs no confluence.
+    //
+    // What arrived with the bound's deletion was a rank-1 cost: axis-blind,
+    // `split_is_a_placed_gap_coincidence` took `guard_violations` 0 -> 5 (the
+    // rejected SVD-WG010 shape on the FRAMELESS `g.`/`n.` axes). #1899 had also
+    // scoped the SIBLING collapse in `partition_block` to the coding DNA axis
+    // (`CoincidenceCarveOut::may_disbelieve_a_separation`, per
+    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`), and
+    // this rule sat directly after that gate re-admitting on `g.`/`n.` exactly
+    // what it excludes. The rule is now gated on the same carve-out, which
+    // returns `guard_violations` to 0 and leaves every counter in this block
+    // where #1621 left it.
     converged: 11_016,
     split_two: 674,
     split_three: 164,
@@ -889,7 +949,14 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `delins.md:47` pass reaching a derived split that carries a gap-bearing
     // member, and one is a block the canonical partitioner returns whole, so it
     // has no derived separation for `general.md:34` to govern.
-    coding_axis_separation_two_or_more_merges: 3,
+    //
+    // #1610: 3 -> 5. The two added rows are `s01-c3{m,p}-pair-delins-del-p4-sep3`
+    // — one variant in both shuffle directions — named and adjudicated in the
+    // module docs' "#1610 adds 2" section. They are
+    // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
+    // coding DNA axis, which is why this instrument moves and `guard_violations`
+    // directly above stays 0.
+    coding_axis_separation_two_or_more_merges: 5,
 };
 
 /// The 5'-direction census, pinned.
@@ -936,6 +1003,9 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // loses convergence, rises in arity, or becomes divergent that was not.
     // #1627 does not move it either: a refused row contributes no family.
     // #1542 (PR #1840) moves it +2 — see the note on `split_two` below.
+    //
+    // #1610 does not move it: see the `#1610` block on [`THREE_PRIME`]'s
+    // `converged` for the measurement and for why the rule takes the axis gate.
     converged: 10_755,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
@@ -988,7 +1058,14 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // `delins.md:47` pass reaching a derived split that carries a gap-bearing
     // member, and one is a block the canonical partitioner returns whole, so it
     // has no derived separation for `general.md:34` to govern.
-    coding_axis_separation_two_or_more_merges: 3,
+    //
+    // #1610: 3 -> 5. The two added rows are `s01-c3{m,p}-pair-delins-del-p4-sep3`
+    // — one variant in both shuffle directions — named and adjudicated in the
+    // module docs' "#1610 adds 2" section. They are
+    // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
+    // coding DNA axis, which is why this instrument moves and `guard_violations`
+    // directly above stays 0.
+    coding_axis_separation_two_or_more_merges: 5,
 };
 
 /// The corpus's shape, independent of any property measured over it.

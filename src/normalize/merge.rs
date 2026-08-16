@@ -3064,10 +3064,35 @@ fn partition_block_for_rule(
         }
     };
     SEQFIRST_ATTEMPTED.fetch_add(1, Ordering::Relaxed);
-    attempt.unwrap_or_else(|| {
+    let pieces = attempt.unwrap_or_else(|| {
         SEQFIRST_DECLINED.fetch_add(1, Ordering::Relaxed);
         partition_block(reference, result, carve_out)
-    })
+    });
+    // #1610, stated once for every arm this dispatch serves. `partition_block`
+    // applies the same rule itself — it has its own escapes and is also reached
+    // directly, as the fallback above and from `canonicalize_from_sequence`'s
+    // shadow audit — so a declining sequence-first arm evaluates it twice. The
+    // rule is idempotent (its product is a single piece, and `pieces.len() < 2`
+    // declines), so that costs a predicate call and changes nothing.
+    //
+    // Deliberately NOT inside `partition_block_canonical_within`: that function
+    // also serves `partition_block_for_derivation`, whose rule is pinned by
+    // `DERIVED_BLOCK_PARTITION_RULE` and whose surface (`from_sequences`) is
+    // out of scope for #1610. The two surfaces already partition differently by
+    // construction (#1834); this keeps that asymmetry where it is rather than
+    // silently moving the derivation surface as a side effect.
+    //
+    // `carve_out` is passed through rather than assumed: the rule is scoped to
+    // the coding DNA axis, for the reason on `CoincidenceCarveOut` and on the
+    // predicate's own `# Axis scope` section.
+    if split_is_a_placed_gap_coincidence(&pieces, reference, result, carve_out) {
+        return vec![Piece {
+            ref_start: 0,
+            ref_end: reference.len(),
+            alt: result.to_vec(),
+        }];
+    }
+    pieces
 }
 
 /// Cut a trimmed block for [`derive_block_members`] under `rule`, within a
@@ -5419,6 +5444,17 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
         && every_separation_is_a_single_base(&pieces)
         && split_buys_no_higher_priority_type(&pieces, reference)
     {
+        return whole();
+    }
+    // The same regime, one member wider: the rule above declines as soon as any
+    // member is a pure deletion, and on an unequal-length block that deletion is
+    // the gap the aligner placed rather than a variant the sequences separated.
+    // See `split_is_a_placed_gap_coincidence` (#1610). Scoped to net deletions,
+    // so nothing here can reach the equal-length path or a net insertion, and
+    // scoped to the coding DNA axis by the same `carve_out` the sibling collapse
+    // directly above takes — ungated it re-admitted on `g.`/`n.` exactly what
+    // that gate excludes.
+    if split_is_a_placed_gap_coincidence(&pieces, reference, result, carve_out) {
         return whole();
     }
     pieces
@@ -8536,15 +8572,160 @@ fn separations_are_meaningful(
 /// `inv` and self-repeat cases would collapse 694 of 1 094 firings (`AT`, ≤7 nt)
 /// and 2 592 of 26 244 (`ACGT`, ≤5 nt) — so both are load-bearing, not defensive.
 fn split_buys_no_higher_priority_type(pieces: &[Piece], reference: &[u8]) -> bool {
-    pieces.iter().all(|piece| {
-        let span = piece.ref_end - piece.ref_start;
-        span > 0
-            && !piece.alt.is_empty()
-            && !(span == 1 && piece.alt.len() == 1)
-            && !is_inversion(piece, reference)
-            && !is_tandem_duplication(piece, reference)
-            && !alt_repeats_its_own_span(piece, reference)
-    })
+    pieces
+        .iter()
+        .all(|piece| piece_renders_as_delins(piece, reference))
+}
+
+/// Whether one derived member would render as a `delins`, and so buys nothing
+/// over the spanning `delins` the split came from.
+///
+/// Extracted from [`split_buys_no_higher_priority_type`] so that
+/// [`split_is_a_placed_gap_coincidence`] can ask the same question of the
+/// members that are not the alignment's gap. One rule, written once: the two
+/// call sites must agree on what "renders as a `delins`" means, and two copies
+/// of this conjunction would drift.
+fn piece_renders_as_delins(piece: &Piece, reference: &[u8]) -> bool {
+    let span = piece.ref_end - piece.ref_start;
+    span > 0
+        && !piece.alt.is_empty()
+        && !(span == 1 && piece.alt.len() == 1)
+        && !is_inversion(piece, reference)
+        && !is_tandem_duplication(piece, reference)
+        && !alt_repeats_its_own_span(piece, reference)
+}
+
+/// Whether a split of an **unequal-length, net-deletion** block is the
+/// `DNA/delins.md:46` artefact rather than a partition the sequences determine
+/// — the members being one or more *placed gaps* plus members that render as
+/// `delins` (#1610).
+///
+/// # The defect this closes
+///
+/// `NM_TEST.1:n.2_5delinsAAC` over `ACGCGGGGG…` came back as
+/// `n.[2_3delinsAA;9del]`: four reference bases against a three-base payload,
+/// whose only interior "unchanged" column is the payload's own `C` landing on a
+/// reference `C`. Ferro cut there and 3'-shifted the residual deletion out to
+/// `n.9`, so the output asserts two variants seven bases apart where the input
+/// asserted one contiguous change.
+///
+/// # Why the gap does not rescue the split
+///
+/// [`split_buys_no_higher_priority_type`] already collapses this regime when
+/// **every** member renders as a `delins`. It declines as soon as one member is
+/// a pure deletion, because a `del` is a higher-priority type than a `delins`.
+/// That reading treats the deletion as a variant the sequences separated. On an
+/// unequal-length block it is not: it is *the gap the aligner placed*, and where
+/// it lands is the alignment choice `README.md`'s ruleset names —
+///
+/// > The variant's decomposition is not recoverable. Recovering one means
+/// > *choosing* an alignment, and the spec does not say which, so there is no
+/// > derivable form to converge on.
+///
+/// — so the member that the split "buys" is manufactured by the same choice
+/// that manufactured the separation. `DNA/delins.md:46` describes exactly this
+/// construction ("parts of the inserted sequence 'align' with the reference
+/// sequence, giving an alternative description like
+/// `c.[850_869del;874_881del;887_897del;901_902insG]`" — a split that is mostly
+/// `del` members), and `:47` answers it: "**The 'delins' format is
+/// recommended**".
+///
+/// # Rule 6, not conformance
+///
+/// Both forms are conformant, so this is a `README.md` rule 6 choice, disclosed
+/// under rule 7, and it must never be cited as a conformance finding.
+///
+/// **The length gate is NOT justified by any equal-length uniqueness claim.**
+/// An earlier revision of this doc quoted a second `README.md` sentence that
+/// contrasted equal-length blocks with unequal-length ones. #1937 **deleted that
+/// sentence as false**, and
+/// `rulings[unchanged-is-read-over-every-minimal-alignment]` is the authority:
+/// `CAG -> AGA` is equal length with edit distance 2, not the position-wise 3.
+/// Do not reintroduce that contrast in any form. What survives is the general
+/// half quoted above, and the length gate's real ground is condition 1's decided
+/// direction scope.
+///
+/// `an_equal_length_block_keeps_its_split` still pins the other side of the
+/// boundary, and is still worth having; read it as pinning the gate's *effect*,
+/// not as evidence for the withdrawn claim.
+///
+/// # Axis scope
+///
+/// Gated on [`CoincidenceCarveOut::may_disbelieve_a_separation`], so it runs on
+/// the **coding DNA axis only**. This rule is grounded on `DNA/delins.md:44-47`,
+/// and `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+/// scopes that passage to `c.` and nothing else; on `g.`/`m.`/`o.`/`n.`/`r.`,
+/// `general.md:34` governs and the members stay individual.
+///
+/// The gate is not decorative. Ungated, this rule sits directly *after* the
+/// sibling collapse in [`partition_block`] — which carries the same gate — and
+/// so re-admitted on the frameless axes exactly what that gate excludes. That
+/// was measured, not argued: it took `spec_conformance_axis`'s
+/// `guard_violations` from 0 to 5, all of them the **rejected** SVD-WG010 shape
+/// on `g.`/`n.`, which is a rank-1 conformance regression rather than a
+/// representation choice.
+///
+/// # The four conditions
+///
+/// 1. **The block loses length** (`result.len() < reference.len()`). The
+///    direction scope of `delins-merge-vs-individual-gap-two-or-more`, decided
+///    2026-08-11: `:47` reaches the net-deletion case and does not reach net
+///    insertions, where the split form stays canonical. It also keeps #422 and
+///    #999 — both net insertions — outside this rule entirely.
+/// 2. **Every separation is a single unchanged base**
+///    ([`every_separation_is_a_single_base`]), the regime where a matched
+///    column is least believable and the one the sibling collapse already runs
+///    in. Real distance between members is `general.md:34`'s population and
+///    stays split.
+/// 3. **Some member supplies bases.** `:46`'s mechanism is an *inserted
+///    sequence* re-aligning, so a split that inserts nothing cannot be its
+///    artefact. That is `delins-recommendation-reach-when-the-input-arrives-split`
+///    (decided) reasoning about the sibling coalesce pass, and it holds here for
+///    the same reason: W58's `c.[992_993del;995_997del;999_1004del]` is three
+///    pure deletions over a 13-base span, nothing is supplied, and it must stay
+///    split.
+/// 4. **Every other member renders as a `delins`**
+///    ([`piece_renders_as_delins`]). A member that is a substitution, an
+///    inversion or a duplication is a real type the split buys, and the
+///    existing predicate's exclusions are measured rather than defensive — see
+///    [`split_buys_no_higher_priority_type`].
+///
+/// A pure **insertion** piece (`ref_start == ref_end`) declines the whole split:
+/// it is neither a placed gap in a net-deletion block nor a `delins`, and
+/// admitting it would reach the compensating-gap geometry this rule says
+/// nothing about.
+fn split_is_a_placed_gap_coincidence(
+    pieces: &[Piece],
+    reference: &[u8],
+    result: &[u8],
+    carve_out: CoincidenceCarveOut,
+) -> bool {
+    if !carve_out.may_disbelieve_a_separation() {
+        return false;
+    }
+    if result.len() >= reference.len() || pieces.len() < 2 {
+        return false;
+    }
+    if !every_separation_is_a_single_base(pieces) {
+        return false;
+    }
+    let mut placed_gap = false;
+    let mut supplies_bases = false;
+    for piece in pieces {
+        if piece.alt.is_empty() {
+            // A pure deletion is the gap; a zero-width piece with no payload is
+            // not a member at all and is refused rather than ignored.
+            if piece.ref_end <= piece.ref_start {
+                return false;
+            }
+            placed_gap = true;
+        } else if piece_renders_as_delins(piece, reference) {
+            supplies_bases = true;
+        } else {
+            return false;
+        }
+    }
+    placed_gap && supplies_bases
 }
 
 /// A member whose payload is its own reference span repeated, which renders as
@@ -15899,10 +16080,36 @@ mod tests {
     /// offset, which is the defect: `:18` is an exception to `:17` and not a
     /// replacement for it, so a pair the exception cannot reach is described
     /// individually.
+    ///
+    /// # The fixture is hand-built, and it must stay that way (#1610)
+    ///
+    /// It read `partition_block(b"TGCA", b"AAC")`, which is the block this pass
+    /// is *about* but is not the pass under test. Since #1610 that call returns
+    /// **one** piece — `split_is_a_placed_gap_coincidence` collapses a
+    /// net-deletion block whose only non-`delins` member is the alignment's own
+    /// gap — so the fixture stopped existing and this test failed on a change
+    /// that has nothing to do with the codon exception.
+    ///
+    /// The pieces below are exactly what that call used to return, so the
+    /// coverage is unchanged and the accidental dependency is gone. Do not put
+    /// the partitioner back: the subject here is
+    /// `coalesce_coding_frame_separation`, and building its input through a
+    /// second, unrelated rule makes this test fail whenever *that* rule moves.
     #[test]
     fn coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon() {
         let reference = b"TGCA";
-        let split = partition_block(reference, b"AAC", NO_AXIS);
+        let split = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 2,
+                alt: b"AA".to_vec(),
+            },
+            Piece {
+                ref_start: 3,
+                ref_end: 4,
+                alt: Vec::new(),
+            },
+        ];
         assert_eq!(split.len(), 2, "got {split:?}");
         assert_eq!(
             split[1].ref_start - split[0].ref_end,
@@ -15926,6 +16133,94 @@ mod tests {
                  consecutive positions",
             );
         }
+    }
+
+    /// [`split_is_a_placed_gap_coincidence`] discriminates, and every `false`
+    /// below is a *different* one of its four conditions plus the axis scope
+    /// (#1610).
+    ///
+    /// Asserted on the predicate rather than through `partition_block`, so a
+    /// change to one of the escapes above it cannot make a case here vacuous.
+    #[test]
+    fn the_placed_gap_predicate_discriminates() {
+        let delins = |start: usize, end: usize, alt: &[u8]| Piece {
+            ref_start: start,
+            ref_end: end,
+            alt: alt.to_vec(),
+        };
+        // Every case below is stated on the coding DNA axis, because that is the
+        // only axis the rule runs on at all; the axis scope itself is the last
+        // case in this test.
+        let coding = CoincidenceCarveOut::InReach;
+
+        // The issue's own block: `TGCA` -> `AAC`, cut at the payload's `C`.
+        let issue = vec![delins(0, 2, b"AA"), delins(3, 4, b"")];
+        assert!(
+            split_is_a_placed_gap_coincidence(&issue, b"TGCA", b"AAC", coding),
+            "the #1610 shape must collapse",
+        );
+
+        // 3. Nothing is supplied — W58's shape. `:46`'s mechanism is an inserted
+        //    sequence re-aligning, so a split of pure deletions is not its
+        //    artefact.
+        let all_deletions = vec![delins(0, 1, b""), delins(2, 3, b"")];
+        assert!(
+            !split_is_a_placed_gap_coincidence(&all_deletions, b"AGC", b"G", coding),
+            "a split that inserts nothing is not `:46`'s artefact",
+        );
+
+        // 4. A member that renders as a substitution is a type the split buys.
+        let with_a_substitution = vec![delins(0, 1, b"A"), delins(2, 3, b"")];
+        assert!(
+            !split_is_a_placed_gap_coincidence(&with_a_substitution, b"TGCA", b"AC", coding),
+            "a lone substitution is a rank-1 type, not a placed gap",
+        );
+
+        // 1. Direction: the same pieces against a *longer* result are a net
+        //    insertion, which `delins-merge-vs-individual-gap-two-or-more`
+        //    scopes out.
+        assert!(
+            !split_is_a_placed_gap_coincidence(&issue, b"TGCA", b"AACGG", coding),
+            "a net insertion is outside the direction scope",
+        );
+        // …and an equal-length block is outside the rule too. The ground is
+        // condition 1's decided direction scope, which reaches net deletions
+        // only — see the predicate's docs for the equal-length claim #1937
+        // withdrew, which must not be used to justify this case.
+        assert!(
+            !split_is_a_placed_gap_coincidence(&issue, b"TGCA", b"AACG", coding),
+            "an equal-length block must never reach this rule",
+        );
+
+        // 2. Two unchanged bases between the members is `general.md:34`'s
+        //    population and stays split.
+        let separated = vec![delins(0, 2, b"AA"), delins(4, 5, b"")];
+        assert!(
+            !split_is_a_placed_gap_coincidence(&separated, b"TGCAT", b"AACT", coding),
+            "a two-base separation is not the coincidence regime",
+        );
+
+        // A pure insertion is neither a placed gap nor a `delins`; it declines
+        // the whole split rather than being ignored.
+        let with_an_insertion = vec![delins(0, 2, b"AA"), delins(3, 3, b"T")];
+        assert!(
+            !split_is_a_placed_gap_coincidence(&with_an_insertion, b"TGCA", b"AAC", coding),
+            "a compensating insertion is a geometry this rule says nothing about",
+        );
+
+        // The axis scope, on the SAME block that collapses above — so this case
+        // isolates the carve-out and nothing else. Ungated, this shape on a
+        // frameless axis is what took `spec_conformance_axis`'s
+        // `guard_violations` from 0 to 5 (the rejected SVD-WG010 shape).
+        assert!(
+            !split_is_a_placed_gap_coincidence(
+                &issue,
+                b"TGCA",
+                b"AAC",
+                CoincidenceCarveOut::OutOfReach
+            ),
+            "`delins.md:47` does not reach a non-coding axis, so the split stands",
+        );
     }
 
     /// The enumerated classes of disagreement between the two block splitters.
