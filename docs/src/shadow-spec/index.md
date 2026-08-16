@@ -56,4 +56,6 @@ changed normalization fails the build — so a page cannot claim behavior ferro 
 
 ## Pages
 
-_None published yet._ The first page (DNA substitution) is in review.
+### DNA
+
+- [Substitution](recommendations/DNA/substitution.md)

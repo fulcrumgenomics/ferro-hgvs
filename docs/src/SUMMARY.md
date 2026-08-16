@@ -21,3 +21,5 @@
 # Interpretation
 
 - [Overview](shadow-spec/index.md)
+- [DNA]()
+  - [Substitution](shadow-spec/recommendations/DNA/substitution.md)

@@ -528,6 +528,7 @@ mod ruling_guard_field;
 mod ruling_prose_pins;
 mod sequence_normalize;
 mod service_tools_tests;
+mod shadow_spec;
 mod soak_package_membership;
 mod spdi_dup_recovery;
 mod spdi_tests;
