@@ -45,6 +45,7 @@ pub mod cache;
 pub mod cli;
 pub mod collate;
 pub mod compare;
+pub mod conformance;
 pub mod extract;
 #[cfg(feature = "hgvs-rs")]
 pub mod hgvs_rs;

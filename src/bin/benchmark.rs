@@ -23,11 +23,12 @@ use ferro_hgvs::benchmark::{
     },
     cli::{
         BenchmarkCommands, Cli, CollateCommands, Commands, CompareCommands, CompareMode,
-        ExtractCommands, GenerateCommands, GenomeOption, SetupCommands, Tool,
+        ConformanceCommands, ExtractCommands, GenerateCommands, GenomeOption, SetupCommands, Tool,
     },
     collate_normalization, collate_parsing,
     compare::rewrite_with_genomic_context,
     compare::{compare_normalize, compare_parse, run_mutalyzer_normalize_parallel, CompareConfig},
+    conformance::run_census_command,
     extract_clinvar, extract_json,
     mutalyzer::{has_mutalyzer_normalizer, has_mutalyzer_parser, run_mutalyzer_parser_subprocess},
     normalize_ferro, normalize_ferro_parallel, perf_matrix, prepare_references,
@@ -437,6 +438,24 @@ fn main() {
             uta_db_url.as_deref(),
             seqrepo_path.as_ref(),
         ),
+
+        Commands::Conformance(cmd) => match cmd {
+            ConformanceCommands::Census {
+                equivalence,
+                corpus,
+                direction,
+                out,
+                findings,
+                compare,
+            } => run_census_command(
+                equivalence,
+                corpus,
+                direction,
+                out.as_deref(),
+                findings.as_deref(),
+                compare.as_deref(),
+            ),
+        },
     };
 
     if let Err(e) = result {
