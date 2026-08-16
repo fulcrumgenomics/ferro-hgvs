@@ -518,6 +518,49 @@ def find_declaration(text: str) -> str | None:
     return declarations[0] if declarations else None
 
 
+#: A line that ends a trailer's value because it opens something the value cannot own:
+#: another column-0 trailer token, a Markdown heading, or an HTML comment (GitHub appends
+#: CodeRabbit's summary after the trailer, opening `<!-- ... -->`).
+#:
+#: A deliberately SEPARATE copy of the terminator in
+#: `inject_representation_disclosure.disclosure_value`. This checker shares no code with
+#: `check_changelog_grouping.py` or the injector that imports from it, so the two decline
+#: rules can be wrong independently (#1555). The column-0 rule this extends is this module's
+#: own `TRAILER_RE`, so no fourth copy of *that* is minted.
+CONTINUATION_END_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*:[ \t]|#{1,6}\s|<!--)")
+
+
+def full_declaration_value(text: str) -> str | None:
+    """Return the first trailer's value with its continuation lines, or `None`.
+
+    `find_declaration` returns only the first line, because `TRAILER_RE` stops at the
+    newline. This repo's trailers are routinely multi-line with UNINDENTED continuation lines
+    -- `git interpret-trailers --parse` reports no trailers at all for #1537/#1535/#1547 --
+    so a decline on the first line can hide a contradicting `<n> rows move` on a later one
+    (#1854). The contradicted-decline tripwire must read the whole value, not the first
+    clause, or the disclosure is filed as `none` and never reaches the changelog.
+
+    The value runs from the trailer to the next line it cannot own -- a column-0 trailer
+    token, a Markdown heading, or the HTML comment GitHub appends -- the same bound
+    `inject_representation_disclosure.disclosure_value` uses, arrived at independently rather
+    than imported. Fenced regions are blanked first, matching `find_declarations`, so a
+    continuation quoted inside a fence is not scavenged into the value.
+    """
+    first = find_declaration(text)
+    if first is None:
+        return None
+    lines = strip_fenced(text).splitlines()
+    start = next(index for index, line in enumerate(lines) if TRAILER_RE.match(line))
+    collected = [first]
+    for line in lines[start + 1 :]:
+        if CONTINUATION_END_RE.match(line):
+            break
+        collected.append(line.rstrip())
+    while collected and not collected[-1].strip():
+        collected.pop()
+    return "\n".join(collected)
+
+
 def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     """
     Decide whether `changed` is adequately declared by `declaration_text`.
@@ -666,11 +709,17 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "Measure with: cargo run --release --features dev --example dump_normalized_corpus"
         )
 
-    if declines(declaration):
-        claim = contradicted_decline(declaration)
+    # The tripwire must read the WHOLE trailer value, not just its first line: a decline on
+    # line 1 can hide a `<n> rows move` on an unindented continuation line (#1854), and
+    # `declaration` above is truncated at the newline by `TRAILER_RE`. `declarations` is
+    # non-empty here, so a full value exists.
+    full_value = full_declaration_value(declaration_text)
+    assert full_value is not None
+    if declines(full_value):
+        claim = contradicted_decline(full_value)
         if claim is not None:
             return False, (
-                f"This trailer declines and then describes a move:\n\n  {declaration}\n\n"
+                f"This trailer declines and then describes a move:\n\n  {full_value}\n\n"
                 f"The verdict is the first word, so this is filed as `none` and the "
                 f"disclosure -- {claim!r} -- never reaches the changelog. Nobody is told, "
                 "which is the failure this whole mechanism exists to prevent.\n\n"
@@ -684,11 +733,11 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             )
         return (
             True,
-            f"Declared `Representation-Change: {declaration}` over {len(watched)} watched file(s).",
+            f"Declared `Representation-Change: {full_value}` over {len(watched)} watched file(s).",
         )
     return (
         True,
-        f"Declared a representation change over {len(watched)} watched file(s): {declaration}",
+        f"Declared a representation change over {len(watched)} watched file(s): {full_value}",
     )
 
 
