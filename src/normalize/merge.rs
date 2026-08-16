@@ -11377,7 +11377,7 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
             // a `commutes` escape hatch this bound would otherwise override.
             //
             // Guarded by `cis_junction_crossing_shift.rs`'s
-            // `a_third_member_past_the_derivation_window_keeps_the_duplication_reaching_its_five_prime_most_position`
+            // `a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position`
             // (#1603), and it takes a deliberately-built shape: the whole
             // over-clamp is sequence-preserving, so neither exhaustive sweep nor
             // any seam oracle can see it, and the allele has to be one the
