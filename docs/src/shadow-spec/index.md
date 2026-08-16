@@ -1,4 +1,4 @@
-# Shadow Spec
+# Interpreting the HGVS Recommendations
 
 > **Under construction.** Pages are added one HGVS spec page at a time; this section will fill in
 > as they land.
@@ -12,10 +12,10 @@ normalizer still has to emit exactly one string. Where ferro has had to settle s
 record the decision (and, where a passage looks inconsistent, file it upstream with the SVD Working
 Group).
 
-The **shadow spec** mirrors the recommendations page for page and records, per clause, how ferro
-reads it. Each page gives, for a span of the spec:
+This section mirrors the recommendations page for page and records, per clause, how ferro reads
+each one. Each page gives, for a span of the spec:
 
-- the **spec text** it shadows, quoted verbatim;
+- the **spec text** it interprets, quoted verbatim;
 - **ferro's reading** of that clause;
 - **example spellings**, each with the form ferro **normalizes** it to and a verdict describing that
   output against the recommendations (see below);
@@ -44,7 +44,7 @@ every adjudication is recorded once in the **ruling ledger**
 ([`hgvs_spec_normalization_overrides.json`](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/tests/fixtures/grammar/hgvs_spec_normalization_overrides.json),
 rendered for reading as
 [NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)).
-The shadow spec **draws its explanations from the ledger** rather than restating them — a rule
+These pages **draw their explanations from the ledger** rather than restating them — a rule
 written in two places is a rule that drifts.
 
 ## How it stays honest

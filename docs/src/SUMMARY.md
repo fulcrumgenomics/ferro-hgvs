@@ -18,6 +18,6 @@
 
 - [CLI reference](cli/overview.md)
 
-# Shadow Spec
+# Interpretation
 
 - [Overview](shadow-spec/index.md)

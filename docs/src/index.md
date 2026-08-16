@@ -22,9 +22,9 @@ Use it as a Python package, a Rust crate, or a command-line tool. API docs are o
 - **[Benchmarking](guide/benchmarking.md)** — timing ferro and comparing it against other HGVS tools.
 - **[CLI reference](cli/overview.md)** — every subcommand.
 
-## Shadow Spec
+## Interpretation
 
-The **[Shadow Spec](shadow-spec/index.md)** is a per-line reading of the HGVS recommendations that
-records exactly how ferro interprets each clause — with runnable example spellings, the form ferro
-normalizes each input to, and the reasoning behind each decision. It is under construction, one spec
-page at a time.
+The **[Interpretation](shadow-spec/index.md)** section is a per-line reading of the HGVS
+recommendations that records exactly how ferro interprets each clause — with runnable example
+spellings, the form ferro normalizes each input to, and the reasoning behind each decision. It is
+under construction, one spec page at a time.

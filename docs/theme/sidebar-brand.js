@@ -145,7 +145,7 @@
         'getting-started':   'Getting Started',
         'guide':             'Guides',
         'cli':               'Reference',
-        'shadow-spec':       'Shadow Spec'
+        'shadow-spec':       'Interpretation'
     };
 
     function injectBreadcrumb() {
@@ -158,7 +158,7 @@
 
         // Key on the TOP-level section, not the immediate parent, so pages that
         // nest below a section (e.g. shadow-spec/recommendations/DNA/…) still get
-        // a "Home › Shadow Spec › page" crumb.
+        // a "Home › Interpretation › page" crumb.
         var si = sectionIndex(segments);
         if (si === -1) return;
         var sectionLabel = SECTION_MAP[segments[si]];
