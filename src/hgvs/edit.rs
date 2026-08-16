@@ -402,6 +402,39 @@ impl InsertedSequence {
         }
     }
 
+    /// Decompose a same-reference position-range payload to
+    /// `(start, end, inverted)` 1-based inclusive coordinates, or `None` when
+    /// this is not one.
+    ///
+    /// An all-numeric same-reference range has **two** AST spellings that the
+    /// parser mints interchangeably and that [`Display`](fmt::Display) renders
+    /// identically: the bare [`PositionRange`](InsertedSequence::PositionRange) /
+    /// [`PositionRangeInv`](InsertedSequence::PositionRangeInv) variant, and the
+    /// single-part `Complex([PositionRange | PositionRangeInv])` shape (the
+    /// parser wraps `parse_cds_position_range`'s result in `Complex` but falls
+    /// through to the bare variant for `parse_simple_count`). Both denote one
+    /// contiguous slice of the same accession, so this is the single place that
+    /// collapses them — consumers call it rather than re-deriving the match, and
+    /// so cannot disagree about which spelling they handle (#1986).
+    ///
+    /// Multi-part `Complex` payloads, [`CdsPositionRange`](InsertedPart::CdsPositionRange)
+    /// (intronic-offset / UTR-marker ranges), external references,
+    /// [`SpecialPositionRange`](InsertedSequence::SpecialPositionRange) and every
+    /// non-range variant return `None`, so the caller keeps its existing
+    /// handling for them.
+    pub fn as_position_range(&self) -> Option<(u64, u64, bool)> {
+        match self {
+            InsertedSequence::PositionRange { start, end } => Some((*start, *end, false)),
+            InsertedSequence::PositionRangeInv { start, end } => Some((*start, *end, true)),
+            InsertedSequence::Complex(parts) => match parts.as_slice() {
+                [InsertedPart::PositionRange { start, end }] => Some((*start, *end, false)),
+                [InsertedPart::PositionRangeInv { start, end }] => Some((*start, *end, true)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Get the bases if this is a literal sequence
     /// Returns None for count, range, repeat, complex, or empty variants
     pub fn bases(&self) -> Option<&[Base]> {
@@ -2365,6 +2398,69 @@ mod tests {
         assert_eq!(
             render(&fs, ProteinRenderStyle::default()),
             format!("{}", fs)
+        );
+    }
+
+    /// The parser mints an all-numeric same-reference range payload in two AST
+    /// spellings — the bare `PositionRange`/`PositionRangeInv` variant and the
+    /// single-part `Complex([PositionRange | PositionRangeInv])` — that Display
+    /// identically. `as_position_range` is the one accessor consumers share so
+    /// they cannot disagree about which spelling they handle (#1986).
+    #[test]
+    fn as_position_range_collapses_both_spellings() {
+        let bare_fwd = InsertedSequence::PositionRange {
+            start: 100,
+            end: 200,
+        };
+        let complex_fwd = InsertedSequence::Complex(vec![InsertedPart::PositionRange {
+            start: 100,
+            end: 200,
+        }]);
+        // The two spellings are display-equivalent, which is why they are so easy
+        // to confuse — the difference is only in the AST.
+        assert_eq!(bare_fwd.to_string(), complex_fwd.to_string());
+        assert_ne!(bare_fwd, complex_fwd);
+        assert_eq!(bare_fwd.as_position_range(), Some((100, 200, false)));
+        assert_eq!(complex_fwd.as_position_range(), Some((100, 200, false)));
+
+        let bare_inv = InsertedSequence::PositionRangeInv { start: 45, end: 90 };
+        let complex_inv =
+            InsertedSequence::Complex(vec![InsertedPart::PositionRangeInv { start: 45, end: 90 }]);
+        assert_eq!(bare_inv.to_string(), complex_inv.to_string());
+        assert_eq!(bare_inv.as_position_range(), Some((45, 90, true)));
+        assert_eq!(complex_inv.as_position_range(), Some((45, 90, true)));
+
+        // Anything that is not a lone same-reference range is not one, so the
+        // caller keeps its own handling.
+        assert_eq!(
+            InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()).as_position_range(),
+            None
+        );
+        assert_eq!(
+            InsertedSequence::Complex(vec![
+                InsertedPart::PositionRange { start: 1, end: 2 },
+                InsertedPart::PositionRange { start: 5, end: 6 },
+            ])
+            .as_position_range(),
+            None
+        );
+        assert_eq!(
+            InsertedSequence::Complex(vec![InsertedPart::CdsPositionRange("244-8_249".into())])
+                .as_position_range(),
+            None
+        );
+        // A special-position range carries `GenomePos` endpoints, not the `u64`
+        // this accessor decomposes to, so it is deliberately not one — the doc
+        // comment names it, and the `PositionRangeInv` note at the enum warns a
+        // future author to keep it in mind.
+        assert_eq!(
+            InsertedSequence::SpecialPositionRange {
+                start: GenomePos::new(100),
+                end: GenomePos::new(200),
+                inverted: true,
+            }
+            .as_position_range(),
+            None
         );
     }
 }

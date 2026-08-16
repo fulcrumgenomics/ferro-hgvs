@@ -16,7 +16,7 @@
 //! existing `RnaVariant` Display path; this module only builds the value.
 
 use crate::convert::mapper::CoordinateMapper;
-use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, Sequence};
+use crate::hgvs::edit::{InsertedSequence, NaEdit, Sequence};
 use crate::hgvs::interval::{CdsInterval, RnaInterval};
 use crate::hgvs::location::{CdsPos, RnaPos, TxPos};
 use crate::hgvs::variant::{AlleleVariant, HgvsVariant, LocEdit, RnaVariant};
@@ -172,23 +172,16 @@ fn resolve_range_bases(
 
 /// Resolve a position-range insert against the transcript sequence, in CDS
 /// coordinates, to a literal `InsertedSequence` (DNA bases; Display applies T→U +
-/// lowercase). Handles the bare `PositionRange`/`PositionRangeInv` variants and the
-/// single-part `Complex([PositionRange | PositionRangeInv])` shape the parser
-/// produces for `delins191_194inv` — both collapse to a single `Literal`. Inserts
-/// that aren't a resolvable same-reference position range pass through unchanged.
+/// lowercase). Both AST spellings of a same-reference range (bare and single-part
+/// `Complex`) are collapsed by [`InsertedSequence::as_position_range`], then
+/// resolved to a single `Literal`. Inserts that aren't a resolvable same-reference
+/// position range pass through unchanged.
 fn resolve_range_insert(
     ins: &InsertedSequence,
     transcript: &Transcript,
 ) -> Option<InsertedSequence> {
-    let (start, end, invert) = match ins {
-        InsertedSequence::PositionRange { start, end } => (*start, *end, false),
-        InsertedSequence::PositionRangeInv { start, end } => (*start, *end, true),
-        InsertedSequence::Complex(parts) => match parts.as_slice() {
-            [InsertedPart::PositionRange { start, end }] => (*start, *end, false),
-            [InsertedPart::PositionRangeInv { start, end }] => (*start, *end, true),
-            _ => return Some(ins.clone()),
-        },
-        other => return Some(other.clone()),
+    let Some((start, end, invert)) = ins.as_position_range() else {
+        return Some(ins.clone());
     };
     Some(InsertedSequence::Literal(resolve_range_bases(
         start, end, invert, transcript,
