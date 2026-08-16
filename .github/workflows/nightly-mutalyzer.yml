@@ -104,7 +104,9 @@ jobs:
         test(/protein_cis_delins_decomposition::/) |
         test(/real_data_normalization_tests::/) |
         test(/accession_inventory::tests::corpus_missing_ng_against_real_reference_when_available/) |
-        test(/ng_placement_builder::tests::derive_for_real_reference_when_available/)
+        test(/ng_placement_builder::tests::derive_for_real_reference_when_available/) |
+        test(/coverage_gap_tests::issue_11::test_flt3_itd_insertion_position_order/) |
+        test(/normalize_tests::real_repeat_tests::test_real_repeat_pattern/)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

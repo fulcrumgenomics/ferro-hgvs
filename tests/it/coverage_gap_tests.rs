@@ -790,9 +790,45 @@ mod inversions {
 
 mod issue_11 {
     use super::*;
+    use ferro_hgvs::{MultiFastaProvider, ReferenceProvider};
+    use std::path::{Path, PathBuf};
+
+    /// This module's name, as it appears in a `FERRO_REQUIRE_MANIFEST` failure.
+    const MODULE: &str = "coverage_gap_tests::issue_11";
+
+    /// The prepared manifest, by the convention every reference-aware module
+    /// here uses: `FERRO_MANIFEST` is authoritative when set, with
+    /// `benchmark-output/manifest.json` as the well-known fallback.
+    ///
+    /// This guard used to consult **only** the relative path *and* carry a
+    /// blanket `#[ignore]`, so it was hidden from the manifest census twice
+    /// over (#1862): the ignore kept it out of every run, and even un-ignored
+    /// it could not see a `FERRO_MANIFEST` the nightly provisions.
+    fn manifest_path() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var(crate::common::manifest::MANIFEST_ENV) {
+            let path = PathBuf::from(path);
+            return path.exists().then_some(path);
+        }
+        let fallback = Path::new("benchmark-output/manifest.json");
+        fallback.exists().then(|| fallback.to_path_buf())
+    }
+
+    /// The provider, or `None` when there is no manifest to build one from.
+    ///
+    /// A manifest that is present but will not load panics rather than
+    /// returning `None` — the same convention `real_data_normalization_tests`
+    /// adopts — so an absent-manifest stand-down is never confused with a
+    /// broken reference, which matters on the one job that exists to notice
+    /// `ferro prepare` left nothing usable behind.
+    fn get_provider() -> Option<MultiFastaProvider> {
+        let path = manifest_path()?;
+        Some(
+            MultiFastaProvider::from_manifest(&path)
+                .unwrap_or_else(|e| panic!("from_manifest({}) failed: {e}", path.display())),
+        )
+    }
 
     #[test]
-    #[ignore] // Requires benchmark-output reference data
     fn test_flt3_itd_insertion_position_order() {
         // Issue #11: FLT3 ITD insertion on minus-strand gene
         // Mutalyzer normalizes to: NM_004119.3:c.1837+2_1837+3ins...
@@ -800,16 +836,23 @@ mod issue_11 {
         //
         // The HGVS spec requires flanking positions in 5'-to-3' coding order.
         // c.1837+2 is 5' of c.1837+3 in coding direction, so +2 must come first.
-        use ferro_hgvs::MultiFastaProvider;
-        use std::path::Path;
+        // This is an adjudicated-correct guard: the two assertions below pin a
+        // decided answer against a named Mutalyzer disagreement, so it must run
+        // (not skip green) whenever a reference is available.
+        let Some(provider) = get_provider() else {
+            crate::common::manifest::absent(MODULE);
+            return;
+        };
 
-        let ref_path = Path::new("benchmark-output/manifest.json");
-        if !ref_path.exists() {
-            eprintln!("Skipping: benchmark-output not available");
+        // A manifest that does not carry FLT3 leaves the assertions unreached,
+        // which is the same coverage loss an absent manifest causes and is
+        // promoted by the same `FERRO_REQUIRE_MANIFEST`.
+        let accession = "NM_004119.3";
+        if let Err(error) = provider.get_transcript(accession) {
+            crate::common::manifest::unserved(MODULE, accession, &error.to_string());
             return;
         }
-        let provider =
-            MultiFastaProvider::from_manifest(ref_path).expect("Failed to load reference data");
+
         let normalizer = Normalizer::new(provider);
 
         let input = "NM_004119.3:c.1837+2_1837+3insGGATATCTCAAATGGGAGTTTCCAAGAGAAAATTTAGAGTTTGGT";
