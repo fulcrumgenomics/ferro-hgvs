@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 38 records, 35 decided / 3 undecided
-//! 124 clause lines, of which 41 are named by more than one record
+//! 39 records, 36 decided / 3 undecided
+//! 127 clause lines, of which 41 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -362,6 +362,10 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
+//! docs/recommendations/DNA/substitution.md:47
+//!     `mosaic-chimeric-substitution-reference-allele-first` — decided (cited)
+//! docs/recommendations/DNA/substitution.md:49
+//!     `mosaic-chimeric-substitution-reference-allele-first` — decided (governing)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:18
@@ -382,6 +386,8 @@
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/RNA/substitution.md:18
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
+//! docs/recommendations/RNA/substitution.md:58
+//!     `mosaic-chimeric-substitution-reference-allele-first` — decided (cited)
 //! docs/recommendations/checklist.md:5
 //!     `absolute-prohibition-enforcement-stage` — decided (governing)
 //! docs/recommendations/checklist.md:16
@@ -981,7 +987,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (38, 35, 3),
+        (39, 36, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together."
     );
