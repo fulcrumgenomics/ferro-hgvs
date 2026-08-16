@@ -5,6 +5,46 @@
 # features even while the major version is 0.
 features_always_increment_minor = true
 
+# Pin the tag format, because release-plz's default is a function of the
+# workspace rather than of anything a releaser sets: a single-package workspace
+# is tagged `v{version}`, a multi-package one `{package}-v{version}`.
+#
+# #1977 made this a multi-package workspace — it added `tests-soak`, a
+# `publish = false` test driver, purely to buy a CI compile-time saving — and the
+# next release was tagged `ferro-hgvs-v0.14.0` instead of `v0.14.0`. Nothing in
+# that PR was about releasing, and the tag rename was invisible in its diff.
+# `release-wheels.yml` gated on a leading `v`, so every one of its ten jobs
+# skipped and v0.14.0 shipped to crates.io and never to PyPI.
+#
+# That a `publish = false` member could do this is not obvious, and is worth
+# recording: release-plz decides the default from `contains_multiple_pub_packages`
+# (`release_plz_core/src/project.rs`), which is `packages.len() > 1` over a list
+# filtered by whether a package carries release metadata — NOT by
+# `is_publishable()`, despite the name. A test harness that is never published
+# still counts, and still flips the tag format.
+#
+# `v{version}` is what the eleven releases before it used, so pinning it keeps
+# every existing tag reference — compare links, `git describe`, install
+# instructions — reading the same way, and stops an unrelated change to the
+# workspace layout from renaming the release tag again. The only package this
+# workspace publishes is `ferro-hgvs`, so there is nothing for the `{package}`
+# component to disambiguate.
+#
+# This pin is the whole fix, not a convenience alongside one: a configured
+# template short-circuits the default entirely (`git_tag()` renders
+# `tag_name_template` and only falls back to the package-count default via
+# `unwrap_or_else`), so with it set the workspace shape is never consulted.
+# `release-wheels.yml`'s gate matches it exactly and deliberately admits nothing
+# else — a gate widened to also accept a format this pin cannot mint is a gate
+# that stays green when the pin is reverted or deleted. The two are checked
+# against each other by `tests/it/release_tag_gate.rs`; that they could drift
+# apart silently is what cost v0.14.0 its wheels.
+#
+# It does NOT retroactively rename `ferro-hgvs-v0.14.0`. That release is
+# recovered separately, by tagging its commit `v0.14.0` and publishing a release
+# on the new tag, which the gate accepts.
+git_tag_name = "v{{ version }}"
+
 # Prepend a representation-stability block to the release PR body (#1424).
 #
 # Representation stability is a shipped guarantee: the downstream consumer keys
