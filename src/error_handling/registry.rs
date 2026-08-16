@@ -4,6 +4,7 @@
 //! warning (W-codes) in ferro-hgvs, enabling the `ferro explain` command.
 
 use super::codes::{CodeCategory, CodeInfo, ModeBehavior};
+use super::normalizer_codes;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -1813,6 +1814,41 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    // W5005 is minted by `ErrorType::MembersCoalescedFromReportedForm::code()`
+    // but had no registry entry, so `ferro explain W5005` failed for a code
+    // ferro documents as its own (#2092). Summary, examples and mode behaviour
+    // are taken from that `ErrorType`'s own `description()` / `example()` /
+    // `is_correctable()` arms in `src/error_handling/types.rs`; the explanation
+    // is taken from the `NormalizationWarning::MembersCoalesced` doc comment.
+    map.insert(
+        "W5005",
+        CodeInfo {
+            code: "W5005",
+            name: "MembersCoalescedFromReportedForm",
+            summary: "Separately-reported variants were coalesced into fewer cis members.",
+            explanation: "Normalization returned FEWER cis members than the input described: two \
+                or more separately-reported variants merged into one. The warning is purely \
+                informational \u{2014} the normalized string is identical whether or not it is \
+                produced \u{2014} and it carries the provenance the canonical form deliberately \
+                does not. Per DNA/delins.md:79-84 the coalesced form is the correct description, \
+                so the individually reported form is not recoverable from the normalized string; \
+                a caller that needs to know how many members the submitter reported has to read \
+                it here. Applies on every axis, protein included: `p.[Ala100Gly;Ala101Gly]` \
+                normalizes to `p.Ala100_Ala101delinsGlyGly`, two reported members becoming one. \
+                There is nothing to correct and nothing to reject: the input and the output are \
+                both valid descriptions of the same allele. It is emitted at the single \
+                normalization exit that compares the two member counts, unconditionally and in \
+                every mode: there is no `ErrorConfig` consult site, so `--error-mode`, `--ignore` \
+                and `--reject` do not reach it.",
+            category: CodeCategory::Semantic,
+            bad_examples: &["g.[100del;102_105del] reported as 2 members"],
+            good_examples: &["g.100_105delinsAC (1 member; provenance carried by W5005)"],
+            mode_behavior: None,
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/DNA/delins/"),
+            related_codes: &["W5002", "MEMBERS_COALESCED_FROM_REPORTED_FORM"],
+        },
+    );
+
     // =========================================================================
     // LOADER WARNINGS / ERRORS (E-LOAD-* / W-LOAD-*)
     // =========================================================================
@@ -2126,10 +2162,48 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
 }
 
 /// Get information about a specific code.
-/// Accepts both uppercase and lowercase codes (e.g., "W1001" or "w1001").
+///
+/// Accepts both uppercase and lowercase codes (e.g. `"W1001"` or `"w1001"`),
+/// and resolves **both** of ferro's code namespaces: the preprocessor's
+/// `E`/`W` codes, and the normalizer's SCREAMING_SNAKE codes such as
+/// `MEMBERS_COALESCED_FROM_REPORTED_FORM`. The second namespace resolves
+/// through [`normalizer_codes::NORMALIZER_CODES`], either to the `W`-code
+/// documenting the same condition or to the normalizer-only entry defined
+/// beside it (#2092).
 pub fn get_code_info(code: &str) -> Option<&'static CodeInfo> {
     let uppercase = code.to_uppercase();
-    get_registry().get(uppercase.as_str())
+    if let Some(info) = get_registry().get(uppercase.as_str()) {
+        return Some(info);
+    }
+    resolve_normalizer_code(&uppercase)
+}
+
+/// Resolve an already-uppercased normalizer code to its `CodeInfo`.
+fn resolve_normalizer_code(uppercase: &str) -> Option<&'static CodeInfo> {
+    let registry_code = normalizer_codes::registry_key_for(uppercase)?;
+    if registry_code == uppercase {
+        normalizer_codes::normalizer_only_entry(registry_code)
+    } else {
+        get_registry().get(registry_code)
+    }
+}
+
+/// Every code in the normalizer's SCREAMING_SNAKE namespace, paired with the
+/// registry entry that documents it.
+///
+/// Kept separate from [`list_all_codes`] because the two namespaces are
+/// different things: an `E`/`W` code is an
+/// [`ErrorType`](super::ErrorType) audited against the HGVS spec and
+/// configurable through `--error-mode` / `--ignore` / `--reject`, while these
+/// are normalizer diagnostics, several of which resolve to the *same* entry as
+/// a `W`-code. Merging them would double-count those conditions in `--list`.
+pub fn list_normalizer_codes() -> Vec<(&'static str, &'static CodeInfo)> {
+    let mut codes: Vec<(&'static str, &'static CodeInfo)> = normalizer_codes::NORMALIZER_CODES
+        .iter()
+        .filter_map(|entry| Some((entry.code, resolve_normalizer_code(entry.code)?)))
+        .collect();
+    codes.sort_by_key(|(code, _)| *code);
+    codes
 }
 
 /// List all codes.
@@ -2217,9 +2291,23 @@ mod tests {
     fn test_warning_codes_have_mode_behavior() {
         let warnings = list_warning_codes();
         for code in warnings {
-            // Loader codes (W-LOAD-*) do not participate in the parser's
-            // strict/lenient/silent configuration, so they may omit mode_behavior.
-            if code.code.starts_with("W-LOAD-") {
+            // A `ModeBehavior` documents what `--error-mode` / `--ignore` /
+            // `--reject` do to this code, so it is required exactly of the
+            // codes those flags reach — which is what
+            // `consults_error_config` declares. Two kinds of warning are
+            // therefore exempt, and the exemption is now derived from that
+            // declaration rather than from a name prefix (#2092):
+            //
+            //   * loader codes (`W-LOAD-*`), which have no `ErrorType` at all
+            //     and so cannot be resolved from a code; and
+            //   * `W5005`, whose `ErrorType` exists but declares itself inert
+            //     because the normalizer emits it unconditionally.
+            //
+            // Printing a mode table for either would describe configuration
+            // that does not happen.
+            let reachable_by_config = crate::error_handling::ErrorType::from_code(code.code)
+                .is_some_and(|error_type| error_type.consults_error_config());
+            if !reachable_by_config {
                 continue;
             }
             assert!(

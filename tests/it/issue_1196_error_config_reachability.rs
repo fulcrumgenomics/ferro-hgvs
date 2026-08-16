@@ -204,10 +204,12 @@ fn met1_advisory_never_rejects_ferros_own_canonical_output() {
 // The declaration, and the CLI diagnostic it drives
 // ---------------------------------------------------------------------------
 
-/// The six codes whose handling never consults the error configuration.
+/// The codes whose handling never consults the error configuration.
 ///
-/// Two disjoint reasons, pinned together because the user-visible consequence
-/// is the same: an override naming any of them cannot change anything.
+/// Three disjoint reasons, pinned together because the user-visible consequence
+/// is the same: an override naming any of them cannot change anything. The
+/// count is deliberately not stated — it has already gone stale once, and a
+/// number in a doc comment guards nothing.
 #[test]
 fn non_configurable_codes_are_declared_inert() {
     // Registered but never emitted — retained as stable Python discriminants
@@ -240,6 +242,21 @@ fn non_configurable_codes_are_declared_inert() {
              can soften it",
         );
     }
+
+    // Emitted unconditionally by the normalizer, with no consult site: the
+    // warning reports provenance about ferro's own output rather than a defect
+    // in the input, so there is nothing to reject and nothing to correct
+    // (#2092). Its registry entry carries no `ModeBehavior` for the same
+    // reason, which `registry::tests::test_warning_codes_have_mode_behavior`
+    // keys on — so the two statements cannot drift apart silently.
+    assert!(
+        !ErrorType::MembersCoalescedFromReportedForm.consults_error_config(),
+        "W5005 is pushed at the normalization exit in every mode, so no override reaches it",
+    );
+    assert!(
+        !ErrorType::MembersCoalescedFromReportedForm.is_correctable(),
+        "premise: the coalesced form IS the correct description, so there is nothing to correct",
+    );
 }
 
 /// A representative configurable code must still declare itself reachable, so

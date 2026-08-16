@@ -590,6 +590,14 @@
       "spec_section_notes": "Detected at the top of normalize_cds / normalize_protein / normalize_rna (src/normalize/mod.rs) via a get_transcript lookup on the variant's own transcript accession: when Transcript::cds_start_incomplete is true, the coordinate is passed through UNCHANGED (no re-numbering) in every mode — only whether the NormalizationWarning::IncompleteCdsStartReference warning is pushed is mode-gated (should_warn_incomplete_cds_start() / should_reject_incomplete_cds_start()). Strict mode's should_reject_incomplete_cds_start() promotes the warning to FerroError::InvalidCoordinates in the normalize() wrapper; lenient warns and preserves; silent preserves without a warning. n. is unaffected (normalize_tx never consults this flag). Input-side counterpart to Task 4's projection-side c./p./r. decline (#972)."
     },
     {
+      "code": "W5005",
+      "description": "MembersCoalescedFromReportedForm — normalization returned fewer cis members than the input described; two or more separately-reported variants merged into one (e.g. g.[100del;102_105del] normalizing to g.100_105delinsAC).",
+      "spec_section": "recommendations/DNA/delins.md:79-84: the coalesced form is the correct description, while \"the two variants may have been reported (or might occur) individually\" — provenance the normalized string cannot carry",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/delins/",
+      "status": "enforced",
+      "spec_section_notes": "Emitted as NormalizationWarning::MembersCoalesced from the single normalization exit in src/normalize/mod.rs that compares cis_member_count(input) against cis_member_count(output), so every pass that can reduce the count is covered by one check. Purely informational: the normalized string is identical whether or not the warning is produced, and the warning never rejects or alters the result. Emission is unconditional and in every mode — there is no ErrorConfig consult site, which is why ErrorType::consults_error_config() declares it inert, so --ignore W5005 / --reject W5005 report themselves as having no effect rather than silently doing nothing (#2092). Registered in src/error_handling/registry.rs by #2092; before that the code was minted by ErrorType::code() but had no registry entry, so `ferro explain W5005` failed."
+    },
+    {
       "code": "E-LOAD-001",
       "description": "MalformedRecord — a required GFF/GTF column failed to parse; the offending row is dropped.",
       "spec_section": null,

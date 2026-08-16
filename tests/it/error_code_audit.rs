@@ -12,7 +12,7 @@
 //!
 //! Tracking issue: fulcrumgenomics/ferro-hgvs#81 item L1.
 
-use ferro_hgvs::error_handling::{list_all_codes, ErrorType};
+use ferro_hgvs::error_handling::{list_all_codes, ErrorType, NORMALIZER_CODES};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -197,27 +197,32 @@ const EMISSION_SCAN_PATHS: &[&str] = &[
     "src/vcf",
 ];
 
-/// Map from a `NormalizationWarning::<Variant>` name to the registry's
-/// `name` field (the `ErrorType::*` variant name the audit row identifies
-/// the code by). Use when the emission variant and the registry name diverge.
-const NORMALIZATION_WARNING_TO_REGISTRY_NAME: &[(&str, &str)] = &[
-    // W5001 — both names match, so no mapping entry needed.
-    ("OverlapConflict", "OverlapConflictingEdits"),
-    // W5003: the warning describes the procedural effect
-    // (canonical-split skipped), the registry/error name describes the
-    // underlying spec violation (variant exceeds the reference). Same
-    // condition, two names.
-    ("CanonicalSplitSkipped", "VariantExceedsReference"),
-    // W4005: the warning is generic over telomere/centromere markers; the
-    // registry/error name is specific to the only unresolvable one (cen).
-    ("UnresolvableSpecialPosition", "UnresolvableCentromere"),
-];
+/// Map a `NormalizationWarning::<Variant>` name to the registry's `name` field
+/// (the `ErrorType::*` variant name the audit row identifies the code by), for
+/// the cases where the emission variant and the registry name diverge.
+///
+/// **Derived, not restated.** This used to be a hand-maintained table beside
+/// the identical correspondence in `src/error_handling/normalizer_codes.rs`;
+/// #2092 made that module's [`NORMALIZER_CODES`] the single source and this a
+/// lookup through it, because two copies of one mapping is how they come to
+/// disagree — and the copy here was already missing `MembersCoalesced`, which
+/// only became visible when `W5005` gained a registry entry.
+///
+/// Returns `None` when the variant has no `W`-code counterpart (the
+/// normalizer-only codes), in which case the caller keeps the variant name.
+fn registry_name_for_warning_variant(variant: &str) -> Option<&'static str> {
+    let entry = NORMALIZER_CODES.iter().find(|e| e.variant == variant)?;
+    list_all_codes()
+        .iter()
+        .find(|c| c.code == entry.registry_code)
+        .map(|c| c.name)
+}
 
 /// Scan [`EMISSION_SCAN_PATHS`] under `CARGO_MANIFEST_DIR` for distinct
 /// variant names actually used to drive warning emission. Recognizes both
 /// `ErrorType::<Variant>` (preprocessor-style emission) and
 /// `NormalizationWarning::<Variant>` (post-normalization emission), mapping
-/// the latter through [`NORMALIZATION_WARNING_TO_REGISTRY_NAME`] so the
+/// the latter through [`registry_name_for_warning_variant`] so the
 /// returned set keys on the registry's `name` field.
 fn emitted_error_type_variants() -> BTreeSet<String> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -462,10 +467,7 @@ fn extract_normalization_warning_variants(text: &str, out: &mut BTreeSet<String>
         if end > 0 {
             let name = &rest[..end];
             if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                let mapped = NORMALIZATION_WARNING_TO_REGISTRY_NAME
-                    .iter()
-                    .find_map(|(emit, reg)| (*emit == name).then_some(*reg))
-                    .unwrap_or(name);
+                let mapped = registry_name_for_warning_variant(name).unwrap_or(name);
                 out.insert(mapped.to_string());
             }
         }
