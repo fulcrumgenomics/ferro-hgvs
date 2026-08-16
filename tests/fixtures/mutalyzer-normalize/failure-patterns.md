@@ -17,6 +17,8 @@ Spec: `recommendations/DNA/delins.md:17-18, :81; general.md:35`
 | `NM_000143.3:c.44_47del4insATC` | normalized | spec_citation | — | — |
 | `NM_000143.3:c.44_47delTGCGinsATC` | normalized | spec_citation | — | — |
 | `NM_000143.3:c.44_47delinsATC` | normalized | spec_citation | — | — |
+| `NM_004006.2:c.992_1004delinsAC` | normalized | spec_citation | — | — |
+| `NM_004006.2:c.[992_1002del;1004T>C]` | normalized | spec_citation | — | — |
 
 ### RefSeqGene transcript selector (gene-symbol → NM_)
 
@@ -406,6 +408,6 @@ Spec: `recommendations/DNA/delins.md:44-47; general.md:157-160; consultation/SVD
 | genomic | 37 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 3 | 0 | 0 | 0 | 8 |
-| normalized | 43 | 0 | 1 | 0 | 18 |
+| normalized | 43 | 0 | 1 | 0 | 20 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 1 | 0 | 0 | 0 | 1 |

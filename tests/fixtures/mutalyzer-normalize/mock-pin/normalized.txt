@@ -241,3 +241,5 @@ NG_007485.1(NM_058195.3):n.204_205insATC	NG_007485.1(NM_058195.3):n.204_205insAT
 LRG_199t1:c.11LRG_199t1:c.11[10]	parse error: Parse error at position 10: Failed to parse variant: Error(Error { input: "LRG_199t1:c.11[10]", code: Tag })
 LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]	parse error: Parse error at position 16: Unexpected trailing characters: '_012337.3(NM_003002.4):c.14[10]'
 NG_012337.3(NM_003002.4):p.(Asp92Tyr)	NG_012337.3(NM_003002.4):p.(Asp92Tyr)
+NM_004006.2:c.[992_1002del;1004T>C]	NM_004006.2:c.[992_1002del;1004T>C]
+NM_004006.2:c.992_1004delinsAC	NM_004006.2:c.992_1004delinsAC
