@@ -3753,6 +3753,391 @@ mod tests {
         }
     }
 
+    /// Rows this gate must not normalize, because normalizing them aborts the
+    /// process under the `Test oracle` job's own flags.
+    ///
+    /// **These are normalizer defects that this corpus revealed, not flakes and not
+    /// rows the gate is allowed to be indifferent about.** Each is filed, each is
+    /// labelled `high`/`bug`, and each names the oracle it trips:
+    ///
+    /// - **#2036** — `FERRO_ASSERT_IDEMPOTENT`. Normalizing a long tract is not a
+    ///   fixed point: every pass walks three more bases 5' and increments the copy
+    ///   count (`g.558_559insACGACG` -> `g.460_558ACG[35]` -> `g.457_558ACG[36]`).
+    ///   Found by `long_tract_window_provenance` on its first armed run, which is
+    ///   the window-provenance defect that family was built to find.
+    /// - **#2037** — `FERRO_ASSERT_IN_BOUNDS`. Combining two members at `c.1` shifts
+    ///   the insertion point 5' off the coordinate space
+    ///   (`c.[1dup;1T>A]` -> `c.-1_1insA`, naming position 0 of a 20-base transcript).
+    ///
+    /// **Why an exclusion here rather than a weakened oracle.** The oracles panic
+    /// *inside* `normalize`, so a row that trips one takes the whole test binary with
+    /// it — and this gate re-normalizes each row **itself**, outside the `catch_unwind`
+    /// that [`normalize_through`] wraps `dump`'s own pass in. So the choice is not
+    /// between checking and not checking these rows; it is between the gate answering
+    /// its own question and the gate aborting on someone else's defect. Suppressing the
+    /// oracle, or dropping the rows from the corpus, would instead destroy the evidence
+    /// the two issues rest on.
+    ///
+    /// The list is **shrink-only**: every entry must still be produced by the corpus,
+    /// asserted below, so a row that stops being generated — or a defect that gets
+    /// fixed and re-admits its row — fails here instead of rotting into a blanket
+    /// exemption.
+    const ORACLE_TRIPPING_INPUTS: &[(&str, &str)] = &[
+        ("NC_TEST.1:g.456_457insACGACG", "#2036"),
+        ("NC_TEST.1:g.558_559insACGACG", "#2036"),
+        ("NC_TEST.1:g.582_583insACGACG", "#2036"),
+        ("NC_TEST.1:g.585_586insACGACG", "#2036"),
+        ("NC_TEST.1:g.756_757insACGACG", "#2036"),
+        ("NM_TEST.1:c.[1dup;1T>A]", "#2037"),
+        ("NM_TEST.1:c.[1dup;1C>A]", "#2037"),
+    ];
+
+    /// The reference a render-time mint would rebuild, against the one the
+    /// per-member pipeline was actually handed (#1946).
+    ///
+    /// **This is the gate on relocating the repeat mint.** `render::mint_reference_for`
+    /// has to reconstruct, from a settled member and a provider, what
+    /// `normalize_na_edit` was given — and `ref_seq` is not one thing: the whole
+    /// spliced transcript on `c.`/`r.`/`n.`, a window on `g.`/`m.`, and a genomic
+    /// window on the intronic and junction-crossing paths.
+    ///
+    /// # The comparison is per call site, and the first revision of it was vacuous
+    ///
+    /// The recorder hands back **every** `ref_seq` a normalization used: one per
+    /// member of a cis allele, one per growth attempt, one per
+    /// `FERRO_ASSERT_IDEMPOTENT` verification pass, and one per recursive re-entry
+    /// (`normalize_na_edit` calls itself from eight arms, always with the same
+    /// `ref_seq`). This gate's first revision asked whether **some** entry in that
+    /// union matched the rebuilt reference — `seen.iter().any(..)` — and reported
+    /// `3903 / 3903` (re-measured on this base; it shipped as `3865/3865` against an
+    /// older one). That number could not have read much else: on any row with a
+    /// transcript-axis member the whole-transcript entry is somewhere in the union,
+    /// so `any` matched for the same reason on every row. Turning it into `all` read
+    /// `3761 / 3903` — **142 members diverge, every one on the multi-exon `cx`
+    /// axis** — and that is not the tightening it looks like either: different
+    /// members of a legitimate multi-member allele genuinely see different windows,
+    /// so `all` over the union goes red on correct behaviour.
+    ///
+    /// Those 142 are the whole story, and per-site selection resolves them rather
+    /// than hiding them. Every one sits on a row that records **both** a `Cds`
+    /// call handed the 20-base spliced transcript **and** a `BoundarySpanning` call
+    /// handed a ~200-base genomic window — `NM_TESTX.1:c.6_11inv` records
+    /// `[Cds@d0=20, BoundarySpanning@d0=206, Cds@d0=20, BoundarySpanning@d0=206]`,
+    /// because `normalize_cds` tries the spliced frame and then re-normalizes across
+    /// the exon junction in genomic coordinates. The mint's whole-transcript rebuild
+    /// agrees with the `Cds` call byte-for-byte; the 206 belongs to a site the mint
+    /// does not model at all, and is counted below rather than matched.
+    ///
+    /// Neither is the right question. The right question is per **call site**, which
+    /// is why [`NaEditReference`] carries one: for each of the two shapes
+    /// `mint_reference_for` claims to model, compare the set of references **it**
+    /// builds against the set the pipeline was handed **at the sites that shape
+    /// models**, at depth 0. Set equality in both directions, so an extra reference
+    /// on either side fails — which is what makes a mis-attributed entry (a
+    /// junction-crossing window filed under `Cds`) fail rather than pass.
+    ///
+    /// # What is asserted
+    ///
+    /// 1. **Every recorded call is attributed.** A depth-0 call at
+    ///    [`NaEditCallSite::Unattributed`] means a normalizer entry point reaches
+    ///    `normalize_na_edit` without a site guard, and every conclusion below is
+    ///    then about a subset nobody delimited. Asserted zero.
+    /// 2. **The recorder did not truncate.** A capped buffer that silently drops
+    ///    entries looks exactly like a set that never contained them.
+    /// 3. **The whole-transcript sets are equal.** The reference is served entire on
+    ///    `c.`/`r.`/`n.`, so there is no window to choose and no reason for a rebuilt
+    ///    reference to differ by a byte from the one the pipeline indexed — nor for
+    ///    the pipeline to have used one the mint does not build. That is a property,
+    ///    statable without any measured number. Asserted over the rows where it is
+    ///    answerable, with the answerable-row count asserted non-zero so `0 of 0`
+    ///    cannot pass as a result.
+    /// 4. **One whole transcript per row.** The set is asserted to be a *singleton*
+    ///    wherever it is non-empty, which is the "nothing to choose" claim stated
+    ///    directly rather than assumed.
+    ///
+    /// # What is reported, and why it is not asserted
+    ///
+    /// **The genomic frame.** It cannot be byte-equal by construction: the pipeline's
+    /// window is centred on the *input* position and a render stage only has the
+    /// settled one, and the two do not even share a left edge —
+    /// `normalize_in_grown_window` fetches from `start - w` where `mint_reference_for`
+    /// fetches from `start - 1 - w`. So the question there is containment, and
+    /// pinning today's ratio would make the count *be* the property.
+    ///
+    /// **The frames the mint does not model.** A `c.` member whose span crosses an
+    /// exon/exon junction, or which sits in an intron, is normalized against a
+    /// *genomic* window by `normalize_boundary_spanning_cds` / `normalize_intronic_cds`
+    /// — `mint_reference_for` returns the spliced transcript for it, because that is
+    /// what its `CisKind` says. Those rows are counted under
+    /// `rows_using_an_unmodelled_frame` rather than being folded into a match, and a
+    /// row whose transcript-side calls were **only** at such a site is excluded from
+    /// assertion 3 (there is no whole-transcript call to compare against) and counted
+    /// under `rows_with_no_modelled_call`. That is the next piece of work, and naming
+    /// it as a population is the difference between an open gap and a hidden one.
+    ///
+    /// # Measured over `dump(1)`
+    ///
+    /// Read the run's own `MINT-REFERENCE` line rather than this table; it is here so
+    /// a reader knows the order of magnitude and which buckets exist.
+    ///
+    /// | population | result |
+    /// |---|---|
+    /// | rows where the whole-transcript sets are compared | see the printed line — **asserted equal** |
+    /// | genomic-frame members at least as wide as the widest witnessed window | reported |
+    /// | members with no rebuildable reference | reported |
+    /// | rows using a frame `mint_reference_for` does not model | reported |
+    /// | held out (#2036, #2037) | 7 rows |
+    ///
+    /// **Every asserted figure is identical with the three `FERRO_ASSERT_*` flags set
+    /// and unset, measured both ways** — same 2209 rows compared, same zero
+    /// mismatches, same `1586 / 2344`, same zero unattributed calls. One *reported*
+    /// counter does move: `rows_using_an_unmodelled_frame` reads **102** unarmed and
+    /// **103** armed, because `FERRO_ASSERT_IDEMPOTENT`'s verification pass is a
+    /// second normalization whose own depth-0 calls are recorded too, and on one row
+    /// it reaches a junction-crossing site the first pass did not. That is a fact
+    /// about the corpus rather than about the mint, and it is stated rather than
+    /// smoothed over: a counter over a *union* is exactly what stays flag-sensitive,
+    /// which is why the assertions are over per-site sets instead.
+    ///
+    /// That distinction is worth stating because a still-earlier revision did
+    /// **not** have it: it compared against the *narrowest* reference in the union,
+    /// and `FERRO_ASSERT_IDEMPOTENT`'s verification pass contributes narrower entries,
+    /// so its genomic figure read `2344/2344` in `Test oracle` and `2274/2344` in
+    /// `Test` (measured against that revision's own base — do not carry those two
+    /// numbers onto this one) — a gate whose number improves when you arm the oracles
+    /// is measuring the oracles. Selecting by call site and depth removes that
+    /// dependence at the
+    /// source: the verification pass's calls are depth-0 calls of a second
+    /// normalization, and they land in the same sets as the first pass's, which for
+    /// the transcript frame is the *same* whole transcript and for the genomic frame
+    /// is folded into the same maximum.
+    ///
+    /// Seven rows are held out; see [`ORACLE_TRIPPING_INPUTS`], which names the issue
+    /// behind each.
+    #[test]
+    fn the_render_time_reference_matches_what_the_pipeline_was_given() {
+        use ferro_hgvs::normalize::{
+            mint_reference_for, na_edit_references_overflowed, reference_digest,
+            take_na_edit_references, MintFrame, NaEditCallSite, NaEditReferenceRecording,
+            MINT_WINDOW,
+        };
+        use std::collections::BTreeSet;
+
+        /// The sites at which the pipeline is handed a whole transcript. These are
+        /// exactly the sites [`MintFrame::WholeTranscript`] models.
+        const WHOLE_TRANSCRIPT_SITES: &[NaEditCallSite] =
+            &[NaEditCallSite::Cds, NaEditCallSite::Tx, NaEditCallSite::Rna];
+        /// The sites at which the pipeline is handed a `g.`/`m.` window. These are
+        /// exactly the sites [`MintFrame::GenomicWindow`] models.
+        const GENOMIC_WINDOW_SITES: &[NaEditCallSite] =
+            &[NaEditCallSite::GrownWindow, NaEditCallSite::UnshiftedWindow];
+        /// Sites the mint does not model at all: a genomic window reached from a
+        /// transcript-axis description.
+        const UNMODELLED_SITES: &[NaEditCallSite] =
+            &[NaEditCallSite::Intronic, NaEditCallSite::BoundarySpanning];
+
+        let mut tx_rows_compared = 0usize;
+        let mut tx_row_mismatches: Vec<String> = Vec::new();
+        let mut rows_with_no_modelled_call = 0usize;
+        let mut rows_using_an_unmodelled_frame = 0usize;
+        let mut rows_with_a_declined_member = 0usize;
+        let mut unattributed_calls = 0usize;
+        let (mut g_total, mut g_contained, mut g_unwitnessed) = (0usize, 0usize, 0usize);
+        let mut no_reference = 0usize;
+        let mut held_out_seen: BTreeSet<&str> = BTreeSet::new();
+
+        // Built BEFORE arming: `dump` normalizes the whole corpus itself, and those
+        // normalizations are not the ones this gate is asking about. Arming first
+        // fills the buffer with them, which the cap assertion below catches.
+        let rows = dump(1);
+
+        // Armed once for the whole walk. Recording is off by default, so nothing
+        // outside this test pays for it or accumulates into it.
+        let _recording = NaEditReferenceRecording::arm();
+
+        for row in rows {
+            if row.axis == "p" {
+                continue;
+            }
+            // Held out BEFORE normalizing: the oracles abort inside `normalize`, and
+            // this gate's own call is not wrapped in `catch_unwind`.
+            if let Some((held, _)) = ORACLE_TRIPPING_INPUTS
+                .iter()
+                .find(|(input, _)| *input == row.input)
+            {
+                held_out_seen.insert(*held);
+                continue;
+            }
+            let provider = provider_for(row.axis, &row.core);
+            let direction = match row.direction {
+                "5prime" => ShuffleDirection::FivePrime,
+                _ => ShuffleDirection::ThreePrime,
+            };
+            let normalizer = Normalizer::with_config(
+                provider_for(row.axis, &row.core),
+                NormalizeConfig::default().with_direction(direction),
+            );
+            let Ok(input) = parse_hgvs(&row.input) else {
+                continue;
+            };
+            let _ = take_na_edit_references();
+            let normalized = normalizer.normalize(&input);
+            // Drained unconditionally, and *before* the `else { continue }`. A
+            // refused normalization still records the references it was handed
+            // before it refused, and leaving them in the buffer bleeds them into
+            // the next row's set — which the cap assertion below caught, and which
+            // the union-based revision of this gate could not have.
+            let seen = take_na_edit_references();
+            let Ok(output) = normalized else {
+                continue;
+            };
+            if seen.is_empty() {
+                continue;
+            }
+
+            // Only depth-0 calls: the eight recursive arms re-enter with the same
+            // `ref_seq`, so counting them would weight one entry point by how many
+            // rewrites it happened to take.
+            let entry_calls = || seen.iter().filter(|e| e.depth == 0);
+            unattributed_calls += entry_calls()
+                .filter(|e| e.site == NaEditCallSite::Unattributed)
+                .count();
+            let witnessed_tx: BTreeSet<(usize, u64)> = entry_calls()
+                .filter(|e| WHOLE_TRANSCRIPT_SITES.contains(&e.site))
+                .map(|e| (e.len, e.digest))
+                .collect();
+            let widest_genomic = entry_calls()
+                .filter(|e| GENOMIC_WINDOW_SITES.contains(&e.site))
+                .map(|e| e.len)
+                .max();
+            let unmodelled: BTreeSet<NaEditCallSite> = entry_calls()
+                .filter(|e| UNMODELLED_SITES.contains(&e.site))
+                .map(|e| e.site)
+                .collect();
+            if !unmodelled.is_empty() {
+                rows_using_an_unmodelled_frame += 1;
+            }
+
+            let members: Vec<_> = match &output {
+                ferro_hgvs::hgvs::variant::HgvsVariant::Allele(a) => a.variants.clone(),
+                other => vec![other.clone()],
+            };
+            let mut built_tx: BTreeSet<(usize, u64)> = BTreeSet::new();
+            let mut declined_here = false;
+            for member in &members {
+                let Some(built) = mint_reference_for(member, &provider, MINT_WINDOW) else {
+                    no_reference += 1;
+                    declined_here = true;
+                    continue;
+                };
+                let digest = reference_digest(&built.bases);
+                match built.frame {
+                    MintFrame::WholeTranscript => {
+                        built_tx.insert((built.bases.len(), digest));
+                    }
+                    MintFrame::GenomicWindow => {
+                        g_total += 1;
+                        // The pipeline's window is centred elsewhere and starts one
+                        // base 3' of this one, so identity is not the question;
+                        // whether the rebuilt window is at least as wide as the
+                        // **widest** the pipeline used at a site this frame models
+                        // is. Widest, because `insertion_to_repeat` walks outward
+                        // bounded by `ref_seq.len()` — a mint is only safe if it is
+                        // at least as wide as every window the pipeline used.
+                        match widest_genomic {
+                            Some(widest) if built.bases.len() >= widest => g_contained += 1,
+                            Some(_) => {}
+                            // The mint built a genomic window for a member the
+                            // pipeline never handed one to. Counted, not passed.
+                            None => g_unwitnessed += 1,
+                        }
+                    }
+                }
+            }
+            if declined_here {
+                rows_with_a_declined_member += 1;
+            }
+
+            // The whole-transcript comparison is answerable only when the pipeline
+            // made a whole-transcript call and every member was minted. A row whose
+            // transcript-side work happened entirely in a frame the mint does not
+            // model has nothing to compare against, and saying so is the point.
+            if witnessed_tx.is_empty() && !built_tx.is_empty() {
+                rows_with_no_modelled_call += 1;
+            } else if !witnessed_tx.is_empty() && !declined_here {
+                tx_rows_compared += 1;
+                if built_tx != witnessed_tx && tx_row_mismatches.len() < 12 {
+                    tx_row_mismatches.push(format!(
+                        "axis={} input={} built={:?} witnessed={:?} unmodelled_sites={:?}",
+                        row.axis,
+                        row.input,
+                        built_tx.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+                        witnessed_tx.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+                        unmodelled,
+                    ));
+                } else if built_tx != witnessed_tx {
+                    tx_row_mismatches.push(String::from("<further mismatches elided>"));
+                }
+                assert!(
+                    witnessed_tx.len() == 1,
+                    "the reference is served whole on `c.`/`r.`/`n.`, so one \
+                     normalization cannot have been handed two different \
+                     whole-transcript references: {} saw {:?}",
+                    row.input,
+                    witnessed_tx.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+                );
+            }
+        }
+
+        eprintln!(
+            "MINT-REFERENCE whole-transcript sets equal on {tx_rows_compared} rows \
+             ({} mismatching); genomic {g_contained}/{g_total} at least as wide \
+             ({g_unwitnessed} unwitnessed); {no_reference} members had no rebuildable \
+             reference across {rows_with_a_declined_member} rows; \
+             {rows_using_an_unmodelled_frame} rows used a frame the mint does not model, \
+             {rows_with_no_modelled_call} of them with no modelled call at all; \
+             {unattributed_calls} unattributed calls; {} rows held out",
+            tx_row_mismatches.len(),
+            ORACLE_TRIPPING_INPUTS.len()
+        );
+
+        // Shrink-only: a held-out row the corpus no longer builds must be removed from
+        // the list deliberately, not left as a silent exemption.
+        let expected: BTreeSet<&str> = ORACLE_TRIPPING_INPUTS.iter().map(|(i, _)| *i).collect();
+        assert_eq!(
+            held_out_seen,
+            expected,
+            "the held-out list has drifted from the corpus; entries never produced: {:?}",
+            expected.difference(&held_out_seen).collect::<Vec<_>>()
+        );
+
+        assert!(
+            !na_edit_references_overflowed(),
+            "the reference recorder hit its cap, so every set above is a truncation \
+             of the real one and a missing entry is indistinguishable from a mismatch"
+        );
+        assert_eq!(
+            unattributed_calls, 0,
+            "a normalizer entry point reached `normalize_na_edit` without a \
+             `NaEditSiteGuard`, so the site selection below is over a population \
+             nobody delimited"
+        );
+        assert!(
+            tx_rows_compared > 0,
+            "no row reached the whole-transcript comparison, so the equality \
+             assertion below is vacuous"
+        );
+        assert!(
+            tx_row_mismatches.is_empty(),
+            "a render-time mint must rebuild exactly the whole-transcript references \
+             the pipeline was handed at the sites this frame models: the reference is \
+             served whole on `c.`/`r.`/`n.`, so there is no window to choose and \
+             nothing to disagree about. {} of {tx_rows_compared} rows disagree:\n{}",
+            tx_row_mismatches.len(),
+            tx_row_mismatches.join("\n"),
+        );
+    }
+
     /// The long tracts bracket the normalizer's own window, on both sides.
     ///
     /// **This is the property the family exists for, so it is asserted rather than
