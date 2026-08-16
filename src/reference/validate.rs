@@ -169,15 +169,20 @@ pub fn validate_transcript_record(tx: &Transcript) -> Vec<TranscriptAnomaly> {
     // coordinate gap, and this check is sound either way because it compares
     // against the maximum rather than against a summed exon length.
     //
-    // Gaps are NOT rejected upstream, contrary to what this comment used to
-    // claim. `data::cdot`'s `RawCdotTranscript::from_genome_build` silently
-    // drops any exon row with fewer than five fields, which can itself open a
-    // gap, and `MultiFastaProvider` diverts a gapped cdot table to supplemental
-    // CDS data only when a supplemental record exists for that accession —
-    // otherwise the gapped table is served as-is. Real annotation has such
-    // gaps: over cdot-0.2.32.refseq.GRCh38, 58 of 474,818 multi-exon builds
-    // carry one (23–2718 bases; the census is recorded on
+    // Gaps in real annotation are NOT rejected upstream, contrary to what this
+    // comment used to claim. `MultiFastaProvider` diverts a gapped cdot table to
+    // supplemental CDS data only when a supplemental record exists for that
+    // accession — otherwise the gapped table is served as-is. Real annotation
+    // has such gaps: over cdot-0.2.32.refseq.GRCh38, 58 of 474,818 multi-exon
+    // builds carry one (23–2718 bases; the census is recorded on
     // `convert::mapper`'s `cdot_tx_basis_cross_checked_against_real_cdot`).
+    //
+    // A synthetic gap opened by a *malformed* exon row is a separate matter and
+    // is no longer served: `data::cdot`'s `RawCdotTranscript::from_genome_build`
+    // used to silently drop any exon row it could not parse (fewer than five
+    // fields, or a non-numeric coordinate), which itself opened a gap and
+    // displaced the derived CDS bounds; it now refuses the whole transcript
+    // instead (#1924).
     let exon_extent = tx.exons.iter().map(|e| e.end).max();
     if let Some(extent) = exon_extent {
         if seq_len < extent {
