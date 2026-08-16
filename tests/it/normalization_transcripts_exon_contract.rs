@@ -139,11 +139,23 @@ const FLATTENED_RECORDS: &[(&str, &str)] = &[(
 /// module docs for what carrying it bought (#1619) and why it must stay.
 const CDOT_GAP_JUNCTIONS: &[(&str, u32, i64)] = &[("NM_033517.1", 10, 39)];
 
+/// cdot's own raw `stop_codon`, per accession, in the gap-COLLAPSED space cdot
+/// states its codon bounds in. The fixture's `cds_end` is the same bound in FLAT
+/// space, so the two differ by exactly that accession's enclosed gap — see
+/// [`the_gapped_records_cds_bounds_are_flat`]. Keyed by accession rather than
+/// assumed for every [`CDOT_GAP_JUNCTIONS`] row, since the raw number has to be
+/// read out of cdot for each one.
+const COLLAPSED_STOP_CODONS: &[(&str, u64)] = &[("NM_033517.1", 5157)];
+
 #[derive(Debug, Deserialize)]
 struct TranscriptRecord {
     id: String,
     sequence: String,
     exons: Vec<ExonRecord>,
+    #[serde(default)]
+    cds_start: Option<u64>,
+    #[serde(default)]
+    cds_end: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,6 +242,114 @@ fn every_pinned_gap_exemption_is_still_load_bearing() {
              the row — an exemption that matches nothing silently weakens this guard."
         );
     }
+}
+
+/// A gap-carrying record's CDS bounds are stated in FLAT transcript space, the
+/// same space as its exon table — which is what the live cdot provider now
+/// serves too (#1619).
+///
+/// This pins a disagreement that was real: cdot states `start_codon`/`stop_codon`
+/// in a gap-COLLAPSED space (exon bases only) while stating its exon `tx_start`/
+/// `tx_end` flat, and ferro copied the codon bounds through unadjusted. So the
+/// provider served `NM_033517.1` with `cds_end = 5157` while this fixture — built
+/// from RefSeq's own annotation, which is flat (`CDS 1..5196`,
+/// `/coded_by="NM_033517.1:1..5196"`, `NP_277052.1` = 1731 aa = 5196/3 - 1) —
+/// carried 5196. Two sources of truth for one accession, differing by exactly the
+/// gap, with nothing comparing them.
+///
+/// The assertions are deliberately structural rather than a bare `== 5196`: the
+/// gap must lie **inside** the CDS (otherwise flat and collapsed agree and the
+/// record proves nothing), the last coding base must land inside an exon (a
+/// collapsed bound would not), and subtracting the enclosed gap must reproduce
+/// cdot's own raw number — so this fails if either side is restated in the
+/// other's space.
+#[test]
+fn the_gapped_records_cds_bounds_are_flat() {
+    let records = load_records();
+    // The `continue` below is a legitimate skip (a non-coding record has no CDS
+    // bound to place in either space), but an unbounded skip makes this test pass
+    // having compared NOTHING — `CDOT_GAP_JUNCTIONS` holds one entry, so a single
+    // silent skip empties the whole test. That is reachable without anyone
+    // touching this file: `cds_start`/`cds_end` are `#[serde(default)]
+    // Option<u64>`, so renaming either key in the fixture yields `None` and a
+    // green run. Count what was actually compared and refuse a zero.
+    let mut compared = 0usize;
+    for &(accession, number, size) in CDOT_GAP_JUNCTIONS {
+        let record = records
+            .iter()
+            .find(|r| r.id == accession)
+            .unwrap_or_else(|| panic!("{accession} is pinned in CDOT_GAP_JUNCTIONS but absent"));
+        let (Some(cds_start), Some(cds_end)) = (record.cds_start, record.cds_end) else {
+            continue; // non-coding record: no CDS bound to place in either space
+        };
+        compared += 1;
+
+        // The gap's flat interval, 1-based inclusive: (prev.end, next.start).
+        let gap_start = record
+            .exons
+            .iter()
+            .find(|e| e.number == number)
+            .unwrap_or_else(|| panic!("{accession} has no exon {number}"))
+            .end;
+
+        // `size` is `i64`, and every arithmetic use below casts it to `u64`. A
+        // non-positive value would wrap to an enormous number and make the
+        // interval checks vacuously true rather than fail, so reject it by name
+        // first — the cast must not be where a bad pin turns into a green run.
+        assert!(
+            size > 0,
+            "{accession}: CDOT_GAP_JUNCTIONS pins a non-positive gap size {size} after exon \
+             {number}; a gap must have a positive width for this record to distinguish flat \
+             from collapsed space"
+        );
+        let size = size as u64;
+
+        assert!(
+            cds_start <= gap_start && gap_start + size < cds_end,
+            "{accession}: the {size}-base gap after exon {number} must lie INSIDE the CDS \
+             [{cds_start}, {cds_end}] for this record to distinguish flat from collapsed space"
+        );
+        assert!(
+            record
+                .exons
+                .iter()
+                .any(|e| e.start <= cds_end && cds_end <= e.end),
+            "{accession}: cds_end {cds_end} must land inside an exon — a gap-collapsed bound \
+             would not, which is how the defect presented"
+        );
+        // Require the entry rather than skipping when it is absent. This is the
+        // strongest assertion in the test — it is the only one that compares the
+        // two coordinate spaces against each other — so letting a missing row
+        // silently disable it would reintroduce, per accession, exactly the
+        // vacuity the `compared > 0` check below exists to prevent. Today every
+        // CDOT_GAP_JUNCTIONS accession has a matching entry, so this is a guard
+        // against a future row being added without its raw stop_codon, not a
+        // live gap.
+        let &(_, collapsed_stop) = COLLAPSED_STOP_CODONS
+            .iter()
+            .find(|(a, _)| *a == accession)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{accession} is pinned in CDOT_GAP_JUNCTIONS but has no COLLAPSED_STOP_CODONS \
+                     entry; add cdot's own raw stop_codon for it, or this record's flat-vs-\
+                     collapsed comparison silently does not run"
+                )
+            });
+        assert_eq!(
+            cds_end - size,
+            collapsed_stop,
+            "{accession}: cds_end minus the enclosed gap must reproduce cdot's own raw \
+             stop_codon, so neither side can drift into the other's coordinate space"
+        );
+    }
+
+    assert!(
+        compared > 0,
+        "no gapped record was actually compared: all {} CDOT_GAP_JUNCTIONS entries skipped for a \
+         missing CDS. This test would have passed while asserting nothing — check that the \
+         fixture still carries `cds_start`/`cds_end` for them",
+        CDOT_GAP_JUNCTIONS.len()
+    );
 }
 
 /// No record may be flattened to a single exon without saying so.
