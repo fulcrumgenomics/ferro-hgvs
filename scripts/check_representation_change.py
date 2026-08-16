@@ -200,23 +200,41 @@ DECLINE_TERMINATORS = ".;:—–"
 
 #: A declination: one of `NONE_VALUES`, alone or followed by a reason. Built from the two
 #: constants above so the vocabulary has one definition rather than a regex restating it.
-#: `DOTALL` so a reason spanning lines does not defeat the trailing `.*`.
+#:
+#: Matched against the trailer's FIRST LINE only (see `declines`), so it carries no `DOTALL`
+#: and no `MULTILINE`: the reason it captures is the remainder of that one line, and any
+#: continuation below is the contradiction tripwire's business, not the decline verdict's.
+#: This used to carry `DOTALL` and be matched against the whole value, which made the verdict
+#: depend on terminating punctuation — a bare `none` with a continuation had nothing to feed
+#: the trailing `.*`, so `$` never reached end-of-string and the value was not read as a
+#: decline at all (#2031). git-cliff reads the verdict off the trailer's own line, so this
+#: now agrees with it by construction rather than only when a terminator happens to be
+#: present -- pinned value-by-value by `test_the_two_decline_rules_agree_value_by_value`.
 DECLINE_RE = re.compile(
     r"^(?:"
     + "|".join(re.escape(value) for value in sorted(NONE_VALUES))
     + r")[ \t]*(?:["
     + re.escape(DECLINE_TERMINATORS)
     + r"].*)?$",
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 
 
 def declines(declaration: str) -> bool:
     """Return whether `declaration` is a decline rather than a description of a move.
 
-    The verdict is the first word; anything after a terminator is the reason for it.
+    The verdict is read from the FIRST LINE of the value, which is what git-cliff's footer
+    rule reads (it is `MULTILINE`, so its `$` anchors on the trailer's own line). Reading the
+    whole value instead depended on terminating punctuation to span a continuation, so a bare
+    `none` followed by a move on the next line was not read as a decline at all and the
+    contradiction tripwire — gated on this verdict — never fired (#2031). The tripwire still
+    scans the whole value; only the *verdict* is a first-line question, and separating the two
+    is what closes the gap #2027 left.
+
+    The verdict is the first word; anything after a terminator on that line is its reason.
     """
-    return DECLINE_RE.match(declaration.strip()) is not None
+    first_line = declaration.strip().partition("\n")[0]
+    return DECLINE_RE.match(first_line) is not None
 
 
 #: A quantified movement claim -- "3 rows move", "577 rows merge", "2 rows respell",
@@ -709,10 +727,15 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "Measure with: cargo run --release --features dev --example dump_normalized_corpus"
         )
 
-    # The tripwire must read the WHOLE trailer value, not just its first line: a decline on
-    # line 1 can hide a `<n> rows move` on an unindented continuation line (#1854), and
-    # `declaration` above is truncated at the newline by `TRAILER_RE`. `declarations` is
-    # non-empty here, so a full value exists.
+    # Two spans, deliberately different (#2031). The decline VERDICT is a first-line question
+    # -- `declines` reads it off the trailer's own line, which is what git-cliff reads -- but
+    # the contradiction TRIPWIRE must scan the WHOLE value, because a decline on line 1 can
+    # hide a `<n> rows move` on an unindented continuation line (#1854). Reading the verdict
+    # off the whole value instead (as #2027 did) made it depend on terminating punctuation, so
+    # a BARE `none` with a move continuation was read as neither a decline nor a contradiction.
+    # `declines(full_value)` still asks the first-line question -- `full_value`'s first line is
+    # this same trailer's -- while `contradicted_decline` searches the whole value below.
+    # `declarations` is non-empty here, so a full value exists.
     full_value = full_declaration_value(declaration_text)
     assert full_value is not None
     if declines(full_value):
