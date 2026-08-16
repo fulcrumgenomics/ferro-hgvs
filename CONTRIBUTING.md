@@ -209,12 +209,15 @@ PR — see [Changelog](#changelog) below. The release PR states the section even
 when it is empty, so that a cycle in which nothing was declared is visible rather
 than silent.
 
-Two limits of that section are worth knowing before you rely on it. It carries
-the commit **subject** only — the trailer's own text does not reach the changelog
+One limit of that section is worth knowing before you rely on it: it carries the
+commit **subject** only — the trailer's own text does not reach the changelog
 ([#1556]), so the four facts above live in your PR description and a reader has
-to follow the link for them. And a declining commit is filed under **Other**
-whatever its type, so a `fix:` that correctly declined is not listed under
-**Fixed** ([#1557]).
+to follow the link for them.
+
+A declining commit (`Representation-Change: none`) is grouped by its conventional
+type, so a `fix:` that correctly declined is listed under **Fixed** rather than
+buried in **Other** — a `commit_preprocessor` in `release-plz.toml` neutralizes
+the declining trailer so the commit falls through to its type ([#1557]).
 
 [#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557

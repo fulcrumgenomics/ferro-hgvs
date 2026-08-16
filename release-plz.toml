@@ -143,69 +143,66 @@ means the trailer is missing. Fix that before releasing, not after.
 # insertion at the top) — so a released section can be amended after the fact.
 # The trailer is what gets a note in automatically, at release time.
 [changelog]
+# A commit's `Representation-Change:` trailer decides its changelog group, and there are
+# three cases to keep apart (#1424, #1557):
+#
+#   - a trailer declaring a REAL move    -> "Representation changes"
+#   - a trailer that DECLINES (`none`, ...) -> grouped by conventional type (Fixed, ...)
+#   - no trailer                         -> grouped by conventional type
+#
+# The declining case is why a preprocessor is needed rather than a second parser. git-cliff
+# matches a footer rule on the trailer's *presence*, not its value, so the inclusion parser
+# below (`^Representation-Change:`) would file a decline under "Representation changes" too
+# -- which #1526 (#1523's CI-only decline) did in v0.13.1. Every direct repair fails,
+# measured against git-cliff 2.13.1:
+#
+#   - `{ footer = <decline>, message = "^fix", group = "Fixed" }` -- git-cliff evaluates a
+#     parser's fields as OR, not AND, so this matches every `fix:` regardless of its
+#     trailer, INCLUDING the ones declaring a real move, which empties the section.
+#   - a parser routing declines to `Other` (what shipped before #1557) files a declining
+#     `fix:` under Other instead of Fixed -- the exact bug this config now fixes.
+#   - a parser that omits `group` does not fall through; the commit keeps `group = None` and
+#     git-cliff renders the raw conventional type (`fix`/`test`), losing the group ordering.
+#
+# So a `commit_preprocessor` renames the trailer KEY on DECLINING commits only, before the
+# parsers run: `Representation-Change:` becomes `Representation-Change-Declined:`, which the
+# inclusion parser's literal `:` no longer matches, so the commit falls through to its
+# conventional-type parser (a declining `fix:` -> Fixed). Real declarations keep their key
+# and are grouped into "Representation changes" as before. The rename touches the footer,
+# never the subject, so no rendered bullet changes and no strip postprocessor is needed;
+# `scripts/inject_representation_disclosure.py` reads the RAW commit message rather than the
+# preprocessed one, so a decline's own text is untouched there too.
+#
+# The decline regex is the exact one `scripts/check_changelog_grouping.py` audits with, so
+# the audit and this config agree on which commits decline by construction:
+#   - `[^\S\r\n]` is horizontal-only whitespace, so `\s` cannot span a newline into the next
+#     trailer and read a following `none` line as this trailer's value.
+#   - `(?i)` accepts `NONE`/`None`, matching the checker (whose regex is case-insensitive);
+#     without it an uppercase decline would be grouped as a real change.
+#   - `m`, because git-cliff matches against the whole footer value, which spans lines
+#     (#1573): the verdict is read off the trailer's own line, as the checker does.
+#   - the verdict is the first word and a reason may follow it (#1555): `[.;:—–]` introduces
+#     the reason, a `,` does not (a comma qualifies -- "none, except two rows" is a real
+#     change). `[\s\S]*` lets the reason span lines.
+# The decline vocabulary and terminator set are kept in step with `NONE_VALUES` and
+# `DECLINE_TERMINATORS` in `scripts/check_representation_change.py` by
+# `test_decline_vocabulary_matches_the_changelog_config` and
+# `test_the_two_decline_rules_agree_value_by_value`.
+#
+# Setting `commit_preprocessors` REPLACES release-plz's defaults wholesale, and its only
+# default is the `(#N)` -> PR-link rewrite (`release_plz_core::changelog::default_git_config`).
+# So that rewrite is reproduced as the second entry below, or the changelog loses every PR
+# link. The URL is this repo's own PR base (`RepoUrl::git_pr_link`), which is stable.
+commit_preprocessors = [
+  { pattern = "(?im)^Representation-Change:([^\\S\\r\\n]*(?:none|no|n/a|na)[^\\S\\r\\n]*(?:[.;:—–][\\s\\S]*)?)$", replace = "Representation-Change-Declined:${1}" },
+  { pattern = "\\(#([0-9]+)\\)", replace = "([#${1}](https://github.com/fulcrumgenomics/ferro-hgvs/pull/${1}))" },
+]
+
 commit_parsers = [
-  # `Representation-Change: none` declares that a change moves NO output, so it must not
-  # be listed as one. git-cliff matches a footer rule on the trailer's *presence*, not its
-  # value, so without this exclusion #1523 -- a CI-only change that correctly declined --
-  # rendered under "Representation changes" in v0.13.1 (#1526).
-  #
-  # That matters as much as the opposite failure. v0.13.0 under-reported (nothing declared,
-  # section empty, disclosure reconstructed by hand from a 5.7M-row corpus diff, #1522);
-  # listing non-changes is the same loss of trust from the other side, and it compounds,
-  # because declining is the COMMON case for changes under those directories.
-  #
-  # Ordering is load-bearing: git-cliff takes the FIRST matching parser, so this exclusion
-  # must precede the inclusion below. `[^\S\r\n]` is horizontal-only whitespace -- `\s`
-  # would span the newline into the next trailer and let `Representation-Change:` followed
-  # by a line reading `none` count as a decline.
-  #
-  # `(?i)` because the checker accepts `NONE`/`None` as declines (its own regex is
-  # case-insensitive); without the flag an uppercase decline is grouped as a real change,
-  # which is this bug in miniature. Verified against git-cliff 2.13.1.
-  #
-  # **The verdict is the first word; a reason may follow it** (#1555). The value used to be
-  # anchored -- `(none|no|n/a|na)$` -- so `none. No file under src/ is touched` was not a
-  # decline and rendered as a real change. That is not a corner case: in the v0.13.1 cycle
-  # 14 of 16 commits declined, 8 of them gave a reason on the same line, and all 8 landed
-  # under "Representation changes". The section listed 10 entries of which 2 were real.
-  #
-  # Explaining a decline is the behaviour to encourage, so the punctuation that introduces
-  # the explanation must not silently invert the verdict. `,` is deliberately NOT a
-  # terminator: a comma most often introduces a qualification that changes the answer
-  # ("none, except two rows"), where a full stop or a dash closes it.
-  #
-  # The decline vocabulary and this terminator set are kept in step with `NONE_VALUES` and
-  # `DECLINE_TERMINATORS` in `scripts/check_representation_change.py` by
-  # `test_decline_vocabulary_matches_the_changelog_config` and
-  # `test_the_two_decline_rules_agree_value_by_value`.
-  #
-  # **`m`, because git-cliff matches this against the whole footer value, which spans
-  # lines** (#1573). Without it `$` is end-of-*string*, so the rule only fires when the
-  # decline is the last thing in the message -- and anything appended after a BARE `none`
-  # defeats it. That is not hypothetical: CodeRabbit appends a release-notes block to the
-  # PR description, GitHub makes the description the squash body, and `3ebcdddd` (#1551)
-  # declined and was then filed under "Representation changes" in the v0.14.0 changelog.
-  # The `[.;:—–]` terminator above does not cover it, because the character following a
-  # bare decline is a newline rather than punctuation.
-  #
-  # With `m` the verdict is read off the trailer's own line, which is what the checker
-  # already does -- its `TRAILER_RE` is `re.IGNORECASE | re.MULTILINE` and takes the value
-  # from one line. The two halves now agree by construction rather than by coincidence.
-  # A reason may still span lines: `[\s\S]*` after a terminator is unchanged, and `,` is
-  # still excluded, so `none, except two rows` remains a real change.
-  { footer = "(?im)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*(?:[.;:—–][\\s\\S]*)?$", group = "<!-- 7 -->Other" },
-  # A declining commit lands in `Other` whatever its type, so a `fix:` that correctly
-  # declined is not listed under `Fixed` (#1557). That is a known cost of the ordering
-  # above, not an oversight, and the obvious repair does not work: **git-cliff evaluates a
-  # parser's fields as OR, not AND** (measured against 2.13.1). Adding `message = "^fix"`
-  # to this rule matches every `fix:` commit regardless of its trailer -- including the
-  # ones declaring a real move -- which empties the section below. Omitting `group` does
-  # not fall through to a later parser either; the commit keeps `group = None` and
-  # git-cliff falls back to the raw conventional type, rendering headings as `fix`/`test`.
-  #
-  # `(?i)` here too, and not only on the exclusion above: the checker accepts any casing,
-  # so a lowercase `representation-change: 577 rows move` is a REAL disclosure that a
-  # case-sensitive rule drops silently into `Other`. Verified against git-cliff 2.13.1.
+  # `(?i)` on the inclusion rule: the checker accepts any casing, so a lowercase
+  # `representation-change: 577 rows move` is a REAL disclosure that a case-sensitive rule
+  # would drop silently into `Other`. A declining trailer never reaches this rule -- the
+  # preprocessor above has renamed its key -- so this matches only real declarations.
   { footer = "(?i)^Representation-Change:", group = "<!-- 0 -->Representation changes" },
   { message = "^feat", group = "<!-- 1 -->Added" },
   { message = "^changed", group = "<!-- 2 -->Changed" },

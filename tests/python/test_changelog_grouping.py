@@ -11,24 +11,32 @@ silently agree with whatever it was handed.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
-_MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_changelog_grouping.py"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_MODULE_PATH = _REPO_ROOT / "scripts" / "check_changelog_grouping.py"
 _SPEC = importlib.util.spec_from_file_location("check_changelog_grouping", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 check_changelog_grouping = importlib.util.module_from_spec(_SPEC)
 sys.modules["check_changelog_grouping"] = check_changelog_grouping
 _SPEC.loader.exec_module(check_changelog_grouping)
 
+load_changelog_config = check_changelog_grouping.load_changelog_config
 opens_with_a_decline = check_changelog_grouping.opens_with_a_decline
 parse_rendered_groups = check_changelog_grouping.parse_rendered_groups
+render = check_changelog_grouping.render
 rendered_headings = check_changelog_grouping.rendered_headings
 strip_ordering_prefix = check_changelog_grouping.strip_ordering_prefix
 trailer_value = check_changelog_grouping.trailer_value
+write_cliff_config = check_changelog_grouping.write_cliff_config
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +382,176 @@ def test_ci_synthesizes_the_squash_commit_before_auditing() -> None:
         "the resolved range must be exported (AUDIT_RANGE -> $GITHUB_ENV) so the audit step "
         "uses it rather than re-deriving it from the reset HEAD"
     )
+
+
+# ---------------------------------------------------------------------------
+# The grouping of a declining `fix:` (#1557), rendered through real git-cliff
+# ---------------------------------------------------------------------------
+#
+# The bug: a commit whose `Representation-Change:` trailer DECLINES (`none`, ...) was filed
+# under **Other** whatever its conventional type, so a `fix:` that correctly declined never
+# reached **Fixed**. git-cliff evaluates a parser's fields as OR (not AND), so the naive
+# `{ footer = <decline>, message = "^fix" }` cannot express "a declining fix"; the fix is a
+# `commit_preprocessor` in `release-plz.toml` that renames a declining trailer's key so the
+# commit falls through to its conventional-type parser. These render the REAL configuration
+# through real git-cliff and assert where each commit lands — the only test that can, because
+# the grouping is git-cliff's, not this script's.
+
+
+_GIT_CLIFF = shutil.which("git-cliff")
+requires_git_cliff = pytest.mark.skipif(
+    _GIT_CLIFF is None,
+    reason="git-cliff is not installed; the grouping is rendered by git-cliff itself",
+)
+
+
+# A hermetic git environment: the throwaway repo must NOT inherit the developer's global
+# config. That config commonly enables commit signing (this repo signs via 1Password), which
+# would prompt or hang on `git commit` in a headless test, and could pull in global hooks. The
+# identity is supplied through env vars so no `git config` step is needed, and signing is
+# forced off. `os.devnull` for the config files isolates global and system config entirely.
+_GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_AUTHOR_NAME": "test",
+    "GIT_AUTHOR_EMAIL": "test@example.com",
+    "GIT_COMMITTER_NAME": "test",
+    "GIT_COMMITTER_EMAIL": "test@example.com",
+}
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=True, env=_GIT_ENV
+    ).stdout
+
+
+def _render_real_config(commits: list[str]) -> dict[str, list[str]]:
+    """Build a throwaway repo of `commits`, render it with the real config, return groups.
+
+    Returns `{group name: [commit subject, ...]}` — subjects rather than ids, because a test
+    reads better asserting on `"declining fix"` than on a 40-hex sha. The configuration is
+    `release-plz.toml`'s own `[changelog]`, written out by the audit's `write_cliff_config`,
+    so this exercises exactly what the release will render.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _git(repo, "init", "-q")
+        # A base commit so the audited range `<base>..HEAD` is a well-formed OID range.
+        _git(repo, "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "chore: base")
+        base = _git(repo, "rev-parse", "HEAD").strip()
+        for message in commits:
+            _git(repo, "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", message)
+
+        config = repo / "cliff.toml"
+        write_cliff_config(load_changelog_config(_REPO_ROOT / "release-plz.toml"), config)
+        rendered = render(f"{base}..HEAD", config, repo)
+
+        subject_of = {
+            line.split(" ", 1)[0]: line.split(" ", 1)[1]
+            for line in _git(repo, "log", "--format=%H %s").strip().splitlines()
+        }
+        groups = parse_rendered_groups(rendered)
+        return {group: [subject_of[i] for i in ids] for group, ids in groups.items()}
+
+
+@requires_git_cliff
+def test_a_declining_fix_is_filed_under_fixed_not_other() -> None:
+    """The #1557 regression: a `fix:` that declined must land under **Fixed**.
+
+    Rendered through the real `release-plz.toml`. Before the fix this subject rendered under
+    **Other**; the assertion is on the group git-cliff actually assigns.
+    """
+    subject = "fix(changelog): a declining fix"
+    groups = _render_real_config(
+        [f"{subject}\n\nBody.\n\nRepresentation-Change: none. Tests only."]
+    )
+    assert subject in groups.get("Fixed", []), groups
+    assert subject not in groups.get("Other", []), groups
+    # And it must NOT be mistaken for a real representation change.
+    assert subject not in groups.get("Representation changes", []), groups
+
+
+@requires_git_cliff
+def test_declines_group_by_type_while_real_changes_group_together() -> None:
+    """The whole routing, in one render: declines by type, real changes into their section.
+
+    Covers the three cases `release-plz.toml` documents, plus the two documented edge forms
+    that read as real changes (`none, except ...` and `no rows move`) so a decline regex that
+    swallowed them — the failure this config's regex is built to avoid — would show up here.
+    """
+    groups = _render_real_config(
+        [
+            "fix(a): declining fix\n\nRepresentation-Change: none. Tests only.",
+            "feat(b): declining feature\n\nRepresentation-Change: none",
+            "fix(c): plain fix, no trailer",
+            "fix(d): a real move\n\nRepresentation-Change: 3 rows move",
+            "fix(e): none-comma is a real change\n\nRepresentation-Change: none, except two rows merge",
+            "fix(f): no-rows-move is real\n\nRepresentation-Change: no rows move",
+            "chore(g): housekeeping",
+        ]
+    )
+    assert set(groups.get("Fixed", [])) == {
+        "fix(a): declining fix",
+        "fix(c): plain fix, no trailer",
+    }, groups
+    assert groups.get("Added", []) == ["feat(b): declining feature"], groups
+    assert set(groups.get("Representation changes", [])) == {
+        "fix(d): a real move",
+        "fix(e): none-comma is a real change",
+        "fix(f): no-rows-move is real",
+    }, groups
+    assert groups.get("Other", []) == ["chore(g): housekeeping"], groups
+
+
+@requires_git_cliff
+def test_declining_commits_are_absent_from_representation_changes() -> None:
+    """A declining trailer must never be filed as a real change (the sibling of #1557).
+
+    The preprocessor and the audit share one decline regex, so this and the audit agree by
+    construction — but this asserts it against the rendered output, not the regex.
+    """
+    groups = _render_real_config(
+        [
+            "fix(a): bare none\n\nRepresentation-Change: none",
+            "fix(b): none dot\n\nRepresentation-Change: none.",
+            "feat(c): NONE upper\n\nRepresentation-Change: NONE",
+            "fix(d): n/a\n\nRepresentation-Change: n/a: docs",
+            "fix(e): dash reason\n\nRepresentation-Change: no — nothing reaches a normalizer",
+        ]
+    )
+    section = groups.get("Representation changes", [])
+    assert section == [], f"declines leaked into Representation changes: {section}"
+
+
+def test_config_carries_the_decline_neutralizing_preprocessor() -> None:
+    """A structural guard: the fix is a `commit_preprocessors` entry, not a parser.
+
+    Rendering (above) skips where git-cliff is absent, e.g. the Python Wheel Test job. This
+    runs everywhere and fails loudly if the preprocessor is dropped or the old
+    route-declines-to-a-fixed-group parser is reintroduced.
+    """
+    changelog = load_changelog_config(_REPO_ROOT / "release-plz.toml")
+    preprocessors = changelog.get("commit_preprocessors", [])
+    assert any(
+        "Representation-Change" in p.get("pattern", "")
+        and "none" in p.get("pattern", "")
+        and "Declined" in (p.get("replace") or "")
+        for p in preprocessors
+    ), f"the decline-neutralizing preprocessor is missing: {preprocessors}"
+    # The default PR-link preprocessor must be reproduced, or the changelog loses every link
+    # (setting commit_preprocessors replaces release-plz's defaults wholesale).
+    assert any(
+        r"(#" in p.get("pattern", "") and "pull/" in (p.get("replace") or "") for p in preprocessors
+    ), f"the PR-link preprocessor is missing, so links would vanish: {preprocessors}"
+    # No parser may route a `Representation-Change` footer to a fixed non-section group —
+    # that is the pre-#1557 shape that buried a declining `fix:` under Other.
+    for parser in changelog.get("commit_parsers", []):
+        footer = parser.get("footer", "")
+        if "Representation-Change" in footer:
+            assert parser.get("group", "").endswith("Representation changes"), (
+                f"a footer parser routes a Representation-Change trailer to {parser.get('group')!r}; "
+                "declines are handled by the preprocessor now, so the only footer parser must be "
+                "the inclusion rule (#1557)"
+            )

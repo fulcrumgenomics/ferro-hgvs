@@ -879,10 +879,16 @@ which is filed as a real change. This was the #1555 defect: the value used to be
 declining *with a reason* was read as a disclosure. It is not a corner case — in the v0.13.1
 cycle 8 of the 14 declines gave a reason, and the section listed 10 entries of which 2 were real.
 
-**One limit of the section itself, and one that is now closed.** A declining commit is filed
-under **Other** whatever its type, so a declining `fix:` is missing from **Fixed** (#1557);
-git-cliff evaluates a parser's fields as OR, not AND, so this cannot be repaired by adding
-`message` to the exclusion rule.
+**Two limits of the section itself, both now closed.** A declining commit used to be filed
+under **Other** whatever its type, so a declining `fix:` was missing from **Fixed** (#1557).
+git-cliff evaluates a parser's fields as OR, not AND, so it could not be repaired by adding
+`message` to the exclusion rule; the fix is a `commit_preprocessor` in `release-plz.toml` that
+renames a declining trailer's key (`Representation-Change:` -> `Representation-Change-Declined:`)
+before the parsers run, so the commit falls through to its conventional-type parser. Real
+declarations keep their key and still reach the section. Setting `commit_preprocessors` replaces
+release-plz's defaults wholesale, so its default `(#N)`->PR-link rewrite is reproduced alongside;
+`check_changelog_grouping.py`'s `write_cliff_config` copies `commit_preprocessors` too, or the
+audit would render without the neutralizer and file every decline as a real change.
 
 The other — the bullet carrying the commit subject and nothing else, so the
 rejected-vs-accepted fact had to be read out of every linked PR — is #1556, and it is closed by
