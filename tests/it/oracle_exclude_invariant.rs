@@ -34,18 +34,30 @@ use std::path::PathBuf;
 /// reason to run it.
 const SELF: &str = "oracle_exclude_invariant.rs";
 
-/// The import that marks a module as built on the spec corpus.
+/// The modules under `ferro_hgvs::conformance` whose import marks a test module
+/// as built on the spec corpus.
 ///
-/// The path form, not the bare word `spec_corpus`, so a mention in prose — of
-/// which the two modules have many — does not count as consumption.
-const CORPUS_IMPORT: &str = "conformance::spec_corpus";
+/// `spec_corpus` is the corpus itself. **`census` is the corpus's measurement**,
+/// added by #2063: the census was extracted out of `spec_conformance_axis` into a
+/// library module so it could be run rather than only pinned, and
+/// `conformance_census_instrument` therefore measures over the corpus while
+/// importing nothing named `spec_corpus`. That is the scan's blind spot in its
+/// flattering direction — an unmatched module is never demanded in
+/// `ORACLE_EXCLUDE`, so its census is taken with the seam oracles armed and reads
+/// better than the truth — and it is the exact shape this file's module doc
+/// predicts ("a corpus module added later and not named in ORACLE_EXCLUDE does not
+/// go red, it reports a better census").
+///
+/// Path forms, not bare words, so a mention in prose — of which these modules have
+/// many — does not count as consumption.
+const CORPUS_MODULES: [&str; 2] = ["spec_corpus", "census"];
 
-/// The brace-grouped form of the same import, `conformance::{…spec_corpus…}`.
+/// The brace-grouped form of the same imports, `conformance::{…spec_corpus…}`.
 const CORPUS_IMPORT_GROUP: &str = "conformance::{";
 
-/// Whether `text` imports the spec corpus, in **either** spelling.
+/// Whether `text` imports any of [`CORPUS_MODULES`], in **either** spelling.
 ///
-/// A single `contains(CORPUS_IMPORT)` misses `use
+/// A single `contains(path)` misses `use
 /// ferro_hgvs::conformance::{spec_corpus, summary};`, and it misses it in the
 /// flattering direction: a module written that way is never demanded in
 /// `ORACLE_EXCLUDE`, so its census is taken with the oracle armed and reads
@@ -53,10 +65,13 @@ const CORPUS_IMPORT_GROUP: &str = "conformance::{";
 /// so the matcher may not be blind to a spelling rustfmt will happily produce.
 ///
 /// Shared by both scans deliberately. Widening one and not the other is how the
-/// same rule kept in two copies drifts — the reason [`CORPUS_IMPORT`] is a
+/// same rule kept in two copies drifts — the reason [`CORPUS_MODULES`] is a
 /// constant rather than an inline literal in the first place.
 fn imports_corpus(text: &str) -> bool {
-    if text.contains(CORPUS_IMPORT) {
+    if CORPUS_MODULES
+        .iter()
+        .any(|module| text.contains(&format!("conformance::{module}")))
+    {
         return true;
     }
     // `conformance::{a, spec_corpus, b}` — read the group and look for the
@@ -83,13 +98,13 @@ fn imports_corpus(text: &str) -> bool {
     //
     // Only GROUPED forms need any of this: `use …::conformance::spec_corpus as
     // corpus;` and `use …::conformance::spec_corpus::{…};` both contain the
-    // `CORPUS_IMPORT` path literal, so the check above already catches them.
+    // path literal, so the check above already catches them.
     text.match_indices(CORPUS_IMPORT_GROUP).any(|(at, _)| {
         let rest = &text[at + CORPUS_IMPORT_GROUP.len()..];
         rest.find('}').is_some_and(|end| {
             rest[..end]
                 .split(',')
-                .any(|item| leading_identifier(item) == "spec_corpus")
+                .any(|item| CORPUS_MODULES.contains(&leading_identifier(item)))
         })
     })
 }
@@ -247,8 +262,8 @@ fn every_module_named_in_the_oracle_exclude_measures_over_the_corpus() {
 /// The scan's one structural blind spot, closed by forbidding the route rather
 /// than by widening the matcher.
 ///
-/// [`corpus_modules`] recognises a consumer by the literal import path
-/// [`CORPUS_IMPORT`], which is right for avoiding prose false positives but
+/// [`corpus_modules`] recognises a consumer by a literal import path from
+/// [`CORPUS_MODULES`], which is right for avoiding prose false positives but
 /// cannot see a module that reaches the corpus **indirectly** — through a shared
 /// helper in `tests/it/common/` that does the importing. Such a module would
 /// carry no matching literal, would not be demanded in `ORACLE_EXCLUDE`, and
@@ -280,7 +295,7 @@ fn no_shared_helper_hides_a_corpus_consumer_from_the_scan() {
         importers.is_empty(),
         "these shared helpers import the spec corpus: {importers:#?}\n\
          A module consuming the corpus THROUGH one of them carries no \
-         `{CORPUS_IMPORT}` literal of its own, so \
+         `conformance::…` literal of its own for any of {CORPUS_MODULES:?}, so \
          `every_spec_corpus_module_is_named_in_the_oracle_exclude` would not \
          demand it be named in ORACLE_EXCLUDE — and it would then measure with \
          the seam oracles armed, which reports a better census rather than \
@@ -660,6 +675,25 @@ fn the_corpus_import_scan_sees_every_spelling() {
         "use ferro_hgvs::conformance::{\n    summary,\n    spec_corpus::{Frame, Row},\n};"
     ));
 
+    // `census` is the corpus's MEASUREMENT, and importing it is importing the
+    // corpus transitively — the route `conformance_census_instrument` takes, and
+    // the reason `CORPUS_MODULES` is a list rather than one path. Every spelling
+    // above is pinned for it too, because the widening is worth nothing if it
+    // only covers the spelling that module happens to use today.
+    assert!(imports_corpus(
+        "use ferro_hgvs::conformance::census::{measure, Equivalence};"
+    ));
+    assert!(imports_corpus(
+        "use ferro_hgvs::conformance::{census, summary};"
+    ));
+    assert!(imports_corpus(
+        "use ferro_hgvs::conformance::{census as c, summary};"
+    ));
+    assert!(imports_corpus(
+        "use ferro_hgvs::conformance::{summary, census::{measure, Census}};"
+    ));
+    assert!(imports_corpus("use ferro_hgvs::conformance::census as c;"));
+
     // Prose, not consumption — the reason the matcher is a path and not the
     // bare word.
     assert!(!imports_corpus(
@@ -678,5 +712,13 @@ fn the_corpus_import_scan_sees_every_spelling() {
     // rather than on a separator would go wrong.
     assert!(!imports_corpus(
         "use ferro_hgvs::conformance::{spec_corpus_regressions::{Frame}, summary};"
+    ));
+    // The same prefix hazard for the second entry, so widening the list did not
+    // widen what counts as a match.
+    assert!(!imports_corpus(
+        "use ferro_hgvs::conformance::{census_filter_invariant, summary};"
+    ));
+    assert!(!imports_corpus(
+        "use ferro_hgvs::conformance::{census_filter_invariant as c, summary};"
     ));
 }

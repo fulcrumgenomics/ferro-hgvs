@@ -369,6 +369,11 @@ pub enum Commands {
     /// Collate sharded results
     #[command(subcommand)]
     Collate(CollateCommands),
+
+    /// Run the conformance census (the instrument the stability harness and
+    /// self-check consume)
+    #[command(subcommand)]
+    Conformance(ConformanceCommands),
 }
 
 // =============================================================================
@@ -784,6 +789,80 @@ pub enum CollateCommands {
         #[arg(long, default_value = "unknown")]
         dataset: String,
     },
+}
+
+/// Conformance census subcommands.
+#[derive(Subcommand)]
+pub enum ConformanceCommands {
+    /// Run the conformance census over a corpus and emit structured counts.
+    ///
+    /// Emits a machine-readable census (`--out`) beside a human summary on stderr,
+    /// so a number can be understood, two revisions diffed (`--compare`), or a
+    /// burn-down produced — without editing a test. It states no release verdict
+    /// and prints no single percentage: rank-1 validity and rank-2 confluence are
+    /// not commensurable, and which relation *gates* a release is left open on
+    /// purpose (#1890).
+    Census {
+        /// Equivalence relation confluence is decided under. REQUIRED, no default:
+        /// the three answer different questions and reporting one as "confluence"
+        /// is the mistake this flag exists to prevent.
+        #[arg(long, value_enum)]
+        equivalence: CensusEquivalence,
+
+        /// Which corpus to census. Only the hermetic spec corpus is supported
+        /// today; a real-expression corpus against a prepared reference is the
+        /// consumer-side self-check's job (#1892).
+        #[arg(long, value_enum, default_value_t = CensusCorpus::Spec)]
+        corpus: CensusCorpus,
+
+        /// Shuffle direction. The 5' direction was removed from the public surface
+        /// in #1879, so only 3prime is offered.
+        #[arg(long, value_enum, default_value_t = CensusDirection::ThreePrime)]
+        direction: CensusDirection,
+
+        /// Write the machine-readable census (JSON: counts + corpus shape +
+        /// completeness) here.
+        #[arg(long)]
+        out: Option<PathBuf>,
+
+        /// Write every counted finding and divergence (JSONL rows, not just
+        /// totals) here. Complete, unlike the stderr summary, which names only
+        /// the first few divergences and says how many more there are; each row
+        /// carries a `record` field naming its shape.
+        #[arg(long)]
+        findings: Option<PathBuf>,
+
+        /// Print a per-counter burn-down against a previously written census JSON,
+        /// with the direction of virtue attached. No overall verdict.
+        #[arg(long)]
+        compare: Option<PathBuf>,
+    },
+}
+
+/// The equivalence relation confluence is decided under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CensusEquivalence {
+    /// Two outputs are the same when they denote the same bases.
+    Sequence,
+    /// … the same bases AND the same member partition.
+    Partition,
+    /// … their per-member SPDI key sets match.
+    Spdi,
+}
+
+/// Which corpus a census run measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CensusCorpus {
+    /// The synthetic spec-derived corpus, enumerated hermetically.
+    Spec,
+}
+
+/// The shuffle direction a census run measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CensusDirection {
+    /// The 3' shuffle direction — the only public one since #1879.
+    #[value(name = "3prime")]
+    ThreePrime,
 }
 
 /// Comparison mode for compare command

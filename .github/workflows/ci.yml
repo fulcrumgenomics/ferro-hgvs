@@ -256,12 +256,23 @@ env:
   # module that reads the corpus is not run with the oracles armed") rather than
   # to protect a measurement; it runs in full in the plain `test` job, where its
   # own refusal assertions are the coverage that matters.
+  #
+  # `conformance_census_instrument` is here for the FIRST reason, arriving by a
+  # route the import scan could not see until #2063's review widened it: it runs
+  # the very same census as `spec_conformance_axis`, but reaches it through
+  # `conformance::census` (the library module the axis was extracted into) rather
+  # than through `conformance::spec_corpus`. Armed, its census reads better than
+  # the truth in exactly the way this whole block is about — and since the oracle
+  # refusal moved inside `run_census`, it does not even get that far: the census
+  # refuses, so the module would simply be red here. Either way it belongs out of
+  # the armed job and in the plain `test` job, where it already runs in full.
   ORACLE_EXCLUDE: >-
     test(spec_conformance_axis) + test(spec_corpus_regressions)
     + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
     + test(lenient_overlap_and_projection_split)
     + test(defect_non_idempotent_outputs)
     + test(issue_1715_rna_alignment_symbol_reach)
+    + test(conformance_census_instrument)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
 # 360-minute default, so a wedged runner holds a PR for six hours: observed on
