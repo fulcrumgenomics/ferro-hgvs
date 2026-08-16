@@ -2,15 +2,38 @@
 //!
 //! # Why this exists
 //!
-//! `canonicalize_from_sequence` is gated on `members.len() > 1`
-//! (`src/normalize/mod.rs`), so a single-member input never reaches the
-//! partitioner, the changed-column bound, or the member-ordering rules. Across
-//! the four bulk corpora — 9 949 738 rows — only **592** inputs are
-//! multi-member cis alleles. Everything else exercises the per-member path.
+//! `canonicalize_from_sequence` (via `sequence_first_pass` in
+//! `src/normalize/mod.rs`) admits **two** shapes, not one: a multi-member cis
+//! allele (`members.len() >= 2`), and a splittable single-member input — any
+//! single-member `g.`/`m.`/`c.`/`n.`/`r.` variant **whose edit is present**
+//! (`is_splittable_single_member` is `edit.inner().is_some()`, so a `?` edit is
+//! refused). So `members.len() > 1` is one of two admitting routes, not the
+//! gate.
 //!
-//! Those 592 are the only real-world evidence the repo has for that code path,
-//! and they currently sit inside bulk corpora whose test modules *skip green*
-//! when the fixtures are absent (`clinvar_hgvs_tests`, `cmrg_exhaustive_tests`,
+//! This harvest captures the multi-member route only: across the four bulk
+//! corpora — 9 949 738 rows — **592** inputs are multi-member cis alleles. The
+//! single-member route is not a rounding error beside it. Measured over the same
+//! four corpora, **9 935 060 of the 9 949 738 rows (99.85 %)** parse to a
+//! single-member `g.`/`m.`/`c.`/`n.`/`r.` variant with a present edit — that is,
+//! the other route admits almost the whole corpus.
+//!
+//! # "Harvested" is not "reaches", and the gap is deliberate
+//!
+//! [`multi_member_cis`] selects on **shape**: a `Cis` allele the parser reports
+//! with two or more members. `sequence_first_pass` then refuses two further
+//! things this predicate never asks about — an `uncertain` allele, and one
+//! `detect_overlap_conflicts` reports a conflict on. `NC_000001.11:g.[(100del;110del)]`
+//! parses `uncertain: true, phase: Cis, n: 2`, so it would be harvested and is
+//! declined by the gate. So **592 is an upper bound** on the rows that reach the
+//! partitioner, not a count of them.
+//!
+//! Measured, the first refusal removes none: of every multi-member cis allele in
+//! these corpora, **zero** are `uncertain`. The second is not measured here.
+//!
+//! Those 592 are the only real-world evidence the repo has for the multi-member
+//! route specifically, and they currently sit inside bulk corpora whose test
+//! modules *skip green* when the fixtures are absent
+//! (`clinvar_hgvs_tests`, `cmrg_exhaustive_tests`,
 //! `paraphase_exhaustive_tests` all `return` on a missing file). Those corpora
 //! are not in the git tree — they are release assets fetched by
 //! `scripts/fetch-test-fixtures.sh` — so on a checkout that has not fetched
@@ -50,6 +73,23 @@ const SOURCES: &[&str] = &[
 ];
 
 const DEFAULT_OUTPUT: &str = "tests/fixtures/cis/multi_member_cis_alleles.json";
+
+/// The `description` written into the fixture, as a named constant so the
+/// committed copy can be checked against it without the bulk corpora.
+///
+/// `--check` already compares the whole rendered file, but it needs all four
+/// release-asset corpora to rebuild one — so on CI and on any checkout that has
+/// not fetched them, nothing looks at this string at all.
+/// [`the_committed_fixture_description_matches_this_generator`] closes that: it
+/// reads only the committed JSON, so it runs everywhere.
+const DESCRIPTION: &str = "Multi-member cis alleles harvested from the bulk corpora. Selected on \
+     shape — a `Cis` allele the parser reports with two or more members — which is \
+     `canonicalize_from_sequence`'s multi-member route (`members.len() >= 2`). Shape is all this \
+     asks, so the count is an upper bound on the rows that reach the partitioner rather than a \
+     count of them: `sequence_first_pass` additionally refuses an uncertain allele and one \
+     carrying an overlap conflict. The other admitting route — a single-member g./m./c./n./r. \
+     variant with a present edit, via `is_splittable_single_member` — reaches the same code path \
+     and is not harvested here.";
 
 /// One harvested row, plus enough provenance to find it again upstream.
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -237,10 +277,7 @@ fn harvest() -> Result<Fixture, String> {
     rows.dedup_by(|a, b| a.input == b.input);
 
     Ok(Fixture {
-        description: "Multi-member cis alleles harvested from the bulk corpora. These are the \
-                      only inputs in those corpora that reach `canonicalize_from_sequence`, \
-                      which is gated on `members.len() > 1`."
-            .to_string(),
+        description: DESCRIPTION.to_string(),
         generator: "cargo run --features dev --example harvest_multi_member_cis".to_string(),
         sources: SOURCES.iter().map(|s| s.to_string()).collect(),
         rows_scanned: scanned,
@@ -323,6 +360,38 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The committed fixture's `description` must be the string this generator
+    /// writes.
+    ///
+    /// Without this, [`DESCRIPTION`] and the JSON are a seventh and eighth copy
+    /// of one paragraph with nothing behind them: `--check` compares them, but
+    /// it needs all four release-asset corpora to rebuild a fixture, so it never
+    /// runs in CI and does not run on a checkout that has not fetched them. This
+    /// reads the committed JSON alone, so it runs everywhere the suite does.
+    ///
+    /// It deliberately checks only the `description`. The rows are what `--check`
+    /// is for, and re-deriving them here would need the corpora again.
+    #[test]
+    fn the_committed_fixture_description_matches_this_generator() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_OUTPUT);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let fixture: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+        let committed = fixture
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .expect("fixture carries a `description` string");
+        assert_eq!(
+            committed,
+            DESCRIPTION,
+            "{} is stale against this generator's DESCRIPTION. Re-run \
+             `cargo run --features dev --example harvest_multi_member_cis` (needs the bulk \
+             corpora), or edit the committed `description` to match.",
+            path.display()
+        );
+    }
 
     #[test]
     fn selects_only_multi_member_cis() {

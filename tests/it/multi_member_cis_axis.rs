@@ -1,10 +1,23 @@
 //! The real-world multi-member cis alleles, as an axis (#1443, part 1).
 //!
-//! `canonicalize_from_sequence` is gated on `members.len() > 1`, so a
-//! single-member input never reaches the partitioner, the changed-column bound
-//! or the member-ordering rules. `examples/harvest_multi_member_cis.rs` swept
-//! all four bulk corpora for inputs that do: **592 out of 9 949 738 rows**.
-//! Those 592 are the entire real-world evidence base for that code path, and
+//! `canonicalize_from_sequence` (via `sequence_first_pass`) admits **two**
+//! shapes, not one: a multi-member cis allele (`members.len() >= 2`), and a
+//! splittable single-member input — any single-member `g.`/`m.`/`c.`/`n.`/`r.`
+//! variant **with a present edit** (`is_splittable_single_member` is
+//! `edit.inner().is_some()`, so a `?` edit is refused). So `members.len() > 1` is
+//! one of two admitting routes, not the gate. `examples/harvest_multi_member_cis.rs`
+//! swept all four bulk corpora for the multi-member route: **592 out of
+//! 9 949 738 rows**. The other route is where the rest of that corpus goes —
+//! 9 935 060 of the same 9 949 738 rows (99.85 %) are single-member variants
+//! with a present edit.
+//!
+//! Those 592 are the entire real-world evidence base for the multi-member route
+//! specifically. Read them as an **upper bound** on what reaches the
+//! partitioner, not a count of it: the harvester selects on shape and never asks
+//! the two further questions `sequence_first_pass` asks — whether the allele is
+//! `uncertain`, and whether `detect_overlap_conflicts` reports a conflict on it.
+//! Measured, the first removes none of the 592 (see the harvester's own module
+//! docs); the second is unmeasured. And
 //! before this module they lived only inside bulk corpora whose test suites
 //! *skip green* when the fixtures are absent — and those corpora are not in the
 //! git tree (they are release assets, fetched by
