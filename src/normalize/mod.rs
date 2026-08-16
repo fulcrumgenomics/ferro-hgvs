@@ -3390,11 +3390,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // way-point the loop stopped on.
         //
         // Cloned lazily. Exhaustion requires the loop to have advanced at least
-        // once, so a variant the pass declines on the first line never needs the
-        // copy — and that is the overwhelming majority, since this method runs on
-        // every `normalize()` and every projection while `sequence_first_pass`
-        // serves only cis alleles and lone `delins`/`inv` members. Cloning
-        // eagerly put a heap allocation on that whole path.
+        // once, so nothing that breaks on the FIRST iteration ever needs the
+        // copy — and all three breaks below precede it: the pass declining, the
+        // re-derivation reproducing `current`, and `normalize_core` handing back
+        // `current`. This method runs on every `normalize()` and every
+        // projection, so keeping the allocation off those paths is the whole
+        // point; cloning eagerly put a heap allocation on all of them.
+        //
+        // The reason used to be given as "`sequence_first_pass` serves only cis
+        // alleles and lone `delins`/`inv` members", which is false and was
+        // corrected by #1709: the pass also admits any single-member
+        // `g.`/`m.`/`c.`/`n.`/`r.` variant with a present edit, via
+        // `is_splittable_single_member`. The optimisation is unaffected, because
+        // it never depended on the pass *declining* — a variant the pass admits
+        // but re-derives unchanged breaks on `canonical == current`, which is
+        // also before `original` is set.
         let mut original: Option<HgvsVariant> = None;
         // Warnings belonging to the pass whose result is the one we return.
         //
@@ -3467,13 +3477,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// One sequence-first re-derivation. `None` when the variant is not a shape
     /// the pass serves (protein, trans alleles, fusions, and so on).
     fn sequence_first_pass(&self, variant: &HgvsVariant) -> Option<HgvsVariant> {
-        // Only shapes where a partition decision actually exists. A lone
-        // substitution / deletion / insertion / duplication already has exactly
-        // one canonical partition, so re-deriving it can only lose what the
-        // per-member pipeline added (gene symbol, RNA `U` alphabet, boundary and
-        // exon-junction clamps). A lone `delins` or `inv` is different: those are
-        // precisely the single-member forms that may need splitting (#1230,
-        // #1232).
+        // Only shapes where a partition decision can exist. The allele arm takes
+        // a non-uncertain `Cis` allele with two or more members; the
+        // single-member arm takes whatever `is_splittable_single_member` admits
+        // — any `g.`/`m.`/`c.`/`n.`/`r.` variant whose edit is present, `?`
+        // excluded. Everything else (protein, trans, unphased, fusions) returns
+        // `None` below.
+        //
+        // The single-member arm is **not** restricted to a lone `delins`/`inv`,
+        // as this comment claimed until #1709. #1235 removed that restriction on
+        // purpose: the re-derivation is a function of (reference, denoted
+        // sequence), so admitting by the input's *spelling* is exactly the
+        // input-relativity that issue is about — `g.263_264insGAAA` and
+        // `g.[261_262insGA;263_264insAA]` denote one variant and only one of them
+        // used to be allowed to be re-derived. The reasoning, and what widening
+        // the axis gate cost, are on `is_splittable_single_member` itself; do not
+        // re-narrow it from here.
         //
         // Borrowed, not cloned: `canonicalize_from_sequence` refuses far more
         // often than it rebuilds, and every refusal used to cost a full copy of

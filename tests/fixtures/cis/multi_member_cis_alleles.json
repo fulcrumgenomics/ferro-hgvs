@@ -1,5 +1,5 @@
 {
-  "description": "Multi-member cis alleles harvested from the bulk corpora. These are the only inputs in those corpora that reach `canonicalize_from_sequence`, which is gated on `members.len() > 1`.",
+  "description": "Multi-member cis alleles harvested from the bulk corpora. Selected on shape — a `Cis` allele the parser reports with two or more members — which is `canonicalize_from_sequence`'s multi-member route (`members.len() >= 2`). Shape is all this asks, so the count is an upper bound on the rows that reach the partitioner rather than a count of them: `sequence_first_pass` additionally refuses an uncertain allele and one carrying an overlap conflict. The other admitting route — a single-member g./m./c./n./r. variant with a present edit, via `is_splittable_single_member` — reaches the same code path and is not harvested here.",
   "generator": "cargo run --features dev --example harvest_multi_member_cis",
   "sources": [
     "tests/fixtures/bulk/clinvar_hgvs_500k.json.gz",

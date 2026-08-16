@@ -3,14 +3,30 @@
 //!
 //! # Why this exists
 //!
-//! `canonicalize_from_sequence` is gated on `members.len() > 1`
-//! (`src/normalize/mod.rs`), so only a multi-member cis allele reaches the
-//! partitioner. Part 1 of this issue harvested every such input out of the bulk
-//! corpora: **650 rows out of 9 949 738**. Real corpora are observed variants,
+//! `canonicalize_from_sequence` (via `sequence_first_pass` in
+//! `src/normalize/mod.rs`) reaches the partitioner by two routes: a multi-member
+//! cis allele (`members.len() >= 2`), and a splittable single-member input — any
+//! single-member `g.`/`m.`/`c.`/`n.`/`r.` variant **with a present edit**, via
+//! `is_splittable_single_member` (a `?` edit is refused).
+//! So `members.len() > 1` is one of two admitting routes, not the gate. This
+//! corpus designs the multi-member route. Part 1 of this issue harvested every
+//! such input out of the bulk corpora: **592 rows out of 9 949 738** — and even
+//! that is an upper bound, since the harvest selects on shape and the gate
+//! refuses an uncertain or overlap-conflicting allele on top of it. Real corpora
+//! are observed variants,
 //! where two changes rarely land close enough to share a block, so no amount of
 //! real data will cover the partitioner. Consumers who submit *designed*
 //! alleles — a systematic indel design walking a window — have the opposite
 //! distribution, and that is the shape this generates.
+//!
+//! **The figure is 592, not 650.** 650 was this passage's number until #1709 and
+//! it was stale from the day it landed: #1458 measured 650 with a bracket-scan
+//! selector, replaced that selector with `parse_hgvs` inside the same PR — which
+//! is what stopped an inserted-range payload's own `;` counting as a member
+//! separator — and re-measured 592, updating the fixture and the harvester but
+//! not this file or `tests/it/cis_confluence_axis.rs`. 592 is what the committed
+//! fixture, `multi_member_cis_axis`'s `assert_eq!` and a re-run of the harvester
+//! all report.
 //!
 //! # What a confluence class is, and how it differs from a dump
 //!

@@ -157,12 +157,37 @@ pub const DENSE_SEPARATIONS: &[usize] = &[0, 1, 2, 3, 5, 8];
 /// Member footprint / payload sizes in the dense strata.
 pub const DENSE_PAYLOADS: &[usize] = &[1, 2, 4];
 
-/// Member counts the dense multi-member strata enumerate.
+/// Member counts the dense **multi-member** strata enumerate.
 ///
-/// Two is the smallest allele that reaches the partitioner at all
-/// (`canonicalize_from_sequence` is gated on `members.len() > 1`); four is where
-/// the bulk corpora run out of evidence entirely — the real-data harvest found
-/// seven three-member and three four-member rows in 9.9M.
+/// Two is the floor because two is the smallest allele: these strata exist to
+/// vary how members sit relative to one another — [`Geometry`], separation,
+/// payload — and a one-member design has no such relation to vary. It is **not**
+/// because one member cannot reach the partitioner. It can:
+/// `canonicalize_from_sequence` admits two routes, a multi-member `Cis` allele
+/// (`members.len() >= 2`) *and* a single-member `g.`/`m.`/`c.`/`n.`/`r.` variant
+/// with a present edit (`is_splittable_single_member`, which is
+/// `edit.inner().is_some()`, so `?` is refused). The premise that
+/// `members.len() > 1` is the gate was stated here and in five sibling files
+/// until #1709; it is false.
+///
+/// **Single-member rows are therefore in this corpus, just not from these
+/// strata.** At `CorpusBounds::default()`, **450** of 12,946 rows carry one
+/// member — 402 [`Mechanism::Lone`], 24 [`Mechanism::CompositePayload`] and 24
+/// [`Mechanism::RepeatCount`], the last two being single-member shapes that only
+/// look otherwise. Of the 450, **404** parse and satisfy
+/// `is_splittable_single_member`; the other 46 are [`RowKind::Prohibited`]
+/// spellings deliberately malformed enough that no parse succeeds, so they reach
+/// nothing.
+///
+/// The 450 is guarded rather than merely asserted here: `spec_conformance_axis`'s
+/// `CorpusShape` pins `rows` at 12,946 and `multi_member_rows` at 12,496, and no
+/// row has `members > 1` under a non-combining mechanism, so their difference
+/// *is* this figure. The 402/24/24 and 404/46 splits are measurements at those
+/// bounds and are not pinned anywhere.
+///
+/// Four is the ceiling because four is where the bulk corpora run out of
+/// evidence entirely — the real-data harvest found seven three-member and three
+/// four-member rows in 9.9M.
 pub const MEMBER_COUNTS: &[usize] = &[2, 3, 4];
 
 /// The bounds of one corpus. Every pinned number is measured over these, so

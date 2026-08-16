@@ -2,13 +2,26 @@
 //!
 //! # The gap
 //!
-//! `canonicalize_from_sequence` is gated on `members.len() > 1`, so only a
-//! multi-member cis allele reaches the partitioner at all. Part 1 of #1443
-//! harvested every such input from the bulk corpora and found **650 rows out of
+//! `canonicalize_from_sequence` (via `sequence_first_pass`) reaches the
+//! partitioner by two routes: a multi-member cis allele (`members.len() >= 2`),
+//! and a splittable single-member input — any single-member
+//! `g.`/`m.`/`c.`/`n.`/`r.` variant **with a present edit**, via
+//! `is_splittable_single_member` (a `?` edit is refused). So
+//! `members.len() > 1` is one of two admitting routes, not the gate. This axis
+//! exercises the multi-member route. Part 1 of #1443 harvested every such input
+//! from the bulk corpora and found **592 rows out of
 //! 9 949 738** — real corpora are observed variants, where two changes rarely
 //! land close enough to share a block. Consumers submitting *designed* alleles
 //! have the opposite distribution, so the partitioner is effectively untested
 //! and no real corpus can fix that.
+//!
+//! **592, not the 650 this passage carried until #1709.** 650 was #1458's
+//! bracket-scan measurement, superseded inside that same PR when the selector
+//! became `parse_hgvs`; the fixture, the harvester and `multi_member_cis_axis`
+//! were updated and this file was not. See
+//! `examples/generate_cis_confluence_corpus.rs` for the full account. Read 592
+//! as an upper bound in any case: the harvest selects on shape, and the gate
+//! additionally refuses an uncertain or overlap-conflicting allele.
 //!
 //! `examples/generate_cis_confluence_corpus.rs` fills it. Each class it emits is
 //! one synthetic reference, one denoted sequence, and N ≥ 2 distinct spellings
@@ -129,9 +142,12 @@ const CDS_END: u64 = 63;
 ///
 /// **100.0% of designed classes converge** (11 270 of 11 272). The 2 that do
 /// not are the measurement this module exists to make: nothing in the repo could
-/// state that number before, because only 650 real rows reach the partitioner at
-/// all — and `multi_member_cis_axis` measures convergence over the respellable
-/// ones of those, which is what a corpus of far-apart members looks like.
+/// state that number before, because at most 592 real rows reach the
+/// partitioner **by the multi-member route** — and `multi_member_cis_axis`
+/// measures convergence over the respellable ones of those, which is what a
+/// corpus of far-apart members looks like. (The single-member route reaches it
+/// far more often; what no real corpus supplies is members close enough to share
+/// a block, which is the shape this axis designs.)
 ///
 /// **Read the percentage as rounded, not as exact.** 11 270 of 11 272 is
 /// 99.982 %, and the guard below rounds to the nearest tenth, so the headline
