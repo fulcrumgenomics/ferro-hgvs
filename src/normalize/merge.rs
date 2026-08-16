@@ -16478,6 +16478,113 @@ mod tests {
         );
     }
 
+    /// The length gate, exercised on a block the CANONICAL PARTITIONER actually
+    /// derives — the coverage [`the_placed_gap_predicate_discriminates`] cannot
+    /// give (#1914).
+    ///
+    /// That test hand-builds its pieces and pairs them with an *artificial*
+    /// `result` length (`issue` reconstructs to three bases, checked against a
+    /// four-base `result`), so it pins the predicate's **logic** at an equal
+    /// length it was never handed by a real partition. It does not witness that
+    /// the canonical partitioner ever produces an equal-length block on which
+    /// conditions 2, 3 and 4 all hold — the case where the length gate is the
+    /// **only** thing keeping the members split.
+    ///
+    /// `an_equal_length_block_keeps_its_split` (in
+    /// `tests/it/issue_1610_lone_unequal_length_delins.rs`) cannot witness it
+    /// either, and neither can any full `Normalizer::normalize` spelling. A full
+    /// normalization emits an equal-length split only when it buys a
+    /// higher-priority type (a lone substitution) or carries a compensating
+    /// *insertion*; the first makes the predicate decline on condition 4, the
+    /// second on the pure-insertion refusal — never on the length gate. Measured
+    /// closing #1914: the `>=`->`>` sabotage below moves **zero** rows over
+    /// ~1.6M swept spanning-`delins` and cis inputs across all three partition
+    /// arms, so no end-to-end spelling isolates this branch. What does isolate it
+    /// is the canonical partitioner run directly, which is what the issue's
+    /// "built through the canonical partitioner" asks for.
+    ///
+    /// `AACAAC -> CGAGGA` is that compensating-gap geometry. The canonical
+    /// partitioner derives `[delins(0,1,"CG"); delins(2,4,"GG"); del(5,6)]`: two
+    /// members supply bases while a third is a placed gap, every separation is
+    /// one base, and the block is equal length — the `+1` of the first member's
+    /// two-base payload is cancelled by the deleted last base. So conditions 2, 3
+    /// and 4 all pass and condition 1 (the length gate) is the sole decliner.
+    ///
+    /// # Proven non-vacuous by sabotage (#1914)
+    ///
+    /// Relaxing the gate `result.len() >= reference.len()` to `>` collapses this
+    /// split to the single spanning `delins(0,6)`, which reddens the
+    /// `pieces.len() >= 2` assertion — and, were it reached, the condition-3
+    /// `.any(|p| p.alt.is_empty() …)` placed-gap assertion, a lone spanning
+    /// `delins` carrying no pure-deletion member. Measured: with only the length
+    /// assertion neutralised, the sabotaged test fails on that one instead.
+    ///
+    /// **The predicate assertion at the end cannot redden here**, so do not trim
+    /// the `pieces.len() >= 2` assertion as redundant on its authority — that
+    /// would leave a test green under the very sabotage it advertises. Under the
+    /// sabotage `split_is_a_placed_gap_coincidence` is handed one piece, so its
+    /// *own* second early return (`|| pieces.len() < 2`) answers `false` and the
+    /// negated assertion passes. Measured: with every assertion above it
+    /// neutralised, the sabotaged test exits 0.
+    ///
+    /// It is run on [`PartitionRule::Canonical`] rather than the shipped default
+    /// because the
+    /// gate is applied identically for `Canonical` and `CanonicalCoalesced`
+    /// (`partition_block_for_rule` maps both to `partition_block_canonical` and
+    /// then consults the predicate), whereas `Live` collapses this block through a
+    /// different route and would not exercise the gate at all.
+    #[test]
+    fn the_length_gate_holds_a_partitioner_derived_equal_length_block() {
+        let reference: &[u8] = b"AACAAC";
+        let result: &[u8] = b"CGAGGA";
+        let coding = CoincidenceCarveOut::InReach;
+
+        // Through the real dispatch that consults the gate: with the gate intact,
+        // the equal-length split is handed back as members rather than collapsed.
+        // `min_separation` is unused by the canonical arm and is spelled 1.
+        let pieces =
+            partition_block_for_rule(PartitionRule::Canonical, reference, result, 1, coding);
+        assert!(
+            pieces.len() >= 2,
+            "the length gate must keep this equal-length split as members; got {pieces:?}",
+        );
+
+        // Why the length gate alone holds it: every other condition passes on the
+        // DERIVED pieces, so the `>=`->`>` sabotage of condition 1 is what reddens
+        // this test — not a change to any of these.
+        assert_eq!(
+            reference.len(),
+            result.len(),
+            "condition 1: the block is equal length"
+        );
+        assert!(
+            every_separation_is_a_single_base(&pieces),
+            "condition 2: every separation is a single base; got {pieces:?}",
+        );
+        assert!(
+            pieces
+                .iter()
+                .any(|p| p.alt.is_empty() && p.ref_end > p.ref_start),
+            "condition 3: a placed gap (a pure deletion member); got {pieces:?}",
+        );
+        assert!(
+            pieces.iter().any(|p| piece_renders_as_delins(p, reference)),
+            "condition 3: a member supplies bases; got {pieces:?}",
+        );
+        assert!(
+            pieces
+                .iter()
+                .all(|p| p.alt.is_empty() || piece_renders_as_delins(p, reference)),
+            "condition 4: no substitution/insertion/dup/inv member; got {pieces:?}",
+        );
+
+        // And so the predicate declines only because of the length gate.
+        assert!(
+            !split_is_a_placed_gap_coincidence(&pieces, reference, result, coding),
+            "the equal-length gate must decline the collapse of this derived split",
+        );
+    }
+
     /// The enumerated classes of disagreement between the two block splitters.
     ///
     /// Harvested with `FERRO_SEQFIRST_SHADOW=1` over the whole suite plus the
