@@ -3,7 +3,7 @@
 //! "unavailable" (exit 0) vs "hard failure" (exit 1).
 
 use crate::error::FerroError;
-use crate::hgvs::variant::HgvsVariant;
+use crate::hgvs::variant::{CoordinateAxis, HgvsVariant};
 use crate::normalize::NormalizationWarning;
 use crate::project::{VariantProjection, VariantProjector};
 use crate::reference::ReferenceProvider;
@@ -206,7 +206,15 @@ pub fn project_axis<P: ReferenceProvider + Clone>(
     axis: Axis,
     transcript: Option<&str>,
 ) -> Result<AxisOutcome, ProjectCliError> {
-    if matches!(variant, HgvsVariant::Genome(_)) {
+    // Route every *genomic-axis* input through the genomic dispatch, not just a
+    // lone `HgvsVariant::Genome`. A genomic cis allele
+    // (`NC_…:g.[261del;263_264insA]`) parses to `HgvsVariant::Allele`, whose
+    // accession is a *chromosome*, not a transcript — so the transcript-
+    // coordinate branch below would compare `--transcript` against that
+    // chromosome accession and reject a valid projection (#1562). Keying on the
+    // coordinate axis rather than the variant kind catches the allele (and any
+    // other genomic-axis shape) the same way a lone `g.` variant is caught.
+    if variant.coordinate_axis() == Some(CoordinateAxis::Genomic) {
         return project_axis_genomic(projector, variant, axis, transcript);
     }
 
@@ -741,5 +749,54 @@ mod tests {
             }
             other => panic!("expected Rendered, got {other:?}"),
         }
+    }
+
+    /// #1562: a genomic (`g.`) *cis allele* must project onto the named
+    /// transcript exactly as a lone genomic variant does. Before the fix the CLI
+    /// only routed `HgvsVariant::Genome(_)` through the genomic dispatch; a
+    /// genomic allele parses to `HgvsVariant::Allele`, so it fell through to the
+    /// transcript-coordinate branch, which read the input's *chromosome*
+    /// accession as its "transcript" and rejected `--transcript` for not
+    /// matching it — refusing a valid projection outright.
+    ///
+    /// The assertion is on the projected *member list*, not merely that the call
+    /// succeeds: the whole point of projecting a cis allele is that every member
+    /// is carried through onto the target axis. Two substitutions six bases apart
+    /// stay individual (`general.md:34` — separated by more than one unchanged
+    /// nucleotide), so a projection that dropped or merged a member would fail
+    /// this. The exact string is measured, not inferred.
+    #[test]
+    fn project_axis_genomic_cis_allele_projects_all_members() {
+        let vp = fixture();
+        let variant = crate::parse_hgvs("NC_000001.11:g.[1002T>A;1008A>C]").unwrap();
+        let outcome = project_axis(&vp, &variant, Axis::Coding, Some("NM_TEST.1")).unwrap();
+        match outcome {
+            AxisOutcome::Rendered {
+                transcript_id,
+                output,
+                ..
+            } => {
+                assert_eq!(transcript_id, "NM_TEST.1");
+                assert_eq!(output, "NC_000001.11(NM_TEST.1):c.[2T>A;9A>C]");
+            }
+            other => panic!("expected Rendered, got {other:?}"),
+        }
+    }
+
+    /// The discriminating half of #1562: routing genomic alleles through the
+    /// genomic dispatch must NOT weaken the mismatch guard for a genuine
+    /// *transcript-coordinate* cis allele. A `c.` allele names its transcript in
+    /// the accession, so a `--transcript` that disagrees with it is still a hard
+    /// error — exactly as for a lone `c.` input.
+    #[test]
+    fn project_axis_coding_cis_allele_transcript_mismatch_is_hard_error() {
+        let vp = fixture();
+        let variant = crate::parse_hgvs("NM_TEST.1:c.[3dup;6del]").unwrap();
+        let err = project_axis(&vp, &variant, Axis::Protein, Some("NM_OTHER.1")).unwrap_err();
+        assert!(
+            err.0.contains("NM_OTHER.1") && err.0.to_lowercase().contains("match"),
+            "got {}",
+            err.0
+        );
     }
 }
