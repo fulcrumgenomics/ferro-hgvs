@@ -1,0 +1,12 @@
+{
+  "kinds": {
+    "doubled-ins-token-renders-non-round-trippable": {
+      "category": "malformed_input",
+      "reason": "Malformed ClinVar source string carrying a doubled 'ins' token: '...702849_702850insinsY13186.2:g.2333_2491'. The lenient parser accepts it, treating 'insY13186.2:g.2333_2491' as the inserted content, but the rendering re-wraps that as 'ins[insY13186.2:g.2333_2491]', which the parser then rejects (an 'ins' cannot open the bracketed insert). The root is the malformed input, not the round trip; it is pinned here so a NEW round-trip disagreement is a loud regression rather than lost among unpinned residue.",
+      "tracking": "#1859"
+    }
+  },
+  "expected_failures": {
+    "LRG_199:g.702849_702850insinsY13186.2:g.2333_2491": "doubled-ins-token-renders-non-round-trippable"
+  }
+}

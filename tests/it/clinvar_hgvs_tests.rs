@@ -20,6 +20,18 @@ const CLINVAR_500K_FAILURE_EXPECTATIONS_PATH: &str =
     "tests/fixtures/bulk/clinvar_hgvs_500k_failure_expectations.json";
 const CLINVAR_UNIQUE_FAILURE_EXPECTATIONS_PATH: &str =
     "tests/fixtures/bulk/clinvar_hgvs_unique_failure_expectations.json";
+const CLINVAR_UNIQUE_ROUNDTRIP_EXPECTATIONS_PATH: &str =
+    "tests/fixtures/bulk/clinvar_hgvs_unique_roundtrip_expectations.json";
+
+/// A generous floor on how many inputs the round-trip guard must actually
+/// exercise. It is a **non-vacuity guard**, not the property under test: the
+/// property is that `parse → format → parse → format` agrees, and the snapshot
+/// below is what pins it. This number only ensures a future breakage that made
+/// most of the corpus unparseable (so nothing reached the round trip) cannot
+/// masquerade as a clean pass. The fixture currently offers 4,188,224 parseable
+/// inputs; the floor sits well below that so ordinary corpus/parser drift does
+/// not trip it, while a collapse to a handful would.
+const CLINVAR_UNIQUE_ROUNDTRIP_MIN_INPUTS: usize = 4_000_000;
 
 // Slim deserialization shape: borrowed `&'a str` against the
 // decompressed JSON buffer. See cmrg_exhaustive_tests for rationale.
@@ -255,4 +267,138 @@ fn test_clinvar_hgvs_unique_benchmark() {
             failures,
         },
     );
+}
+
+// ============================================================================
+// Round trip over the 4.2M unique variants
+// ============================================================================
+
+/// Round-trip guard over the 4.2M unique ClinVar HGVS strings (issue #1859):
+/// for every input that parses, `format!` it, re-parse the rendering, and
+/// require the two renderings to agree — i.e. `parse → format → parse → format`
+/// is stable.
+///
+/// **Why the sibling benchmarks do not cover this.**
+/// `test_clinvar_hgvs_unique_benchmark` (and the 500K one) read the same corpora
+/// but only *parse*: they assert a parse-failure snapshot and, for the 500K, a
+/// throughput floor. Neither ever calls `format!` on a parsed variant, so a
+/// formatter that emits something the parser rejects — or accepts as a
+/// *different* variant — is invisible to them. The idempotency suite does the
+/// round trip, but only over the curated spec/edge-case corpora, not the long
+/// tail of what ClinVar actually stores. This test is the intersection that was
+/// nominally covered by a test (`test_clinvar_sample_parsing_idempotency`) which
+/// read a corpus that never existed and so only ever took its skip branch.
+///
+/// **The unique corpus, not the 500K stratified sample, on purpose.** Measured
+/// while filing #1859: the 500K sample round-trips with zero disagreements,
+/// while the broadest fixture surfaces exactly one — a malformed ClinVar input
+/// carrying a doubled `ins` token, whose rendering re-wraps as `ins[ins…]` and
+/// no longer parses. That single residue is pinned below; it is the long tail
+/// the stratified sample drops.
+///
+/// The residue is tracked per-input via the same failure-expectations snapshot
+/// framework the parse-only benchmarks use (`tests/common/failure_expectations.rs`),
+/// rather than a percentage floor: a new disagreement is a loud regression, and
+/// a previously-disagreeing input that starts round-tripping is flagged as an
+/// improvement to re-bless. Regenerate the snapshot after an intended change:
+///
+///   UPDATE_FAILURE_EXPECTATIONS=1 \
+///     cargo nextest run --features dev test_clinvar_hgvs_unique_roundtrip
+///
+/// Absence of the fixture skips locally and fails under
+/// `FERRO_REQUIRE_BULK_FIXTURES` — see `common::bulk_fixtures`.
+#[test]
+fn test_clinvar_hgvs_unique_roundtrip() {
+    let buf = match load_fixture_bytes("clinvar_hgvs_unique.json.gz") {
+        Some(b) => b,
+        // `load_fixture_bytes` has already reported the skip, or panicked
+        // under `FERRO_REQUIRE_BULK_FIXTURES`.
+        None => return,
+    };
+    let fixture: ClinvarHgvsFixture<'_> =
+        serde_json::from_slice(&buf).expect("Failed to parse clinvar_hgvs_unique.json.gz");
+
+    let start = Instant::now();
+
+    // One parallel pass: count the inputs that parse (the round-trip domain —
+    // parse failures are the sibling benchmark's job, not this one) and collect
+    // every disagreement. `fold`/`reduce` keeps only the tiny disagreement list
+    // in memory rather than one entry per input.
+    let report = fixture
+        .test_cases
+        .par_iter()
+        .fold(RoundTripReport::default, |mut acc, case| {
+            let Ok(v1) = parse_hgvs(case.input) else {
+                return acc; // does not parse: not a round-trip case
+            };
+            acc.roundtripped += 1;
+            let rendered = format!("{}", v1);
+            match parse_hgvs(&rendered) {
+                Err(e) => acc
+                    .disagreements
+                    .push((case.input, format!("re-parse of rendering failed: {e}"))),
+                Ok(v2) => {
+                    let reparsed = format!("{}", v2);
+                    if rendered != reparsed {
+                        acc.disagreements.push((
+                            case.input,
+                            format!("rendering not stable: '{rendered}' vs '{reparsed}'"),
+                        ));
+                    }
+                }
+            }
+            acc
+        })
+        .reduce(RoundTripReport::default, RoundTripReport::merge);
+
+    let elapsed = start.elapsed();
+    let failures: BTreeMap<&str, String> = report.disagreements.into_iter().collect();
+
+    eprintln!("\n========================================");
+    eprintln!("ClinVar HGVS Unique Round-Trip");
+    eprintln!("========================================");
+    eprintln!("Total cases:        {}", fixture.test_cases.len());
+    eprintln!("Round-tripped:      {}", report.roundtripped);
+    eprintln!("Disagreements:      {}", failures.len());
+    eprintln!("Time:               {:.2}s", elapsed.as_secs_f64());
+    eprintln!("========================================\n");
+
+    // Non-vacuity: the guard is only meaningful if it actually ran the round
+    // trip over the corpus. Checked before `enforce` so a corpus that collapsed
+    // to nothing fails here loudly rather than passing with an empty snapshot.
+    assert!(
+        report.roundtripped >= CLINVAR_UNIQUE_ROUNDTRIP_MIN_INPUTS,
+        "round-trip exercised only {} inputs, expected at least {} — did parsing collapse?",
+        report.roundtripped,
+        CLINVAR_UNIQUE_ROUNDTRIP_MIN_INPUTS
+    );
+
+    enforce(
+        // Workspace-root-relative, for the same reason as the benchmarks above:
+        // this module also compiles into the soak driver.
+        &fixture_gen::fixture_path(CLINVAR_UNIQUE_ROUNDTRIP_EXPECTATIONS_PATH),
+        "UPDATE_FAILURE_EXPECTATIONS",
+        FixtureCheck {
+            // The round-trip population is the inputs that parsed, so that is the
+            // denominator the zero-inputs bless guard keys on.
+            total_inputs: report.roundtripped,
+            failures,
+        },
+    );
+}
+
+/// Accumulator for the round-trip pass: how many inputs were round-tripped and
+/// which of them disagreed (`input -> reason`).
+#[derive(Default)]
+struct RoundTripReport<'a> {
+    roundtripped: usize,
+    disagreements: Vec<(&'a str, String)>,
+}
+
+impl<'a> RoundTripReport<'a> {
+    fn merge(mut self, mut other: Self) -> Self {
+        self.roundtripped += other.roundtripped;
+        self.disagreements.append(&mut other.disagreements);
+        self
+    }
 }
