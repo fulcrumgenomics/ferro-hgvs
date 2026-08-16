@@ -559,6 +559,7 @@ mod variantvalidator_tests;
 mod web_service_tests;
 mod weight_bound_worked_examples;
 mod workflow_gh_repo_context;
+mod workflow_pipefail_gate;
 
 mod issue_1618_anchored_repeat_semantics;
 mod issue_1831_applier_member_order;

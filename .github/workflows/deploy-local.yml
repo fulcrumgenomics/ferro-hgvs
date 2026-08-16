@@ -46,6 +46,9 @@ jobs:
 
       - name: Setup Rust
         run: |
+          # `pipefail`: without it a failed `curl` pipes an empty script into a
+          # `sh` that exits 0, and the job proceeds with no rustup installed.
+          set -euo pipefail
           if ! command -v rustc &> /dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           fi
@@ -53,6 +56,9 @@ jobs:
 
       - name: Setup Pixi
         run: |
+          # Same shape as the rustup install above: a failed fetch must not be
+          # swallowed by the shell it is piped into.
+          set -euo pipefail
           if ! command -v pixi &> /dev/null; then
             curl -fsSL https://pixi.sh/install.sh | bash
           fi
@@ -198,6 +204,12 @@ jobs:
 
       - name: Ensure UTA container is running
         run: |
+          # Set for uniformity with the repo-wide rule, not against a live bug:
+          # the pipeline below is an `if` condition, and the only case `pipefail`
+          # changes is a `docker ps` that both prints the container and exits
+          # non-zero. The rule is deliberately not conditioned on that judgement
+          # — see `tests/it/workflow_pipefail_gate.rs` for why.
+          set -euo pipefail
           if ! sudo docker ps -a | grep -q ferro-uta; then
             sudo docker run -d --name ferro-uta -p 127.0.0.1:5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust biocommons/uta:uta_20210129b
           else
