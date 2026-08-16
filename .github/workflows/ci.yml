@@ -2107,11 +2107,74 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: python-wheel
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      # src/python.rs carries 10 pure-Rust `#[cfg(test)]` tests that only
+      # compile under the `python` feature — and, before #2046, ran NOWHERE:
+      # `dev` excludes `python` so the sharded test jobs never compiled them,
+      # `maturin build` runs no Rust test, and `cargo clippy --all-features`
+      # compiles without executing. A break in one passed every check (the
+      # #1505 / #1372 dead-coverage family, one feature over).
+      #
+      # They are pure (they never start the interpreter), so they only need the
+      # crate to LINK, which needs libpython. That is why `extension-module` is
+      # NOT part of Cargo.toml's `python` feature: with it set, PyO3 links no
+      # libpython on Linux (`is_linking_libpython_for_target` in
+      # pyo3-build-config), so this test executable would fail to link its
+      # undefined Python symbols. `cargo` never reads pyproject.toml, so this
+      # step gets `python` WITHOUT `extension-module` and links libpython; the
+      # wheel step below asks for both features BY NAME (see its comment — the
+      # `[tool.maturin] features` list does not reach a build that passes
+      # `--features` on the command line).
+      #
+      # SCOPED, and run under nextest rather than `cargo test`, because this
+      # job reports a REQUIRED status check and the lib suite is not safe to run
+      # in one process. `cargo test --features python --lib` ran all 4240 lib
+      # tests under libtest's thread pool, where
+      # `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
+      # asserts deltas on process-global `AtomicU64` counters (`SEQFIRST_*` in
+      # src/normalize/merge.rs) that any concurrent test reaching
+      # `partition_block_for_rule` corrupts, and
+      # `parallel::tests::test_stress_concurrent_throughput` is a timing test
+      # sensitive to oversubscription. Measured on this branch at
+      # `--test-threads=32`: 4 of 6 runs failed that way, i.e. a green PR's
+      # required check would flake for reasons unrelated to the PR. nextest is
+      # process-per-test, so the corruption is not expressible at any thread
+      # count, and the selection keeps the job to the tests it exists to run
+      # (10 tests in 0.02s, against 4240 in ~14s).
+      #
+      # `--no-tests=fail` is the non-vacuity guard, and is the other reason this
+      # is nextest: a selection matching nothing exits 4 here ("error: no tests
+      # to run"), where `cargo test -- python::tests` reports
+      # `ok. 0 passed; 4240 filtered out` and exits 0 — a typo in the filter
+      # would silently delete the coverage this job was added to provide. Same
+      # reasoning as the `soak` job's `--no-tests=fail`; see its comment.
+      #
+      # The test binary loads libpython at startup, so point the loader at the
+      # interpreter's shared-library dir.
+      - name: Run src/python.rs unit tests
+        run: |
+          LIBDIR="$(python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+          echo "libpython dir: $LIBDIR"
+          LD_LIBRARY_PATH="$LIBDIR:${LD_LIBRARY_PATH:-}" \
+            cargo nextest run --features python --lib --no-tests=fail \
+              -E 'test(python::tests::)'
+      # `extension-module` is named explicitly, NOT inherited from
+      # `[tool.maturin] features`. Measured with maturin 1.13.3: a `--features`
+      # flag on the command line REPLACES that list rather than merging with it,
+      # so `maturin build --features python` hands cargo `--features python`
+      # alone and the pyproject entry is never consulted. Without the name here,
+      # the wheel's non-libpython linkage would rest solely on maturin setting
+      # `PYO3_BUILD_EXTENSION_MODULE=1` (which pyo3 honours independently of the
+      # Cargo feature) — true of every maturin in use today, but an unpinned
+      # `maturin>=1.0,<2.0` that predates it would silently build a
+      # libpython-linked wheel. Naming the feature restores exactly the cargo
+      # feature resolution this repo had before the split, and costs no version
+      # floor.
       - name: Build release wheel
         run: |
           python -m pip install --upgrade pip
           python -m pip install 'maturin>=1.0,<2.0'
-          maturin build --release --features python --out dist
+          maturin build --release --features python,extension-module --out dist
       - name: Install wheel into clean venv
         run: |
           python -m venv /tmp/wheel-venv
