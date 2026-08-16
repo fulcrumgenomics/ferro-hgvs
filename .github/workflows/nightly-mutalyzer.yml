@@ -264,17 +264,25 @@ jobs:
           # soft-masked bases. Non-gating here like the other three.
           FERRO_ASSERT_SEQUENCE: "1"
         run: |
-          cargo nextest run --features dev -E "$REFERENCE_AWARE_SELECTION"
+          # `--profile nightly-xfail` writes JUnit to
+          # target/nextest/nightly-xfail/junit.xml (see .config/nextest.toml).
+          # The set of FAILING tests in that report is what the "Diff FAIL set
+          # against xfail baseline" step below gates on — NOT this step's
+          # `continue-on-error` conclusion, which is `success` whenever the only
+          # thing that failed is the run (#1998).
+          cargo nextest run --features dev --profile nightly-xfail -E "$REFERENCE_AWARE_SELECTION"
 
       # The reproduction recipe for the failure this job actually produces.
       #
       # It lives HERE, and not in `report-failure`'s `hint:` below, because
       # `report-failure` is `if: failure()` and the step above is
-      # `continue-on-error: true` — so the job concludes `success` whenever the
-      # ONLY thing that failed is the test run, and that hint is never rendered
-      # for a fired oracle or a moved baseline. Every failure that does reach
-      # `report-failure` is an infrastructure one (checkout, `ferro prepare`, a
-      # missing manifest), for which an armed re-run is the wrong advice.
+      # `continue-on-error: true` — so the test run's own failure never fails the
+      # job by itself, and this armed reproduction recipe is what a reader needs
+      # when a test fails. The failures that DO reach `report-failure` are the
+      # xfail-diff step's drift verdict and infrastructure breakage (checkout,
+      # `ferro prepare`, a missing manifest) — for both of which an armed re-run
+      # is the wrong first move (read the drift report / the failing step's log
+      # first), which is why that hint points there instead.
       #
       # Keyed on `outcome`, not `conclusion`: `continue-on-error` rewrites the
       # latter to `success` while the former stays `failure`, which is exactly
@@ -323,6 +331,65 @@ jobs:
             echo "than as a failed workflow."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # THE GATE. #1998: the step above is `continue-on-error`, so its
+      # conclusion is `success` whether 38 tests fail or 39 do — a new failure
+      # is indistinguishable from the known set, and "surface drift" only works
+      # if a human remembers yesterday's artifact. This step closes that: it
+      # diffs the run's actual FAIL set (from the JUnit report) against the
+      # committed baseline and FAILS THE JOB on any drift.
+      #
+      #   - a NEW failure (failing now, not baselined)      -> red
+      #   - an UNEXPECTED PASS (baselined, now passing/gone) -> red
+      #   - a missing or unparseable JUnit report            -> red
+      #   - an exact match                                   -> green
+      #
+      # What it compares is the set of FAILING TESTS. It is blind to drift
+      # *inside* a baselined test — a comparator axis that moves from 30 pass /
+      # 57 FAIL to 0 pass / 87 FAIL over its own inputs leaves the id set
+      # byte-identical, and this step reports an exact match. That per-input
+      # movement is still IN the run, on the axis summary line and in the
+      # `ferro-xfail-*` artifact; nothing diffs it. See
+      # `tests/fixtures/nightly-reference-aware/README.md`.
+      #
+      # It carries NO `continue-on-error`, so its non-zero exit turns the
+      # nightly red and `report-failure` opens a tracking issue. Regenerating
+      # the baseline after a deliberate change is `--update-baseline` (see the
+      # script and `tests/fixtures/nightly-reference-aware/README.md`).
+      #
+      # `python3` is preinstalled on `ubuntu-latest`; the script is stdlib-only.
+      - name: Diff FAIL set against xfail baseline
+        id: xfail-diff
+        # Run whenever the test step actually executed (passed or failed via
+        # continue-on-error), but not when an earlier infra step (checkout,
+        # prepare, missing manifest) skipped it — that failure is `report-failure`'s.
+        if: always() && (steps.reference-aware-tests.outcome == 'success' || steps.reference-aware-tests.outcome == 'failure')
+        env:
+          JUNIT: target/nextest/nightly-xfail/junit.xml
+          BASELINE: tests/fixtures/nightly-reference-aware/xfail-baseline.txt
+        run: |
+          set -euo pipefail
+          # `pipefail` is set HERE because the shell does not supply it. A step
+          # naming no `shell:` runs under `bash -e {0}`, where a pipeline's exit
+          # status is its LAST command's — so the `tee` below reported 0 while
+          # the diff exited 1, and this gate could not go red (#2082). Only an
+          # explicit `shell: bash` expands with `-eo pipefail`.
+          # `tests/it/workflow_pipefail_gate.rs` checks that repo-wide.
+
+          # A missing JUnit report FAILS. This step's `if:` says the test step
+          # ran, so an absent report means nextest died before writing one —
+          # diffing nothing against the baseline would otherwise report every
+          # baselined id as an "unexpected pass", and the exit-2 that raises
+          # was swallowed by the same `tee`.
+          if [ ! -f "$JUNIT" ]; then
+            echo "::error::the reference-aware test step ran but wrote no JUnit report at ${JUNIT}"
+            exit 1
+          fi
+          # Keep the JUnit report in the uploaded artifact for offline triage.
+          mkdir -p /tmp/ferro-xfail
+          cp "$JUNIT" /tmp/ferro-xfail/junit.xml
+          python3 scripts/diff_nightly_xfail_baseline.py \
+            --junit "$JUNIT" --baseline "$BASELINE" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload xfail reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -343,6 +410,7 @@ jobs:
       summary: >-
         The nightly manifest-backed conformance run failed.
       hint: |
-          **This is an infrastructure failure, not a conformance one.** The test step carries `continue-on-error: true`, so a fired oracle or a moved baseline leaves this job concluding `success` and never opens an issue — it lands in the run's `ferro-xfail-*` artifact instead, and the run's job summary carries the armed reproduction command. Reaching this issue therefore means something before or around the tests broke: the checkout, the `ferro` build, `ferro prepare`, a manifest that never appeared, or the artifact upload.
-          Start from the failing step's own log rather than from a re-run of the axes. These axes only run with a prepared reference (`FERRO_MANIFEST`), so they cannot run on a pull request, and re-running them proves nothing about a step that failed before they started.
+          **First read `Diff FAIL set against xfail baseline` in the run — it is the one gating step (#1998).** The test step itself carries `continue-on-error: true`, so a fired oracle or an individual test failure does not reach this issue; it lands in the `ferro-xfail-*` artifact and the job summary. This job goes red, and this issue opens, for exactly two reasons:
+          1. **Xfail drift** — the diff step found the reference-aware FAIL set no longer matches `tests/fixtures/nightly-reference-aware/xfail-baseline.txt`: a **new failure** (a regression, or an upstream reference change) or an **unexpected pass** (a baselined test now passes, so the baseline must be updated). Its report is in the job summary. A moved baseline is re-blessable with `--update-baseline`; a new live divergence is not — read which it is out of the summary and the `ferro-xfail-*` artifact before deciding.
+          2. **Infrastructure** — something before or around the tests broke: the checkout, the `ferro` build, `ferro prepare`, a manifest that never appeared, or the artifact upload. If the diff step never ran (it is skipped when the test step is), it is this. Start from the failing step's own log rather than from a re-run of the axes — these axes only run with a prepared reference (`FERRO_MANIFEST`) and cannot run on a pull request.
           `ferro prepare` runs on every night's run — the prepared reference is deliberately not cached (see the comment above that step) — so it fetches from NCBI and Ensembl each time, and an upstream fetch is the most likely thing to have broken.
