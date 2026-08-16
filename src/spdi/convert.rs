@@ -158,6 +158,31 @@ pub enum ConversionError {
         /// Why a provider is needed for this variant.
         reason: String,
     },
+    /// SPDI cannot express the description at all — a limit of the *target
+    /// representation*, decided from the description alone.
+    ///
+    /// The distinction from its two reference-flavoured siblings is what a
+    /// better-provisioned provider would buy you: [`ProviderRequired`] is
+    /// answered by supplying a provider and [`MissingReferenceData`] by
+    /// supplying one that holds the region, while **no** provider answers this
+    /// one, because nothing is missing. SPDI is positional and has no offset
+    /// notation, so an intronic transcript position (`c.10+5`, `n.10+5`,
+    /// `r.10+5`) names no coordinate on the transcript accession however
+    /// completely that accession is served.
+    ///
+    /// Consumers classifying a conversion failure as "could not tell" versus
+    /// "decided negative" must read this as the latter — see
+    /// `equivalence::checker`'s `TripleDecline::from_conversion_error`, which
+    /// is where routing these three sites through `MissingReferenceData`
+    /// turned four decided verdicts into refusals on a fully served reference
+    /// (#2056 follow-up).
+    ///
+    /// [`MissingReferenceData`]: ConversionError::MissingReferenceData
+    /// [`ProviderRequired`]: ConversionError::ProviderRequired
+    UnrepresentableInSpdi {
+        /// What cannot be expressed, and why.
+        description: String,
+    },
 }
 
 impl std::fmt::Display for ConversionError {
@@ -191,6 +216,9 @@ impl std::fmt::Display for ConversionError {
                     "reference provider required to convert {}. variant: {}",
                     variant_type, reason
                 )
+            }
+            ConversionError::UnrepresentableInSpdi { description } => {
+                write!(f, "cannot be expressed in SPDI: {}", description)
             }
         }
     }
@@ -1376,13 +1404,17 @@ fn unwrap_edit<E>(edit: &crate::hgvs::uncertainty::Mu<E>) -> Result<&E, Conversi
 /// already answers the same question for the **start** side, with `ok_or_else`
 /// and exactly that variant ("cannot convert c. variant with unknown start
 /// position"). The asymmetry between the two sides *is* the defect, so the end
-/// gets what the start has always had. The axis' other verdict,
-/// `MissingReferenceData`, would be a false statement here: it means "a
-/// well-formed position whose SPDI form needs data or a projection I do not
-/// have" (see [`resolve_cds_to_tx`], [`resolve_tx_pos`], [`require_simple_tx_pos`]),
-/// and it invites the caller to supply a provider. No provider, exon table or
-/// genomic projection can resolve `?` — the uncertainty is in the description,
-/// not in ferro's reference data.
+/// gets what the start has always had.
+///
+/// Neither of the axis' other two verdicts fits. `MissingReferenceData` means
+/// "a well-formed position whose SPDI form needs reference data I do not have",
+/// and it invites the caller to supply a provider — but no provider, exon table
+/// or genomic projection can resolve `?`, because the uncertainty is in the
+/// description rather than in ferro's reference data. `UnrepresentableInSpdi`
+/// is nearer but still wrong: it says the *representation* cannot carry an
+/// otherwise-determinate position (see [`resolve_cds_to_tx`], [`resolve_tx_pos`],
+/// [`require_simple_tx_pos`], whose intronic offsets are exactly that), whereas
+/// `?` names no position for any representation to carry.
 fn resolve_transcript_end_boundary<'a, T: std::fmt::Display>(
     interval: &'a Interval<T>,
     coord: &str,
@@ -1403,8 +1435,9 @@ fn resolve_transcript_end_boundary<'a, T: std::fmt::Display>(
 }
 
 /// Resolve the start position of a `TxInterval` for the simple (no-provider)
-/// path. Returns `MissingReferenceData` if the position requires provider
-/// data (intronic, downstream `*N`, or non-positive base).
+/// path. Returns `MissingReferenceData` if the position requires provider data
+/// (downstream `*N` or non-positive base), and `UnrepresentableInSpdi` for an
+/// intronic offset, which no provider can resolve.
 fn tx_pos_for_simple_path(interval: &Interval<TxPos>, coord: &str) -> Result<u64, ConversionError> {
     let start = interval
         .start
@@ -1427,10 +1460,16 @@ fn tx_end_for_simple_path(interval: &Interval<TxPos>, coord: &str) -> Result<u64
 // provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
 // callers accept unbounded exonic positions by construction.
 fn require_simple_tx_pos(pos: &TxPos, coord: &str) -> Result<u64, ConversionError> {
+    // Not `MissingReferenceData`: unlike the two declines below it, this one is
+    // not answered by supplying a provider. The provider-backed path refuses an
+    // intronic position too (`resolve_tx_pos`), because SPDI has no offset
+    // notation — so promising "requires reference provider with exon data" here
+    // would send the caller after a provider that cannot help.
     if pos.is_intronic() {
-        return Err(ConversionError::MissingReferenceData {
+        return Err(ConversionError::UnrepresentableInSpdi {
             description: format!(
-                "intronic {}. position requires reference provider with exon data",
+                "intronic {}. position cannot be expressed in SPDI without genomic projection; \
+                 SPDI is positional and has no offset notation",
                 coord
             ),
         });
@@ -1482,10 +1521,12 @@ fn rna_end_for_simple_path(
 // provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
 // callers accept unbounded exonic positions by construction.
 fn require_simple_rna_pos(pos: &RnaPos, coord: &str) -> Result<u64, ConversionError> {
+    // See `require_simple_tx_pos`: a representation limit, not a provider gap.
     if pos.is_intronic() {
-        return Err(ConversionError::MissingReferenceData {
+        return Err(ConversionError::UnrepresentableInSpdi {
             description: format!(
-                "intronic {}. position requires reference provider with exon data",
+                "intronic {}. position cannot be expressed in SPDI without genomic projection; \
+                 SPDI is positional and has no offset notation",
                 coord
             ),
         });
@@ -1529,6 +1570,12 @@ fn rna_needs_provider(interval: &Interval<RnaPos>) -> bool {
 /// on the transcript accession without first projecting to genomic coords.
 /// That projection is intentionally out of scope for this entry point —
 /// callers needing it can use the genomic conversion path explicitly.
+///
+/// That rejection is [`ConversionError::UnrepresentableInSpdi`] and is raised
+/// **before the provider is consulted at all**, which is why it must not be
+/// `MissingReferenceData`: no amount of reference data changes the answer, and
+/// a consumer classifying the error would otherwise read a decidable case as
+/// "could not tell".
 fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &CdsPos,
@@ -1536,7 +1583,7 @@ fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
     provider: &P,
 ) -> Result<(u64, u64), ConversionError> {
     if start.is_intronic() || end.is_intronic() {
-        return Err(ConversionError::MissingReferenceData {
+        return Err(ConversionError::UnrepresentableInSpdi {
             description: "intronic c. positions cannot be expressed in SPDI without genomic \
                           projection; SPDI is positional and has no offset notation"
                 .to_string(),
@@ -1676,9 +1723,10 @@ fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, Conversio
     // SPDI is positional and has no offset notation, so intronic n. positions
     // cannot be expressed without genomic projection. Match the sibling
     // `resolve_rna_pos` (and the simple-path helpers) by emitting
-    // `MissingReferenceData` here.
+    // `UnrepresentableInSpdi` here: the answer is decided by the position's own
+    // spelling, and no provider changes it.
     if pos.is_intronic() {
-        return Err(ConversionError::MissingReferenceData {
+        return Err(ConversionError::UnrepresentableInSpdi {
             description: format!(
                 "intronic n.{} cannot be expressed in SPDI without genomic projection; \
                  SPDI is positional and has no offset notation",
@@ -1706,8 +1754,9 @@ fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, Conversio
 }
 
 fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, ConversionError> {
+    // As in `resolve_tx_pos`: a representation limit, read off the spelling.
     if pos.is_intronic() {
-        return Err(ConversionError::MissingReferenceData {
+        return Err(ConversionError::UnrepresentableInSpdi {
             description: format!(
                 "intronic r.{} cannot be expressed in SPDI without genomic projection; \
                  SPDI is positional and has no offset notation",
@@ -5265,16 +5314,20 @@ mod tests {
     }
 
     #[test]
-    fn test_hgvs_to_spdi_simple_tx_intronic_needs_provider() {
-        // n.100+5: intronic offset cannot be expressed as a positional SPDI;
-        // the simple path bails with MissingReferenceData (provider needed
-        // for genomic projection — out of scope for this PR).
+    fn test_hgvs_to_spdi_simple_tx_intronic_is_unrepresentable() {
+        // n.100+5: an intronic offset cannot be expressed as a positional SPDI.
+        //
+        // The simple path used to call this `MissingReferenceData` and say the
+        // position "requires reference provider with exon data", which named a
+        // remedy that does not exist — the provider-backed path refuses an
+        // intronic position too (`resolve_tx_pos`). It is a limit of SPDI, so
+        // it declines as `UnrepresentableInSpdi` on both paths.
         let hgvs = parse_hgvs("NR_046018.2:n.100+5A>G").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
-        assert!(matches!(
-            result,
-            Err(ConversionError::MissingReferenceData { .. })
-        ));
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "expected a representation limit, got {result:?}"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("intronic"), "msg: {}", msg);
     }
@@ -5356,13 +5409,14 @@ mod tests {
     }
 
     #[test]
-    fn test_hgvs_to_spdi_simple_rna_intronic_needs_provider() {
+    fn test_hgvs_to_spdi_simple_rna_intronic_is_unrepresentable() {
+        // As on the `n.` axis above: a representation limit, not a provider gap.
         let hgvs = parse_hgvs("NR_046018.2:r.10+5a>g").unwrap();
         let result = hgvs_to_spdi_simple(&hgvs);
-        assert!(matches!(
-            result,
-            Err(ConversionError::MissingReferenceData { .. })
-        ));
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "expected a representation limit, got {result:?}"
+        );
     }
 
     // ----- p. (protein) — rejected with helpful error -----------------------
@@ -5683,14 +5737,17 @@ mod tests {
     #[test]
     fn test_hgvs_to_spdi_with_provider_cds_intronic_rejected() {
         // Intronic c. cannot be expressed as a positional SPDI: SPDI has no
-        // offset notation. The provider-aware path surfaces a clear error.
+        // offset notation. The provider-aware path surfaces a clear error —
+        // and it is a *representation* error, not a reference one: this
+        // provider serves the transcript, and the decline is raised before it
+        // is asked anything.
         let provider = make_intronic_provider();
         let hgvs = parse_hgvs("NM_INTRON.1:c.10+5A>G").unwrap();
         let result = hgvs_to_spdi(&hgvs, &provider);
-        assert!(matches!(
-            result,
-            Err(ConversionError::MissingReferenceData { .. })
-        ));
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "expected a representation limit, got {result:?}"
+        );
     }
 
     #[test]
@@ -6292,12 +6349,19 @@ mod tests {
     }
 
     /// The transcript axes are where a `+`/`-` offset is legitimate HGVS, and
-    /// the genomic guard must not reach them. Each still declines for its own,
-    /// unchanged reason — `MissingReferenceData`, "cannot be expressed in SPDI
-    /// without genomic projection" — which is a different verdict from the
-    /// genomic `InvalidPosition`, and the difference is the point: `c.10+5` is
-    /// a well-formed position SPDI cannot carry, `g.10+2` is not a well-formed
+    /// the genomic guard must not reach them. Each still declines for its own
+    /// reason — `UnrepresentableInSpdi`, "cannot be expressed in SPDI without
+    /// genomic projection" — which is a different verdict from the genomic
+    /// `InvalidPosition`, and the difference is the point: `c.10+5` is a
+    /// well-formed position SPDI cannot carry, `g.10+2` is not a well-formed
     /// position at all.
+    ///
+    /// The carrier used to be `MissingReferenceData`, which named the wrong
+    /// obstacle: the provider is serving this transcript — the exonic siblings
+    /// below prove it — and the `c.` arm declines before the provider is
+    /// consulted at all. Consumers classify a conversion failure on this
+    /// variant, and a downstream one read the mislabel as "could not tell"; see
+    /// `equivalence::checker`'s `TripleDecline::from_conversion_error`.
     ///
     /// Their exonic siblings on the same providers still convert, so this pins
     /// that the axes are working rather than merely erroring.
@@ -6313,8 +6377,9 @@ mod tests {
             let err = hgvs_to_spdi(&variant, &provider)
                 .expect_err("an intronic transcript position has no SPDI representation");
             assert!(
-                matches!(err, ConversionError::MissingReferenceData { .. }),
-                "`{descriptor}` must still decline as MissingReferenceData, got {err:?}"
+                matches!(err, ConversionError::UnrepresentableInSpdi { .. }),
+                "`{descriptor}` must decline as UnrepresentableInSpdi — the reference is served \
+                 and is not the obstacle, got {err:?}"
             );
             assert!(
                 err.to_string().contains("genomic projection"),
@@ -6734,7 +6799,7 @@ mod tests {
     /// which is a deliberate change of diagnostic and worth pinning as one.
     ///
     /// On `main`, `n.10+5_?delAAAA` reported the intronic start
-    /// (`MissingReferenceData`, "cannot be expressed in SPDI without genomic
+    /// (`UnrepresentableInSpdi`, "cannot be expressed in SPDI without genomic
     /// projection"); it now reports the end. Both are correct refusals, and the
     /// ordering is structural rather than a preference: `resolve_tx_to_provider_tx`
     /// takes a resolved end **by value**, so there is nothing to hand it until
@@ -6764,7 +6829,7 @@ mod tests {
         let err = hgvs_to_spdi(&intronic_only, &provider)
             .expect_err("an intronic transcript position has no SPDI representation");
         assert!(
-            matches!(err, ConversionError::MissingReferenceData { .. }),
+            matches!(err, ConversionError::UnrepresentableInSpdi { .. }),
             "a resolvable end must leave the intronic decline untouched, got {err:?}"
         );
         assert!(
