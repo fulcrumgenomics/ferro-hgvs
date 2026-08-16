@@ -1318,6 +1318,13 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
         "checklist.md:16" | "checklist.md:45" => output
             .split_once(":g.")
             .is_some_and(|(_, body)| body.contains('+') || body.contains('-')),
+        // `checklist.md:20` is CONDITIONAL, not an absolute prohibition: a bare
+        // `c.`/`n.` intronic position is a legal HGVS description, so lenient and
+        // silent legitimately emit it. There is nothing prohibited to re-emit, so
+        // the rule-1 output guard is satisfied by construction — the row this arm
+        // serves exists to assert the strict-PARSE refusal (the stage move
+        // `#1630` records), not an output violation.
+        "checklist.md:20" => false,
         other => panic!("no output check for {other}"),
     }
 }
@@ -1341,13 +1348,29 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
 /// nothing away, while re-emitting the prohibited spelling is a rule-1
 /// violation whatever mode produced it.
 ///
-/// **`#[ignore]`d because ONE of its four rows is still open.** Three are now
-/// closed — `standards.md:39`'s `delinsX` by #1627, and both `g.`-offset rows by
-/// #1628 — leaving `checklist.md:33`'s `ins6`, which is #1627's remaining half.
-/// Delete the `#[ignore]` once that lands; the other three rows already pass and
-/// are guarded individually by
-/// [`an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`] and
-/// [`the_clauses_three_offset_symbols_are_refused_alike`].
+/// **No longer `#[ignore]`d — this is #1630's acceptance criterion, now met.**
+/// Every clause the ruling's census named is enforced at the stage it decided:
+/// `standards.md:39`'s `delinsX` by #1627, both `g.`-offset rows by #1628,
+/// `checklist.md:33`'s `ins6` by #1789 (the last blocker), and `checklist.md:20`
+/// moved from a strict-*normalize* refusal to a strict-*parse* one by #1872. The
+/// rows below are each also guarded individually — by
+/// [`an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`],
+/// [`the_clauses_three_offset_symbols_are_refused_alike`],
+/// [`one_checklist_insertion_bullet_is_enforced_and_its_neighbour_is_not`] and
+/// [`a_bare_transcript_intronic_position_is_refused_at_parse_in_strict_mode`] —
+/// so this test is the single place that asserts the *whole* decided answer at
+/// once.
+///
+/// **`checklist.md:20` is the conditional fifth row, and it behaves differently
+/// on purpose.** The four absolute prohibitions are refused in every mode — at
+/// parse in strict, at normalize in lenient/silent — and none may ever be
+/// *emitted*. `checklist.md:20` is CONDITIONAL: strict refuses the bare
+/// `NM_…:c.20+2del` at parse (the uniformity move #1630 records), while lenient
+/// and silent legitimately *accept and emit* it, because a bare intronic
+/// position is a legal HGVS description. So its rule-1 output guard is satisfied
+/// by construction (see [`output_still_violates`]), and the row asserts only the
+/// strict-parse refusal. `rulings[bare-transcript-intronic-position]` decided
+/// that mode split; nothing here reopens it.
 ///
 /// The `g.` offset rows were the ones no un-normalizability argument reached.
 /// `ins6` and `delinsX` denote nothing (`Denotation::Inexpressible`, and
@@ -1357,14 +1380,13 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
 /// and answered for `g.266del`; that half is closed by #1641 and #1734, and the
 /// normalize half by the `W4009` rule, so both now refuse rather than disagree.
 #[test]
-#[ignore = "one row still open: checklist.md:33's `ins6` — see #1627. The \
-            other three rows pass (#1627's `delinsX`, #1628's two `g.` offsets), \
-            as does checklist.md:20 (#1630), which this test does not yet carry \
-            a row for"]
 fn the_decided_target_is_a_mode_gated_refusal() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
     let genomic = Frame::build(RefShape::Genomic, &core);
+    // `checklist.md:20`'s bare intronic offset needs a transcript with an intron
+    // for lenient/silent to normalize it, so it uses a multi-exon coding frame.
+    let coding_multi = Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core);
 
     for (frame, input, clause) in [
         (
@@ -1386,6 +1408,11 @@ fn the_decided_target_is_a_mode_gated_refusal() {
             &genomic,
             "NC_TEST.1:g.266-268del",
             "checklist.md:45", // and checklist.md:16 on a `g.` axis
+        ),
+        (
+            &coding_multi,
+            "NM_TEST.1:c.20+2del",
+            "checklist.md:20", // bare-transcript intronic position (conditional)
         ),
     ] {
         // STRICT — refused at parse, because strict validates input conformance.
