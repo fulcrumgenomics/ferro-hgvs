@@ -19,13 +19,13 @@
 //! Extract patterns from ClinVar, sample 1M, and benchmark parsing:
 //! ```bash
 //! # Extract all HGVS patterns from ClinVar
-//! ferro-benchmark extract-clinvar -i data/clinvar/hgvs4variation.txt.gz -o /tmp/clinvar_patterns.txt
+//! ferro-benchmark extract clinvar -i data/clinvar/hgvs4variation.txt.gz -o /tmp/clinvar_patterns.txt
 //!
 //! # Create a stratified sample of 1M patterns
-//! ferro-benchmark sample -i /tmp/clinvar_patterns.txt -o /tmp/clinvar_1M.txt -s 1000000 --seed 42
+//! ferro-benchmark extract sample -i /tmp/clinvar_patterns.txt -o /tmp/clinvar_1M.txt -s 1000000 --seed 42
 //!
 //! # Run the parsing benchmark
-//! ferro-benchmark parse-ferro -i /tmp/clinvar_1M.txt -r /tmp/results.json -t /tmp/timing.json
+//! ferro-benchmark parse ferro -i /tmp/clinvar_1M.txt -o /tmp/results.json -t /tmp/timing.json
 //!
 //! # View timing results
 //! cat /tmp/timing.json
@@ -33,9 +33,9 @@
 //!
 //! ## Full Benchmark (with Mutalyzer comparison)
 //!
-//! Run the complete comparison workflow:
+//! Run the complete performance matrix:
 //! ```bash
-//! ferro-benchmark run --cores 12 --output-dir benchmark_results
+//! ferro-benchmark benchmark matrix --population /tmp/clinvar_1M.txt --output perf_results.json
 //! ```
 
 pub mod accessions;

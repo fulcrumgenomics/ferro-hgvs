@@ -364,7 +364,7 @@ pub struct CompareConfig {
     /// Biocommons settings file path (optional, for local biocommons setup)
     ///
     /// When provided, uses local UTA and SeqRepo configuration from this file.
-    /// Generate with: `ferro-benchmark generate-biocommons-settings`
+    /// Generate with: `ferro-benchmark prepare biocommons`
     pub biocommons_settings: Option<std::path::PathBuf>,
     /// SeqRepo path for hgvs-rs validator (optional)
     ///
