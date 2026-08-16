@@ -19,9 +19,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The `fuzz` job carries a `timeout-minutes`; without one it inherits GitHub's
+  # 360-minute default. This is the half #1994 scoped out (see #2004): a nightly
+  # schedule nobody watches is the worse place to leave a six-hour hang.
+  #
+  # 60 = at least 5x the slowest SUCCESSFUL run observed (296s, measured
+  # 2026-08-16 over the last 8 nightlies). The fuzz step itself is ALREADY
+  # self-bounded — `timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run` with
+  # FUZZ_SECONDS defaulting to 300 — so this job bound exists to cap the
+  # surrounding nightly toolchain install and target build, not the fuzzing. A
+  # `workflow_dispatch` run with a large `fuzz_seconds` may need this raised.
+  # (`report-failure` is a reusable-workflow `uses:` call, on which GitHub
+  # rejects `timeout-minutes`; the callee's own `report` job carries one.)
   fuzz:
     name: Fuzz Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

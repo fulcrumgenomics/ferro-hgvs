@@ -32,6 +32,25 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
+# 360-minute default. This is the half #1994 scoped out (see #2004): #1994
+# bounded the PR-gating workflows, and #2010 added a step-level stall bound to
+# the soak step here but left the jobs themselves unbounded. This is a nightly
+# schedule, so nobody watches a green run — the worse place to leave a six-hour
+# hang. Values are at least 5x the slowest SUCCESSFUL run observed for that job,
+# measured 2026-08-16 over the last 8 nightlies, then rounded up. These bound a
+# hang, they are not a budget.
+#
+#   60  build: `cargo nextest archive` under `--cargo-profile soak`, so it
+#       compiles Rust and a cold cache is on the table (297s, matching ci.yml's
+#       `test-build-soak`).
+#   30  soak: downloads the prebuilt archive and runs proptest (76s). It also
+#       runs through `scripts/run_nextest_archive.sh`, whose default
+#       `NEXTEST_STALL_TIMEOUT` is 25m, so this MUST be > 25 or the job bound
+#       fires before the step's stall bound can annotate the phase — a property
+#       `issue_2000_nextest_stall_phase::the_step_bound_fires_before_every_job_bound`
+#       asserts. 30 matches ci.yml's `soak`.
+#   15  report: opens/updates the tracking issue on failure only.
 jobs:
   # One optimized build, fanned out to all eight shards.
   #
@@ -49,6 +68,7 @@ jobs:
   build:
     name: Build soak archive (optimized)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -138,6 +158,7 @@ jobs:
     name: Unseeded soak (${{ matrix.shard }}/8)
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       # Let every shard finish: with independent random streams, one shard
       # failing says nothing about the others, and the extra failures are
@@ -211,6 +232,7 @@ jobs:
   report:
     name: Report soak failures
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: soak
     if: failure()
     permissions:

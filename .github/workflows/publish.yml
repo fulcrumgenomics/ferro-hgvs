@@ -14,8 +14,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # `timeout-minutes` so this cannot inherit GitHub's 360-minute default. This is
+  # the half #1994 scoped out (see #2004). 60 = far more than 5x the slowest
+  # SUCCESSFUL run observed (208s, measured 2026-08-16 over the last 15 runs).
+  # release-plz walks the release cycle's history running `cargo package` at each
+  # commit, so it compiles Rust and a large cycle can run well past the typical
+  # ~3.5m — hence the generous bound rather than a tight one.
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

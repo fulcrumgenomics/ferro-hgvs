@@ -24,8 +24,15 @@ env:
   CONFIG_FILE: /opt/ferro-web/service.toml
 
 jobs:
+  # `timeout-minutes` so this cannot inherit GitHub's 360-minute default. This is
+  # the half #1994 scoped out (see #2004). 90 = >5x the slowest SUCCESSFUL run
+  # observed (767s, measured 2026-08-16 over the last 7 runs; the typical run is
+  # ~390s). It builds the `ferro-web` release binary and deploys it on a
+  # self-hosted runner, so the extra headroom over the 60 Rust-build tier is a
+  # deliberate allowance for self-hosted variance. Bounds a hang, not a budget.
   build-and-deploy:
     runs-on: [self-hosted, linux, x64, ferro-deploy]
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
