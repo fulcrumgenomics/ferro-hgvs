@@ -17,4 +17,4 @@
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:32-32","input":"NM_004006.3:c.79_80GC>TT","verdict":"refused","normalizes_to":null}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85=/T>C","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=/T>C"}
 {"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85=//T>C","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=//T>C"}
-{"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85T>C/=","verdict":"conformant","normalizes_to":"NM_004006.3:c.85T>C/="}
+{"page":"recommendations/DNA/substitution.md","anchor":"recommendations/DNA/substitution.md:47-49","input":"NM_004006.3:c.85T>C/=","verdict":"recommended","normalizes_to":"NM_004006.3:c.85=/T>C"}

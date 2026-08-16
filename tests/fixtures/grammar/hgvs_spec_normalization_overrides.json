@@ -1642,6 +1642,33 @@
           "tests/it/issue_390_hgvs_vcf_provider_coverage.rs::inverted_range_insertion_declines_instead_of_emitting_its_spelling"
         ]
       }
+    },
+    {
+      "id": "mosaic-chimeric-substitution-reference-allele-first",
+      "question": "A mosaic (`/`) or chimeric (`//`) substitution allele carries one member describing a variant nucleotide and one describing the reference (`=`). Ferro accepted a variant-first spelling (`c.85T>C/=`) and left it as authored, neither reordering it nor refusing it. `DNA/substitution.md:49` states the reference allele is \"always described first\", but the clause is non-normative prose. Does ferro reorder to reference-first, refuse the variant-first spelling, or leave it alone?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:49",
+          "quote": "irrespective of the frequency in which each nucleotide was found, the reference is always described first"
+        },
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:47",
+          "quote": "LRG_199t1:c.85=/T>C"
+        }
+      ],
+      "governing": "docs/recommendations/DNA/substitution.md:49",
+      "deviates_from": [],
+      "rationale": "OPERATOR RULING, 2026-08-16 (#2034) — REORDER TO REFERENCE-FIRST. A two-member mosaic/chimeric SUBSTITUTION allele is emitted reference-allele-first: `c.85T>C/=` normalizes to `c.85=/T>C`, and the chimeric `//` analogue to `c.85=//T>C`. The variant-first spelling is not refused; it is rewritten.\n\nAUTHORITY. `substitution.md:49` states it outright — \"irrespective of the frequency in which each nucleotide was found, the reference is always described first\" — and `:47` publishes the target `LRG_199t1:c.85=/T>C` as the spec's own worked mosaic example. The clause is lowercase prose, not an RFC 2119 keyword (per this repository's reading of the spec almost nothing in `recommendations/` is normative), so it is cited as GOVERNING in the sense of a positive statement of the rule ferro follows, not as a MUST. It aligns with the project's canonical-form doctrine (`canonical-form-choice-when-both-legal`): the form is derived rather than preserved from the input's spelling, and reference-first spellings are already fixed points, so this makes the two spellings of one mosaic converge on the one the spec prints.\n\nWHY REORDER RATHER THAN REFUSE. Refusing the variant-first spelling in strict was the alternative the issue enumerated. It is rejected on the same ground `absolute-prohibition-enforcement-stage` gives for output conformance: accepting a non-conformant input and normalizing it to the conformant form trades nothing, and a mode-dependent refusal would leave lenient/silent still emitting the disfavoured order. Reordering fixes every mode at once.\n\nSCOPE — SUBSTITUTION ONLY, DELIBERATELY. The ruling reaches a substitution beside a reference allele (`=`), which is the shape the issue names and the only one where reference-first is unambiguous: the reference-first compact form is `<pos>=/<edit>` and there is exactly one. A RANGE edit (`del`/`dup`) is OUT OF SCOPE and left as authored, because its reference-first spelling is ambiguous between the position-identity form `c.79_80=/del` and the whole-entity-identity form `c.=/79_80del`, and the spec does not adjudicate between them. A three-or-more-member mosaic, and a mosaic of two real edits (no reference member), are also out of scope — there is no single reference allele to move to the front. Those cases fall through unchanged and are owed their own ruling if raised.\n\nMECHANISM. Implemented in `Normalizer::normalize_allele` via `reorder_mosaic_chimeric_reference_first`: a two-member, non-predicted Mosaic/Chimeric allele whose first member is a certain substitution and whose second member is an identity (`=`, whole-entity or position-bound) is rewritten to `[<sub-location>=, <sub>]`, then re-dispatched. The rewrite is idempotent — its output is spelled reference-first and no longer matches the guard — so the re-dispatch runs at most once.\n\nREPRESENTATION IMPACT: a real, one-directional migration. Every previously-accepted variant-first mosaic/chimeric substitution (`<pos><ref>><alt>/=` and the `//` form) re-spells to reference-first. The synthetic shape-family corpus has no mosaic/chimeric family, so a count from it would be a STRUCTURAL zero; the move is disclosed in the PR's `Representation-Change:` trailer and pinned by `tests/it/issue_2034_mosaic_chimeric_reference_first.rs`.",
+      "guard": {
+        "tests": [
+          "tests/it/issue_2034_mosaic_chimeric_reference_first.rs::genomic_mosaic_substitution_reorders_reference_first",
+          "tests/it/issue_2034_mosaic_chimeric_reference_first.rs::genomic_chimeric_substitution_reorders_reference_first",
+          "tests/it/issue_2034_mosaic_chimeric_reference_first.rs::cds_mosaic_substitution_reorders_reference_first",
+          "tests/it/issue_2034_mosaic_chimeric_reference_first.rs::cds_chimeric_substitution_reorders_reference_first",
+          "tests/it/issue_2034_mosaic_chimeric_reference_first.rs::genomic_reference_first_substitution_is_a_fixed_point"
+        ]
+      }
     }
   ]
 }

@@ -116,4 +116,4 @@ allele first.
 |---|---|---|---|
 | `NM_004006.3:c.85=/T>C` | recommended | self | mosaic: reference `=` written first, then `T>C` |
 | `NM_004006.3:c.85=//T>C` | recommended | self | chimeric: a mix of `c.85=` and `c.85T>C` cells |
-| `NM_004006.3:c.85T>C/=` | conformant | self | valid, but `substitution.md:49` writes the reference first; ferro does not yet reorder this to the recommended `c.85=/T>C`. Tracked by [#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034). |
+| `NM_004006.3:c.85T>C/=` | recommended | `NM_004006.3:c.85=/T>C` | variant-first spelling; ferro reorders it to the recommended reference-first form, since `substitution.md:49` writes the reference first ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)). |

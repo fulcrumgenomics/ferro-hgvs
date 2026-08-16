@@ -2039,6 +2039,159 @@ fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
     }
 }
 
+/// The `NaEdit` an NA-arm variant carries, unwrapping the `Mu` certainty
+/// wrapper. `None` for protein / null / unknown / bracketed-allele arms, which
+/// have no single `NaEdit`.
+fn na_edit_of(variant: &HgvsVariant) -> Option<&NaEdit> {
+    match variant {
+        HV::Genome(v) => v.loc_edit.edit.inner(),
+        HV::Cds(v) => v.loc_edit.edit.inner(),
+        HV::Tx(v) => v.loc_edit.edit.inner(),
+        HV::Rna(v) => v.loc_edit.edit.inner(),
+        HV::Mt(v) => v.loc_edit.edit.inner(),
+        HV::Circular(v) => v.loc_edit.edit.inner(),
+        _ => None,
+    }
+}
+
+/// Build the position-bound identity (`<pos>=`) that shares `variant`'s
+/// accession, gene symbol and location — the LHS of the spec compact
+/// mosaic / chimeric reference-first form (`c.85=/T>C`). Returns `None` for
+/// non-NA arms.
+fn na_variant_as_position_identity(variant: &HgvsVariant) -> Option<HgvsVariant> {
+    let identity = NaEdit::position_identity();
+    Some(match variant {
+        HV::Genome(v) => HV::Genome(GenomeVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        HV::Cds(v) => HV::Cds(CdsVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        HV::Tx(v) => HV::Tx(TxVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        HV::Rna(v) => HV::Rna(RnaVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        HV::Mt(v) => HV::Mt(MtVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        HV::Circular(v) => HV::Circular(crate::hgvs::variant::CircularVariant {
+            accession: v.accession.clone(),
+            gene_symbol: v.gene_symbol.clone(),
+            loc_edit: LocEdit::new(v.loc_edit.location.clone(), identity),
+        }),
+        _ => return None,
+    })
+}
+
+/// Whether two NA-arm members address the exact same location, compared within
+/// a single coordinate system. Two members of different arms — or any member on
+/// a non-NA arm — are never co-located. Used to decide whether a position-bound
+/// reference-identity member (`c.85=`) sits at the substitution it accompanies,
+/// which is the only position-bound case the reference-first reorder may absorb
+/// without discarding a screened region (#2107).
+fn members_are_colocated(a: &HgvsVariant, b: &HgvsVariant) -> bool {
+    match (a, b) {
+        (HV::Genome(x), HV::Genome(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HV::Cds(x), HV::Cds(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HV::Tx(x), HV::Tx(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HV::Rna(x), HV::Rna(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HV::Mt(x), HV::Mt(y)) => x.loc_edit.location == y.loc_edit.location,
+        (HV::Circular(x), HV::Circular(y)) => x.loc_edit.location == y.loc_edit.location,
+        _ => false,
+    }
+}
+
+/// Reorder a two-member mosaic (`/`) or chimeric (`//`) **substitution** allele
+/// so the reference allele is written first (#2034), or `None` when no reorder
+/// applies.
+///
+/// `DNA/substitution.md:49` states the reference allele "is always described
+/// first". The clause is non-normative prose, and the operator adjudicated it
+/// reference-first (ledger record
+/// `mosaic-chimeric-substitution-reference-allele-first`). So a variant-first
+/// spelling `c.85T>C/=` is rewritten to the spec compact reference-first form
+/// `c.85=/T>C`: the real substitution becomes the second member and a
+/// position-bound identity at its own location becomes the first.
+///
+/// Deliberately narrow — the only shape the ruling reaches:
+/// - phase is `Mosaic` or `Chimeric`, exactly two members, not a predicted
+///   (`(...)`) allele;
+/// - the **first** member is a certain substitution (`>` with or without a
+///   stated reference); and
+/// - the **second** member is the reference allele, and specifically one the
+///   rebuild can absorb losslessly: a whole-entity identity (bare `=`) or a
+///   position-bound identity **co-located** with the substitution (`c.85=`
+///   beside `c.85T>C`). A position-bound identity at a *different* location is
+///   a screened region (`c.85T>C/c.60_70=`) carrying its own fact; reordering
+///   would silently delete it (#2107), so the allele is left as authored.
+///
+/// A range edit (`del`/`dup`) is out of scope: its reference-first compact form
+/// is ambiguous between `c.79_80=/del` and `c.=/79_80del`, which the ruling does
+/// not adjudicate. An allele already spelled reference-first (identity first)
+/// does not match, so the transform is idempotent and cannot recurse.
+fn reorder_mosaic_chimeric_reference_first(allele: &AlleleVariant) -> Option<AlleleVariant> {
+    if allele.uncertain
+        || !matches!(allele.phase, AllelePhase::Mosaic | AllelePhase::Chimeric)
+        || allele.variants.len() != 2
+    {
+        return None;
+    }
+
+    let first = &allele.variants[0];
+    let second = &allele.variants[1];
+
+    let first_is_substitution = matches!(
+        na_edit_of(first),
+        Some(NaEdit::Substitution { .. } | NaEdit::SubstitutionNoRef { .. })
+    );
+    // The rebuild rewrites the first member as a position-bound identity at the
+    // *substitution's* own location and discards the second member entirely
+    // (only `first.clone()` survives as the reordered RHS). So the reorder is
+    // lossless only when the second member — the reference allele — carries no
+    // information beyond "identity at the substitution's position":
+    //
+    //   - a **whole-entity** identity (bare `=`) asserts nothing about a
+    //     specific region, so it is fully captured; or
+    //   - a **position-bound** identity that is **co-located** with the
+    //     substitution (e.g. `c.85T>C/c.85=`), where the discarded location
+    //     equals the rebuilt one.
+    //
+    // A position-bound identity at a *different* location is a screened region
+    // (`c.85T>C/c.60_70=`) — a second, independent fact. Reordering would
+    // silently delete it (#2107), so that allele is left exactly as authored
+    // and round-trips verbatim.
+    let second_is_reference = match na_edit_of(second) {
+        Some(NaEdit::Identity {
+            whole_entity: true, ..
+        }) => true,
+        Some(NaEdit::Identity {
+            whole_entity: false,
+            ..
+        }) => members_are_colocated(first, second),
+        _ => false,
+    };
+    if !first_is_substitution || !second_is_reference {
+        return None;
+    }
+
+    let reference_first = na_variant_as_position_identity(first)?;
+    let mut reordered = AlleleVariant::new(vec![reference_first, first.clone()], allele.phase);
+    reordered.uncertain = allele.uncertain;
+    Some(reordered)
+}
+
 /// Whether the opt-in normalization idempotency self-check is active.
 ///
 /// Enabled when the `FERRO_ASSERT_IDEMPOTENT` environment variable is set to
@@ -4967,6 +5120,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   3. run the full per-variant pipeline on every result — this is
         //      what applies the HGVS 3' rule to the merged anchor (#161, #180)
         //   4. detect post-shift overlaps and emit warnings
+        //
+        // First, reorder a two-member mosaic/chimeric substitution so the
+        // reference allele is written first (#2034, spec substitution.md:49).
+        // The rewrite is idempotent — its output is spelled reference-first and
+        // no longer matches the guard — so this recursion runs at most once.
+        if let Some(reordered) = reorder_mosaic_chimeric_reference_first(allele) {
+            return self.normalize_allele(&reordered, manufactured);
+        }
+
         let mut all_warnings = Vec::new();
         let original_len = allele.variants.len();
         // Detect insertion overlaps on the *raw* members before merge collapses
