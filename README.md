@@ -175,6 +175,7 @@ Full guides live in **[the documentation site](https://ferro-hgvs.readthedocs.io
 - [Normalization rules](docs/src/reference/normalization-rules.md) — ferro's output contract: what a normalized description is allowed to be
 - [Deriving a description from sequences](docs/src/guide/deriving-from-sequences.md) — turn a window of bases into one canonical description, no reference needed
 - [Normalize variants](docs/src/guide/normalize-variants.md) · [Reference data](docs/src/guide/reference-data.md)
+- [Project to another axis](docs/src/guide/project-variants.md) — re-express a variant on a transcript; the projected `c.`/`r.` axis applies the coding-axis rules a genomic axis cannot
 - [Error handling](docs/src/guide/error-handling.md) — strict / lenient / silent modes and warning codes
 - [Comparing normalization rules (`FERRO_PARTITION`)](docs/src/guide/comparing-rules.md)
 - [Benchmarking](docs/src/guide/benchmarking.md)
