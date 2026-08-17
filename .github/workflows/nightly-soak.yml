@@ -93,7 +93,7 @@ jobs:
       # it hashed this workflow file as well as the lockfile, suffix-before-hash
       # so its restore-key was a real prefix, after the measurement that a
       # lockfile-only key had frozen dev-feature artifacts into an
-      # `opt-level = 3` tree and was re-compiling reqwest/hyper/criterion every
+      # `opt-level = 2` tree and was re-compiling reqwest/hyper/criterion every
       # run. That reasoning is preserved in `ci.yml`; what it could not fix is
       # size, and this job's `soak` profile tree is the largest in the repo.
       # `rust-cache` stores dependency artifacts only, and its key already
@@ -139,10 +139,10 @@ jobs:
         # ci.yml for why that package exists. The three proptest modules this
         # workflow's shards select are `#[path]`-included by
         # `tests-soak/tests/soak/main.rs`, so they are in the archive; nothing
-        # else in `tests/it/` is compiled at `opt-level = 3` to get them there.
+        # else in `tests/it/` is compiled at `opt-level = 2` to get them there.
         #
         # No `--features dev`, also as in ci.yml. The feature drags
-        # `web-service` and `benchmark` into an `opt-level = 3` build for a
+        # `web-service` and `benchmark` into an `opt-level = 2` build for a
         # binary that uses neither, and `test(proptest)` resolves to the same
         # 10 tests with or without it.
         run: |

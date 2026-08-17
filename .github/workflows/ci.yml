@@ -1200,7 +1200,7 @@ jobs:
           path: nextest.tar.zst
           retention-days: 1
 
-  # A SECOND archive, built at `opt-level = 3`, for the soak shards only.
+  # A SECOND archive, built at `opt-level = 2` (#1963), for the soak shards only.
   #
   # The soak is compute-bound in a way the other jobs are not: eight shards each
   # run 125,000 proptest cases, so a constant factor on the code under test is
@@ -1214,8 +1214,8 @@ jobs:
   # tests — at `opt-level = 3` so that about 45 of them can run. Measured on an
   # M2 Max, `user` CPU with the workspace artifacts scrubbed the way `rust-cache`
   # scrubs them here, deps warm: 394.8s for the `it` archive, of which the
-  # library is a minority. The rest was the driver, and the runtime
-  # `opt-level = 3` buys comes from optimizing the LIBRARY.
+  # library is a minority. The rest was the driver, and the runtime this
+  # profile's optimization buys comes from optimizing the LIBRARY.
   #
   # Cargo profile overrides are keyed on the PACKAGE, never on the target, so
   # `[profile.soak.package.ferro-hgvs]` reaches the lib, the bins and the `it`
@@ -1279,8 +1279,8 @@ jobs:
       # Skip the rebuild entirely when this exact commit already produced an
       # archive. `rust-cache` above caches DEPENDENCIES only — it deliberately
       # deletes workspace artifacts — so `ferro_hgvs` and the `it` test crate are
-      # recompiled at `opt-level = 3` on every run even when not one byte of Rust
-      # changed. Measured on run 31275848682: 142s of this job's 170s is that
+      # recompiled at `opt-level = 2` (#1963) on every run even when not one byte
+      # of Rust changed. Measured on run 31275848682: 142s of this job's 170s is that
       # rebuild, and this job plus `sweeps` IS the critical path.
       #
       # Keyed on the commit SHA, deliberately, rather than on `hashFiles` over the
@@ -1316,7 +1316,7 @@ jobs:
         if: steps.soak-archive.outputs.cache-hit != 'true'
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
         # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
-        # futures) — an entire dependency tree compiled at `opt-level = 3` to
+        # futures) — an entire dependency tree compiled at `opt-level = 2` to
         # produce one test binary that never touches any of it. None of the ten
         # modules this package compiles is gated on the feature and none of the
         # three consuming jobs selects a gated one, so the selections are
