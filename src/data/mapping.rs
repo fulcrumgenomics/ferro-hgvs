@@ -289,6 +289,8 @@ impl CoordinateMapper {
         cds_pos: &CdsPos,
         transcript_id: &str,
     ) -> Result<(GenomePos, MappingInfo), FerroError> {
+        Self::reject_inverted_cds(tx, transcript_id)?;
+
         let mut info = MappingInfo {
             transcript_id: Some(transcript_id.to_string()),
             ..Default::default()
@@ -523,6 +525,39 @@ impl CoordinateMapper {
         Ok((GenomePos::new(genome_pos), info))
     }
 
+    /// Refuse a transcript whose CDS bounds are inverted (`cds_end < cds_start`)
+    /// before any coordinate arithmetic runs, so **both** conversion directions
+    /// — and every region arm within them — decline such a record rather than
+    /// some declining and others computing a fabricated coordinate (#1894).
+    ///
+    /// On an inverted record the 5'UTR and 3'UTR halves overlap, so one
+    /// transcript position carries two names and any answer picks one of them
+    /// arbitrarily. `tx_to_cds` states no ordering precondition, so on such a
+    /// record every arm is reachable — the intronic 3'UTR arm merely happened to
+    /// underflow first (#1877), while the exonic arm returned a confidently-wrong
+    /// `c.*N`. `merge.rs`'s `ordered_cds_bounds` refuses the same condition on
+    /// the same ground; validating once here keeps this conversion from being
+    /// one more place that resolves the ambiguity per-arm.
+    ///
+    /// Nothing on the load path rejects one — `RawCdotTranscript::from_genome_build`
+    /// adopts `start_codon` / `stop_codon` verbatim — so this is the mapper's own
+    /// gate. A record missing either bound is not inverted; it is left to the
+    /// region logic, which already handles a `None` CDS.
+    fn reject_inverted_cds(tx: &CdotTranscript, transcript_id: &str) -> Result<(), FerroError> {
+        if let (Some(cds_start), Some(cds_end)) = (tx.cds_start, tx.cds_end) {
+            if cds_end < cds_start {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript {transcript_id} has inverted CDS bounds \
+                         (cds_start {cds_start} > cds_end {cds_end}); its c. axis is \
+                         incoherent, so no CDS-relative position can be resolved"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Internal: Convert genome position to CDS position.
     fn genome_pos_to_cds_pos(
         &self,
@@ -530,6 +565,8 @@ impl CoordinateMapper {
         genome_pos: &GenomePos,
         transcript_id: &str,
     ) -> Result<(CdsPos, MappingInfo), FerroError> {
+        Self::reject_inverted_cds(tx, transcript_id)?;
+
         // Populated on every success, matching `cds_pos_to_genome_pos` and the
         // field's own documentation (#1895).
         //
@@ -730,32 +767,20 @@ impl CoordinateMapper {
                             // fallbacks are unreachable rather than load-bearing.
                             let cds_end = tx.cds_end.unwrap_or(0);
                             let cds_start = tx.cds_start.unwrap_or(0);
-                            // Refuse an inverted record rather than wrap. `tx_to_cds`
-                            // states no ordering precondition: it tests
-                            // `tx_pos < cds_start` then `tx_pos < cds_end`, so when
-                            // `cds_end < cds_start` every position at or past
-                            // `cds_start` falls through to this arm — making it
-                            // exactly where such a record arrives. The bare
-                            // subtraction then underflowed: a panic in debug, and in
-                            // release a wrap that `as i64` turns into a negative
-                            // `base` flagged `utr3`, returned as success.
-                            //
-                            // `merge.rs`'s `ordered_cds_bounds` refuses the same
-                            // condition on the same ground — an inverted record's
-                            // 5'UTR and 3'UTR halves overlap, so one transcript
-                            // position has two names and any answer here silently
-                            // picks one of them. Refusing does not repair that
-                            // ambiguity; it keeps this conversion from being one
-                            // more place that resolves it arbitrarily.
-                            let last_cds_pos = cds_end.checked_sub(cds_start).ok_or_else(|| {
-                                FerroError::InvalidCoordinates {
-                                    msg: format!(
-                                        "transcript {transcript_id} has inverted CDS bounds \
-                                         (cds_start {cds_start} > cds_end {cds_end}); its c. \
-                                         axis is incoherent, so c.*{utr_offset} cannot be resolved"
-                                    ),
-                                }
-                            })? as i64;
+                            // `cds_end >= cds_start` here: an inverted record is
+                            // refused up front by `reject_inverted_cds` (#1894),
+                            // which runs before any arm — so this subtraction, once
+                            // a bare `u64` underflow that wrapped into a negative
+                            // `base` flagged `utr3` (#1877), can no longer
+                            // underflow. The guard lives at the top rather than in
+                            // this one arm so every arm and both directions decline
+                            // an inverted record identically, instead of this being
+                            // the single place that happened to notice it.
+                            debug_assert!(
+                                cds_end >= cds_start,
+                                "reject_inverted_cds must run before this arm",
+                            );
+                            let last_cds_pos = (cds_end - cds_start) as i64;
                             Ok((
                                 CdsPos {
                                     base: last_cds_pos,
@@ -1649,6 +1674,86 @@ mod tests {
             msg.contains("inverted CDS bounds"),
             "the refusal must come from the inverted-bounds guard, not from another \
              `InvalidCoordinates` site this call can reach; got: {msg}",
+        );
+    }
+
+    /// The exonic arm of `genome_pos_to_cds_pos` must refuse an inverted record
+    /// too — not only the intronic 3'UTR arm (#1894).
+    ///
+    /// The refusal in #1877 landed in the intronic 3'UTR arm alone, because that
+    /// is the only arm that happened to underflow. But an inverted record is
+    /// incoherent on *every* arm: its 5'UTR and 3'UTR halves overlap, so one
+    /// transcript position carries two names and any answer picks one
+    /// arbitrarily. The exonic path is worse than the underflow was — it
+    /// returns a confidently-wrong coordinate rather than a detectably-wrong
+    /// one.
+    ///
+    /// On `NM_INVERTED.1` (cds_start 50, cds_end 10, exon 1 genome 1000–1100 ↔
+    /// tx 0–100) genome 1050 is exonic → tx 50. `tx_to_cds(50)` files it
+    /// `ThreePrimeUtr(41)` (50 is not below cds_end 10), and before the guard
+    /// `cds_pos_from_region` returned `Ok(c.*41)` — a fabricated 3'UTR
+    /// coordinate on a record that has no coherent 3'UTR.
+    #[test]
+    fn exonic_arm_on_an_inverted_cds_record_is_refused() {
+        let mapper = create_inverted_cds_mapper();
+        let result = mapper.genome_to_cds("NM_INVERTED.1", &GenomePos::new(1050));
+        let msg = match &result {
+            Err(FerroError::InvalidCoordinates { msg }) => msg.as_str(),
+            _ => panic!(
+                "an inverted CDS record must be refused on the exonic arm, not \
+                 answered with a fabricated `c.*` coordinate; got {:?}",
+                result.as_ref().map(|r| &r.variant)
+            ),
+        };
+        assert!(
+            msg.contains("inverted CDS bounds"),
+            "the refusal must come from the inverted-bounds guard; got: {msg}",
+        );
+    }
+
+    /// The exonic 5'UTR arm on an inverted record must be refused as well.
+    ///
+    /// Genome 1020 is exonic → tx 20, and `tx_to_cds(20)` files it
+    /// `FivePrimeUtr(30)` (20 < cds_start 50), which before the guard returned
+    /// `Ok(c.-30)` — the 5'UTR half of the same overlapping, incoherent axis.
+    #[test]
+    fn exonic_five_prime_utr_arm_on_an_inverted_cds_record_is_refused() {
+        let mapper = create_inverted_cds_mapper();
+        let result = mapper.genome_to_cds("NM_INVERTED.1", &GenomePos::new(1020));
+        let msg = match &result {
+            Err(FerroError::InvalidCoordinates { msg }) => msg.as_str(),
+            _ => panic!(
+                "an inverted CDS record must be refused on the exonic 5'UTR arm; \
+                 got {:?}",
+                result.as_ref().map(|r| &r.variant)
+            ),
+        };
+        assert!(
+            msg.contains("inverted CDS bounds"),
+            "the refusal must come from the inverted-bounds guard; got: {msg}",
+        );
+    }
+
+    /// The reverse direction must refuse an inverted record too, so the guard is
+    /// ahead of *both* `genome_to_cds` and `cds_to_genome` (#1894). Without a
+    /// guard at the top of `cds_pos_to_genome_pos`, a `c.` position on an
+    /// inverted record is mapped to a genomic coordinate through the same
+    /// two-named, overlapping axis.
+    #[test]
+    fn cds_to_genome_on_an_inverted_cds_record_is_refused() {
+        let mapper = create_inverted_cds_mapper();
+        let result = mapper.cds_to_genome("NM_INVERTED.1", &cds(1));
+        let msg = match &result {
+            Err(FerroError::InvalidCoordinates { msg }) => msg.as_str(),
+            _ => panic!(
+                "an inverted CDS record must be refused in the c. -> g. \
+                 direction; got {:?}",
+                result.as_ref().map(|r| &r.variant)
+            ),
+        };
+        assert!(
+            msg.contains("inverted CDS bounds"),
+            "the refusal must come from the inverted-bounds guard; got: {msg}",
         );
     }
 }
