@@ -13,6 +13,7 @@ use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use crate::sequence::reverse_complement;
+use crate::spdi::apply::{apply_triples_classified, ApplyDecline};
 use crate::spdi::{hgvs_to_spdi, ConversionError, SpdiVariant};
 
 /// Largest reference window (in bases) a sequence-level equivalence rung will
@@ -526,7 +527,8 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
         // (unsupported edit, missing reference, mixed accessions, or a
         // multi-molecule allele) simply declines, so the rung only ever
         // upgrades a `NotEquivalent` verdict.
-        match self.same_resulting_sequence(v1, v2) {
+        let verdict = self.same_resulting_sequence(v1, v2);
+        match verdict {
             SequenceVerdict::Same => {
                 let (level, note) = self.strengthen_across_axes(v1, v2);
                 return Ok(EquivalenceResult::new(level)
@@ -545,17 +547,20 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                     )));
             }
             // The reference needed to compare the pair could not be read, from
-            // either of two points: the window fetch, after both sides converted
-            // to SPDI on a shared accession (#1989/#2053), or a member's own
+            // one of three points: the window fetch, after both sides converted
+            // to SPDI on a shared accession (#1989/#2053); a member's own
             // HGVS→SPDI conversion, which the ordinary short forms must run
-            // against the provider (#2056). Either way — as with `WindowTooWide`
-            // — nothing was reconstructed and nothing was compared. This is the
-            // "want of reference data" decline, and it must report
-            // `Indeterminate` for the same reason its sibling does: falling
-            // through to the `NotEquivalent` tail would assert a decided negative
-            // about a pair that was never examined. Pinned by
-            // `issue_1989_declined_is_indeterminate` and
-            // `issue_2056_edit_triples_reference_failure`.
+            // against the provider (#2056); or the apply itself, when the fetch
+            // succeeded but a stated reference base contradicts the served
+            // reference so the edit could not be reconstructed (#2075). Either
+            // way — as with `WindowTooWide` — nothing was reconstructed and
+            // nothing was compared. This is the "want of reference data"
+            // decline, and it must report `Indeterminate` for the same reason
+            // its sibling does: falling through to the `NotEquivalent` tail
+            // would assert a decided negative about a pair that was never
+            // examined. Pinned by `issue_1989_declined_is_indeterminate`,
+            // `issue_2056_edit_triples_reference_failure` and
+            // `issue_2075_apply_triples_reference_mismatch`.
             SequenceVerdict::ReferenceUnavailable => {
                 return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
                     .with_normalized(str1, str2)
@@ -570,20 +575,52 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
             // checker routes to `NotEquivalent` *deliberately* are an edit SPDI
             // cannot carry (`issue_1578_followup_equivalence_rungs` for a
             // fusion), a cross-accession pair (the mixed-accession arm of
-            // `same_resulting_sequence`) and an un-appliable overlapping allele
-            // (`issue_1244_equivalence_overlap_panic`), each pinned there.
+            // `same_resulting_sequence`) and an allele whose members overlap, so
+            // that it denotes no single sequence of its own accord (pinned by
+            // `issue_2075_apply_triples_reference_mismatch`'s #2104 case — *not*
+            // by `issue_1244_equivalence_overlap_panic`, whose tests normalize
+            // first and so never reach this route; see that module's docs).
             //
-            // The reference-level declines both reach `ReferenceUnavailable`
-            // above and are handled there: the window fetch (#1989/#2053) and,
-            // as of #2056, a member's own HGVS→SPDI conversion failing for want
-            // of reference data (`edit_triples` now classifies that as
-            // `TripleDecline::ReferenceUnavailable` rather than swallowing it).
-            // So `NC_ABSENT.1:g.2del` vs `g.2delC` — `NotEquivalent` before, and
-            // `CrossAxisSequenceMatch` against a served contig — reaches the
-            // `Indeterminate` arm above and never falls through here. These two
-            // fall through.
+            // The reference-level declines all reach `ReferenceUnavailable`
+            // above and are handled there: the window fetch (#1989/#2053); as of
+            // #2056, a member's own HGVS→SPDI conversion failing for want of
+            // reference data (`edit_triples` now classifies that as
+            // `TripleDecline::ReferenceUnavailable` rather than swallowing it);
+            // and as of #2075, a stated reference base contradicting the served
+            // reference after a successful fetch (`compare_triples` now maps
+            // `apply_triples`'s `ApplyDecline::ReferenceMismatch` there rather
+            // than to `Declined`). So `NC_ABSENT.1:g.2del` vs `g.2delC` —
+            // `NotEquivalent` before, and `CrossAxisSequenceMatch` against a
+            // served contig — reaches the `Indeterminate` arm above and never
+            // falls through here. These two fall through.
+            // The applier was handed a triple outside the window built from that
+            // very triple. Nothing was reconstructed, and the fault is ours, not
+            // either description's — so this is undecided and gets its own note
+            // rather than borrowing the arm above, whose wording ("could not be
+            // read from the provider") would be false here (#2104).
+            SequenceVerdict::ApplyContractViolated => {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::Indeterminate)
+                    .with_normalized(str1, str2)
+                    .with_note(
+                        "The resulting sequences could not be reconstructed because the reference \
+                         window did not cover the edits it was built from, so nothing was compared"
+                            .to_string(),
+                    ));
+            }
             SequenceVerdict::Different | SequenceVerdict::Declined => {}
         }
+
+        // Everything reaching here fell through the match above, i.e. it is a
+        // verdict the ladder is entitled to read as a negative. Stated on
+        // `SequenceVerdict` and asserted here rather than left implicit in which
+        // arms happen to `return`, so a verdict that reports no comparison
+        // cannot acquire a decided negative by being added without an arm
+        // (#2104).
+        debug_assert!(
+            verdict.may_be_read_as_a_negative(),
+            "{verdict:?} reports that nothing was compared, so it must not fall through to \
+             NotEquivalent",
+        );
 
         // #1578 follow-up: `NotEquivalent` is a *positive claim* that two
         // descriptions denote different variants, and it is only sound if
@@ -697,6 +734,7 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                     // `a_second_axis_that_cannot_be_computed_stops_at_the_single_axis_rung`.
                     SequenceVerdict::WindowTooWide
                     | SequenceVerdict::ReferenceUnavailable
+                    | SequenceVerdict::ApplyContractViolated
                     | SequenceVerdict::Declined => (
                         EquivalenceLevel::SequenceMatch,
                         format!(
@@ -928,7 +966,7 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     ///
     /// Best-effort and side-effect free. [`SequenceVerdict::Declined`] covers
     /// every variant that cannot be projected to SPDI triples on a single
-    /// shared accession. Three declines are split out of it because they must
+    /// shared accession. Five declines are split out of it because they must
     /// not be read as a negative and instead resolve to
     /// [`EquivalenceLevel::Indeterminate`] at the caller:
     ///
@@ -940,7 +978,16 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     /// * [`SequenceVerdict::ReferenceUnavailable`] from a **member's
     ///   HGVS→SPDI conversion** — a short form (`g.2del`, `g.2dup`) whose SPDI
     ///   had to read the reference and could not, surfaced via
-    ///   [`TripleDecline::ReferenceUnavailable`] rather than swallowed (#2056).
+    ///   [`TripleDecline::ReferenceUnavailable`] rather than swallowed (#2056);
+    /// * [`SequenceVerdict::ReferenceUnavailable`] from the **apply** — the
+    ///   fetch succeeds and both sides convert, but a stated reference base
+    ///   contradicts the served reference, surfaced via
+    ///   [`ApplyDecline::ReferenceMismatch`](crate::spdi::apply::ApplyDecline::ReferenceMismatch)
+    ///   rather than collapsed into the catch-all (#2075);
+    /// * [`SequenceVerdict::ApplyContractViolated`] from the **apply** again —
+    ///   the applier was handed a triple the window built from that very triple
+    ///   does not cover, which is an internal inconsistency and so must not be
+    ///   argued into a verdict about the two descriptions (#2104).
     ///
     /// So `NC_ABSENT.1:g.2del` vs `g.2delC` — one edit, two spellings — now
     /// answers `Indeterminate` on a provider serving no bases, matching its
@@ -1520,22 +1567,29 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
 /// What a sequence-level comparison concluded.
 ///
-/// Three of the four variants mean "nothing was compared", and they are kept
-/// apart because they are not read the same way. `WindowTooWide` and
-/// `ReferenceUnavailable` both report `Indeterminate`, because arguing either
-/// into a decided negative claims a comparison that never ran (#1989).
+/// Four of the six variants mean "nothing was compared", and they are kept
+/// apart because they are not read the same way. `WindowTooWide`,
+/// `ReferenceUnavailable` and `ApplyContractViolated` all report
+/// `Indeterminate`, because arguing any of them into a decided negative claims a
+/// comparison that never ran (#1989).
 /// `WindowTooWide` is a window that exceeds the cap. `ReferenceUnavailable` is
-/// "want of reference data", and it now has **two** sources, both routed here by
+/// "want of reference data", and it now has **three** sources, all routed here by
 /// [`Self::same_resulting_sequence`]: the window fetch failing after both sides
-/// convert ([`compare_triples`], #1989/#2053), and — as of #2056 — a member's
-/// own HGVS→SPDI conversion failing for want of reference, surfaced by
+/// convert ([`compare_triples`], #1989/#2053); as of #2056, a member's own
+/// HGVS→SPDI conversion failing for want of reference, surfaced by
 /// [`edit_triples`](EquivalenceChecker::edit_triples) as
-/// [`TripleDecline::ReferenceUnavailable`] instead of being swallowed. `Declined`
-/// is the catch-all; the checker deliberately routes it to `NotEquivalent`, and
-/// the shapes it carries — an edit SPDI cannot carry, a cross-accession pair, an
-/// un-appliable overlapping allele — are pinned elsewhere. `Different` is the one
-/// decided negative that was actually measured: both sides reconstructed, and
-/// they disagree.
+/// [`TripleDecline::ReferenceUnavailable`] instead of being swallowed; and as of
+/// #2075, a stated reference base contradicting the served reference after a
+/// successful fetch, surfaced by `apply_triples` as
+/// [`ApplyDecline::ReferenceMismatch`](crate::spdi::apply::ApplyDecline::ReferenceMismatch).
+/// `Declined` is the catch-all; the checker deliberately routes it to
+/// `NotEquivalent`, and the shapes it carries — an edit SPDI cannot carry, a
+/// cross-accession pair, an allele whose members overlap — are pinned
+/// elsewhere. `Different` is the one decided negative that was actually measured:
+/// both sides reconstructed, and they disagree. `ApplyContractViolated` is the
+/// fourth undecided one and the newest: as of #2104, a broken precondition of the
+/// applier reports its own verdict instead of sharing `Declined`'s, because an
+/// internal inconsistency is not a statement about two descriptions.
 ///
 /// The short forms are why the `edit_triples` source matters most in practice:
 /// `g.2del`, `g.2dup`, `c.10_12del` omit their deleted / duplicated bases, so
@@ -1546,7 +1600,10 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 /// `issue_2056_edit_triples_reference_failure`. Note an **out-of-bounds
 /// substitution on a served contig** does *not* take this route — its SPDI
 /// converts (a substitution states its own bases), so it is the window fetch's
-/// concern, not `edit_triples`'.
+/// concern, not `edit_triples`'. A substitution **in bounds** whose stated base
+/// contradicts the served one is a third route again: the fetch succeeds and the
+/// apply declines, which is #2075's `ApplyDecline::ReferenceMismatch`, pinned by
+/// `issue_2075_apply_triples_reference_mismatch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SequenceVerdict {
     /// Both sides were reconstructed and the resulting sequences are equal.
@@ -1556,14 +1613,18 @@ enum SequenceVerdict {
     /// Nothing was reconstructed: the union window exceeds
     /// [`MAX_SEQUENCE_COMPARE_WINDOW`].
     WindowTooWide,
-    /// Nothing was reconstructed for want of reference data. Raised from two
+    /// Nothing was reconstructed for want of reference data. Raised from three
     /// sources: the union window is bounded and both sides convert to SPDI on a
     /// shared accession, but the provider could not serve the window's bases
-    /// (#1989/#2053); or a member's own HGVS→SPDI conversion needed the reference
+    /// (#1989/#2053); a member's own HGVS→SPDI conversion needed the reference
     /// and could not read it, mapped from [`TripleDecline::ReferenceUnavailable`]
-    /// (#2056). The "want of reference data" decline — the sibling of
-    /// [`Self::WindowTooWide`], and like it a decline that must **not** be read
-    /// as a negative.
+    /// (#2056); or — as of #2075 — the fetch **succeeded** but a stated reference
+    /// base contradicts the base the reference carries, so `apply_triples`
+    /// declined with [`ApplyDecline::ReferenceMismatch`]. The "want of reference
+    /// data" decline — the sibling of [`Self::WindowTooWide`], and like it a
+    /// decline that must **not** be read as a negative.
+    ///
+    /// [`ApplyDecline::ReferenceMismatch`]: crate::spdi::apply::ApplyDecline::ReferenceMismatch
     ReferenceUnavailable,
     /// Nothing was reconstructed, for any other reason. The shapes it carries
     /// are representation-level — an edit SPDI cannot carry, a cross-accession
@@ -1572,13 +1633,86 @@ enum SequenceVerdict {
     /// *before* the fetch, inside `edit_triples`, no longer lands here: it is
     /// [`Self::ReferenceUnavailable`] as of #2056 (see [`TripleDecline`]).
     ///
-    /// One reference-level obstacle still does land here, knowingly: a fetch
-    /// that **succeeds** followed by an `apply_triples` that returns `None` —
-    /// typically a description whose stated reference base contradicts the base
-    /// the reference carries. That is [`compare_triples`]'s catch-all arm, it is
-    /// the last route by which a reference-level obstacle is read as a decided
-    /// negative, and it is tracked as **#2075** rather than fixed here.
+    /// Neither does a reference base contradicting the served reference *after* a
+    /// successful fetch: as of #2075 `apply_triples` distinguishes that
+    /// ([`ApplyDecline::ReferenceMismatch`]) from a set of triples that cannot be
+    /// spliced whatever the reference holds, and as of #2104 only the
+    /// **description-level** half of the latter — an allele whose members
+    /// overlap, [`ApplyDecline::MembersOverlap`] — reaches here. A broken
+    /// precondition of the applier is [`Self::ApplyContractViolated`].
+    ///
+    /// [`ApplyDecline::ReferenceMismatch`]: crate::spdi::apply::ApplyDecline::ReferenceMismatch
+    /// [`ApplyDecline::MembersOverlap`]: crate::spdi::apply::ApplyDecline::MembersOverlap
     Declined,
+    /// Nothing was reconstructed because a precondition of the **applier** was
+    /// broken: it was handed a triple the window it was also handed does not
+    /// cover ([`ApplyDecline::ContractViolated`], #2104).
+    ///
+    /// Reports [`EquivalenceLevel::Indeterminate`], and its own note rather than
+    /// [`Self::ReferenceUnavailable`]'s, because the reference was read
+    /// perfectly well — the inconsistency is ours. Routing it to
+    /// [`Self::Declined`] would turn an internal bug into a decided
+    /// `NotEquivalent`, which is the class #2053/#2069/#2075 spent three PRs
+    /// removing; it was the residual arm inside the last of them.
+    ///
+    /// **Unreachable from [`compare_triples`] by construction** — the window is
+    /// the union of both triple sets' footprints — so that function asserts
+    /// against it in debug rather than only reporting it. The verdict exists so
+    /// that if it ever *is* raised, it is undecided rather than negative.
+    ///
+    /// [`ApplyDecline::ContractViolated`]: crate::spdi::apply::ApplyDecline::ContractViolated
+    ApplyContractViolated,
+}
+
+impl SequenceVerdict {
+    /// Whether the ladder may fall through to its `NotEquivalent` tail on this
+    /// verdict.
+    ///
+    /// Stated once, wildcard-free, rather than left implicit in which arms of
+    /// [`EquivalenceChecker::denotational_verdict`] happen to `return` — and
+    /// asserted at that fall-through, so a verdict added without an arm is a
+    /// compile error there and a loud assertion here rather than a silent
+    /// decided negative (#2104).
+    ///
+    /// [`Self::Same`] is `false`: it reports a positive and must not fall
+    /// through either. [`Self::Declined`] is `true` because the checker
+    /// deliberately reads it as a negative — the description itself is what said
+    /// it denotes no single sequence.
+    const fn may_be_read_as_a_negative(self) -> bool {
+        match self {
+            Self::Different | Self::Declined => true,
+            Self::Same
+            | Self::WindowTooWide
+            | Self::ReferenceUnavailable
+            | Self::ApplyContractViolated => false,
+        }
+    }
+}
+
+impl ApplyDecline {
+    /// The [`SequenceVerdict`] this decline reports at the sequence rung.
+    ///
+    /// Lives here rather than beside the enum because `SequenceVerdict` is this
+    /// module's private type and `spdi` must not depend on `equivalence`. The
+    /// counterpart for the rung one step earlier is
+    /// [`TripleDecline::into_sequence_verdict`].
+    ///
+    /// **Wildcard-free, and tested over the enum** as well as end-to-end.
+    /// Measured: with this mapping carried by ordered match arms, over-mapping
+    /// one decline onto another's verdict left the whole suite green (#2104), and
+    /// [`ApplyDecline::ContractViolated`] is unreachable from either caller by
+    /// construction — so for it the enum is the only place the mapping can be
+    /// asserted at all. Pinned by
+    /// `every_apply_decline_maps_to_its_own_verdict`; the two reachable declines
+    /// are additionally pinned through the ladder by
+    /// `issue_2075_apply_triples_reference_mismatch`.
+    fn into_sequence_verdict(self) -> SequenceVerdict {
+        match self {
+            Self::ReferenceMismatch => SequenceVerdict::ReferenceUnavailable,
+            Self::MembersOverlap => SequenceVerdict::Declined,
+            Self::ContractViolated => SequenceVerdict::ApplyContractViolated,
+        }
+    }
 }
 
 /// Why [`EquivalenceChecker::edit_triples`] could not project a variant to its
@@ -1876,24 +2010,40 @@ where
         return SequenceVerdict::ReferenceUnavailable;
     };
 
-    match (
-        crate::spdi::apply::apply_triples(&reference, win_start, triples1),
-        crate::spdi::apply::apply_triples(&reference, win_start, triples2),
+    // The fetch succeeded, so a side that still will not apply says so for one
+    // of three reasons, and they are *not* read the same way — see
+    // [`ApplyDecline`]. Which verdict each reports, and which of two governs
+    // when both sides decline, are pure total functions over that enum rather
+    // than an ordering of arms here. That is #2104: with the precedence carried
+    // by arm order, swapping the arms reversed the rule #2075 states in words
+    // and left the whole suite green, because no input in it reaches the second
+    // arm at all.
+    let verdict = match (
+        apply_triples_classified(&reference, win_start, triples1),
+        apply_triples_classified(&reference, win_start, triples2),
     ) {
         // Case-insensitive, like the deletion check in `apply_triples`:
         // reference FASTAs are often soft-masked (repeats lower-cased), so
         // case carries no biological meaning here and must not split two
         // otherwise-identical resulting sequences.
-        (Some(a), Some(b)) if a.eq_ignore_ascii_case(&b) => SequenceVerdict::Same,
-        (Some(_), Some(_)) => SequenceVerdict::Different,
-        // The fetch succeeded and a side still would not apply — most often
-        // because its stated reference base contradicts the base the reference
-        // carries. That is a reference-level obstacle read as a decided
-        // negative, i.e. the same class #2053 and #2056 each closed at their own
-        // rung, surviving at this one. Tracked as #2075; deliberately unchanged
-        // here so this PR moves one rung only.
-        _ => SequenceVerdict::Declined,
-    }
+        (Ok(a), Ok(b)) if a.eq_ignore_ascii_case(&b) => SequenceVerdict::Same,
+        (Ok(_), Ok(_)) => SequenceVerdict::Different,
+        (Err(first), Err(second)) => first.governing(second).into_sequence_verdict(),
+        (Err(only), Ok(_)) | (Ok(_), Err(only)) => only.into_sequence_verdict(),
+    };
+
+    // The window above is the union of both triple sets' own footprints, so
+    // neither set can contain a triple the applier was not given bases for. A
+    // contract violation here is therefore a bug in this function and not a fact
+    // about either description: loud in debug, and `Indeterminate` rather than a
+    // decided negative in release (#2104).
+    debug_assert_ne!(
+        verdict,
+        SequenceVerdict::ApplyContractViolated,
+        "compare_triples built the window from these very triples, so the applier \
+         cannot have been handed one outside it",
+    );
+    verdict
 }
 
 /// Why `variant` has no computable denotation, or `None` when it has one.
@@ -2115,7 +2265,13 @@ mod tests {
     #[test]
     fn test_different_variants() {
         let checker = checker();
-        let v1 = parse_hgvs("NM_000088.3:c.10A>G").unwrap();
+        // The stated reference bases must match what the provider serves for
+        // `NM_000088.3` (…AAGG**T**G…, so c.10 is `G` and c.20 is `A`). A
+        // substitution whose stated base contradicts the served one no longer
+        // reconstructs — the sequence rung reports `Indeterminate`, not a decided
+        // negative (#2075) — so two *faithful* different substitutions are used
+        // to keep this a `NotEquivalent` test.
+        let v1 = parse_hgvs("NM_000088.3:c.10G>A").unwrap();
         let v2 = parse_hgvs("NM_000088.3:c.20A>G").unwrap();
 
         let result = checker.check(&v1, &v2).unwrap();
@@ -2152,8 +2308,12 @@ mod tests {
         // the normalizer treats an unknown accession. The members differ in
         // coordinates, so the alleles are not identical.
         let checker = checker();
-        let v1 = parse_hgvs("NM_000088.3:c.[10A>G;20C>T]").unwrap();
-        let v2 = parse_hgvs("NM_000088.3:c.[11A>G;21C>T]").unwrap();
+        // Faithful reference bases for `NM_000088.3` (c.10=G, c.11=T, c.20=A,
+        // c.21=G) so both alleles reconstruct and the sequence rung genuinely
+        // compares them; a stated-base contradiction would report `Indeterminate`
+        // rather than the `NotEquivalent` this asserts (#2075).
+        let v1 = parse_hgvs("NM_000088.3:c.[10G>A;20A>T]").unwrap();
+        let v2 = parse_hgvs("NM_000088.3:c.[11T>A;21G>T]").unwrap();
         assert!(matches!(v1, HgvsVariant::Allele(_)));
         assert!(matches!(v2, HgvsVariant::Allele(_)));
 
@@ -2255,8 +2415,10 @@ mod tests {
     #[test]
     fn test_substitution_at_different_positions() {
         let checker = checker();
-        let v1 = parse_hgvs("NM_000088.3:c.10A>G").unwrap();
-        let v2 = parse_hgvs("NM_000088.3:c.11A>G").unwrap();
+        // Faithful bases for `NM_000088.3` (c.10=G, c.11=T); a contradicting base
+        // would now report `Indeterminate` instead of a decided negative (#2075).
+        let v1 = parse_hgvs("NM_000088.3:c.10G>A").unwrap();
+        let v2 = parse_hgvs("NM_000088.3:c.11T>A").unwrap();
 
         let result = checker.check(&v1, &v2).unwrap();
         assert_eq!(result.level, EquivalenceLevel::NotEquivalent);
@@ -2921,5 +3083,85 @@ mod tests {
             checker.compare_denotations(&v1, &v2).unwrap().level,
             EquivalenceLevel::AccessionVersionDifference
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #2104: `ApplyDecline` -> `SequenceVerdict` is pinned over the enum, and
+    // not only through the pipeline.
+    //
+    // Measured on this branch: a `panic!()` in the old ordered `Unappliable`
+    // arm, and in all five of `apply_triples_classified`'s contract guards,
+    // left `11405 tests run: 11405 passed` — so both mutations that matter
+    // (over-mapping a decline, reversing the precedence) were green. The
+    // reachable half is now driven end-to-end from
+    // `issue_2075_apply_triples_reference_mismatch`; `ContractViolated` cannot
+    // be reached from either caller by construction, so the enum is the only
+    // place its mapping can be asserted at all. See `ApplyDecline`'s own docs
+    // for the per-variant reachability measurement.
+    // -----------------------------------------------------------------------
+
+    /// Each decline's verdict, asserted by constructing the decline directly.
+    #[test]
+    fn every_apply_decline_maps_to_its_own_verdict() {
+        assert_eq!(
+            ApplyDecline::ReferenceMismatch.into_sequence_verdict(),
+            SequenceVerdict::ReferenceUnavailable,
+        );
+        assert_eq!(
+            ApplyDecline::MembersOverlap.into_sequence_verdict(),
+            SequenceVerdict::Declined,
+        );
+        assert_eq!(
+            ApplyDecline::ContractViolated.into_sequence_verdict(),
+            SequenceVerdict::ApplyContractViolated,
+        );
+
+        // And no two may share a verdict. Over-mapping one decline onto
+        // another's is the mutation #2104 measured green, so it has to be
+        // observable somewhere, and this is where.
+        for (index, first) in ApplyDecline::ALL.iter().enumerate() {
+            for second in &ApplyDecline::ALL[index + 1..] {
+                assert_ne!(
+                    first.into_sequence_verdict(),
+                    second.into_sequence_verdict(),
+                    "{first:?} and {second:?} must not report the same verdict",
+                );
+            }
+        }
+    }
+
+    /// Only a **description-level** decline may reach a decided negative.
+    ///
+    /// This is the property the split exists for: an allele whose members
+    /// overlap says of itself that it denotes no single sequence, so
+    /// `NotEquivalent` is honest. A reference obstacle and a broken precondition
+    /// of the applier say nothing about the descriptions at all.
+    #[test]
+    fn only_a_description_level_decline_reaches_a_decided_negative() {
+        for decline in ApplyDecline::ALL {
+            let negative = decline.into_sequence_verdict().may_be_read_as_a_negative();
+            assert_eq!(
+                negative,
+                decline == ApplyDecline::MembersOverlap,
+                "{decline:?} reaching a decided negative: {negative}",
+            );
+        }
+    }
+
+    /// Which verdicts the ladder may fall through to `NotEquivalent` on, over
+    /// every variant. `denotational_verdict` asserts against this at the
+    /// fall-through, so the table and the arms cannot drift apart silently.
+    #[test]
+    fn only_a_measured_or_stated_verdict_may_be_read_as_a_negative() {
+        for (verdict, expected) in [
+            (SequenceVerdict::Same, false),
+            (SequenceVerdict::Different, true),
+            (SequenceVerdict::Declined, true),
+            (SequenceVerdict::WindowTooWide, false),
+            (SequenceVerdict::ReferenceUnavailable, false),
+            (SequenceVerdict::ApplyContractViolated, false),
+        ] {
+            assert_eq!(verdict.may_be_read_as_a_negative(), expected, "{verdict:?}",);
+        }
     }
 }
