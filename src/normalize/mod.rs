@@ -4947,6 +4947,81 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
     /// Normalize an allele (compound) variant
     ///
+    /// Emit `W4004 PositionPastEnd` for any raw `c.` allele member whose start
+    /// or end position lies past the transcript's `cds_end` (or past the 3'UTR /
+    /// 5'UTR bound), mirroring the lone-position bounds gate in `normalize_cds`.
+    ///
+    /// # Why here, on the raw members
+    ///
+    /// The lone-position path refuses such a coordinate in strict mode and
+    /// repairs it to its canonical `c.*N` form (with a recorded `W4004`) in
+    /// lenient mode. The allele path never reaches that gate, because
+    /// `merge::collapse_overlapping_cis_edits` converts each member to a
+    /// sequence coordinate *before* per-member normalization, and a plain
+    /// `c.<N>` past `cds_end` classifies as an in-range `Region::Cds` position
+    /// mapping to the same sequence coordinate as its `c.*(N - cds_end)`
+    /// spelling — so the coordinate is silently remapped across the CDS/3'UTR
+    /// seam with no diagnostic, in every mode (#2018). Two validation paths gave
+    /// the same coordinate two answers.
+    ///
+    /// Checking the *raw* members before the merge reinterprets them puts the
+    /// finding on the one machinery the lone path uses: the strict-mode ladder
+    /// in [`Self::normalize_core_checked`] promotes `W4004` to a typed refusal,
+    /// and lenient keeps it as a recorded correction while the output (already
+    /// the repaired `c.*N` form, since the merge maps the coordinate into the
+    /// 3'UTR) is unchanged. This mirrors `detect_insertion_overlaps`, which emits
+    /// `W5002` pre-merge for the identical reason.
+    ///
+    /// Mode-gated exactly as the lone gate is: only when the config would reject
+    /// or warn on a past-end position. Silent mode runs neither, so the silent
+    /// remap continues, matching the lone path's own silent behaviour — both
+    /// paths therefore apply one rule, mode-dependent per the decided
+    /// `rulings[past-cds-end-coordinate-is-non-conformant]` and
+    /// `rulings[absolute-prohibition-enforcement-stage]`.
+    fn check_allele_members_past_cds_end(
+        &self,
+        allele: &crate::hgvs::variant::AlleleVariant,
+    ) -> Vec<NormalizationWarning> {
+        let mut warnings = Vec::new();
+        if !(self.config.should_reject_position_past_end()
+            || self.config.should_warn_position_past_end())
+        {
+            return warnings;
+        }
+        for member in &allele.variants {
+            let HV::Cds(cv) = member else { continue };
+            let accession = cv.accession.transcript_accession();
+            let Ok(transcript) = self.provider.get_transcript(&accession) else {
+                continue;
+            };
+            let start = cv.loc_edit.location.start.inner();
+            let end = cv.loc_edit.location.end.inner();
+            if let Some(start_pos) = start {
+                if !has_unknown_offset_cds(start_pos) {
+                    if let Some(w) = check_cds_pos_past_end(&accession, start_pos, &transcript) {
+                        warnings.push(w);
+                    }
+                }
+            }
+            if let Some(end_pos) = end {
+                // Only check the end when it is a distinct coordinate, matching
+                // the lone gate's own `end_distinct` guard, so a point member
+                // is not reported twice.
+                let end_distinct = start.is_none_or(|start_pos| {
+                    end_pos.base != start_pos.base
+                        || end_pos.utr3 != start_pos.utr3
+                        || end_pos.offset != start_pos.offset
+                });
+                if end_distinct && !has_unknown_offset_cds(end_pos) {
+                    if let Some(w) = check_cds_pos_past_end(&accession, end_pos, &transcript) {
+                        warnings.push(w);
+                    }
+                }
+            }
+        }
+        warnings
+    }
+
     /// Normalizes each variant in the allele individually, with overlap prevention.
     /// After normalization, checks if variants would overlap and constrains shifting
     /// to prevent collisions.
@@ -4979,6 +5054,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &allele.variants,
             allele.phase,
         ));
+
+        // #2018: a `c.` member past `cds_end` (e.g. `c.22` on a transcript whose
+        // CDS ends at `c.21`) names no base on the coding axis —
+        // `background/numbering.md:21` ends `c.` numbering at the last base of
+        // the stop codon and the next base is `*1`. The lone-position path
+        // already refuses such a coordinate in strict mode and repairs it to its
+        // canonical `c.*N` form (with a recorded `W4004`) in lenient mode, via
+        // the bounds gate in `normalize_cds`. The allele path does not reach that
+        // gate: `merge::collapse_overlapping_cis_edits` converts each member to a
+        // sequence coordinate *before* per-member normalization, and `c.22`
+        // classifies as an in-range `Region::Cds` position that maps to the same
+        // sequence coordinate as `c.*1` — so the coordinate is silently remapped
+        // across the CDS/3'UTR seam with no `W4004`, in every mode. Two
+        // validation paths gave the same coordinate two answers (#2018).
+        //
+        // Emit `W4004` on the *raw* members here, before the merge reinterprets
+        // them, exactly as `detect_insertion_overlaps` above emits `W5002`
+        // pre-merge for the same reason. The warning is then handled by the ONE
+        // machinery the lone path uses: the strict-mode ladder in
+        // `normalize_core_checked` promotes it to a typed refusal, and lenient
+        // keeps it as a recorded correction (the output is already the repaired
+        // `c.*N` form, since the merge maps the coordinate into the 3'UTR).
+        // Silent mode suppresses the message (the gate below is skipped when
+        // neither reject nor warn is active), matching the lone path's own silent
+        // behaviour — so both paths apply one rule, mode-dependent per the decided
+        // `rulings[past-cds-end-coordinate-is-non-conformant]` and
+        // `rulings[absolute-prohibition-enforcement-stage]`.
+        all_warnings.extend(self.check_allele_members_past_cds_end(allele));
 
         // Coincident *bounds* among the raw members, for exactly the reason the
         // insertion detector above runs pre-merge — and the half that was

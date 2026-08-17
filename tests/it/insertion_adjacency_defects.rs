@@ -201,35 +201,38 @@ fn control_the_genomic_analogue_of_the_seam_shape_is_clean() {
 // DEFECT — an out-of-range coding position behaves differently inside an allele.
 // ---------------------------------------------------------------------------
 
-/// A position past `cds_end` is refused alone and must be refused in an allele.
+/// A position past `cds_end` is refused alone and is now refused in an allele.
 ///
 /// `c.22` is past this transcript's `cds_end` (`c.21`), so it names no base on
 /// the `c.` axis — `background/numbering.md:21` starts `c.1` at the `A` of the
 /// initiator and ends at "the last nucleotide of the translation termination
-/// (stop) codon"; past that the axis is `*N`. Ferro refuses `c.22del` outright.
+/// (stop) codon"; past that the axis is `*N`. Ferro refuses `c.22del` outright
+/// in strict mode.
 ///
-/// Inside a cis allele the same coordinate is silently accepted and remapped to
-/// `*1`, which changes the description's meaning without saying so. One
-/// validation path refusing what another accepts is the defect, independent of
-/// which answer is right.
+/// This used to be a PINNED FINDING: inside a cis allele the same coordinate was
+/// silently accepted and remapped to `*1` (`c.[22_23insG;*1G>A]` -> `c.21dup`),
+/// which changed the description's meaning without saying so. #2018 reconciled
+/// the two paths — the allele path now applies the same mode-dependent rule as
+/// the lone path (see `issue_2018_past_cds_end_mode_dependent`). This test now
+/// asserts the reconciled behaviour: in the strict `seam_normalize` mode both
+/// the lone position and the allele refuse with the same `W4004`.
 #[test]
-fn pinned_past_cds_end_position_is_refused_alone_but_accepted_in_an_allele() {
-    let alone = seam_normalize("NM_SEAM.1:c.22del");
+fn pinned_past_cds_end_position_is_refused_alone_and_in_an_allele() {
+    let alone = seam_normalize("NM_SEAM.1:c.22del")
+        .expect_err("c.22 is past cds_end and is refused alone in strict mode");
     assert!(
-        alone.is_err(),
-        "precondition: c.22 is past cds_end and is refused alone, got {alone:?}"
+        alone.contains("W4004") && alone.contains("PositionPastEnd"),
+        "expected the lone position to refuse with W4004, got {alone:?}"
     );
 
-    // PINNED FINDING. Correct behaviour is the same W4004 refusal the lone
-    // description gets; instead the coordinate is silently remapped past the
-    // seam and the allele normalizes. Pinned to today's output so the tripwire
-    // fires when the two validation paths are reconciled.
+    // RECONCILED (#2018): the allele path now refuses the past-cds-end
+    // coordinate with the same W4004 the lone description gets, rather than
+    // silently remapping it across the seam and normalizing to `c.21dup`.
     let in_allele = seam_normalize("NM_SEAM.1:c.[22_23insG;*1G>A]")
-        .expect("PINNED FINDING: currently accepted rather than refused");
-    assert_eq!(
-        in_allele, "NM_SEAM.1:c.21dup",
-        "PINNED FINDING — c.22 is past cds_end (21). Refusing, as `c.22del` alone \
-         is refused, is the correct behaviour; this pins the current acceptance."
+        .expect_err("c.22 in a cis allele is now refused with W4004, as it is alone");
+    assert!(
+        in_allele.contains("W4004") && in_allele.contains("PositionPastEnd"),
+        "expected the allele to refuse with W4004, as the lone position does, got {in_allele:?}"
     );
 }
 

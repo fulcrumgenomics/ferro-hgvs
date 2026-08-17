@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 35 records, 32 decided / 3 undecided
-//! 117 clause lines, of which 40 are named by more than one record
+//! 36 records, 33 decided / 3 undecided
+//! 118 clause lines, of which 40 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -127,6 +127,9 @@
 //! docs/background/numbering.md:21  [MULTI]
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (governing)
+//!     `past-cds-end-coordinate-is-non-conformant` — decided (governing)
+//! docs/background/numbering.md:30
+//!     `past-cds-end-coordinate-is-non-conformant` — decided (cited)
 //! docs/background/numbering.md:40
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //! docs/background/numbering.md:44  [MULTI]
@@ -472,6 +475,7 @@
 //! docs/background/numbering.md:21
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (governing)
+//!     `past-cds-end-coordinate-is-non-conformant` — decided (governing)
 //! docs/background/numbering.md:44
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (cited)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
@@ -947,7 +951,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (35, 32, 3),
+        (36, 33, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"

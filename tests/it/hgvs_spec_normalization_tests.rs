@@ -1391,6 +1391,17 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // clean decline. So ferro refuses with `UnrepresentableInSpdi`; a concrete-base
     // repeat (`insACGT[3]`) is untouched. Pinned by `src/spdi/convert.rs`.
     ("spdi-n-unit-repeat-refusal", "decided"),
+    // A `c.N` coordinate past `cds_end` is a NON-CONFORMANT coordinate, not an
+    // alternate spelling of `*(N - cds_end)`. `numbering.md:21` ends the coding
+    // axis at the stop codon and `:30` opens the `*` zone the moment it ends.
+    // Decided (operator, 2026-08-16): the enforcement stage is mode-dependent
+    // per `absolute-prohibition-enforcement-stage` — strict refuses (W4004),
+    // lenient repairs to `c.*N` as a recorded correction, silent repairs
+    // silently — and the rule is applied IDENTICALLY on the lone-position and
+    // cis-allele paths. The defect (#2018) was that the allele path silently
+    // remapped the coordinate across the CDS/3'UTR seam while the lone path
+    // refused it. Pinned by `issue_2018_past_cds_end_mode_dependent.rs`.
+    ("past-cds-end-coordinate-is-non-conformant", "decided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
