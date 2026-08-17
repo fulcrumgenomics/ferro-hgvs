@@ -22,6 +22,7 @@
 - [Normalization rules](reference/normalization-rules.md)
 - [CLI reference](cli/overview.md)
 - [Supported HGVS syntax](reference/hgvs-syntax.md)
+- [Tool comparison](reference/comparison.md)
 
 # Interpretation
 
