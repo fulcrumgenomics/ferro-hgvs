@@ -43,21 +43,19 @@
 //! Checking the normalizer against itself would pass for any self-consistent
 //! defect.
 //!
-//! # …and the soundness half is currently OFF — read this before citing the
-//! module as coverage
+//! # The soundness half is live again as of #2013
 //!
 //! [`an_accepted_allele_denotes_its_input_and_reparses`] is the only property
-//! here that consults an oracle outside the normalizer, and it is `#[ignore]`d
-//! against **#2013**. So as shipped this module runs three *self-consistency*
-//! properties — order-independence, idempotence and the edge-adjacency verdict
-//! — and **zero** soundness ones. The paragraph above describes the check the
-//! module is built around, not a check that executes today.
-//!
-//! The ignore is pre-existing behaviour, not something this module introduced:
-//! an insertion with an adjacent `dup` and a nearby `del` normalizes to a
-//! different sequence, and it reproduces byte-for-byte on `origin/main`.
-//! Un-ignoring the property is #2013's acceptance criterion, and doing so is
-//! what restores the guarantee this section opens with.
+//! here that consults an oracle outside the normalizer, and it was `#[ignore]`d
+//! against **#2013** — an insertion with an adjacent `dup` and a nearby `del`
+//! normalized to a different sequence (byte-for-byte on `origin/main`). The
+//! defect was a fall-through in the sibling clamps: an insertion 3'-shifted into
+//! a repeat form, sweeping its payload junction across the `dup`, and no pass
+//! caught it because a repeat states no junction. `demote_repeats_spanning_siblings`
+//! now demotes such a repeat back to its insertion so the junction clamp can
+//! pull it back. Un-ignoring this property was that issue's acceptance
+//! criterion, so this module again runs a soundness check alongside its three
+//! self-consistency ones.
 
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, NormalizeConfig, Normalizer};
@@ -258,7 +256,6 @@ proptest! {
     /// wrong answer, an unparseable output is an unusable one. The seam defect
     /// in `insertion_adjacency_defects` is the second kind, and would pass a
     /// sequence-only property.
-    #[ignore = "#2013: pre-existing — an insertion, an adjacent dup and a nearby del normalize to a different sequence. Reproduces byte-for-byte on origin/main; found here, not caused here. Un-ignoring this property is that issue's acceptance criterion."]
     #[test]
     fn an_accepted_allele_denotes_its_input_and_reparses(case in case_strategy()) {
         let body = case.body();
