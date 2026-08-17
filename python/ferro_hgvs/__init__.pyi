@@ -113,7 +113,8 @@ def from_sequences(
     reference, recommended form and confluent. So an output may be 3'-shiftable
     further than a window-local function could shift it, which is not a defect.
     Run ``Normalizer.normalize`` afterwards if you want it, or
-    ``Normalizer.from_sequences(..., normalize=True)`` to do both in one call.
+    ``Normalizer.from_sequences(..., recommended_form=True)`` to do both in one
+    call.
 
     Args:
         accession: The sequence the window is on. A transcript or protein
@@ -855,7 +856,17 @@ class Normalizer:
         ...
 
     def normalize(self, hgvs_string: str) -> str:
-        """Parse and normalize an HGVS string."""
+        """Parse and normalize an HGVS string.
+
+        Applies 3'/5' shifting and local re-spelling rules to the *given*
+        spelling, on any axis (``g/c/n/r/p/m``). This is the entry point for a
+        caller who already has a description and wants it normalized.
+
+        Contrast :meth:`rederive`, which discards the spelling and re-derives a
+        description from the denoted bases — the confluent, genomic-only path,
+        where two spellings of one variant reach one result. See
+        :meth:`rederive` for when to reach for each.
+        """
         ...
 
     def to_sequences(self, variant: HgvsVariant, pad: int = 128) -> SequencePair:
@@ -910,8 +921,9 @@ class Normalizer:
         case alone.
 
         **Not the tool for making heterogeneous inputs agree in general.** That
-        is already available and better: ``from_sequences(..., normalize=True)``
-        or a round trip through ``to_sequences``, both of which reach the
+        is already available and better:
+        ``from_sequences(..., recommended_form=True)`` or a round trip through
+        ``to_sequences``, both of which reach the
         reference-anchored placement.
 
         Raises:
@@ -932,7 +944,7 @@ class Normalizer:
         alternate: str,
         *,
         max_grid_cells: int | None = None,
-        normalize: bool = False,
+        recommended_form: bool = False,
     ) -> HgvsVariant:
         """:func:`from_sequences`, against this normalizer's reference.
 
@@ -948,13 +960,15 @@ class Normalizer:
             reference: The reference bases over the window.
             alternate: The observed bases over the same window.
             max_grid_cells: As the free function.
-            normalize: Normalize the derived description before returning it.
-                Defaults to False, but prefer True unless you have a reason not
-                to: over a 6,000-shape sweep ``normalize`` moved 8.6% of derived
-                descriptions (repeat notation, reference-anchored member
-                re-derivation, and inversions spread across several members).
-                All three are the recommended-form and confluence rules this
-                design assigns to ``normalize``, so False still yields a
+            recommended_form: Route the derived description through ``normalize``
+                to reach ferro's recommended, reference-anchored form before
+                returning it. Defaults to False, but prefer True unless you have
+                a reason not to: in an internal sweep of many synthetic shapes
+                ``normalize`` moved a meaningful share of derived descriptions
+                (repeat notation, reference-anchored
+                member re-derivation, and inversions spread across several
+                members). All three are the recommended-form and confluence rules
+                this design assigns to ``normalize``, so False still yields a
                 conformant, deterministic description.
 
         Raises:
@@ -963,18 +977,18 @@ class Normalizer:
             NormalizationError: everything else, including the two refusals this
                 method adds over the free function — an unknown accession, and
                 an interval running past the end of the sequence — plus any
-                refusal from ``normalize`` when ``normalize=True``. Those two
-                were documented as ``ReferenceDataError`` until 2026-08-12 and
-                never raised it.
+                refusal from ``normalize`` when ``recommended_form=True``. Those
+                two were documented as ``ReferenceDataError`` until 2026-08-12
+                and never raised it.
         """
         ...
 
-    def sequence_normalize(
+    def rederive(
         self,
         description: str,
         *,
         max_grid_cells: int | None = None,
-        normalize: bool = False,
+        recommended_form: bool = False,
     ) -> str:
         """Re-derive a description from the bases it denotes.
 
@@ -986,6 +1000,19 @@ class Normalizer:
         variant therefore reach one description, decided by the observed bases
         rather than by how either was written.
 
+        Prefer this over :meth:`normalize` when the input's spelling should
+        carry no weight. The two are different operations, not two names for
+        one:
+
+        - :meth:`normalize` shifts and re-spells the *given* description in
+          place (3'/5' shifting and local re-spelling rules). It works on every
+          axis (``g/c/n/r/p/m``).
+        - :meth:`rederive` throws the spelling away and re-derives from the
+          denoted bases, so two spellings of one variant reach one result
+          (confluence). Because it re-derives from a genomic sequence window it
+          is genomic-only — ``g.`` (and ``m.`` on the two rCRS accessions);
+          any other axis is refused.
+
         The loop reads ``DerivedDescription``'s two per-side flags apart, so a
         placement pinned to the sequence's own start or end is recognised as
         settled rather than chased.
@@ -995,11 +1022,11 @@ class Normalizer:
                 ``from_sequences`` emits — genomic ``g.`` (and ``m.`` on the two
                 rCRS mitochondrial accessions); any other is refused.
             max_grid_cells: As ``from_sequences``.
-            normalize: Route the derived description through ``normalize``
-                before returning it. Defaults to False, which yields the
-                alignment-derived form (conformant + deterministic) rather than
-                ferro's recommended form. Set True for the recommended,
-                reference-anchored form.
+            recommended_form: Route the re-derived description through
+                ``normalize`` before returning it. Defaults to False, which
+                yields the alignment-derived form (conformant + deterministic)
+                rather than ferro's recommended form. Set True for the
+                recommended, reference-anchored form.
 
         Returns:
             The canonical HGVS description, as a string.
@@ -1012,7 +1039,7 @@ class Normalizer:
                 ``max_grid_cells``, or a placement still resting on the edge of
                 the widest window the loop reads (a repeat tract whose shift
                 depends on how much reference is read). Plus any refusal from
-                ``normalize`` when ``normalize=True``.
+                ``normalize`` when ``recommended_form=True``.
         """
         ...
 

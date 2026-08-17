@@ -2121,7 +2121,7 @@ const MAX_CANONICAL_WINDOW: i64 = 4096;
 /// Padding either side of the changed interval, giving the 3'-shift room.
 ///
 /// `pub(crate)` because it is also the pad every *caller-facing* derivation
-/// starts from — `Normalizer::sequence_normalize`'s `START_PAD` and the
+/// starts from — `Normalizer::rederive`'s `START_PAD` and the
 /// `pad = 128` default on the Python `to_sequences` binding — so the three
 /// cannot be allowed to drift apart.
 pub(crate) const CANONICAL_PAD: i64 = 128;
@@ -10578,7 +10578,7 @@ pub(crate) fn derive_block_members(
     // no piece to fold into is a true insertion before base 1 and still refuses.
     //
     // Both are guarded to `w_lo == 1`: at any interior window the answer is to
-    // widen the 5' flank (`Normalizer::sequence_normalize` does), not to
+    // widen the 5' flank (`Normalizer::rederive` does), not to
     // relabel. `verify_round_trip` re-applies the emitted members, so a mis-step
     // here surfaces as an error rather than a wrong sequence.
     if w_lo == 1 {

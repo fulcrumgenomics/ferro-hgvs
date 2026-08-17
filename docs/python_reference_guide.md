@@ -229,24 +229,25 @@ everything above about picking a reference applies to them normally:
 | Method | Needs | Why |
 |---|---|---|
 | `Normalizer.to_sequences(variant, pad=128)` | a reference | it reads the bases a description denotes, plus flank on both sides |
-| `Normalizer.from_sequences(..., normalize=True)` | a reference | the derivation itself does not, but range-checking the interval and the optional `normalize` pass do |
+| `Normalizer.from_sequences(..., recommended_form=True)` | a reference | the derivation itself does not, but range-checking the interval and the optional `normalize` pass do |
 | `Normalizer.reanchor(pair, start, end)` | a reference | widening a window means reading bases the caller never supplied |
 
-Note `normalize` defaults to **False**, and that is not the value most callers
-want. Prefer `normalize=True` unless you have a reason not to: over a
-6,000-shape sweep it moved 8.6% of derived descriptions. False is still a
-conformant, deterministic answer — the 8.6% is entirely rules 2 and 3, which the
-derivation never claimed — but if you are storing one canonical string per
-variant, that is the difference between the derived form and the recommended
-one.
+Note `recommended_form` defaults to **False**, and that is not the value most
+callers want. Prefer `recommended_form=True` unless you have a reason not to:
+in an internal sweep of many synthetic shapes, it visibly changed a
+meaningful share of derived descriptions — entirely rules 2 and 3 (the
+recommended form and confluence), which the derivation never claimed. False
+is still a conformant, deterministic answer, but if you are storing one
+canonical string per variant, that is the difference between the derived form
+and the recommended one.
 
-**That figure is a claim about that sweep, not about the world:** one synthetic
-contig, six shape generators, genomic axis only. It is a conformance-movement
-rate, not a benchmark, so no host or timing applies to it — but it is also a
-**one-off measurement with no committed harness that re-derives it**, so treat it
-as an order of magnitude rather than a number to quote. Your own rate depends
-entirely on which shapes your inputs are. The full statement of what was swept,
-and the three classes the movement falls into, is in the
+**That is a qualitative recommendation, not a benchmark figure.** The
+movement rate behind it is a one-off, uncommitted measurement over a narrow
+synthetic corpus (one contig, a handful of shape generators, genomic axis
+only) with no host, tool version, or reproducible command attached, so it is
+deliberately not quoted here as a number. Your own rate depends entirely on
+which shapes your inputs are. The full statement of what was swept, and the
+three classes the movement falls into, is in the
 [README](../README.md#how-to-one-canonical-description-per-variant); this page
 does not restate it.
 

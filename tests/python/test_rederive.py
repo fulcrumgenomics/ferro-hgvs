@@ -1,15 +1,15 @@
-"""``Normalizer.sequence_normalize`` and ``DerivedDescription``'s per-side flags.
+"""``Normalizer.rederive`` and ``DerivedDescription``'s per-side flags.
 
-``sequence_normalize`` expresses a variant as a padded reference/alternate window
+``rederive`` expresses a variant as a padded reference/alternate window
 (``to_sequences``), derives a description from those bases alone
 (``from_sequences``), and — while a member still rests on a window edge that can
 still move — doubles the pad and retries. Two spellings of one variant therefore
 reach one description, decided by the observed bases.
 
 The properties themselves are judged in Rust, over
-``tests/it/sequence_normalize.rs`` and the cis corpus. What is checked here is
+``tests/it/rederive.rs`` and the cis corpus. What is checked here is
 what only the binding can get wrong: the keyword-only signature, that
-``normalize`` is threaded through rather than accepted and dropped, which
+``recommended_form`` is threaded through rather than accepted and dropped, which
 exception class comes out of which failure, and that the two new
 ``DerivedDescription`` getters are wired to the fields they name rather than
 both to ``placement_bounded_by_window``.
@@ -41,14 +41,14 @@ def _normalizer(sequence: str) -> ferro_hgvs.Normalizer:
     """A genome-capable provider over one synthetic contig named ``NC_TEST.1``.
 
     The name is genomic on purpose: ``from_sequences``, which
-    ``sequence_normalize`` calls, emits ``g.`` and refuses a transcript or
+    ``rederive`` calls, emits ``g.`` and refuses a transcript or
     protein accession, so a non-genomic contig name would be rejected before any
     derivation.
 
     There is no ``direction=`` here because the bindings no longer take one —
     3' is the only direction ferro shifts. The 5'-shuffle half of the per-side
     split is therefore only reachable from Rust, and is pinned there by
-    ``tests/it/sequence_normalize.rs``.
+    ``tests/it/rederive.rs``.
     """
     payload = {
         "transcripts": [],
@@ -70,7 +70,7 @@ def test_three_spellings_of_one_deletion_converge():
     description — and reaching it requires the loop to widen past its start pad."""
     normalizer = _normalizer(LONG_RUN)
     results = {
-        normalizer.sequence_normalize(spelling)
+        normalizer.rederive(spelling)
         for spelling in ("NC_TEST.1:g.11del", "NC_TEST.1:g.160del", "NC_TEST.1:g.310del")
     }
     assert results == {"NC_TEST.1:g.310del"}
@@ -85,8 +85,8 @@ def test_a_duplication_and_its_insertion_spelling_converge():
     fires and the loop would return it without widening.
     """
     normalizer = _normalizer(DUP_CONTIG)
-    assert normalizer.sequence_normalize("NC_TEST.1:g.7_14dup") == "NC_TEST.1:g.7_14dup"
-    assert normalizer.sequence_normalize("NC_TEST.1:g.14_15insACGTACGT") == "NC_TEST.1:g.7_14dup"
+    assert normalizer.rederive("NC_TEST.1:g.7_14dup") == "NC_TEST.1:g.7_14dup"
+    assert normalizer.rederive("NC_TEST.1:g.14_15insACGTACGT") == "NC_TEST.1:g.7_14dup"
 
 
 def test_a_run_reaching_the_contig_end_settles_by_the_sequence():
@@ -94,7 +94,7 @@ def test_a_run_reaching_the_contig_end_settles_by_the_sequence():
     edge the placement rests on is the sequence's own — the loop must return
     rather than widen past it or decline it as unbounded."""
     normalizer = _normalizer("GCTAGCTAGC" + "A" * 40)
-    assert normalizer.sequence_normalize("NC_TEST.1:g.15del") == "NC_TEST.1:g.50del"
+    assert normalizer.rederive("NC_TEST.1:g.15del") == "NC_TEST.1:g.50del"
 
 
 # ---------------------------------------------------------------------------
@@ -102,22 +102,32 @@ def test_a_run_reaching_the_contig_end_settles_by_the_sequence():
 # ---------------------------------------------------------------------------
 
 
-def test_max_grid_cells_and_normalize_are_keyword_only():
+def test_max_grid_cells_and_recommended_form_are_keyword_only():
     normalizer = _normalizer(LONG_RUN)
     with pytest.raises(TypeError):
-        normalizer.sequence_normalize("NC_TEST.1:g.11del", 4096)  # type: ignore[misc]
+        normalizer.rederive("NC_TEST.1:g.11del", 4096)  # type: ignore[misc]
     with pytest.raises(TypeError):
-        normalizer.sequence_normalize("NC_TEST.1:g.11del", normalize_flag=True)  # type: ignore[call-arg]
+        normalizer.rederive("NC_TEST.1:g.11del", normalize_flag=True)  # type: ignore[call-arg]
 
 
-def test_normalize_true_reaches_the_normalizer():
-    """``normalize`` must be threaded through, not accepted and dropped. For a
-    placement already at its 3'-most, reference-anchored base the pass is a
-    no-op, so what this pins is that the routing runs and returns the same
-    settled variant rather than raising."""
-    normalizer = _normalizer(LONG_RUN)
+def test_recommended_form_true_reaches_the_normalizer():
+    """``recommended_form`` must be threaded through, not accepted and dropped.
+
+    A lone reference `A` immediately upstream of an insertion of three more
+    `A`s is a case where the two flag values give genuinely different strings:
+    repeat-notation collapse is a `normalize` (rule 2) pass that
+    `from_sequences`'s own derivation never performs (see
+    `from_sequences.rs`'s `retype_inversions` docs, which name this exact
+    shape as still un-typed there). So `recommended_form=False` must derive
+    the literal insertion and `recommended_form=True` must collapse it to
+    repeat notation — if the keyword were silently dropped, the second
+    assertion would see the first string instead and fail.
+    """
+    core = "GCTAGC" + "A" + "TCGATC"  # a lone 'A' at position 7, 'T' at 8
+    normalizer = _normalizer(core)
+    assert normalizer.rederive("NC_TEST.1:g.7_8insAAA") == "NC_TEST.1:g.7_8insAAA"
     assert (
-        normalizer.sequence_normalize("NC_TEST.1:g.11del", normalize=True) == "NC_TEST.1:g.310del"
+        normalizer.rederive("NC_TEST.1:g.7_8insAAA", recommended_form=True) == "NC_TEST.1:g.7A[4]"
     )
 
 
@@ -129,7 +139,7 @@ def test_normalize_true_reaches_the_normalizer():
 def test_an_unparseable_description_raises_parse_error():
     normalizer = _normalizer(LONG_RUN)
     with pytest.raises(ferro_hgvs.ParseError):
-        normalizer.sequence_normalize("not an hgvs description")
+        normalizer.rederive("not an hgvs description")
 
 
 def test_a_zero_grid_budget_raises_value_error():
@@ -137,13 +147,13 @@ def test_a_zero_grid_budget_raises_value_error():
     ``from_sequences``."""
     normalizer = _normalizer(LONG_RUN)
     with pytest.raises(ValueError):
-        normalizer.sequence_normalize("NC_TEST.1:g.11del", max_grid_cells=0)
+        normalizer.rederive("NC_TEST.1:g.11del", max_grid_cells=0)
 
 
 def test_an_unknown_accession_raises_normalization_error():
     normalizer = _normalizer(LONG_RUN)
     with pytest.raises(ferro_hgvs.NormalizationError):
-        normalizer.sequence_normalize("NC_ABSENT.1:g.11del")
+        normalizer.rederive("NC_ABSENT.1:g.11del")
 
 
 # ---------------------------------------------------------------------------

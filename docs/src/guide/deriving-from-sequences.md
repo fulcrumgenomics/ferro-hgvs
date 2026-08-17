@@ -127,19 +127,21 @@ scope names the 3' rule explicitly, and a reference-anchored shift is precisely 
 window-local function cannot perform.
 
 So an output may be 3'-shiftable further than the window allowed, and **that is not a defect**.
-Run `normalize` afterwards if you want it — `Normalizer::from_sequences(..., normalize = true)`
-does both in one call.
+Run `normalize` afterwards if you want it — `Normalizer::from_sequences(..., recommended_form = true)`
+does both in one call. (`Normalizer::rederive` is the one-call path when you have a
+*description* rather than a sequence pair — see [Normalize or rederive?](normalize-or-rederive.md).)
 
-**Run it unless you have a reason not to.** Over a 6,000-shape sweep, `normalize` moved **8.6%** of
-derived descriptions — in three classes: repeat notation (`g.27_28insAAA` → `g.27A[4]`),
+**Run it unless you have a reason not to.** In an internal sweep of many synthetic shapes, `normalize`
+moved a meaningful share of derived descriptions — in three classes: repeat notation (`g.27_28insAAA` → `g.27A[4]`),
 reference-anchored member re-derivation, and an inversion spread across several members
 (`g.[17C>A;19T>A;21T>G]` → `g.17_21inv`, which the alignment DAG partitions before anything can see
 it, since it minimises edit distance and an inversion is not in that cost model). All three are
 rule 2 and rule 3 — the recommended form and agreement with a wider view — which is exactly the
 pair this design assigns to `normalize`. Rules 1 and 4 hold either way.
 
-That figure is a claim about that sweep, not about the world: one synthetic contig, six shape
-generators, genomic axis only.
+That movement rate is a qualitative claim about a narrow sweep, not a benchmark: one synthetic
+contig, a handful of shape generators, genomic axis only, from a one-off measurement with no
+committed harness — so it is deliberately not quoted here as a number.
 
 ## What you get for it
 
@@ -286,7 +288,7 @@ the provider and therefore returns the whole window **upper-cased**, exactly as 
 does, rather than splicing provider bases onto caller bases and handing back a mixed-case pair.
 
 > **Reach for this when the bound is a requirement, not to make heterogeneous inputs agree.** For
-> that, `Normalizer::from_sequences(..., normalize = true)` and a `to_sequences` round trip both
+> that, `Normalizer::from_sequences(..., recommended_form = true)` and a `to_sequences` round trip both
 > already converge, and both reach the *reference-anchored* placement — which can shift as far as
 > the sequence allows rather than as far as your window allows. Anchoring to a window that cuts an
 > ambiguous run makes every caller using that window agree with each other and disagree with the

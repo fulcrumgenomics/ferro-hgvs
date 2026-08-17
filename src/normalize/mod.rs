@@ -2618,7 +2618,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Making heterogeneous raw pairs agree *in general*. That is already
     /// available, twice, and both are better answers:
-    /// [`Self::from_sequences`] with `normalize = true`, or a round trip through
+    /// [`Self::from_sequences`] with `recommended_form = true`, or a round trip through
     /// [`Self::to_sequences`]. Both reach the **reference-anchored** placement,
     /// which can shift as far as the sequence allows rather than as far as a
     /// chosen window allows. Measured on three reads over one homopolymer
@@ -2856,8 +2856,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// also offers `normalize`, which the free function cannot: normalizing
     /// needs the reference too.
     ///
-    /// **Prefer `normalize = true` unless you have a reason not to.** Over a
-    /// 6,000-shape sweep `normalize` moved **8.6%** of derived descriptions:
+    /// **Prefer `recommended_form = true` unless you have a reason not to.** In an
+    /// internal sweep of many synthetic shapes `normalize` moved a meaningful
+    /// share of derived descriptions:
     /// repeat notation (`g.27_28insAAA` -> `g.27A[4]`), reference-anchored
     /// member re-derivation, and an inversion spread across several members
     /// (`g.[17C>A;19T>A;21T>G]` -> `g.17_21inv`, which the alignment DAG
@@ -2872,14 +2873,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// # Which seam oracles this reaches, stated because it is not all of them
     ///
-    /// `normalize = true` routes the derived description through
+    /// `recommended_form = true` routes the derived description through
     /// [`Self::normalize`] and therefore through `normalize_core_checked`, the
     /// single exit `assert_seam_oracles` runs from — so all four oracles
     /// (`FERRO_ASSERT_IDEMPOTENT`, `_REPARSE`, `_IN_BOUNDS`, `_SEQUENCE`) fire
     /// on it, and this is the **only** entry to the derivation that reaches
     /// them.
     ///
-    /// `normalize = false`, the free [`crate::from_sequences`] and
+    /// `recommended_form = false`, the free [`crate::from_sequences`] and
     /// [`crate::SequencePair::derive`] reach none of them, and that is a
     /// deliberate limit rather than an omission to be closed later:
     ///
@@ -2908,7 +2909,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         reference: &str,
         alternate: &str,
         options: &crate::normalize::from_sequences::FromSequencesOptions,
-        normalize: bool,
+        recommended_form: bool,
     ) -> Result<HgvsVariant, FerroError> {
         let length = self.provider.get_sequence_length(accession)?;
         // Checked before the derivation, not after: a description of bases that
@@ -2932,7 +2933,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let variant = crate::normalize::from_sequences::from_sequences(
             accession, position, reference, alternate, options,
         )?;
-        if normalize {
+        if recommended_form {
             self.normalize(&variant)
         } else {
             Ok(variant)
@@ -2962,12 +2963,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///   tract running past what the derivation can read, where how far the
     ///   change shifts depends on how much reference is read.
     ///
-    /// Plus any refusal from [`Self::normalize`] when `normalize` is true.
-    pub fn sequence_normalize(
+    /// Plus any refusal from [`Self::normalize`] when `recommended_form` is true.
+    pub fn rederive(
         &self,
         variant: &HgvsVariant,
         options: &crate::normalize::from_sequences::FromSequencesOptions,
-        normalize: bool,
+        recommended_form: bool,
     ) -> Result<HgvsVariant, FerroError> {
         use crate::normalize::from_sequences::from_sequences_detailed;
 
@@ -3060,7 +3061,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let unsettled_3prime = derived.bounded_at_end && !three_prime_stalled;
 
             if !unsettled_5prime && !unsettled_3prime {
-                return if normalize {
+                return if recommended_form {
                     self.normalize(&derived.variant)
                 } else {
                     Ok(derived.variant)

@@ -141,9 +141,10 @@ fn the_method_refuses_an_interval_past_the_sequence_end() {
 
 /// Post-normalizing a derived description is a no-op **on this material**.
 ///
-/// Scoped in the name and meant literally: a 6,000-shape sweep found `normalize`
-/// moves 8.6% of derived descriptions, so this is a property of the rows below
-/// and never of the surface. See `Normalizer::from_sequences`.
+/// Scoped in the name and meant literally: an internal sweep of many synthetic
+/// shapes found `normalize` moves a meaningful share of derived descriptions, so
+/// this is a property of the rows below and never of the surface. See
+/// `Normalizer::from_sequences`.
 ///
 /// Pinned as a **measured property of today's normalizer**, not asserted as a
 /// law: the derivation and the normalizer are separate rules, and the value of
