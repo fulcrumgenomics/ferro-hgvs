@@ -72,12 +72,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-/// The vendored spec checkout, relative to the crate root — the same default
-/// `generate_spec_fixture` takes for `--spec-dir`.
-const SPEC_DIR: &str = "assets/hgvs-nomenclature";
-
 /// The one spec file whose lines moved in #1793, and the only one whose basename
-/// is unambiguous inside `docs/`.
+/// is unambiguous inside `docs/`. Named as a path inside the spec checkout, since
+/// it is resolved through [`SpecCheckout`] at the gitlink rather than off the
+/// submodule working tree — see [`spec_lines`].
 const SPEC_FILE: &str = "docs/recommendations/general.md";
 
 /// The document this guard is about, relative to the crate root.
@@ -174,17 +172,21 @@ fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The spec file's lines, as read from the pinned checkout.
+/// The spec file's lines, as recorded by the commit under test.
+///
+/// Resolved through [`SpecCheckout`] — the gitlink resolver shared with
+/// [`claude_md_bare_clause_anchors`] — and never via `fs::read_to_string` on the
+/// submodule working tree. That distinction is the whole of #2124: a worktree in
+/// this layout routinely pins the submodule at an older commit than the
+/// superproject's gitlink, and the two numberings are each internally consistent,
+/// so a filesystem read makes every expectation below a property of the local
+/// checkout rather than of the commit — green on a stale checkout and red on a
+/// fresh one for byte-identical `CLAUDE.md` source. Reading at the gitlink makes
+/// the verdict a function of the pinned spec revision, as it must be.
+/// [`the_spec_text_is_read_at_the_gitlink_not_the_submodule_working_tree`] keeps
+/// it that way.
 fn spec_lines() -> Vec<String> {
-    let path = crate_root().join(SPEC_DIR).join(SPEC_FILE);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "read {}: {e} — the spec submodule is probably not initialised. Run\n    \
-             git -c protocol.file.allow=always submodule update --init {SPEC_DIR}",
-            path.display()
-        )
-    });
-    text.lines().map(str::to_string).collect()
+    crate::claude_md_bare_clause_anchors::SpecCheckout::get().lines_of(SPEC_FILE)
 }
 
 /// The whole of [`CLAUDE_MD`].
@@ -546,4 +548,93 @@ fn the_scanners_read_citations_and_sentence_boundaries() {
         split.iter().any(|s| s.contains("c.76_83inv")),
         "an HGVS description's internal period must not lose the text around it: {split:?}"
     );
+}
+
+/// The spec bytes every check above reads must come from the commit's gitlink, not
+/// from the submodule working tree.
+///
+/// This is the guard for #2124. Before it, [`spec_lines`] read the spec with
+/// `fs::read_to_string` off the submodule working tree, so the whole file's verdict
+/// depended on whatever revision the submodule happened to be checked out at rather
+/// than on the pinned spec — measured directly: with the working tree at `6f85311`
+/// while the gitlink stayed `565b9734`, `every_qualified_citation_resolves` and
+/// `a_citation_names_the_clause_its_sentence_is_about` went red on byte-identical
+/// `CLAUDE.md` source, which reads as a regression and invites a hunt.
+///
+/// The equality below is true by construction today; the point is that it stops
+/// being true the moment somebody reverts [`spec_lines`] to a filesystem read, and
+/// then only on a checkout whose submodule lags the gitlink — the exact situation
+/// this layout produces routinely and CI never does. The two sides are derived
+/// differently on purpose: [`spec_lines`] resolves through
+/// [`SpecCheckout::lines_of`]'s `git show <rev>:<path>`, while the comparand resolves
+/// the blob id from the tree and `cat-file`s it, because two readings of one command
+/// are one reading. It also *reports* the pin, so a run in a worktree whose submodule
+/// is checked out elsewhere says so instead of leaving the reader to wonder.
+#[test]
+fn the_spec_text_is_read_at_the_gitlink_not_the_submodule_working_tree() {
+    use crate::claude_md_bare_clause_anchors::{git, SpecCheckout};
+
+    let spec = SpecCheckout::get();
+    let spec_dir = crate_root().join("assets/hgvs-nomenclature");
+
+    // Independent derivation of SPEC_FILE at the gitlink: resolve its blob id from
+    // the tree and cat it — a different path from `lines_of`'s `show <rev>:<path>`.
+    let listing = git(&spec_dir, &["ls-tree", &spec.gitlink, "--", SPEC_FILE])
+        .expect("list SPEC_FILE at the gitlink");
+    let blob = listing
+        .split_whitespace()
+        .nth(2)
+        .unwrap_or_else(|| panic!("no blob id for {SPEC_FILE} in {listing:?}"))
+        .to_string();
+    let independent: Vec<String> = git(&spec_dir, &["cat-file", "blob", &blob])
+        .expect("read the blob")
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    let through_the_guard = spec_lines();
+    assert!(
+        through_the_guard.len() > 100,
+        "{SPEC_FILE} has only {} lines at gitlink {} — the checkout is not what this expects",
+        through_the_guard.len(),
+        spec.gitlink
+    );
+    assert_eq!(
+        through_the_guard, independent,
+        "the text this guard reads for {SPEC_FILE} is not the blob the commit's gitlink records. \
+         Whatever it is reading instead — most likely the submodule working tree — makes every \
+         line number checked above a property of the local checkout rather than of the commit."
+    );
+
+    // Non-vacuous only where the two pins differ, which is the #2124 case and the one
+    // that cannot be arranged in CI. Report it either way.
+    let head = git(&spec_dir, &["rev-parse", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if head == spec.gitlink {
+        eprintln!(
+            "submodule working tree is AT the gitlink ({}); the pin-independence half of this \
+             test is vacuous here and is exercised by checking out another revision",
+            &spec.gitlink[..8]
+        );
+    } else {
+        let on_disk = std::fs::read_to_string(spec_dir.join(SPEC_FILE)).ok();
+        eprintln!(
+            "submodule working tree is at {} while the gitlink is {}; working-tree copy {} the \
+             gitlink's",
+            &head[..8.min(head.len())],
+            &spec.gitlink[..8],
+            match &on_disk {
+                Some(d)
+                    if d.lines().map(str::to_string).collect::<Vec<_>>() == through_the_guard =>
+                    "happens to match",
+                Some(_) => "DIFFERS from",
+                None => "is absent for",
+            }
+        );
+        assert_eq!(
+            through_the_guard, independent,
+            "with the working tree at a different revision, spec_lines() must still read the gitlink"
+        );
+    }
 }

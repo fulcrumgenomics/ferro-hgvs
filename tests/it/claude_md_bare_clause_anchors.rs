@@ -160,7 +160,7 @@ fn crate_root() -> PathBuf {
 /// `GIT_DIR`/`GIT_WORK_TREE` pointing at the **outer** repository when it runs a
 /// hook, and those override `-C`'s repository discovery — so under the pre-push
 /// hook a submodule query would silently answer about the superproject.
-fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -183,9 +183,14 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
 
 /// The spec checkout as the commit under test records it — never as the submodule
 /// working tree happens to be checked out.
-struct SpecCheckout {
+///
+/// Shared with [`claude_md_clause_anchors`], which resolves its one spec file the
+/// same way (#2124) — the gitlink resolver is deliberately in one place so both
+/// guards read the spec at the commit under test rather than at whatever the
+/// submodule working tree happens to be checked out to.
+pub(crate) struct SpecCheckout {
     /// The commit the superproject's tree records for [`SPEC_DIR`].
-    gitlink: String,
+    pub(crate) gitlink: String,
     /// Every `.md` path under [`SPEC_DOCS_ROOT`] at that commit.
     paths: Vec<String>,
     /// `path -> lines`, filled on demand. A handful of files are ever needed.
@@ -241,13 +246,13 @@ impl SpecCheckout {
         }
     }
 
-    fn get() -> &'static Self {
+    pub(crate) fn get() -> &'static Self {
         static SPEC: OnceLock<SpecCheckout> = OnceLock::new();
         SPEC.get_or_init(SpecCheckout::load)
     }
 
     /// The lines of one spec file, read at the gitlink.
-    fn lines_of(&self, path: &str) -> Vec<String> {
+    pub(crate) fn lines_of(&self, path: &str) -> Vec<String> {
         if let Some(cached) = self.lines.lock().expect("spec cache").get(path) {
             return cached.clone();
         }
