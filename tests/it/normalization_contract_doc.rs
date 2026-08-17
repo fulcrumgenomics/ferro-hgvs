@@ -386,7 +386,7 @@ candidate arm, so the answer depends on the default — and that default is curr
 `{default_arm}`.** That sentence is not written by hand: the generator reads the arm out of
 `src/normalize/merge.rs`, so a change to the default fails this document's own test until it
 is regenerated, and cannot leave a stale claim behind. See
-[README.md, *Comparing normalization rules*](../README.md#comparing-normalization-rules-ferro_partition)
+[Comparing normalization rules](src/guide/comparing-rules.md#comparing-normalization-rules-ferro_partition)
 for the knob and its traps.
 
 "#

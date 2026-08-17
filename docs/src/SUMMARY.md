@@ -11,12 +11,16 @@
 # Guides
 
 - [Normalize variants](guide/normalize-variants.md)
+- [Deriving a description from sequences](guide/deriving-from-sequences.md)
 - [Reference data](guide/reference-data.md)
+- [Error handling](guide/error-handling.md)
+- [Comparing normalization rules](guide/comparing-rules.md)
 - [Benchmarking](guide/benchmarking.md)
 
 # Reference
 
 - [CLI reference](cli/overview.md)
+- [Supported HGVS syntax](reference/hgvs-syntax.md)
 
 # Interpretation
 
