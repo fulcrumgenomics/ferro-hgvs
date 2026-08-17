@@ -487,9 +487,16 @@ fn an_rna_description_over_a_dna_reference_does_not_fire() {
 /// Everything else in this file exercises `compare_denoted_sequences` directly,
 /// so **deleting the `assert_denoted_sequence` call from
 /// `Normalizer::assert_seam_oracles` would leave this whole suite green** — and
-/// `sweeps`, the flag's only gating home, green with zero comparisons made. That
+/// every gating job that arms the flag green with zero comparisons made. That
 /// is the failure mode the counters exist for; this is the assertion that reads
 /// them, rather than leaving it to a human to remember to.
+///
+/// Those jobs are `sweeps`, which appends this module to its selection for
+/// exactly this reason, and — as of #1815 — `test-oracle`, whose own selection
+/// already contains this module (nothing in its `-E` negates it). So the counter
+/// guard is live in two gating jobs rather than one; read that as defence in
+/// depth, not as a second copy to remove. This paragraph used to call `sweeps`
+/// "the flag's only gating home", which was true when it was written.
 ///
 /// `compared` is monotonic and this test contributes to it itself, so a `> 0`
 /// assertion is safe under `cargo test`'s shared process as well as under

@@ -73,11 +73,11 @@ env:
   # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
   # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
   # denoted-sequence oracle's counters, which are meaningless unless
-  # `FERRO_ASSERT_SEQUENCE` is set and `sweeps` is the only job IN THIS FILE that
-  # sets it (`nightly-mutalyzer.yml` sets it too, non-gating). So
-  # "nothing is run twice" holds of this filter and is one module short of
-  # holding of that job's `-E`; the reason it is appended there rather than added
-  # here is on the job itself.
+  # `FERRO_ASSERT_SEQUENCE` is set. `sweeps` was the only job IN THIS FILE that
+  # set it until #1815 armed it in `test-oracle` too (`nightly-mutalyzer.yml`
+  # sets it as well, non-gating). So "nothing is run twice" holds of this filter
+  # and is one module short of holding of that job's `-E`; the reason it is
+  # appended there rather than added here is on the job itself.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
@@ -275,6 +275,53 @@ env:
     + test(issue_1715_rna_alignment_symbol_reach)
     + test(conformance_census_instrument)
     + test(conformance_census_runs)
+  # Withheld from the DENOTED-SEQUENCE oracle and from nothing else.
+  #
+  # `test-oracle` arms `FERRO_ASSERT_SEQUENCE` as of #1815. These are the rows
+  # that stopped it being armed before, each named with the OPEN issue that
+  # retires it. Re-measured on `origin/main` @ 1aecc93a, that job's four flags
+  # over its own `-E` with no `--partition`, bulk fixtures present
+  # (`FERRO_REQUIRE_BULK_FIXTURES=1`, zero `Skipping:` lines):
+  #
+  #   without this filter: 11202 tests run: 11199 passed, 3 failed   EXIT=100
+  #   with    this filter: 11197 tests run: 11197 passed, 0 failed   EXIT=0
+  #
+  #   * `stranded_identity_member` (2 of its 4 tests) — a GENUINE fire, of
+  #     #1281's "denotes no sequence" shape, on a module whose purpose is to PIN
+  #     a defect (**#1655**, 132 of 132 non-confluent). That is exactly the class
+  #     `ORACLE_EXCLUDE` documents: a test that pins a defect and an oracle that
+  #     aborts on it cannot both run.
+  #   * `the_render_time_reference_matches_what_the_pipeline_was_given` (1 test,
+  #     in `examples/dump_normalized_corpus.rs`) — also a genuine fire, and the
+  #     module's other 55 tests stay armed because this names the TEST, not the
+  #     module. #2051 added this gate on 2026-08-16; it re-normalizes each corpus
+  #     row ITSELF, outside the `catch_unwind` `dump`'s own pass uses, so a row
+  #     that trips an oracle takes the test with it. 47 corpus inputs fire:
+  #     **#2140** (38 inputs — a minted repeat tract widened across the CDS start
+  #     into the 5'UTR swallows its sibling), **#1983** (8 — the authored-repeat
+  #     form of the same collision) and **#2139** (1 — an adjacent-junction
+  #     insertion pair straddling the CDS start).
+  #
+  # THIS LIST IS TEMPORARY AND MUST SHRINK, and its composition has already moved
+  # TWICE IN THREE DAYS — which is the reason to re-measure it rather than trust
+  # the figures above. It held `issue_1487_canonical_window_overflow` until #1990
+  # closed #1690 (2026-08-15), and gained the render-time gate when #2051 landed
+  # (2026-08-16). Both times the stale reading was the *flattering* one.
+  #
+  # NOTHING IS TRADED AWAY FOR IT. A nextest `-E` is one expression, so negating
+  # this filter in the armed step would also withdraw these rows from
+  # `FERRO_ASSERT_IDEMPOTENT`, `_REPARSE` and `_IN_BOUNDS`, which they pass —
+  # trading three oracles for one, the swap the `sweeps` job's comment refuses to
+  # make for `issue_1615_denoted_sequence_oracle`. The step after the armed one
+  # re-runs precisely these rows under those three, so this file's oracle
+  # coverage is a strict superset of what it was.
+  #
+  # Kept separate from `ORACLE_EXCLUDE` rather than added to it: that list is a
+  # permanent statement about instruments that destroy each other, this one is a
+  # debt with three issue numbers on it.
+  SEQUENCE_ORACLE_EXCLUDE: >-
+    test(stranded_identity_member)
+    + test(the_render_time_reference_matches_what_the_pipeline_was_given)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
 # 360-minute default, so a wedged runner holds a PR for six hours: observed on
@@ -1487,9 +1534,19 @@ jobs:
         # *does not* provision a manifest, so requiring one here would fail
         # every PR. It is set in `nightly-mutalyzer.yml`, the only job that runs
         # `ferro prepare`. See `src/conformance/manifest_gate.rs`.
+        #
+        # THE SKIP REPORTS AS PASS, NOT SKIP, and that is the half of #1815 this
+        # file does not close. #1815 armed `FERRO_ASSERT_SEQUENCE` in
+        # `test-oracle`, which is the only one of the four oracles that can see a
+        # wrong-bases output on these axes — but that job provisions no manifest
+        # either, so they early-return there too. The one job that sets both is
+        # `nightly-mutalyzer.yml`, and it is `continue-on-error` by design.
+        # Provisioning a reference here is not a small change: that workflow
+        # spends ~30 min in `ferro prepare` per run and the result is deliberately
+        # uncached (a 3.25 GiB entry against a 10 GiB repository budget, #1218).
         if: matrix.shard == 1
         run: |
-          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
+          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip, and nextest reports that skip path as PASS rather than SKIP. No gating job runs those axes, so a denoted-sequence violation on them still cannot redden a required check (#1815). The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest, non-gating."
       - name: Run Rust tests (shard ${{ matrix.shard }} of 6)
         env:
           # Absence of a bulk fixture must FAIL here, never skip. The bulk and
@@ -1631,9 +1688,18 @@ jobs:
         # times (#1274, #1343, #1307) before it was asserted here.
         #
         # `FERRO_ASSERT_SEQUENCE` — the fourth oracle at this same seam (#1615) —
-        # is deliberately **not** set here, and this job is the one place the set
-        # is incomplete. It used to fire on two rows of this job's own selection,
-        # and both were real disagreements rather than noise to be suppressed:
+        # IS set here as of #1815, so this job is no longer the one place the set
+        # is incomplete. It runs over this job's whole selection MINUS
+        # `SEQUENCE_ORACLE_EXCLUDE`, whose rows and their open issues are
+        # documented on that variable; the step after this one re-runs those rows
+        # under the other three oracles, so nothing is traded away.
+        #
+        # EVERYTHING BELOW IS KEPT AS HISTORY, because the exclusion has to be
+        # read against it: three times a "the rows I know about are green" reading
+        # was taken for "it can be armed", and three times a selection-wide run
+        # found rows that reading could not reach. It used to fire on two rows of
+        # this job's own selection, and both were real disagreements rather than
+        # noise to be suppressed:
         #
         #   * #1618 — `NC_TEST.1:g.262TG[6]` -> `g.259_262GT[6]`
         #     (`repeat_tract_maximization`). `hgvs_to_spdi` read the anchored
@@ -1652,10 +1718,10 @@ jobs:
         #
         #   Both rows are green. THE SELECTION-WIDE RUN THIS COMMENT USED TO ASK
         #   FOR HAS NOW BEEN DONE, and it is RED — so the two closures were
-        #   necessary and not sufficient, and the flag stays unset. Measured on
-        #   `origin/main` @ 674e9c8b, this job's four flags plus
-        #   `FERRO_ASSERT_SEQUENCE=1`, over the `-E` below with its two `env:`
-        #   filters expanded and no `--partition`:
+        #   necessary and not sufficient. Measured on `origin/main` @ 674e9c8b,
+        #   this job's then-three flags plus `FERRO_ASSERT_SEQUENCE=1`, over the
+        #   selection THIS JOB HAD AT THAT COMMIT — two `env:` filters, not the
+        #   four below — with them expanded and no `--partition`:
         #
         #     Summary [87.5s] 10383 tests run: 10378 passed, 5 failed, 289 skipped
         #
@@ -1721,8 +1787,35 @@ jobs:
         #   `every_stranded_identity_is_non_confluent_with_its_surviving_member`
         #   and `the_wider_multi_member_census_is_what_the_header_says`.
         #
-        #   So arming this is blocked on a home for `stranded_identity_member`,
-        #   and on that alone — #1690 is closed and is no longer a blocker.
+        #   That put arming it as blocked on a home for
+        #   `stranded_identity_member` and on that alone — #1690 is closed and is
+        #   no longer a blocker.
+        #
+        #   RE-MEASURED AGAIN FOR #1815, on `origin/main` @ 1aecc93a, same recipe:
+        #
+        #     Summary [128.560s] 11202 tests run: 11199 passed, 3 failed, 321 skipped
+        #
+        #   THREE, not two — and the third is a module the two readings above could
+        #   not have named, because it did not exist when either was taken.
+        #   `dump_normalized_corpus`'s
+        #   `the_render_time_reference_matches_what_the_pipeline_was_given` landed
+        #   with #2051 on 2026-08-16 and re-normalizes each corpus row outside
+        #   `catch_unwind`, so 47 corpus inputs abort it: #2140, #1983 and #2139.
+        #   It passes UNARMED in the same tree (measured, EXIT=0), so it is an
+        #   oracle fire and not a pre-existing red.
+        #
+        #   The two `stranded_identity_member` rows are UNCHANGED, and are still
+        #   `every_stranded_identity_is_non_confluent_with_its_surviving_member`
+        #   and `the_wider_multi_member_census_is_what_the_header_says` — verified
+        #   by removing that row from the filter and reading the names off the red
+        #   run, not by matching them against this comment. The module has 4 tests
+        #   and the other 2 pass armed; `SEQUENCE_ORACLE_EXCLUDE` names the MODULE
+        #   anyway, because the module's whole purpose is pinning the defect, and
+        #   names a single TEST only where the surrounding module is innocent (the
+        #   render-time gate, whose other 55 tests stay armed).
+        #
+        #   READ THE PATTERN, NOT THE COUNT: 5 -> 2 -> 3 in three days, changing in
+        #   BOTH directions. Re-measure before trusting any figure in this comment.
         #
         #     This row replaced an earlier one on the same issue
         #     (`NM_000492.4:c.1520_1522del` -> `c.1521_1523del`), and the swap is
@@ -1739,24 +1832,58 @@ jobs:
         #     otherwise lost. See `CDOT_GAP_JUNCTIONS` in
         #     `tests/it/normalization_transcripts_exon_contract.rs`.
         #
-        # Suppressing a row would hollow out the oracle, which is why neither was
-        # ever exempted. It runs in `sweeps` below — the cis-allele space every
-        # one of the eight defects it was built for came from, and where it is
-        # measured green — and non-gating in the nightly. Both rows closing
-        # unblocked the two obstacles this comment knew about; the selection-wide
-        # run above then found two more, so the flag stays out until those are
-        # settled. Do not read "both rows are green" as "it can be armed".
+        # Suppressing a row AT THE SEAM would hollow out the oracle, which is why
+        # none of these is exempted there. The exclusion is a SELECTION TERM in
+        # this file instead — visible, measured, and carrying the open issue that
+        # retires it — and the distinction is the whole reason
+        # `SEQUENCE_ORACLE_EXCLUDE` exists as its own variable. The flag also runs
+        # in `sweeps` below, over the cis-allele space every one of the eight
+        # defects it was built for came from, and non-gating in the nightly.
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           FERRO_ASSERT_IN_BOUNDS: "1"
+          FERRO_ASSERT_SEQUENCE: "1"
           # As in `test` above: an absent bulk fixture fails rather than skips.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/4 \
-            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER) and not ($SEQUENCE_ORACLE_EXCLUDE)"
+      # The other half of the trade, and the reason arming the flag above costs no
+      # coverage: the rows `SEQUENCE_ORACLE_EXCLUDE` withholds from the armed step
+      # still run under the three oracles they pass, exactly as they did before
+      # #1815. Without this step, negating that filter would withdraw them from all
+      # four — three oracles surrendered to gain one.
+      #
+      # Runs on ONE shard and UN-partitioned, deliberately. It selects 5 tests, so
+      # `--partition hash:K/4` would leave some shards selecting none, and neither
+      # answer to that is acceptable: `--no-tests=fail` would redden a shard for
+      # doing its job, and `--no-tests=pass` would be a step that goes green having
+      # run nothing — the vacuous pass this repository keeps meeting. Un-partitioned
+      # on shard 1 with `--no-tests=fail` instead, so a rename that empties the
+      # filter is loud rather than silent. These rows ran exactly once per CI run
+      # before this change too, spread across the shards, so nothing runs twice and
+      # nothing runs less.
+      #
+      # It carries no `if: always()`, so a red armed step on shard 1 skips it. That
+      # is the intended reading: the job is already failing and the useful signal is
+      # the armed step's own failure, not a further confirmation that five withheld
+      # rows still pass. Nothing here can turn a red job green — the concern the
+      # `.github/workflows/**` review rule raises about a skipped step is coverage
+      # lost on a PASSING run, and on a passing run this step always executes.
+      - name: Run the sequence-oracle exclusions under the other three oracles
+        if: matrix.shard == 1
+        env:
+          FERRO_ASSERT_IDEMPOTENT: "1"
+          FERRO_ASSERT_REPARSE: "1"
+          FERRO_ASSERT_IN_BOUNDS: "1"
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
+        run: |
+          scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite --no-tests=fail \
+            -E "$SEQUENCE_ORACLE_EXCLUDE"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
   #
@@ -1953,15 +2080,20 @@ jobs:
         # one is exactly the edit that would drop a sweep from CI silently.
         #
         # `issue_1615_denoted_sequence_oracle` is appended to the selection
-        # because this job is the only one IN THIS FILE that sets
-        # `FERRO_ASSERT_SEQUENCE` (`nightly-mutalyzer.yml` sets it too, but it is
-        # non-gating and selects only the reference-aware modules), and
-        # that module holds the one test which reads the oracle's counters —
-        # `the_seam_compares_when_the_flag_is_set`, the guard that a green run
-        # actually compared something rather than the seam call having been
-        # deleted. Without it here that guard would run only in jobs where the
-        # flag is unset, where it skips by design, so the wiring would be
-        # unverified everywhere.
+        # because that module holds the one test which reads the oracle's
+        # counters — `the_seam_compares_when_the_flag_is_set`, the guard that a
+        # green run actually compared something rather than the seam call having
+        # been deleted — and it skips by design wherever the flag is unset.
+        #
+        # It STAYS appended after #1815 armed `FERRO_ASSERT_SEQUENCE` in
+        # `test-oracle` too, and not out of redundancy: this job runs the module
+        # against `FERRO_SWEEP_SEEDS: full`, and its own selection is the
+        # cis-allele space the oracle was built for. `test-oracle` also selects
+        # that module (nothing in its `-E` negates it), so as of #1815 the counter
+        # guard is live in two gating jobs rather than one — read that as defence
+        # in depth, not as a second copy to remove. (`nightly-mutalyzer.yml` sets
+        # the flag as well, but it is non-gating and selects only the
+        # reference-aware modules.)
         #
         # Appended here rather than added to `SWEEP_FILTER` for two reasons.
         # `tests/it/sweep_filter_invariant.rs`'s
@@ -2001,6 +2133,15 @@ jobs:
   # move rather than a change of instrument. `sweeps` does set it, so these
   # modules could not simply be appended there.
   #
+  # #1815 armed that flag in `test-oracle`, so this job's armed step no longer
+  # mirrors that job's flag set — it is now a strict SUBSET of it, deliberately.
+  # Arming a fourth oracle here would be exactly the change of instrument the
+  # paragraph above refuses, and it has NOT been measured over
+  # `ORACLE_ONLY_FILTER`'s modules. Do not "restore parity" by copying the flag
+  # down here without taking that measurement first: `test-oracle`'s own comment
+  # records what a selection-wide armed run cost each of the three times one was
+  # taken, and the answer changed every time.
+  #
   # No `submodules: true`: none of the three modules names a path under
   # `assets/` (the spec worked-examples citation gate, which does, stays in
   # `test`). `spec-fixtures` IS needed —
@@ -2039,8 +2180,10 @@ jobs:
           path: tests/fixtures/
       - name: Run the censuses that need the oracles armed
         env:
-          # The three `test-oracle` sets, and only those three. See that job for
-          # what each asserts and why `FERRO_ASSERT_SEQUENCE` is not among them.
+          # Three of the four `test-oracle` sets, and only those three. See that
+          # job for what each asserts, and this job's own header for why
+          # `FERRO_ASSERT_SEQUENCE` is not among them even though #1815 added it
+          # there.
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           FERRO_ASSERT_IN_BOUNDS: "1"

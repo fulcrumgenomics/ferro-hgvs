@@ -330,10 +330,23 @@ fn the_parser_is_what_keeps_an_insertion_anchor_off_i64_max() {
 // identical either side and only the line moved. All three are green now.
 //
 // **Those three are not the regression guard, and that is the point of the
-// test below.** CI's `test-oracle` job does not set `FERRO_ASSERT_SEQUENCE`
-// (`sweeps` and the nightly do, over selections that exclude this module), so
-// the site would go back to being invisible to the required checks the moment
-// the refusal is removed. The guard has to be a test that runs unarmed.
+// test below.** The reason has changed since it was written, and the conclusion
+// has not. It used to be that CI's `test-oracle` job did not set
+// `FERRO_ASSERT_SEQUENCE` at all (`sweeps` and the nightly did, over selections
+// excluding this module), so the site would go back to being invisible to the
+// required checks the moment the refusal was removed.
+//
+// As of #1815 that job DOES set the flag, and this module runs under it: all 8
+// of its tests are armed and green, and — unlike `stranded_identity_member` —
+// it is deliberately NOT named in `ci.yml`'s `SEQUENCE_ORACLE_EXCLUDE`, because
+// #1690 closed and the three failures are gone. (It was on the debt list drafted
+// while #1690 was open; that row was never needed.)
+//
+// The guard below still has to be a test that runs unarmed, for a reason arming
+// the flag does not touch: an armed oracle catches this site only on a row that
+// happens to route through `hgvs_to_spdi` with an `i64::MAX`-adjacent `c.`
+// coordinate, which is a property of the corpus rather than of the refusal. The
+// unarmed test asserts the refusal itself.
 // ---------------------------------------------------------------------------
 
 #[test]
