@@ -136,7 +136,7 @@ impl DescriptionExtractor {
                 reference,
                 self.config.detect_duplications,
                 self.config.detect_inversions,
-            );
+            )?;
 
             let hgvs = generate_hgvs(&edit, &classification, accession);
 
@@ -215,5 +215,36 @@ mod tests {
         let result = extractor.extract("", "ATGC");
 
         assert!(result.is_err());
+    }
+
+    /// An insertion whose point sits past the end of the reference must decline
+    /// cleanly rather than panic (#2128). The alignment records a 1-based
+    /// `ref_start` of `reference.len() + 1` for a trailing insertion, and the
+    /// duplication classifier's preceding-bases slice then ran off the end of
+    /// the reference (`reference[pos - ins_len..pos]` with `pos > len`),
+    /// aborting the process with exit 101 on a well-formed input.
+    #[test]
+    fn an_insertion_past_the_reference_end_declines_instead_of_panicking() {
+        let extractor = DescriptionExtractor::with_defaults();
+        let result = extractor.extract("ATG", "ATGC");
+
+        match result {
+            Err(FerroError::InvalidCoordinates { .. }) => {}
+            other => panic!("expected InvalidCoordinates decline, got {other:?}"),
+        }
+    }
+
+    /// The duplication sibling of the case above: appending a copy of the final
+    /// base reaches the same out-of-bounds classifier slice and must decline
+    /// rather than panic (#2128).
+    #[test]
+    fn a_duplication_past_the_reference_end_declines_instead_of_panicking() {
+        let extractor = DescriptionExtractor::with_defaults();
+        let result = extractor.extract("ATG", "ATGG");
+
+        match result {
+            Err(FerroError::InvalidCoordinates { .. }) => {}
+            other => panic!("expected InvalidCoordinates decline, got {other:?}"),
+        }
     }
 }
