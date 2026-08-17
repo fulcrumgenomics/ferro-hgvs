@@ -350,9 +350,9 @@ the thing it summarises.
 **It is not the ruleset.** What ferro's output is allowed to be — which properties are
 absolute and which are best effort, what happens where the spec determines no answer, and what
 must be disclosed when a choice changes — is stated once, in
-[README.md, *Normalization rules*](../README.md#normalization-rules). That statement is
+[the normalization rules](src/reference/normalization-rules.md). That statement is
 deliberately not reproduced here, and single-sourcing it is itself part of one of the rulings
-below. Where this document and the README appear to disagree, the README governs and this
+below. Where this document and the ruleset page appear to disagree, the ruleset page governs and this
 document has a bug.
 
 **It is not a substitute for the records.** It is a reading of them. The records are what the
@@ -680,18 +680,15 @@ fn the_preamble_does_not_restate_the_readme_ruleset() {
         .0;
 
     assert!(
-        preamble.contains("../README.md#normalization-rules"),
-        "the preamble must send the reader to the README ruleset rather than restating it"
+        preamble.contains("src/reference/normalization-rules.md"),
+        "the preamble must send the reader to the ruleset page rather than restating it"
     );
 
-    let readme = read("README.md");
-    let section = readme
-        .split_once("\n## Normalization rules\n")
-        .expect("README has a Normalization rules section")
-        .1
-        .split_once("\n## ")
-        .expect("the section is followed by another")
-        .0;
+    let page = read("docs/src/reference/normalization-rules.md");
+    let section = page
+        .split_once("# Normalization rules\n")
+        .expect("the ruleset page has a title heading")
+        .1;
 
     let openers: Vec<&str> = section
         .lines()

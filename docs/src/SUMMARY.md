@@ -19,6 +19,7 @@
 
 # Reference
 
+- [Normalization rules](reference/normalization-rules.md)
 - [CLI reference](cli/overview.md)
 - [Supported HGVS syntax](reference/hgvs-syntax.md)
 

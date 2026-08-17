@@ -1,6 +1,7 @@
-//! Drift guard for the **Normalization rules** section of `README.md`.
+//! Drift guard for the **Normalization rules** page,
+//! `docs/src/reference/normalization-rules.md` (published in the mdBook docs site).
 //!
-//! That section is the project's stated contract for what the normalizer's output
+//! That page is the project's stated contract for what the normalizer's output
 //! is allowed to be: four rules about the output, three about the gaps. It is cited
 //! by rule number — from PR descriptions, from ruling records, and from
 //! `CONTRIBUTING.md`, whose "Declaring a representation change" section is rule 7's
@@ -25,7 +26,7 @@
 //! states this" — a guard satisfiable from a code block or an unrelated section is
 //! one that passes while the thing it guards is broken.
 //!
-//! That applies to the *pinned* side of a cross-claim as much as to the README
+//! That applies to the *pinned* side of a cross-claim as much as to the ruleset-page
 //! side, which is why [`banner_block`] exists: a whole-file `contains` over a
 //! 500-line Rust module is the same weak question in a different language.
 //!
@@ -37,6 +38,11 @@
 //! actually lands in.
 
 use std::path::PathBuf;
+
+/// The canonical ruleset page. The rules used to live in `README.md`; #2114
+/// moved them here, single-sourced in the mdBook, and repointed this guard and
+/// the `adjudication-precedence-order` ledger record with them.
+const RULESET_PAGE: &str = "docs/src/reference/normalization-rules.md";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,18 +59,18 @@ fn read(relative: &str) -> String {
 ///
 /// Every assertion below runs against a slice rather than the whole file,
 /// because a whole-file search answers a weaker question than the one being
-/// asked. `README.md` is long and full of HGVS prose and fenced examples, so a
-/// rule opener or an organising heading appearing *anywhere* — a later section,
-/// a code block, a changelog snippet — would satisfy a whole-file `find` while
+/// asked. The ruleset page carries HGVS prose and fenced examples, so a rule
+/// opener or an organising heading appearing *anywhere* — a later section, a
+/// code block, a changelog snippet — would satisfy a whole-file `find` while
 /// the ruleset itself was incomplete or renumbered. That is the failure this
 /// guard exists to catch, so it must not be satisfiable from outside the
 /// section it guards.
 ///
 /// The match is **line-anchored** (the whole trimmed line must equal `heading`)
-/// rather than a substring `find`. A substring search for `## Normalization
-/// rules` also matches inside a `### Normalization rules` heading, since `##`
-/// is a prefix of `###` — so a deeper heading added later would silently move
-/// where the slice begins.
+/// rather than a substring `find`. A substring search for `## The output
+/// contract` also matches inside a `### The output contract` heading, since
+/// `##` is a prefix of `###` — so a deeper heading added later would silently
+/// move where the slice begins.
 fn section<'a>(text: &'a str, heading: &str) -> &'a str {
     let level = heading.chars().take_while(|c| *c == '#').count();
     assert!(level > 0, "`{heading}` is not a Markdown heading");
@@ -116,7 +122,7 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
 /// token sitting only in a doc comment inside the right record still passes.
 /// What it rules out is the failure that actually happens here — the case
 /// migrating to a different record, or surviving only as commented-out text
-/// elsewhere in the file — while the README goes on citing it.
+/// elsewhere in the file — while the ruleset page goes on citing it.
 fn banner_block<'a>(text: &'a str, title: &str) -> &'a str {
     /// The prefix a banner rule line starts with; long enough not to match an
     /// ordinary `// --` comment.
@@ -153,27 +159,28 @@ fn banner_block<'a>(text: &'a str, title: &str) -> &'a str {
     &text[start..end]
 }
 
-/// The section heading, and the subsection headings that organise it.
+/// The page's title heading, and the subsection headings that organise it.
 ///
 /// Listed in the order they must appear: the two halves of the ruleset first
 /// (`The output contract` holds rules 1-4, `The procedure` holds 5-7), then the
-/// explanatory material.
+/// explanatory material. The page's title is an H1 (`#`); the subsections are
+/// H2 (`##`), one level shallower than they were as a README subsection.
 const HEADINGS: &[&str] = &[
-    "## Normalization rules",
-    "### The output contract",
-    "### The procedure",
-    "### Why 2 and 3 are best effort, and 1 and 4 are not",
-    "### A worked example of reading force from prose",
-    "### What rule 3 excludes",
-    "### Known limitation",
+    "# Normalization rules",
+    "## The output contract",
+    "## The procedure",
+    "## Why 2 and 3 are best effort, and 1 and 4 are not",
+    "## A worked example of reading force from prose",
+    "## What rule 3 excludes",
+    "## Known limitation",
 ];
 
-/// The coordinates the README's rule 3 example is stated on.
+/// The coordinates the ruleset page's rule 3 example is stated on.
 ///
-/// The example exists in two places by necessity — the README states the rule and
+/// The example exists in two places by necessity — the page states the rule and
 /// `cis_confluence_adjudication.rs` pins the behaviour — so it is exactly the shape
 /// this repository drifts on. Neither copy is the authority for the other's *prose*;
-/// what must not diverge is the case itself, since a README example on coordinates
+/// what must not diverge is the case itself, since a page example on coordinates
 /// no test covers is a claim nothing checks.
 const RULE_3_EXAMPLE_TOKENS: &[&str] = &[
     "NC_000001.11",
@@ -184,11 +191,16 @@ const RULE_3_EXAMPLE_TOKENS: &[&str] = &[
 ];
 
 /// The banner block of `cis_confluence_adjudication.rs` that owns the rule 3
-/// example, so the pinned side of the cross-claim is scoped like the README side.
+/// example, so the pinned side of the cross-claim is scoped like the page side.
 const RULE_3_PINNED_RECORD: &str =
     "// Record 1 — settled: separation is a property of the spelling";
 
-/// The seven rules, by number and name, exactly as the README opens each one.
+/// The GitHub blob link the ruleset page uses for `cis_confluence_adjudication.rs`.
+/// A docs-site page cannot use a repo-relative link (it would resolve inside
+/// `docs/src/` and fail the link check), so repo files are cited by absolute URL.
+const RULE_3_PINNED_LINK: &str = "[`tests/it/cis_confluence_adjudication.rs`](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/tests/it/cis_confluence_adjudication.rs)";
+
+/// The seven rules, by number and name, exactly as the page opens each one.
 ///
 /// The name is part of the guard because the numbers alone are what a renumbering
 /// preserves: swapping two rules keeps `1.`..`7.` intact and silently re-points
@@ -204,15 +216,15 @@ const RULE_OPENERS: &[&str] = &[
 ];
 
 #[test]
-fn readme_states_all_seven_normalization_rules() {
-    let readme = read("README.md");
-    let rules = section(&readme, "## Normalization rules");
+fn the_page_states_all_seven_normalization_rules() {
+    let page = read(RULESET_PAGE);
+    let rules = section(&page, "# Normalization rules");
     let mut cursor = 0usize;
     for opener in RULE_OPENERS {
         assert_eq!(
             rules.matches(opener).count(),
             1,
-            "the `## Normalization rules` section must state `{opener}` exactly once; \
+            "the ruleset page must state `{opener}` exactly once; \
              a rule was dropped, duplicated, or reworded"
         );
         let at = rules
@@ -220,7 +232,7 @@ fn readme_states_all_seven_normalization_rules() {
             .expect("checked to occur exactly once just above");
         assert!(
             at >= cursor,
-            "the `## Normalization rules` section states `{opener}` out of order; \
+            "the ruleset page states `{opener}` out of order; \
              the rules are cited by number, so reordering them re-points every \
              existing citation"
         );
@@ -230,10 +242,10 @@ fn readme_states_all_seven_normalization_rules() {
 
 /// Each rule must sit under the subsection that classifies it.
 ///
-/// [`readme_states_all_seven_normalization_rules`] pins the openers' *order*,
+/// [`the_page_states_all_seven_normalization_rules`] pins the openers' *order*,
 /// which is a strictly weaker claim than the one the module doc makes: it walks
 /// the rules with one cursor and the headings with another, and the two never
-/// meet. Rule 4 could move below `### The procedure` — reclassifying an
+/// meet. Rule 4 could move below `## The procedure` — reclassifying an
 /// **Absolute** output-contract guarantee as procedure — and both walks would
 /// still pass, because the relative order of every opener and every heading is
 /// unchanged. The half a rule lives in is what says whether it is a promise
@@ -242,17 +254,17 @@ fn readme_states_all_seven_normalization_rules() {
 fn each_rule_sits_under_the_heading_that_classifies_it() {
     const OUTPUT_CONTRACT: usize = 4; // rules 1-4; the rest belong to the procedure
 
-    let readme = read("README.md");
-    let rules = section(&readme, "## Normalization rules");
-    let output_contract = section(rules, "### The output contract");
-    let procedure = section(rules, "### The procedure");
+    let page = read(RULESET_PAGE);
+    let rules = section(&page, "# Normalization rules");
+    let output_contract = section(rules, "## The output contract");
+    let procedure = section(rules, "## The procedure");
 
     let (contract_rules, procedure_rules) = RULE_OPENERS.split_at(OUTPUT_CONTRACT);
     for (half, openers) in [
-        ("### The output contract", contract_rules),
-        ("### The procedure", procedure_rules),
+        ("## The output contract", contract_rules),
+        ("## The procedure", procedure_rules),
     ] {
-        let slice = if half == "### The output contract" {
+        let slice = if half == "## The output contract" {
             output_contract
         } else {
             procedure
@@ -271,9 +283,9 @@ fn each_rule_sits_under_the_heading_that_classifies_it() {
 }
 
 #[test]
-fn readme_keeps_the_headings_that_organise_the_rules() {
-    let readme = read("README.md");
-    let rules = section(&readme, "## Normalization rules");
+fn the_page_keeps_the_headings_that_organise_the_rules() {
+    let page = read(RULESET_PAGE);
+    let rules = section(&page, "# Normalization rules");
     let mut cursor = 0usize;
     for heading in HEADINGS {
         // Exactly once, not merely present: a duplicated organising heading
@@ -282,15 +294,14 @@ fn readme_keeps_the_headings_that_organise_the_rules() {
         assert_eq!(
             rules.matches(heading).count(),
             1,
-            "the `## Normalization rules` section must carry the heading `{heading}` \
-             exactly once"
+            "the ruleset page must carry the heading `{heading}` exactly once"
         );
         let at = rules
             .find(heading)
             .expect("checked to occur exactly once just above");
         assert!(
             at >= cursor,
-            "the `## Normalization rules` section states `{heading}` out of order"
+            "the ruleset page states `{heading}` out of order"
         );
         cursor = at;
     }
@@ -301,7 +312,7 @@ fn the_ruleset_and_its_disclosure_mechanism_point_at_each_other() {
     // `CONTRIBUTING.md`'s trailer section is rule 7's mechanism, and rule 7 is that
     // section's reason for existing. Either pointer going stale leaves a reader on
     // one half of one statement.
-    let readme = read("README.md");
+    let page = read(RULESET_PAGE);
     let contributing = read("CONTRIBUTING.md");
 
     // Whole Markdown link tokens, not bare fragments: `contains("…#anchor")`
@@ -309,7 +320,7 @@ fn the_ruleset_and_its_disclosure_mechanism_point_at_each_other() {
     // left behind after the link itself was deleted.
     //
     // Both sides are asserted **inside** the section the link belongs to. The
-    // README side must sit in the ruleset, since rule 7 is what it belongs to;
+    // page side must sit in the ruleset, since rule 7 is what it belongs to;
     // the CONTRIBUTING side must sit in `Declaring a representation change`,
     // since that section is rule 7's mechanism. A whole-file `contains` on
     // either side passes while the backlink has migrated somewhere the reader
@@ -319,46 +330,42 @@ fn the_ruleset_and_its_disclosure_mechanism_point_at_each_other() {
     // `section()` panics with a clear message when its heading is absent, so
     // each call below doubles as the "the anchor still exists" assertion; the
     // link targets are the two headings themselves.
-    let rules = section(&readme, "## Normalization rules");
+    let rules = section(&page, "# Normalization rules");
     let declaring = section(&contributing, "### Declaring a representation change");
 
     assert!(
-        rules.contains("[CONTRIBUTING.md](CONTRIBUTING.md#declaring-a-representation-change)"),
-        "the `## Normalization rules` section must link to CONTRIBUTING.md's \
+        rules.contains("[CONTRIBUTING.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/CONTRIBUTING.md#declaring-a-representation-change)"),
+        "the ruleset page must link to CONTRIBUTING.md's \
          `Declaring a representation change` section, which is rule 7's mechanism"
     );
     assert!(
-        declaring.contains("[normalization rules](README.md#normalization-rules)"),
+        declaring.contains("[normalization rules](docs/src/reference/normalization-rules.md)"),
         "CONTRIBUTING.md's `Declaring a representation change` section must link \
-         back to the README's normalization rules, so the trailer's purpose is \
+         back to the normalization rules page, so the trailer's purpose is \
          reachable from the trailer's instructions"
     );
 }
 
-/// The ledger record that names `README.md` as canonical must find the section
+/// The ledger record that names the ruleset page as canonical must find the page
 /// it names.
 ///
 /// The `adjudication-precedence-order` record was rewritten from a restatement
 /// of the ruleset into a **pointer** at it. A pointer has a failure mode a
-/// restatement does not: it can dangle. Nothing asserted that it resolved —
-/// `readme_normalization_rules.rs` guards the README against itself and knows
-/// nothing of the ledger, and `ruling_citation_currency.rs` checks the ledger's
-/// citations of *spec clauses*, not of this repository's own documents.
+/// restatement does not: it can dangle. Nothing else asserts that it resolves —
+/// this module guards the page against itself and knows nothing of the ledger,
+/// and `ruling_citation_currency.rs` checks the ledger's citations of *spec
+/// clauses*, not of this repository's own documents.
 ///
-/// The gap was live, and named at the time it was live: while the ruleset PR was
-/// unmerged, this record's opening claim — that the ruleset "lives in
-/// `README.md`" — was false on `main`, and the required merge order was carried
-/// only by a PR comment. The guard could not be written on that branch because
-/// it would have been red until the README section landed. It has, so this is
-/// that guard, and from here the order is enforced by the suite rather than
-/// remembered.
+/// #2114 moved the canonical ruleset out of `README.md` and into the mdBook page
+/// `docs/src/reference/normalization-rules.md`, amending this record's pointer in
+/// the same change. This guard follows the pointer to wherever it now names.
 ///
 /// Deliberately checks that the record *is still a pointer*, not only that the
 /// pointer resolves. "Do not restate the rules" is the substance of the ruling,
 /// and a record that quietly grew a copy of them would satisfy a
 /// resolves-only check while recreating the drift the ruling exists to stop.
 #[test]
-fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
+fn the_ledgers_pointer_at_the_ruleset_resolves() {
     let ledger_path =
         repo_root().join("tests/fixtures/grammar/hgvs_spec_normalization_overrides.json");
     let text = std::fs::read_to_string(&ledger_path)
@@ -372,31 +379,31 @@ fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
         .iter()
         .find(|r| r["id"] == "adjudication-precedence-order")
         .expect(
-            "the `adjudication-precedence-order` record must exist; it is what names the README \
-             ruleset as canonical",
+            "the `adjudication-precedence-order` record must exist; it is what names the \
+             ruleset page as canonical",
         );
     let rationale = record["rationale"].as_str().expect("a string rationale");
 
     assert!(
-        rationale.contains("README.md"),
-        "`adjudication-precedence-order` no longer names `README.md`. If the canonical ruleset \
-         moved, move this guard with it; if the record went back to restating the rules, that is \
-         the drift the ruling forbids"
+        rationale.contains(RULESET_PAGE),
+        "`adjudication-precedence-order` no longer names `{RULESET_PAGE}`. If the canonical \
+         ruleset moved, move this guard with it; if the record went back to restating the \
+         rules, that is the drift the ruling forbids"
     );
 
     // `section` panics with the heading it could not find, so this call IS the
     // "the pointer resolves" assertion — the same construction
     // `the_ruleset_and_its_disclosure_mechanism_point_at_each_other` relies on.
-    let readme = read("README.md");
-    let rules = section(&readme, "## Normalization rules");
+    let page = read(RULESET_PAGE);
+    let rules = section(&page, "# Normalization rules");
     assert!(
         !rules.trim().is_empty(),
-        "the `## Normalization rules` section exists but is empty, so the ledger's pointer \
-         resolves to nothing"
+        "the ruleset page's `# Normalization rules` section exists but is empty, so the \
+         ledger's pointer resolves to nothing"
     );
 
-    // Still a pointer, not a restatement. The rules are numbered `1.`..`7.` in
-    // the README; a record that had grown its own copy would carry several of
+    // Still a pointer, not a restatement. The rules are numbered `1.`..`7.` on
+    // the page; a record that had grown its own copy would carry several of
     // their bolded names.
     let restated: Vec<&str> = [
         "**Confluent.**",
@@ -414,11 +421,11 @@ fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
     );
 }
 
-/// The README's rule 3 example must still be the case the adjudication test pins.
+/// The ruleset page's rule 3 example must still be the case the adjudication test pins.
 ///
 /// [`the_ruleset_and_its_disclosure_mechanism_point_at_each_other`] guards a
 /// cross-*link*; this guards a cross-*claim*, which is the weaker link of the two.
-/// A link breaks loudly when its anchor moves. An example does not: the README can
+/// A link breaks loudly when its anchor moves. An example does not: the page can
 /// go on quoting coordinates long after the test stopped covering them, or the test
 /// can be re-pinned onto a different run, and both documents still read as though
 /// they agree. That is the failure this repository has recorded against itself
@@ -431,30 +438,30 @@ fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
 ///
 /// **Both sides are scoped**, which is what the module doc above claims of every
 /// assertion here and what this test would otherwise have been the one exception
-/// to. The README side is bound to `### What rule 3 excludes` by [`section`]; the
+/// to. The page side is bound to `## What rule 3 excludes` by [`section`]; the
 /// pinned side is bound to record 1's banner block by [`banner_block`], since a
 /// whole-file `contains` over a 500-line module answers the weaker question
 /// [`section`]'s own doc argues against — it would stay green with the case moved
 /// into an unrelated record, or left behind as commented-out text.
 #[test]
 fn the_rule_3_example_is_the_case_the_adjudication_test_pins() {
-    let readme = read("README.md");
-    let rules = section(&readme, "## Normalization rules");
-    let example = section(rules, "### What rule 3 excludes");
+    let page = read(RULESET_PAGE);
+    let rules = section(&page, "# Normalization rules");
+    let example = section(rules, "## What rule 3 excludes");
     let pinned_file = read("tests/it/cis_confluence_adjudication.rs");
     let pinned = banner_block(&pinned_file, RULE_3_PINNED_RECORD);
 
     for token in RULE_3_EXAMPLE_TOKENS {
         assert!(
             example.contains(token),
-            "the README's rule 3 example no longer states `{token}`; if the example moved to \
-             different coordinates, move `RULE_3_EXAMPLE_TOKENS` and the pinned test with it"
+            "the ruleset page's rule 3 example no longer states `{token}`; if the example moved \
+             to different coordinates, move `RULE_3_EXAMPLE_TOKENS` and the pinned test with it"
         );
         assert!(
             pinned.contains(token),
-            "the README's rule 3 example states `{token}`, which \
+            "the ruleset page's rule 3 example states `{token}`, which \
              `tests/it/cis_confluence_adjudication.rs` no longer covers under \
-             `{RULE_3_PINNED_RECORD}`. The README would be quoting a case nothing checks — or \
+             `{RULE_3_PINNED_RECORD}`. The page would be quoting a case nothing checks — or \
              the case moved to another record, in which case move `RULE_3_PINNED_RECORD` too"
         );
     }
@@ -462,9 +469,7 @@ fn the_rule_3_example_is_the_case_the_adjudication_test_pins() {
     // The link is what sends a reader from the claim to its evidence, so it is
     // part of the claim rather than a courtesy.
     assert!(
-        example.contains(
-            "[`tests/it/cis_confluence_adjudication.rs`](tests/it/cis_confluence_adjudication.rs)"
-        ),
+        example.contains(RULE_3_PINNED_LINK),
         "the rule 3 example must link to the test that pins it"
     );
 }

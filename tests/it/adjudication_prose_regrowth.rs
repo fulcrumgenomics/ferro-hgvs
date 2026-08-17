@@ -110,7 +110,7 @@
 //!
 //! Every existing ledger guard — those two plus `claude_md_adjudication_tables`,
 //! `normalization_contract_doc`, `ledger_clause_jurisdiction`,
-//! `ruling_guard_field` and `readme_normalization_rules` — fires only on prose
+//! `ruling_guard_field` and `normalization_ruleset_page` — fires only on prose
 //! that already names a record, or on the ledger's own contents. **The class that
 //! cost this project a week names no record and cites no clause**: the falsified
 //! equal-length premise was a bare assertion. This file is the only one that can

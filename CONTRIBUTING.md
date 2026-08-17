@@ -74,7 +74,7 @@ fix(normalize): correct boundary detection for UTR regions
 ### Declaring a representation change
 
 This section is the mechanism for rule 7 of the project's
-[normalization rules](README.md#normalization-rules); read that section for what has to be
+[normalization rules](docs/src/reference/normalization-rules.md); read that section for what has to be
 disclosed, and this one for how to declare it.
 
 **Disclosure is the shipped guarantee — stability is not.** A downstream consumer
