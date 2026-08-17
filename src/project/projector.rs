@@ -1751,6 +1751,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    (#653/#713); the parent placement must be selected by the input's
         //    build, matching what `deanchor` itself used.
         let input_build = self.build_hint_for_variant(variant);
+        // A bare `NG_`/`LRG_` genomic *input* carries parent-relative coordinates
+        // that only a chromosomal placement can map into the fan-out (`NC_`) frame.
+        // With no placement on the requested build, `deanchor_genomic_parent_input`
+        // leaves the input in its unmappable parent frame and the fan-out below
+        // enumerates nothing — degrading a genuine decline into an empty
+        // `Ok(vec![])` a caller cannot distinguish from "this locus overlaps no
+        // transcripts" (#2102). Surface the parent's decline instead, mirroring
+        // `project_to_genomic`'s no-placement decline (`reanchor_genome_output`,
+        // #480/#655). A bare `NC_` chromosome input is already in the fan-out frame
+        // and must NOT be caught here — it legitimately has no placement and fans
+        // out (or returns an empty `Vec` for a locus with no transcripts) as before.
+        if let HgvsVariant::Genome(gv) = variant {
+            if (&*gv.accession.prefix == "NG" || gv.accession.is_lrg())
+                && self
+                    .provider
+                    .genomic_placement_on_build(&gv.accession, input_build)
+                    .is_none()
+            {
+                return Err(FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "cannot enumerate transcripts overlapping {}{}: no chromosomal \
+                         placement is known for this NG_/LRG_ reference, so its \
+                         parent-relative coordinates cannot be mapped into cdot's \
+                         chromosome (NC_) frame (#480/#2102)",
+                        gv.accession.transcript_accession(),
+                        match input_build {
+                            Some(build) => format!(" on {build}"),
+                            None => String::new(),
+                        },
+                    ),
+                });
+            }
+        }
         let (variant, parent) = self.deanchor_genomic_parent_input(variant);
         // 1. Normalize once in the genome frame, then fan out across the
         //    overlapping transcripts. Use `normalize_core_checked` to keep the
@@ -10795,6 +10828,41 @@ mod tests {
             let err = vp
                 .project_to_genomic(&HgvsVariant::Cds(cds))
                 .expect_err("NG_ parent without a placement must decline, not emit invalid HGVS");
+            match err {
+                FerroError::UnsupportedProjection { reason } => assert!(
+                    reason.contains("NG_TEST.1") && reason.contains("no chromosomal placement"),
+                    "expected a no-placement decline naming NG_TEST.1, got: {reason}"
+                ),
+                other => panic!("expected UnsupportedProjection, got: {other:?}"),
+            }
+        }
+
+        /// The multi-axis sibling of the decline above (#2102). A bare `NG_`/`LRG_`
+        /// genomic *input* carries parent-relative coordinates that only a
+        /// chromosomal placement can map into the fan-out (`NC_`) frame. With no
+        /// placement on the requested build, `project_variant_all` must surface the
+        /// parent's decline the way `project_to_genomic` does — not degrade it into
+        /// an empty `Ok(vec![])`, which a caller cannot distinguish from "this locus
+        /// overlaps no transcripts".
+        #[test]
+        fn project_variant_all_ng_parent_without_placement_declines() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            // NG_TEST.1 has no registered chromosomal placement in the test provider.
+            let g = GenomeVariant {
+                accession: ng_parent("TEST", 1),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            };
+            let err = vp
+                .project_variant_all(&HgvsVariant::Genome(g))
+                .expect_err("NG_ genomic input without a placement must decline, not return []");
             match err {
                 FerroError::UnsupportedProjection { reason } => assert!(
                     reason.contains("NG_TEST.1") && reason.contains("no chromosomal placement"),
