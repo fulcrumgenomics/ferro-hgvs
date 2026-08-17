@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**36 adjudication records — 33 decided, 3 open.**
+**37 adjudication records — 34 decided, 3 open.**
 
 ## What this document is
 
@@ -91,6 +91,7 @@ for the knob and its traps.
 - [`c-and-n-positions-are-flat-transcript-offsets`](#c-and-n-positions-are-flat-transcript-offsets)
 - [`c-description-against-an-unresolvable-cds-is-refused`](#c-description-against-an-unresolvable-cds-is-refused)
 - [`canonical-form-choice-when-both-legal`](#canonical-form-choice-when-both-legal)
+- [`cds-unknown-position-is-refused-at-conversion`](#cds-unknown-position-is-refused-at-conversion)
 - [`coding-axis-merges-are-a-disclosed-general-34-deviation`](#coding-axis-merges-are-a-disclosed-general-34-deviation)
 - [`codon-carve-out-shape-restriction`](#codon-carve-out-shape-restriction)
 - [`conflicting-member-geometry-refusal-scope`](#conflicting-member-geometry-refusal-scope)
@@ -558,6 +559,37 @@ THE RESIDUE THIS DOES NOT REACH. `general.md:55` ranks five types — substituti
 COST, MEASURED, SO THIS IS NOT ADOPTED AS A SLOGAN. A fewest-members-subject-to-minimal-edit-distance partitioner was measured end to end: Mutalyzer agreement 200/234 -> 177/234, and release-to-release drift 31 -> 849 rows, a 27x increase. Splits are also non-unique — exact enumeration over 40 rows found 27 admitting more than one equally-compliant split, median 2 and max 125, and the spec's own `:44-47` example admits five. Re-derivation must therefore be paired with a deterministic choice among equally-minimal partitions; where that choice is arbitrary, `adjudication-precedence-order` rank (5) breaks it toward the already-shipped form. Every resulting move is declared under rank (4).
 
 A FOURTH PIECE OF COUNTER-EVIDENCE, ADDED 2026-08-11, AND IT IS THE SHARPEST OF THE FOUR BECAUSE IT IS A SEQUENCE-IDENTITY CASE RATHER THAN A PROVENANCE ONE. The three above — `DNA/delins.md:83`, `RNA/delins.md:41`, and the repeat pages — all condition a preference on information that is not in the two sequences, so re-derivation cannot honour them and the trade is visible from the outside. `protein/delins.md:50` is different in kind: "Although the proteins resulting from the changes `NM_080877.2:c.1733_1735delinsTTT` and `c.1732_1794del` are identical, their HGVS description is different." Here the RESULTING SEQUENCES are stated by the spec to be the same, and the spec still keeps two descriptions apart — which is the one thing that derivation from the resulting sequence structurally cannot do. Note what the sentence's referent is, because the reading matters: `:47-49` gives each of the two DNA changes its own predicted protein consequence (`p.(Pro578_Lys579delinsLeuTer)` against `p.(Pro578_Gln598del)`), so "their HGVS description" reads either as the two DNA descriptions or as those two protein consequences, and on the second reading it is a protein description that depends on the underlying DNA change — exactly what `general.md:156-159` tells a protein description not to read back. THIS DOES NOT OVERTURN THE RULING. It is recorded so it is not later discovered as a refutation, which is the same service the paragraph above performs for the other three.
+
+#### `cds-unknown-position-is-refused-at-conversion`
+
+**Status:** decided
+
+**The question.** A `c.?` position states that the coordinate is unknown. When `CoordinateMapper::cds_to_tx` converts it toward a transcript coordinate (on the way to SPDI), should it coerce `c.?` into a concrete transcript position, or refuse it? Ferro used to coerce: `c.?` answered `c.1`'s own transcript coordinate (base 6 on the test transcript, which #1910 measured as bit-identical to `c.1+5`), because `CDS_BASE_UNKNOWN` is the integer `0` and `0 < 1` took the 5'UTR branch with a zero displacement.
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 5 (silent limb) where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** COERCING `c.?` TO A CONCRETE POSITION (the status quo this record replaces). Rejected: `?` is the spec's explicit marker for an UNKNOWN position (`general.md:87`), so an input carrying it has DECLINED to name the coordinate. `cds_to_tx` answered `c.1`'s own transcript coordinate anyway — a fabricated position, bit-identical to an ordinary in-CDS coordinate — so a description stating "I do not know the position" became a description stating position 6, and through `hgvs_to_spdi` a storable-but-wrong SPDI triple a consumer can persist and key on. That is the same failure the #1747 refusals (`c.pterdel`/`c.qterdel`/`c.1del`, storable-but-wrong triples) and the `spdi-n-unit-repeat-refusal` (`insN[341]`, a length asserted as bases) were decided against: a plausible-but-wrong answer a consumer can persist is worse than a clean decline. RULING IT AS A SPEC-CLAUSE DECISION (a `governing` clause). Rejected: the recommendations define what `?` MEANS in a description (`general.md:87`, `uncertain.md:12` — an unknown nucleotide or amino acid position) but say nothing about coordinate conversion or about what a tool must do when asked to place `c.?` on a transcript axis. Propagating the `?` through conversion and refusing at conversion are both consistent with the description's meaning; no clause forces the choice. So there is no clause to hold governing — this is `README.md` rule 5's silent limb. DISTINGUISHING IT FROM THE TWO ADJACENT REFERENCE-FRAME RECORDS, because it is easy to file under either and it belongs under neither. `c-and-n-positions-are-flat-transcript-offsets` decides the coordinate SPACE a known `c.` number lives in (flat offset vs. exon walk); `c.?` carries no number to place in any space. `c-description-against-an-unresolvable-cds-is-refused` decides a case where the REFERENCE fails to resolve a CDS; here the reference is fine and it is the DESCRIPTION that carries `?`. This record is about a description that explicitly declines to give a coordinate, whatever the reference holds.
+
+**Also cited.**
+
+- `docs/recommendations/general.md:87`
+  > `?` (question mark) is used to indicate unknown positions (nucleotide or amino acid)
+- `docs/recommendations/uncertain.md:12`
+  > `?` (question mark) is used to indicate unknown positions (nucleotide or amino acid)
+
+**The ruling.**
+
+OPERATOR RULING — DECIDED: REFUSE. `CoordinateMapper::cds_to_tx` refuses a `c.?` position rather than coercing it into a concrete transcript coordinate. `c.?` states that the position is unknown (`general.md:87`, restated at `uncertain.md:12`), so there is no coordinate for the conversion to answer with, and fabricating one is a storable-but-wrong result rather than a helpful default.
+
+WHAT IT REPLACES, AS A BEHAVIOUR. `cds_to_tx` answered `c.?` with `c.1`'s own transcript coordinate — base 6 on the test transcript `NM_TEST.1` (`cds_start = 6`), which #1910 measured as bit-identical to `c.1+5`. The mechanism: `CDS_BASE_UNKNOWN` is the integer `0` (`src/hgvs/location.rs`), and `0 < 1` fell into the 5'UTR arm with a zero displacement, so the unknown sentinel was quietly answered the CDS start. Carried through `hgvs_to_spdi`, a description that names no position produced a concrete SPDI triple a consumer could store and key on.
+
+THE PRINCIPLE, WHICH IS IMPORTED FROM SETTLED RECORDS RATHER THAN INVENTED. A plausible-but-wrong answer that a consumer can persist is worse than a clean decline. #1747 refused `c.pterdel`/`c.qterdel`/`c.1del` for exactly this — each produced a storable-but-wrong SPDI triple by collapsing a no-coordinate input onto an ordinary base — and `spdi-n-unit-repeat-refusal` refused `insN[341]` for asserting 341 bases the input never named. `c.?` is the same shape one converter over: the input has declined to give the coordinate, and the honest response is to decline in turn, not to substitute one.
+
+WHY IT IS A HOUSE CHOICE, NOT A CLAUSE RULING. The recommendations describe descriptions; `general.md:87` says what `?` MEANS, not what a coordinate mapper must do with it. Refusing at conversion and propagating the `?` are both consistent with that meaning, so no clause governs the choice — this is `README.md` rule 5's silent limb, and it must never be cited as conformance.
+
+WHERE, AND SCOPE. The guard sits at the top of `cds_to_tx` (`src/convert/mapper.rs`), keyed on `pos.base == CDS_BASE_UNKNOWN` — not on `CdsPos::is_unknown()`, which recognises only one of the three shapes carrying the integer `0` (the sibling `c.*0` and telomere/centromere-marker shapes are refused by the same guard on their own terms). An offset does not make the base known: `c.?+5` is still anchored on a position that names nothing, so it is refused too. Positions either side of the sentinel (`c.1`, `c.-1`, `c.*1`) still convert, so the guard is `base == 0` and not a widened 5'UTR refusal. `src/convert` is not a watched prefix, and the refusal was already SHIPPED by #1747; this record is the missing adjudication that #1910 asks for, documenting the decided rule the shipped code and its pin test already enforce.
+
+REPRESENTATION IMPACT: none on the normalization path. `src/convert` is not a watched directory, no normalized HGVS string moves, and the code change (the refusal itself) shipped in #1747 rather than here. A `c.?`-carrying description now DECLINES at HGVS->SPDI conversion instead of emitting a fabricated concrete position; no input whose emitted coordinate was correct changes.
 
 #### `coding-axis-merges-are-a-disclosed-general-34-deviation`
 

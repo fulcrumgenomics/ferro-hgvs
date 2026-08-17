@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 36 records, 33 decided / 3 undecided
-//! 118 clause lines, of which 40 are named by more than one record
+//! 37 records, 34 decided / 3 undecided
+//! 120 clause lines, of which 40 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -438,6 +438,8 @@
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/general.md:87
+//!     `cds-unknown-position-is-refused-at-conversion` — decided (cited)
 //! docs/recommendations/general.md:156
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
 //! docs/recommendations/protein/delins.md:50
@@ -446,6 +448,8 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
+//! docs/recommendations/uncertain.md:12
+//!     `cds-unknown-position-is-refused-at-conversion` — decided (cited)
 //! docs/versions/index.md:16
 //!     `adjudication-precedence-order` — decided (cited)
 //!
@@ -951,7 +955,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (36, 33, 3),
+        (37, 34, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"

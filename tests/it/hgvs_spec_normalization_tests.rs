@@ -1402,6 +1402,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // remapped the coordinate across the CDS/3'UTR seam while the lone path
     // refused it. Pinned by `issue_2018_past_cds_end_mode_dependent.rs`.
     ("past-cds-end-coordinate-is-non-conformant", "decided"),
+    // Should `CoordinateMapper::cds_to_tx` COERCE a `c.?` (unknown position) into
+    // a concrete transcript coordinate, or REFUSE it? **House choice, decided
+    // under `README.md` rule 5's silent limb** — the recommendations define what
+    // `?` MEANS (`general.md:87`: an unknown position) but say nothing about
+    // coordinate conversion, so no clause governs the choice. `cds_to_tx` used to
+    // answer `c.1`'s own coordinate (base 0 == `CDS_BASE_UNKNOWN` took the 5'UTR
+    // branch), fabricating a position the input explicitly declined to name — a
+    // storable-but-wrong SPDI triple via `hgvs_to_spdi`. Per the #1747 precedent
+    // (`c.pterdel`/`c.1del`) and `spdi-n-unit-repeat-refusal`, a plausible-but-wrong
+    // answer a consumer can persist is worse than a clean decline, so ferro refuses.
+    // The refusal code + its pin test shipped in #1747; this is the missing record.
+    // Pinned by `src/convert/mapper.rs::cds_to_tx_refuses_an_unknown_position`.
+    ("cds-unknown-position-is-refused-at-conversion", "decided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
