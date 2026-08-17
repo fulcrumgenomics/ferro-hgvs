@@ -84,6 +84,43 @@ impl<'a> CoordinateMapper<'a> {
         Self { transcript }
     }
 
+    /// Refuse a transcript whose CDS bounds are inverted (`cds_end < cds_start`)
+    /// before any coordinate arithmetic runs, so **both** CDS-axis conversion
+    /// directions — `c.`/`n.` ↔ tx here, and the genomic delegators that funnel
+    /// through them — decline such a record rather than fabricating a
+    /// coordinate.
+    ///
+    /// This is the `convert::mapper` twin of the guard #2109 added to the
+    /// *other* `CoordinateMapper` (`src/data/mapping.rs`, `reject_inverted_cds`,
+    /// #1894). On an inverted record the 5'UTR and 3'UTR halves overlap, so one
+    /// transcript position carries two `c.` names and any answer picks one
+    /// arbitrarily: measured on `NM_INVERTED.1` (cds_start 20, cds_end 6),
+    /// `c.1` mapped to `n.20` and `c.*1` to `n.7` — an answer straddling the
+    /// inversion, with no diagnostic (#2123).
+    ///
+    /// Nothing on the load path rejects one — `Transcript` stores `cds_start` /
+    /// `cds_end` exactly as its provider supplied them and validates nothing —
+    /// so this is the mapper's own gate. A record missing either bound is not
+    /// inverted; it is left to the region logic, which already handles a `None`
+    /// CDS.
+    fn reject_inverted_cds(&self) -> Result<(), FerroError> {
+        if let (Some(cds_start), Some(cds_end)) =
+            (self.transcript.cds_start, self.transcript.cds_end)
+        {
+            if cds_end < cds_start {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript {} has inverted CDS bounds \
+                         (cds_start {cds_start} > cds_end {cds_end}); its c. axis is \
+                         incoherent, so no CDS-relative position can be resolved",
+                        self.transcript.id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Convert CDS position to transcript position
     ///
     /// CDS positions are relative to the start of the coding sequence,
@@ -189,6 +226,10 @@ impl<'a> CoordinateMapper<'a> {
             });
         }
 
+        // An inverted CDS makes every arm below fabricate a coordinate (#2123);
+        // refuse before any of them can, matching the c. -> g. direction.
+        self.reject_inverted_cds()?;
+
         let cds_start = self
             .transcript
             .cds_start
@@ -279,6 +320,11 @@ impl<'a> CoordinateMapper<'a> {
     /// the contract it belongs to, and that caller's earlier, better-worded
     /// refusal still runs first.
     pub fn tx_to_cds(&self, pos: &TxPos) -> Result<CdsPos, FerroError> {
+        // An inverted CDS makes the zone classification below fabricate a
+        // coordinate (#2123); refuse before it can, so both directions decline
+        // identically.
+        self.reject_inverted_cds()?;
+
         if pos.downstream {
             return Err(FerroError::ConversionError {
                 msg: format!(
@@ -2569,6 +2615,74 @@ mod intronic_debug_tests {
             cdot_path.display(),
             unresolved.len(),
             exonless.len()
+        );
+    }
+
+    /// A transcript whose CDS bounds are inverted (`cds_end < cds_start`). The
+    /// concrete numbers reproduce issue #2123 exactly: `cds_start = 20`,
+    /// `cds_end = 6`, so `cds_to_tx` fabricates `c.1 -> n.20` and
+    /// `c.*1 -> n.7` — an answer that maps happily across the inversion the
+    /// sibling `data::mapping::CoordinateMapper` refuses since #2109.
+    fn make_inverted_cds_transcript() -> Transcript {
+        Transcript {
+            id: "NM_INVERTED.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            sequence: Some("AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string()),
+            cds_start: Some(20),
+            cds_end: Some(6),
+            exons: vec![Exon::new(1, 1, 38)],
+            ..Default::default()
+        }
+    }
+
+    /// `c. -> n.` (`cds_to_tx`) must refuse an inverted-CDS record rather than
+    /// fabricate the `n.20` / `n.7` coordinates issue #2123 recorded. Mutation
+    /// check: without the guard this returns `Ok(TxPos { base: 20, .. })` for
+    /// `c.1` and `Ok(TxPos { base: 7, .. })` for `c.*1`.
+    #[test]
+    fn cds_to_tx_on_an_inverted_cds_record_is_refused() {
+        let tx = make_inverted_cds_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let mut utr3_star_one = CdsPos::new(1);
+        utr3_star_one.utr3 = true;
+
+        for pos in [CdsPos::new(1), utr3_star_one] {
+            let result = mapper.cds_to_tx(&pos);
+            let msg = match &result {
+                Err(FerroError::InvalidCoordinates { msg }) => msg.as_str(),
+                _ => panic!(
+                    "an inverted CDS record must be refused in the c. -> n. \
+                     direction for c.{pos}; got {result:?}"
+                ),
+            };
+            assert!(
+                msg.contains("inverted CDS bounds"),
+                "the refusal must come from the inverted-bounds guard; got: {msg}",
+            );
+        }
+    }
+
+    /// `n. -> c.` (`tx_to_cds`) must refuse the same record, so both directions
+    /// decline identically rather than one fabricating a coordinate. Mutation
+    /// check: without the guard this returns `Ok(CdsPos { .. })` (e.g. `n.7`
+    /// classifies as `c.*1` against the inverted bounds).
+    #[test]
+    fn tx_to_cds_on_an_inverted_cds_record_is_refused() {
+        let tx = make_inverted_cds_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+
+        let result = mapper.tx_to_cds(&TxPos::new(7));
+        let msg = match &result {
+            Err(FerroError::InvalidCoordinates { msg }) => msg.as_str(),
+            _ => panic!(
+                "an inverted CDS record must be refused in the n. -> c. \
+                 direction; got {result:?}"
+            ),
+        };
+        assert!(
+            msg.contains("inverted CDS bounds"),
+            "the refusal must come from the inverted-bounds guard; got: {msg}",
         );
     }
 }
