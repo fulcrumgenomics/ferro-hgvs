@@ -3735,46 +3735,34 @@ pub fn correct_empty_delins(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrectio
     }
 }
 
-/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>` and
-/// the two numeric tokens (with sign) are equal, return `(pair_end,
+/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>` and the
+/// two endpoints are the SAME SIGNED POSITION, return `(pair_end,
 /// canonical_single_position_text)`; otherwise `None`.
+///
+/// `i` must be a position boundary. The walk in `correct_single_position_range`
+/// calls this at every byte offset, so without the anchor it can start in the
+/// MIDDLE of a signed or prefixed position — e.g. at the `1` inside `c.-1` — and
+/// read the trailing digits as a bare position. On `c.-1_1del` that yields the
+/// substring `1_1` and a false collapse to `c.-1del`, dropping the first CDS
+/// base that `_1` names (#2144). A position token begins only after a
+/// delimiter; if the preceding byte could itself be part of a position (a digit,
+/// or a `-`/`+`/`*` sign or 3'UTR prefix), `i` is mid-token, not a start.
 fn match_equal_position_pair(bytes: &[u8], i: usize, input: &str) -> Option<(usize, String)> {
-    let mut j = i;
-    let first_start = j;
-    if j < bytes.len() && bytes[j] == b'-' {
-        j += 1;
-    }
-    let num1_digit_start = j;
-    while j < bytes.len() && bytes[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j == num1_digit_start {
+    if i > 0 && matches!(bytes[i - 1], b'0'..=b'9' | b'-' | b'+' | b'*') {
         return None;
     }
-    let first_end = j;
-    if j >= bytes.len() || bytes[j] != b'_' {
+    let (first_value, first_end) = match_signed_number(bytes, i)?;
+    if first_end >= bytes.len() || bytes[first_end] != b'_' {
         return None;
     }
-    j += 1;
-    let second_start = j;
-    if j < bytes.len() && bytes[j] == b'-' {
-        j += 1;
-    }
-    let num2_digit_start = j;
-    while j < bytes.len() && bytes[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j == num2_digit_start {
+    let (second_value, second_end) = match_signed_number(bytes, first_end + 1)?;
+    // Compare the SIGNED values, not the digit text: `-1` (5'UTR) and `1` (CDS)
+    // share digits but denote different positions and must not collapse, while
+    // `1_1` and `-50_-50` genuinely name one position and do collapse.
+    if first_value != second_value {
         return None;
     }
-    let second_end = j;
-
-    let first = &input[first_start..first_end];
-    let second = &input[second_start..second_end];
-    if first != second {
-        return None;
-    }
-    Some((j, first.to_string()))
+    Some((second_end, input[i..first_end].to_string()))
 }
 
 /// Returns true when `bytes` at `i` starts with one of `del` (not `delins`),
@@ -6137,6 +6125,54 @@ mod tests {
     fn test_correct_single_position_range_does_not_touch_substitution() {
         let (out, hits) = correct_single_position_range("NM_000088.3:c.100A>G");
         assert_eq!(out, "NM_000088.3:c.100A>G");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_position_range_cds_start_seam_not_collapsed() {
+        // Issue #2144: `c.-1_1` spans the last 5'UTR base and the first CDS base
+        // — two DIFFERENT positions whose digit texts happen to coincide (`1`
+        // inside `-1`, and the bare `1`). The old digit-text walk started inside
+        // `-1`, saw the substring `1_1`, and collapsed it to `-1del`, dropping a
+        // base. It must be left untouched.
+        for input in [
+            "NM_000546.6:c.-1_1del",
+            "NM_000546.6:c.-1_1dup",
+            "NM_TEST.1:c.-2_2del",
+        ] {
+            let (out, hits) = correct_single_position_range(input);
+            assert_eq!(out, input, "input {input} must not be collapsed");
+            assert!(hits.is_empty(), "input {input} should not warn");
+        }
+    }
+
+    #[test]
+    fn test_correct_single_position_range_utr3_seam_not_collapsed() {
+        // Same defect on the `*` (3'UTR) flavor: `c.*1` and `c.1` are different
+        // positions sharing digit text.
+        let (out, hits) = correct_single_position_range("NM_000546.6:c.*1_1del");
+        assert_eq!(out, "NM_000546.6:c.*1_1del");
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn test_correct_single_position_range_genuine_same_position_still_collapses() {
+        // The intended cases must keep collapsing after the fix: genuinely equal
+        // signed endpoints on any axis, including a signed 5'UTR pair.
+        for (input, expected) in [
+            ("NC_000017.11:g.1_1del", "NC_000017.11:g.1del"),
+            ("NM_000088.3:c.-50_-50del", "NM_000088.3:c.-50del"),
+        ] {
+            let (out, hits) = correct_single_position_range(input);
+            assert_eq!(out, expected, "input {input} should collapse");
+            assert_eq!(hits.len(), 1, "input {input} should warn once");
+        }
+    }
+
+    #[test]
+    fn test_correct_single_position_range_normal_range_untouched() {
+        let (out, hits) = correct_single_position_range("NM_000546.6:c.1_2del");
+        assert_eq!(out, "NM_000546.6:c.1_2del");
         assert!(hits.is_empty());
     }
 
