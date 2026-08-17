@@ -209,14 +209,22 @@ pub mod urls {
 /// Sourced (authoritative) metadata for a legacy transcript fetched from
 /// GenBank: accession, gene symbol, and CDS bounds.
 ///
-/// The transcript LENGTH is deliberately **not** a field here. Its sole
-/// authority is the FASTA (`seq.len()`, recoverable from the `.fai` index), so
-/// storing it on the sourced record would make a second, drift-prone copy of a
-/// value the FASTA already owns. This type therefore *structurally* cannot carry
-/// a derived length — the compiler enforces the sourced/derived split (#2085).
-/// The on-disk row that still carries the length for byte-compatible metadata is
-/// [`LegacyTranscriptRecord`]; dropping it from disk entirely is tracked by #2064
-/// (a deliberate re-bless of the reference identity).
+/// The transcript LENGTH is deliberately **not** a field here, and is no longer
+/// persisted anywhere (#2064). Its sole authority is the FASTA (`seq.len()`,
+/// recoverable from the `.fai` index), so a persisted copy would be a second,
+/// drift-prone copy of a value the FASTA already owns — a derived "hollow" field
+/// of exactly the kind #2058 removed from the benchmark supplemental sidecar.
+/// The empirical measurement that justified the removal here: on the blessed
+/// reference every legacy row's persisted `sequence_length` equalled its FASTA
+/// record length exactly, and no `src/` consumer ever read the field.
+///
+/// This is the on-disk row as well as the in-memory authority: there is no
+/// separate record type that could reintroduce a derived length, so the field is
+/// now *unrepresentable* rather than merely unread (#2085 move 3 completed by
+/// #2064). Removing it changes the serialized bytes of the content-stamped
+/// `legacy_transcripts_metadata` / `legacy_genbank_metadata` artifacts, so it
+/// bumps the blessed reference identity (#905/#933) — a deliberate, operator-
+/// approved re-bless, unlike #2087 which was byte-for-byte identity-neutral.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LegacyTranscript {
     /// Accession with version (e.g., "NM_000051.3")
@@ -229,88 +237,14 @@ pub struct LegacyTranscript {
     pub cds_end: Option<u64>,
 }
 
-/// On-disk row for a legacy transcript: the sourced [`LegacyTranscript`] fields
-/// plus the **derived** `sequence_length`.
-///
-/// This is the *only* type that carries the derived length across the
-/// persistence boundary. It exists so the structural sourced/derived split (the
-/// authority type has no length) is byte-for-byte identity-neutral (#905/#933):
-/// the serialized JSON is unchanged from the pre-split format, so the content
-/// stamps in [`crate::prepare::identity`] and the blessed reference identity do
-/// not move. Field order matches the pre-split `LegacyTranscript` exactly, which
-/// is what keeps the bytes identical. Dropping the field from disk (which *would*
-/// move the identity) is #2064.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct LegacyTranscriptRecord {
-    /// Accession with version (e.g., "NM_000051.3")
-    pub id: String,
-    /// Gene symbol if available
-    pub gene_symbol: Option<String>,
-    /// CDS start position (1-based, inclusive)
-    pub cds_start: Option<u64>,
-    /// CDS end position (1-based, inclusive)
-    pub cds_end: Option<u64>,
-    /// Total sequence length. **Derived**: its authority is the FASTA / `.fai`;
-    /// this persisted copy equals `seq.len()` at write time and is recomputable.
-    pub sequence_length: usize,
-}
-
-impl LegacyTranscript {
-    /// Pair this sourced record with the **derived** length taken from its FASTA
-    /// authority at write time, producing the on-disk [`LegacyTranscriptRecord`].
-    ///
-    /// This is the seam the split exists for, and it is load-bearing rather than
-    /// advisory: [`legacy_record_from_genbank`] — the only construction of
-    /// `LegacyTranscriptRecord` in `src/`, and the step
-    /// [`fetch_legacy_versions`] performs per GenBank record — reaches the
-    /// persisted row exclusively through here, so a derived length cannot enter
-    /// production metadata without passing this function. A writer that bypassed
-    /// it would leave that helper unused and fail the `-D warnings` build.
-    pub fn into_record(self, sequence_length: usize) -> LegacyTranscriptRecord {
-        LegacyTranscriptRecord {
-            id: self.id,
-            gene_symbol: self.gene_symbol,
-            cds_start: self.cds_start,
-            cds_end: self.cds_end,
-            sequence_length,
-        }
-    }
-}
-
-impl LegacyTranscriptRecord {
-    /// Project to the sourced authority, dropping the derived length. Callers
-    /// that need the length must consult the FASTA / `.fai` (the authority),
-    /// never this persisted copy.
-    pub fn sourced(&self) -> LegacyTranscript {
-        LegacyTranscript {
-            id: self.id.clone(),
-            gene_symbol: self.gene_symbol.clone(),
-            cds_start: self.cds_start,
-            cds_end: self.cds_end,
-        }
-    }
-}
-
 /// Metadata file for legacy transcripts.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LegacyMetadata {
     /// When the metadata was generated
     pub generated_at: String,
-    /// Map from accession to the on-disk transcript row.
-    pub transcripts: HashMap<String, LegacyTranscriptRecord>,
-}
-
-impl LegacyMetadata {
-    /// The sourced authority view of every transcript, with the derived length
-    /// dropped. This is the API consumers should use to reason about legacy
-    /// transcripts so a persisted length can never be mistaken for the source of
-    /// truth (#2085); the length, when needed, comes from the FASTA / `.fai`.
-    pub fn sourced_transcripts(&self) -> HashMap<String, LegacyTranscript> {
-        self.transcripts
-            .iter()
-            .map(|(id, record)| (id.clone(), record.sourced()))
-            .collect()
-    }
+    /// Map from accession to the on-disk transcript row (the sourced authority;
+    /// carries no derived length — #2064).
+    pub transcripts: HashMap<String, LegacyTranscript>,
 }
 
 /// Prepare reference data for normalization.
@@ -2326,25 +2260,21 @@ fn parse_genbank_record(genbank: &str) -> Option<(String, Option<u64>, Option<u6
 /// Fetch legacy transcript versions from NCBI and save to FASTA with metadata.
 ///
 /// Build the on-disk row for one legacy transcript from its parsed GenBank
-/// record and the bases being written to the FASTA.
+/// record.
 ///
-/// This is the **single seam** through which a derived length enters a
-/// persisted legacy row, and it is deliberately the only construction of
-/// [`LegacyTranscriptRecord`] in `src/`: the sourced authority is built first
-/// as a [`LegacyTranscript`] — which structurally cannot hold a length — and
-/// the length is attached only by [`LegacyTranscript::into_record`], taken from
-/// `sequence`, its sole authority (#2085 move 3). It is factored out of
-/// [`fetch_legacy_versions`] because that function shells out to `curl` and so
-/// cannot be reached from a test, which would leave the seam unexercised in
-/// production; its guard is
-/// `tests::the_writer_pairs_the_sourced_authority_with_the_fasta_derived_length`.
+/// It is deliberately the only construction of [`LegacyTranscript`] as an
+/// on-disk row in `src/`. The transcript length is **not** stored (#2064): its
+/// sole authority is the FASTA being written alongside (`seq.len()`, recoverable
+/// from the `.fai` index), so persisting it would duplicate a value the FASTA
+/// already owns. It is factored out of [`fetch_legacy_versions`] because that
+/// function shells out to `curl` and so cannot be reached from a test; its guard
+/// is `tests::the_writer_builds_the_sourced_authority_with_no_derived_length`.
 fn legacy_record_from_genbank(
     accession: &str,
     gene_name: &str,
     cds_start: Option<u64>,
     cds_end: Option<u64>,
-    sequence: &str,
-) -> LegacyTranscriptRecord {
+) -> LegacyTranscript {
     LegacyTranscript {
         id: accession.to_string(),
         gene_symbol: if gene_name.is_empty() {
@@ -2355,7 +2285,6 @@ fn legacy_record_from_genbank(
         cds_start,
         cds_end,
     }
-    .into_record(sequence.len())
 }
 
 /// These are older RefSeq versions that are referenced in patterns
@@ -2452,12 +2381,12 @@ pub fn fetch_legacy_versions(
                     )?;
                 }
 
-                // Add to metadata. The row is built through the single seam,
-                // so the derived `sequence_length` can only come from the FASTA
-                // bases written just above — its authority (#2085).
+                // Add to metadata. The row is the sourced authority only; the
+                // transcript length is not persisted (#2064) — it lives in the
+                // FASTA bases written just above, recoverable from the `.fai`.
                 metadata.transcripts.insert(
                     acc.clone(),
-                    legacy_record_from_genbank(acc, &gene_name, cds_start, cds_end, &seq),
+                    legacy_record_from_genbank(acc, &gene_name, cds_start, cds_end),
                 );
 
                 fetched += 1;
@@ -2633,30 +2562,21 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
-    /// The writer's own record-building step, on the production path (#2085).
+    /// The writer's own record-building step, on the production path (#2064).
     ///
     /// `fetch_legacy_versions` shells out to `curl`, so no test can reach it;
     /// the step it performs per GenBank record is factored into
     /// [`legacy_record_from_genbank`], and this is the guard on *that*. What it
-    /// pins is that the derived length reaches the persisted row **only**
-    /// through [`LegacyTranscript::into_record`] — sabotage `into_record` and
-    /// this test goes red, which is what separates a load-bearing seam from a
-    /// method only tests call. The type-level half of the split (the sourced
-    /// authority has no length field at all) is pinned in
-    /// `tests/it/legacy_integration.rs::sourced_derived_split`.
+    /// pins is that the persisted row is the sourced authority and carries **no**
+    /// derived length — the field is unrepresentable, not merely unread (#2064).
+    /// The serialization half (a `LegacyTranscript` never emits a
+    /// `sequence_length` key) is pinned in
+    /// `tests/it/legacy_integration.rs::legacy_metadata_carries_no_derived_length`.
     #[test]
-    fn the_writer_pairs_the_sourced_authority_with_the_fasta_derived_length() {
-        // Stands in for the bases the same loop writes to the FASTA, which is
-        // the length's sole authority.
-        let sequence = "ACGTACGTACGT";
-        let record =
-            legacy_record_from_genbank("NM_000051.3", "ATM", Some(250), Some(9500), sequence);
-
-        assert_eq!(record.sequence_length, sequence.len());
-        // The sourced authority survives the pairing intact, and carries no
-        // length of its own to disagree with the FASTA's.
+    fn the_writer_builds_the_sourced_authority_with_no_derived_length() {
+        let record = legacy_record_from_genbank("NM_000051.3", "ATM", Some(250), Some(9500));
         assert_eq!(
-            record.sourced(),
+            record,
             LegacyTranscript {
                 id: "NM_000051.3".to_string(),
                 gene_symbol: Some("ATM".to_string()),
@@ -2664,6 +2584,10 @@ mod tests {
                 cds_end: Some(9500),
             }
         );
+        // No derived length is representable on the on-disk row.
+        assert!(!serde_json::to_string(&record)
+            .unwrap()
+            .contains("sequence_length"));
     }
 
     /// An absent GenBank gene name is absence, not an empty symbol. This rule
@@ -2671,9 +2595,8 @@ mod tests {
     /// extraction cannot quietly change it.
     #[test]
     fn an_empty_genbank_gene_name_becomes_no_gene_symbol() {
-        let record = legacy_record_from_genbank("NM_000001.1", "", None, None, "ACGT");
+        let record = legacy_record_from_genbank("NM_000001.1", "", None, None);
         assert_eq!(record.gene_symbol, None);
-        assert_eq!(record.sequence_length, 4);
     }
 
     /// Build a config with only the named cdot switches on.
