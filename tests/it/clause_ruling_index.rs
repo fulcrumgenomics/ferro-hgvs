@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 34 records, 31 decided / 3 undecided
-//! 116 clause lines, of which 40 are named by more than one record
+//! 35 records, 32 decided / 3 undecided
+//! 117 clause lines, of which 40 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -137,6 +137,8 @@
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //! docs/background/refseq.md:129
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
+//! docs/background/standards.md:30
+//!     `spdi-n-unit-repeat-refusal` — decided (cited)
 //! docs/background/standards.md:36  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
@@ -411,6 +413,7 @@
 //! docs/recommendations/general.md:47  [MULTI]
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
+//!     `spdi-n-unit-repeat-refusal` — decided (cited)
 //! docs/recommendations/general.md:49
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
 //! docs/recommendations/general.md:55  [MULTI]
@@ -606,6 +609,7 @@
 //! docs/recommendations/general.md:47
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
+//!     `spdi-n-unit-repeat-refusal` — decided (cited)
 //! docs/recommendations/general.md:55
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -943,7 +947,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (34, 31, 3),
+        (35, 32, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"

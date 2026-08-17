@@ -378,16 +378,50 @@ where
     Ok(apply_alphabet(&bases, alphabet))
 }
 
+/// Refuse a repeat whose unit carries undetermined content — an `N` (or `n`)
+/// anywhere in the spelled unit.
+///
+/// An `N` names a *length*, not bases, so expanding an `N`-unit repeat into an
+/// SPDI insertion string asserts specific bases the input never specified:
+/// `insN[341]` would emit 341 literal `N`s, a triple a consumer can store keyed
+/// on 341 bases that do not exist. That is the same information content as the
+/// `ins<length>` shape (`ins341`, [`InsertedSequence::Count`]) this module
+/// already refuses (#1967), so it is refused here too — consistent with the
+/// #1747 precedent that a plausible-but-wrong SPDI triple is worse than a clean
+/// decline. The determination is made from the description alone and no provider
+/// can change it, so the error is [`ConversionError::UnrepresentableInSpdi`].
+///
+/// A concrete-base unit (`insACGT[3]`, `insA[10]`) states its bases exactly and
+/// passes through — only undetermined content is refused. Ruling
+/// `spdi-n-unit-repeat-refusal` in `hgvs_spec_normalization_overrides.json`.
+fn refuse_undetermined_repeat_unit(unit: &str) -> Result<(), ConversionError> {
+    if unit.bytes().any(|b| b.eq_ignore_ascii_case(&b'N')) {
+        return Err(ConversionError::UnrepresentableInSpdi {
+            description: format!(
+                "repeat unit `{unit}` contains an undetermined base (`N`); it names a length, \
+                 not bases, so expanding it would assert bases the input never specified. Like \
+                 `ins<length>`, an undetermined-content repeat is refused rather than emitted \
+                 as a run of `N`s"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Expand a repeat `unit` `count` times, folded through the output alphabet —
 /// the one place the overflow and [`MAX_REPEAT_EXPANSION_BASES`] cap checks
 /// live, so a top-level `insA[10]` and a `[…;A[10];…]` bracket part expand
 /// identically. `unit` is the literal unit spelled once.
+///
+/// An `N`-carrying unit is refused here (see [`refuse_undetermined_repeat_unit`])
+/// rather than expanded into a run of `N`s.
 fn expand_repeat_unit(
     unit: &str,
     count: u64,
     alphabet: AlphabetMode,
 ) -> Result<String, ConversionError> {
     let unit = apply_alphabet(unit, alphabet);
+    refuse_undetermined_repeat_unit(&unit)?;
     let count = count as usize;
     let expansion_bases =
         unit.len()
@@ -2245,6 +2279,11 @@ where
                 }
             };
             let unit_str = apply_alphabet(&sequence_to_string(unit), alphabet);
+            // An `N`-unit repeat (`g.pos_posN[n]`) names a length, not bases —
+            // the same undetermined content the inserted-sequence repeat path
+            // refuses. Decline before consulting the reference, on the same
+            // grounds as `insN[n]` (ruling `spdi-n-unit-repeat-refusal`, #1975).
+            refuse_undetermined_repeat_unit(&unit_str)?;
             // Bound the expanded ins-string before allocating. The count is
             // user-controlled (u64), so `unit_str.repeat(n_post)` can be
             // forced to allocate gigabytes from a single short input.
@@ -3718,6 +3757,85 @@ mod tests {
             matches!(result, Err(ConversionError::MissingReferenceData { .. })),
             "a range repeat count names no single expansion: {result:?}"
         );
+    }
+
+    /// An `N`-unit repeat insertion (`insN[18]`) carries a *length*, not bases —
+    /// the same information content as the `ins<length>` shape (`ins341`,
+    /// `InsertedSequence::Count`) SPDI already refuses (#1967). Emitting a run of
+    /// `N`s would assert 18 specific bases the input never specified, a
+    /// storable-but-wrong SPDI triple, so it is refused as
+    /// `UnrepresentableInSpdi` (ruling `spdi-n-unit-repeat-refusal`, #1975).
+    #[test]
+    fn an_n_unit_repeat_insertion_is_refused() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insN[18]").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "an N-unit repeat names a length, not bases, and must not emit an N-run: {result:?}"
+        );
+    }
+
+    /// The same refusal on the `delins` arm: `delinsN[341]` must not emit 341
+    /// `N`s (this was the `delinsN[341]` corpus row).
+    #[test]
+    fn an_n_unit_repeat_delins_is_refused() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delinsN[341]").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "an N-unit repeat delins must be refused, not emitted as an N-run: {result:?}"
+        );
+    }
+
+    /// The ruling is "unit is `N` *or contains `N`*" — a multi-base unit with an
+    /// `N` in it (`insAN[3]`) is equally undetermined and equally refused, since
+    /// its expansion (`ANANAN`) asserts three `N` bases the input did not spell.
+    #[test]
+    fn an_n_containing_multibase_repeat_insertion_is_refused() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insAN[3]").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "a repeat unit containing N is undetermined content and must be refused: {result:?}"
+        );
+    }
+
+    /// An `N`-carrying repeat part inside a compound bracket
+    /// (`delins[N[3];A]`) is refused on the same grounds — the guard sits at the
+    /// shared expansion leaf, so it reaches bracket parts too.
+    #[test]
+    fn an_n_unit_repeat_part_in_a_compound_insert_is_refused() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12delins[N[3];A]").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "an N-unit repeat part in a compound insert must be refused: {result:?}"
+        );
+    }
+
+    /// A short-form tandem repeat spelled with an `N` unit (`g.pos_posN[n]`) is
+    /// the same class on the same path and is refused before any reference is
+    /// consulted — the refusal is decided from the description alone.
+    #[test]
+    fn an_n_unit_shortform_repeat_is_refused() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_105N[6]").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::UnrepresentableInSpdi { .. })),
+            "a short-form N-unit repeat must be refused, not expanded to an N-run: {result:?}"
+        );
+    }
+
+    /// Negative control: the refusal is scoped to *undetermined* content. A
+    /// concrete-base repeat (`insACGT[3]`) names its bases exactly and must keep
+    /// expanding normally — the guard must not over-reach onto determined units.
+    #[test]
+    fn a_concrete_base_repeat_insertion_still_expands() {
+        let hgvs = parse_hgvs("NC_000001.11:g.100_101insACGT[3]").unwrap();
+        let spdi = hgvs_to_spdi_simple(&hgvs).unwrap();
+        assert_eq!(spdi.position, 100);
+        assert_eq!(spdi.deletion, "");
+        assert_eq!(spdi.insertion, "ACGTACGTACGT");
     }
 
     /// The `delins` arm expands an exact repeat insert on the same path. del at

@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**34 adjudication records — 31 decided, 3 open.**
+**35 adjudication records — 32 decided, 3 open.**
 
 ## What this document is
 
@@ -112,6 +112,7 @@ for the knob and its traps.
 - [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
 - [`separation-is-a-property-of-the-spelling-not-of-the-variant`](#separation-is-a-property-of-the-spelling-not-of-the-variant)
 - [`separation-rule-force-modal-or-negation`](#separation-rule-force-modal-or-negation)
+- [`spdi-n-unit-repeat-refusal`](#spdi-n-unit-repeat-refusal)
 - [`unchanged-is-read-over-every-minimal-alignment`](#unchanged-is-read-over-every-minimal-alignment)
 - [`unequal-length-block-a-placed-gap-is-not-a-separation`](#unequal-length-block-a-placed-gap-is-not-a-separation)
 - [`whole-span-reverse-complement-types-as-inv`](#whole-span-reverse-complement-types-as-inv)
@@ -1695,6 +1696,35 @@ WHAT THIS DOES NOT LICENSE. Rule 2 is a rule. README states that a preference cl
 WHAT WAS REFUTED, RECORDED SO IT IS NOT RE-DERIVED. Two readings were argued at length before this ruling and both are WITHDRAWN. (1) That the bolded “not” in `general.md:33` is prohibition force under README rule 1's “prose force rather than keyword casing” clause — refuted by the complement argument above and by `delins.md:81`. (2) That the clause splits, rule 2 on the positive half and rule 1 on the negative — refuted by the same complement argument; the split reading requires the alternatives NOT to exhaust the space, which is the `duplication.md:18` shape and not this one.
 
 SCOPE. This record rules on the FORCE of the separation rule, and on the reading of “and not” generally. It does not decide which form ferro emits where several remain legal — that is `canonical-form-choice-when-both-legal`; nor the reach of the codon exception — that is `projection-codon-exception-is-decided-by-the-rendered-axis`; nor `delins.md:47`'s carve-out — that is `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. Nor does it disturb `delins-merge-vs-individual-gap-two-or-more`, which scopes WHEN `:33` yields to `delins.md:44-47`; this record is about how strongly `:33` speaks when it does apply.
+
+#### `spdi-n-unit-repeat-refusal`
+
+**Status:** decided
+
+**The question.** On the HGVS→SPDI conversion path, should an `N`-unit (or `N`-containing) repeat be REFUSED, or expanded into the SPDI `insertion` string as a run of literal `N`s? `insN[341]` currently emits 341 `N`s even though `N[341]` carries a length, not bases — the same information content as the length-only `ins341` shape SPDI already refuses (#1967).
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 5 (silent limb) where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** EMITTING THE `N`-RUN (the status quo this record replaces). Rejected: `insN[341]` produced 341 literal `N`s in the SPDI `insertion` field — a well-formed triple a consumer can store and key read counts on, asserting 341 specific bases the input never named. `N[341]` carries a length, not bases, so it is the exact information content of `ins341` (`InsertedSequence::Count`), which SPDI already refuses (#1967); emitting one while refusing the other treats equally-undetermined inputs inconsistently. #1747 settles the direction: `c.pterdel`/`c.qterdel`/`c.1del` all produced a storable-but-wrong SPDI triple and were refused, on the principle that a plausible-but-wrong answer a consumer can persist is worse than a clean decline. CLASSIFYING IT AS `MissingReferenceData`. Rejected: nothing is missing and no provider can supply the identity of an `N`, because the input declines to name it. `UnrepresentableInSpdi` is the variant whose contract is 'decided from the description alone, and no better-provisioned provider changes the answer' — exactly this case. RULING IT AS A SPEC-CLAUSE DECISION (a `governing` clause). Rejected: the HGVS recommendations govern HGVS descriptions and say nothing about SPDI, which is NCBI's format. `N` is a legal HGVS symbol (`general.md:47`, IUPAC-IUBMB); the problem is only that SPDI's `insertion` string is concrete DNA bases. So there is no clause to hold governing — this is `README.md` rule 5's silent limb, and an SPDI-side `N` representation would be an upstream feature request, not a bug report. REFUSING CONCRETE-BASE REPEATS TOO (over-reach). Rejected: a concrete unit (`insACGT[3]`, `insA[10]`) names its bases exactly and expands to a determinate, correct SPDI triple, so it must keep emitting. Only undetermined content — an `N` anywhere in the unit — refuses.
+
+**Also cited.**
+
+- `docs/background/standards.md:30`
+  > A, C, G or T
+- `docs/recommendations/general.md:47`
+  > nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide symbols]
+
+**The ruling.**
+
+REFUSE an `N`-unit or `N`-containing repeat on the HGVS→SPDI path with `UnrepresentableInSpdi`, rather than emit a run of literal `N`s. `insN[18]`, `delinsN[341]` and the multi-base `insAN[3]` used to expand into insertion strings containing literal `N`s; they now decline.
+
+WHY IT IS REFUSED. `N` denotes 'any of A, C, G or T' (`background/standards.md:30`), so an `N`-repeat states a LENGTH and no base identity — the same information content as the length-only `ins<length>` shape (`ins341`, `InsertedSequence::Count`) SPDI already refuses (#1967). Expanding it asserts specific bases the input never specified: `insN[341]` becomes a well-formed SPDI triple a consumer can store, keyed on 341 bases that do not exist. Per #1747 (`c.pterdel`/`c.qterdel`/`c.1del`, all refused for producing storable-but-wrong triples) a plausible-but-wrong answer is worse than a clean decline.
+
+WHY IT IS A HOUSE CHOICE, NOT A CLAUSE RULING. The recommendations do not reach SPDI conversion, and `N` is a legal HGVS symbol (`general.md:47`). So no clause governs; this is `README.md` rule 5's silent limb.
+
+WHERE, AND SCOPE. The guard sits at the shared expansion leaf `expand_repeat_unit` (covering top-level `insN[n]`/`delinsN[n]` and the single-part and bracket `Complex` shapes) and at the short-form `NaEdit::Repeat` arm (`g.pos_posN[n]`), before any reference read — the refusal is decided from the description alone. A concrete-base repeat (`insACGT[3]`, `insA[10]`) is untouched; only undetermined content refuses.
+
+REPRESENTATION IMPACT. This is on the HGVS→SPDI conversion path, not the normalization path, so no normalized HGVS string moves. The SPDI conversion of the `insN[]`/`delinsN[]` family changes from a (wrong) emitted triple to a clean decline; no input whose emitted SPDI was correct changes.
 
 #### `unchanged-is-read-over-every-minimal-alignment`
 
