@@ -2131,6 +2131,27 @@ jobs:
         run: |
           cargo nextest run --features hgvs-rs --lib --no-tests=fail \
             -E 'test(benchmark::hgvs_rs::)'
+      # src/service/tools/hgvs_rs.rs was #2080's FOURTH dead-coverage site (#2101),
+      # which the step above cannot reach. `src/service` compiles only under
+      # `web-service` (`#[cfg(feature = "web-service")] pub mod service;`), while the
+      # enabled arm of `service::tools::hgvs_rs::tests::test_hgvs_rs_service_creation`
+      # is `#[cfg(feature = "hgvs-rs")]`. No other CI job builds BOTH features at once:
+      # `dev` (the sharded `test` jobs) has `web-service` but not `hgvs-rs`, and the
+      # step above has `hgvs-rs` but not `web-service` — so that arm ran nowhere and a
+      # break in it passed every check, the same family as the step above. It is
+      # reached here by asking for the two features together.
+      #
+      # Hermetic for the same reason: the test drives `HgvsRsService::new` with an
+      # empty seqrepo path, which fails during provider path parsing before any UTA
+      # connection is attempted, so it needs no database, SeqRepo, or spec submodule.
+      # A SEPARATE build (not folded into the step above) because `web-service` pulls
+      # axum/tokio/tower, a tree the benchmark step does not need — keeping them apart
+      # leaves #2080's proven coverage on exactly the feature set it was verified with.
+      # SCOPED and `--no-tests=fail` for the same non-vacuity reasons as above.
+      - name: Run src/service/tools/hgvs_rs.rs unit tests
+        run: |
+          cargo nextest run --features hgvs-rs,web-service --lib --no-tests=fail \
+            -E 'test(service::tools::hgvs_rs::)'
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.

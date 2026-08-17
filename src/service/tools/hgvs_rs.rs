@@ -182,33 +182,49 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn test_hgvs_rs_service_creation_without_feature() {
+    fn test_hgvs_rs_service_creation() {
+        // An empty `seqrepo_path` makes provider construction fail deterministically
+        // and *independently of any live UTA database*: with the `hgvs-rs` feature
+        // enabled, `HgvsRsService::new` builds a real UTA/SeqRepo provider, and the
+        // empty path aborts provider construction during path parsing — before any
+        // database connection is attempted (an empty `Path` has no `parent()`). So
+        // the assertions below hold whether or not a UTA server happens to be
+        // reachable from the test host. Without the feature, the value is ignored and
+        // the constructor returns its static feature-not-enabled error.
         let config = HgvsRsConfig {
             enabled: true,
             uta_url: "postgresql://anonymous:anonymous@localhost:5432/uta/uta_20210129b"
                 .to_string(),
             uta_schema: "uta_20210129b".to_string(),
-            seqrepo_path: PathBuf::from("/tmp"),
+            seqrepo_path: PathBuf::new(),
             lrg_mapping_file: None,
             parallel_workers: Some(1),
         };
 
-        // Without hgvs-rs feature, this should return a configuration error
-        #[cfg(not(feature = "hgvs-rs"))]
-        {
-            let result = HgvsRsService::new(&config);
-            assert!(result.is_err());
-            if let Err(ServiceError::ConfigError(msg)) = result {
-                assert!(msg.contains("hgvs-rs"));
-            }
-        }
+        let result = HgvsRsService::new(&config);
 
-        // With hgvs-rs feature, this might fail due to missing database, but shouldn't panic
-        #[cfg(feature = "hgvs-rs")]
-        {
-            // This may succeed or fail depending on whether the database is available,
-            // but it must not panic — the binding is discarded deliberately.
-            let _result = HgvsRsService::new(&config);
+        // In every feature configuration, construction with this config must fail with
+        // a `ConfigError` and must never panic. The error-variant assertion is
+        // unconditional: an `Ok`, or a differently-typed `ServiceError`, now fails the
+        // test instead of passing silently (the previous `if let` swallowed both).
+        match result {
+            Err(ServiceError::ConfigError(msg)) => {
+                // Without the feature the message is our own static string, which names
+                // the missing feature; assert on it. With the feature the message comes
+                // from the provider layer and is not contractually fixed, so only the
+                // variant is asserted there.
+                #[cfg(not(feature = "hgvs-rs"))]
+                assert!(
+                    msg.contains("hgvs-rs"),
+                    "config error should name the required feature, got: {msg}"
+                );
+                #[cfg(feature = "hgvs-rs")]
+                let _ = msg;
+            }
+            Err(other) => panic!("expected ServiceError::ConfigError, got {other:?}"),
+            Ok(_) => {
+                panic!("HgvsRsService::new unexpectedly succeeded with an empty seqrepo path")
+            }
         }
     }
 
