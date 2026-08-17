@@ -1,8 +1,8 @@
-//! Generator for the README performance tables.
+//! Generator for the comparison-page performance tables.
 //!
 //! Reads `data/benchmark/perf_results.json` and renders the parse + normalize
-//! cross-tool tables and the ferro thread-scaling table into README.md between
-//! `perf:<id>` markers.
+//! cross-tool tables and the ferro thread-scaling table into
+//! docs/src/reference/comparison.md between `perf:<id>` markers.
 //!
 //! Run:   cargo run --features dev --example generate_perf_tables
 //! Check: cargo run --features dev --example generate_perf_tables -- --check
@@ -15,9 +15,9 @@ use clap::Parser;
 use ferro_hgvs::perf_table::PerfResults;
 
 #[derive(Parser, Debug)]
-#[command(about = "Generate the README performance tables")]
+#[command(about = "Generate the comparison-page performance tables")]
 struct Cli {
-    /// Re-render in memory and fail if README.md differs.
+    /// Re-render in memory and fail if the target differs.
     #[arg(long)]
     check: bool,
     /// Path to the results JSON.
@@ -25,7 +25,7 @@ struct Cli {
     results: String,
 }
 
-const README: &str = "README.md";
+const TARGET: &str = "docs/src/reference/comparison.md";
 
 /// Replace the text between `<!-- BEGIN perf:<id> -->` and `<!-- END perf:<id> -->`.
 fn splice(content: &str, id: &str, body: &str) -> Result<String, String> {
@@ -85,10 +85,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let current = match std::fs::read_to_string(README) {
+    let current = match std::fs::read_to_string(TARGET) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: read {README}: {e}");
+            eprintln!("error: read {TARGET}: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -103,18 +103,18 @@ fn main() -> ExitCode {
     if cli.check {
         if rendered != current {
             eprintln!(
-                "README perf tables are out of date; rerun: \
+                "comparison-page perf tables are out of date; rerun: \
                  cargo run --features dev --example generate_perf_tables \
-                 (edit data/benchmark/perf_results.json, not README.md)"
+                 (edit data/benchmark/perf_results.json, not docs/src/reference/comparison.md)"
             );
             return ExitCode::FAILURE;
         }
     } else if rendered != current {
-        if let Err(e) = std::fs::write(README, &rendered) {
-            eprintln!("error: write {README}: {e}");
+        if let Err(e) = std::fs::write(TARGET, &rendered) {
+            eprintln!("error: write {TARGET}: {e}");
             return ExitCode::FAILURE;
         }
-        println!("updated {README}");
+        println!("updated {TARGET}");
     }
     ExitCode::SUCCESS
 }

@@ -2,8 +2,9 @@
 //!
 //! Reads `docs/tool_support_matrix.json` (the single source of truth) and
 //! renders:
-//!   - the "Normalization Capabilities" markdown table into README.md and
-//!     docs/BENCHMARK_GUIDE.md (between `tool-support:<view>` markers), and
+//!   - the "Normalization Capabilities" markdown table into
+//!     docs/src/reference/comparison.md and docs/BENCHMARK_GUIDE.md (between
+//!     `tool-support:<view>` markers), and
 //!   - the render-ready website JSON into
 //!     src/service/web/static/data/tool_support_matrix.json.
 //!
@@ -44,7 +45,7 @@ struct Cli {
 }
 
 const VIEW: &str = "normalization_capabilities";
-const README: &str = "README.md";
+const COMPARISON: &str = "docs/src/reference/comparison.md";
 const GUIDE: &str = "docs/BENCHMARK_GUIDE.md";
 const WEB_JSON: &str = "src/service/web/static/data/tool_support_matrix.json";
 
@@ -86,7 +87,7 @@ struct Target {
 fn compute_targets(m: &Matrix) -> Result<Vec<Target>, String> {
     let body = m.render_markdown_view(VIEW)?;
     let mut targets = Vec::new();
-    for path in [README, GUIDE] {
+    for path in [COMPARISON, GUIDE] {
         let cur = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
         targets.push(Target {
             path: path.to_string(),
