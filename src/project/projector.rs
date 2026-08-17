@@ -24,7 +24,7 @@ use crate::project::protein::{
 };
 use crate::project::result::{AxisDeclineReasons, VariantProjection};
 use crate::reference::transcript::Transcript;
-use crate::reference::ReferenceProvider;
+use crate::reference::{GenomicPlacement, ReferenceProvider};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -34,6 +34,187 @@ use std::sync::{Arc, RwLock};
 /// is `Some` only when the variant-aware path observes an NG/NC parent that
 /// could steer the lookup to a non-primary cdot build (issue #332).
 type TranscriptCacheKey = (String, Option<String>);
+
+/// Shared transcript cache: the map [`VariantProjector`] and the
+/// [`SharedTranscriptCacheProvider`] it hands its normalizer both read and
+/// write, so one fetched transcript is served on both sides (issue #1860).
+type SharedTranscriptCache = Arc<RwLock<HashMap<TranscriptCacheKey, Arc<Transcript>>>>;
+
+/// Derive the parent component of a [`TranscriptCacheKey`] from an accession —
+/// its `genomic_context` (NG/NC parent) rendered to a string, or `None`. Kept
+/// as one function so [`VariantProjector::parent_key_for`] and
+/// [`SharedTranscriptCacheProvider`] key by byte-identical values (issue #332).
+fn parent_key_for_accession(accession: &Accession) -> Option<String> {
+    accession
+        .genomic_context
+        .as_deref()
+        .map(|gc| gc.to_string())
+}
+
+/// A [`ReferenceProvider`] decorator that serves transcript lookups from a
+/// transcript cache shared with a [`VariantProjector`].
+///
+/// The projector caches transcript fetches on its projection-side derivations
+/// (`cached_get_transcript_for_variant`). The normalizer it holds, however,
+/// fetches transcripts straight from the provider, so any axis the projector
+/// re-derives by handing a variant to that normalizer re-paid the transcript
+/// fetch — once per variant, however warm the projector's own cache was (issue
+/// #1860). `reanchor_and_normalize_genomic` and `project_to_genomic_normalized`
+/// have routed a normalization per projected variant since #737/#867.
+///
+/// Wrapping the projector's provider in this decorator and handing *that* to
+/// the normalizer puts one shared transcript cache below both sides: a
+/// transcript fetched on the projection side is served from the same map when
+/// the normalizer asks for it, and vice versa. The cache is keyed by the same
+/// parent-aware `(transcript_id, parent_accession)` identity the projector uses
+/// (issue #332), so an NG/NC-parented input never reuses a different cdot
+/// build's record.
+///
+/// Only the three transcript-fetch methods consult the cache; every other
+/// method delegates straight to the wrapped provider so build-aware placement,
+/// sequence and protein reads, and the version/gene-selector probes keep the
+/// inner provider's behaviour verbatim.
+#[derive(Clone)]
+pub(crate) struct SharedTranscriptCacheProvider<P: ReferenceProvider> {
+    inner: P,
+    cache: SharedTranscriptCache,
+}
+
+impl<P: ReferenceProvider> SharedTranscriptCacheProvider<P> {
+    fn new(inner: P, cache: SharedTranscriptCache) -> Self {
+        Self { inner, cache }
+    }
+
+    /// Serve `key` from the shared cache, or run `fetch`, insert its result and
+    /// return it. Mirrors `VariantProjector::cached_get_transcript_for_variant`
+    /// so both sides use the same read-then-`entry(..).or_insert_with` shape.
+    fn get_or_fetch(
+        &self,
+        key: TranscriptCacheKey,
+        fetch: impl FnOnce() -> Result<Arc<Transcript>, FerroError>,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        if let Some(tx) = self
+            .cache
+            .read()
+            .expect("transcript cache poisoned")
+            .get(&key)
+        {
+            return Ok(Arc::clone(tx));
+        }
+        let tx = fetch()?;
+        let mut guard = self.cache.write().expect("transcript cache poisoned");
+        let entry = guard.entry(key).or_insert_with(|| tx);
+        Ok(Arc::clone(entry))
+    }
+}
+
+impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P> {
+    fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
+        self.get_or_fetch((id.to_string(), None), || self.inner.get_transcript(id))
+    }
+
+    fn get_transcript_for_variant(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        // Only cache when the variant names a transcript accession; otherwise
+        // there is no stable key to share, so fall through to the inner probe.
+        match variant.accession() {
+            Some(acc) => self.get_or_fetch(
+                (acc.transcript_accession(), parent_key_for_accession(acc)),
+                || self.inner.get_transcript_for_variant(variant),
+            ),
+            None => self.inner.get_transcript_for_variant(variant),
+        }
+    }
+
+    fn get_transcript_for_accession(
+        &self,
+        accession: &Accession,
+    ) -> Result<Arc<Transcript>, FerroError> {
+        self.get_or_fetch(
+            (
+                accession.transcript_accession(),
+                parent_key_for_accession(accession),
+            ),
+            || self.inner.get_transcript_for_accession(accession),
+        )
+    }
+
+    fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
+        self.inner.genomic_placement(parent)
+    }
+
+    fn genomic_placement_on_build(
+        &self,
+        parent: &Accession,
+        build: Option<&str>,
+    ) -> Option<GenomicPlacement> {
+        self.inner.genomic_placement_on_build(parent, build)
+    }
+
+    fn infer_genome_build(&self, accession: &Accession) -> Option<&'static str> {
+        self.inner.infer_genome_build(accession)
+    }
+
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&Accession>,
+    ) -> Option<String> {
+        self.inner.resolve_legacy_gene_selector(selector, ng_parent)
+    }
+
+    fn sole_hosted_transcript(&self, ng_parent: &Accession) -> Option<String> {
+        self.inner.sole_hosted_transcript(ng_parent)
+    }
+
+    fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        self.inner.get_sequence(id, start, end)
+    }
+
+    fn has_transcript(&self, id: &str) -> bool {
+        self.inner.has_transcript(id)
+    }
+
+    fn has_transcript_version_exact(&self, id: &str) -> bool {
+        self.inner.has_transcript_version_exact(id)
+    }
+
+    fn get_genomic_sequence(
+        &self,
+        contig: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        self.inner.get_genomic_sequence(contig, start, end)
+    }
+
+    fn has_genomic_data(&self) -> bool {
+        self.inner.has_genomic_data()
+    }
+
+    fn get_protein_sequence(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<String, FerroError> {
+        self.inner.get_protein_sequence(accession, start, end)
+    }
+
+    fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
+        self.inner.get_protein_length(accession)
+    }
+
+    fn has_protein_data(&self) -> bool {
+        self.inner.has_protein_data()
+    }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        self.inner.get_sequence_length(id)
+    }
+}
 
 /// Build a bare whole-protein-unknown `p.?` variant for an in-cis frameshift
 /// allele (#855), reusing the protein accession and gene symbol of an existing
@@ -761,7 +942,7 @@ fn lrg_protein_accession(lrg_transcript: &str) -> Option<String> {
 pub struct VariantProjector<P: ReferenceProvider + Clone> {
     projector: Projector,
     provider: P,
-    normalizer: Normalizer<P>,
+    normalizer: Normalizer<SharedTranscriptCacheProvider<P>>,
     /// Cache of fetched transcripts keyed by `(transcript_id, parent_accession)`.
     ///
     /// `project_single_inner` looks up each overlapping transcript via the
@@ -777,7 +958,12 @@ pub struct VariantProjector<P: ReferenceProvider + Clone> {
     /// build for the same `transcript_id` (issue #332). Inputs without a
     /// `genomic_context` and the legacy `cached_get_transcript` entry point
     /// both cache under `(transcript_id, None)`, so they share entries.
-    transcript_cache: RwLock<HashMap<TranscriptCacheKey, Arc<Transcript>>>,
+    ///
+    /// Held behind an [`Arc`] so the same map is shared with the
+    /// [`SharedTranscriptCacheProvider`] the normalizer runs on: a transcript
+    /// fetched on either side is served from this one map on the other, rather
+    /// than each re-paying the fetch (issue #1860).
+    transcript_cache: SharedTranscriptCache,
     /// Cache of the translated reference protein (ref CDS + ref protein +
     /// ref-with-stop) keyed by the same `(transcript_id, parent_accession)`
     /// identity used by `transcript_cache`. Each entry is stable for the life
@@ -809,12 +995,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // override it — the `project` CLI does so via `with_normalize_config`
         // (#1193) — and `tests/it/issue_1197_required_error_config.rs` scans only
         // the CLI / PyO3 / service seams for that reason.
-        let normalizer = Normalizer::with_config(provider.clone(), NormalizeConfig::default());
+        let transcript_cache: SharedTranscriptCache = Arc::new(RwLock::new(HashMap::new()));
+        // Hand the normalizer a provider view that shares this projector's
+        // transcript cache, so an axis re-derived through the normalizer serves
+        // its `get_transcript` from the same map (issue #1860).
+        let caching =
+            SharedTranscriptCacheProvider::new(provider.clone(), Arc::clone(&transcript_cache));
+        let normalizer = Normalizer::with_config(caching, NormalizeConfig::default());
         Self {
             projector,
             provider,
             normalizer,
-            transcript_cache: RwLock::new(HashMap::new()),
+            transcript_cache,
             ref_protein_cache: RwLock::new(HashMap::new()),
             assembly_override: None,
         }
@@ -865,10 +1057,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// [`Self::cached_ref_translation`] so both caches use byte-identical keys
     /// for the same variant.
     fn parent_key_for(variant: &HgvsVariant) -> Option<String> {
-        variant
-            .accession()
-            .and_then(|a| a.genomic_context.as_deref())
-            .map(|gc| gc.to_string())
+        variant.accession().and_then(parent_key_for_accession)
     }
 
     /// The build-bearing genomic accession to stamp as `genomic_context` when
@@ -1343,7 +1532,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     }
 
     pub fn with_normalize_config(mut self, config: NormalizeConfig) -> Self {
-        self.normalizer = Normalizer::with_config(self.provider.clone(), config);
+        // Rebuild the normalizer over a provider that still shares this
+        // projector's transcript cache (issue #1860), not the bare provider.
+        let caching = SharedTranscriptCacheProvider::new(
+            self.provider.clone(),
+            Arc::clone(&self.transcript_cache),
+        );
+        self.normalizer = Normalizer::with_config(caching, config);
         self
     }
 
