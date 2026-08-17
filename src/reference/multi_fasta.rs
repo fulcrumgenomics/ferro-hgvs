@@ -1502,6 +1502,42 @@ impl MultiFastaProvider {
         None
     }
 
+    /// The build-agnostic LRG placement parsed from the on-hand LRG XML, cached
+    /// per accession.
+    ///
+    /// The parsed placement is stored verbatim (the parse reads only the single
+    /// `main_assembly` mapping and does not depend on any requested build), so
+    /// the cache key is the bare `LRG_<N>` accession and the build filter is
+    /// applied by the caller *after* this returns — see
+    /// [`genomic_placement_on_build`](Self::genomic_placement_on_build). Keeping
+    /// the filter out of the cache is what stops a first-requested build from
+    /// being served to every later requester (#1903).
+    fn lrg_placement_cached(
+        &self,
+        parent: &crate::hgvs::variant::Accession,
+    ) -> Option<GenomicPlacement> {
+        let dir = self.lrg_xml_dir.as_ref()?;
+        let key = parent.full(); // e.g. "LRG_1" (LRG accessions carry no version)
+
+        if let Some(cached) = self
+            .lrg_placement_cache
+            .lock()
+            .expect("lrg placement cache poisoned")
+            .get(&key)
+        {
+            return cached.clone();
+        }
+
+        let placement = std::fs::read_to_string(dir.join(format!("{key}.xml")))
+            .ok()
+            .and_then(|xml| parse_lrg_main_assembly_placement(&xml));
+        self.lrg_placement_cache
+            .lock()
+            .expect("lrg placement cache poisoned")
+            .insert(key, placement.clone());
+        placement
+    }
+
     /// Resolve a sequence name, trying various forms
     fn resolve_name(&self, name: &str) -> Option<String> {
         // Direct lookup, plus the LRG bare-genomic → `LRG_<N>g` record rename
@@ -3736,33 +3772,28 @@ impl ReferenceProvider for MultiFastaProvider {
                 self.infer_genome_build(a)
             });
         }
-        // LRG placement comes from the on-hand LRG XMLs (parsed on demand). LRG
-        // carries a single main-assembly placement, so the build hint is not
-        // used here — a build mismatch is caught downstream by the re-anchor's
-        // endpoint-outside-span guard (#655).
+        // LRG placement comes from the on-hand LRG XMLs (parsed on demand). The
+        // parsed record carries a single main-assembly (GRCh38) placement, so
+        // honour the requested build the same way the `NG_` path does: return it
+        // only when its build matches the request (or none was requested), and
+        // decline otherwise rather than mis-anchor onto a different build's
+        // coordinates (#1903). The re-anchor's endpoint-outside-span guard was
+        // assumed to catch a cross-build request, but it is purely numeric and
+        // does not fire when the two builds' spans overlap.
         if !parent.is_lrg() {
             return None;
         }
-        let dir = self.lrg_xml_dir.as_ref()?;
-        let key = parent.full(); // e.g. "LRG_1" (LRG accessions carry no version)
-
-        if let Some(cached) = self
-            .lrg_placement_cache
-            .lock()
-            .expect("lrg placement cache poisoned")
-            .get(&key)
-        {
-            return cached.clone();
-        }
-
-        let placement = std::fs::read_to_string(dir.join(format!("{key}.xml")))
-            .ok()
-            .and_then(|xml| parse_lrg_main_assembly_placement(&xml));
-        self.lrg_placement_cache
-            .lock()
-            .expect("lrg placement cache poisoned")
-            .insert(key, placement.clone());
-        placement
+        let placement = self.lrg_placement_cached(parent)?;
+        // `select_placement_for_build` over the single parsed placement applies
+        // exactly the NG_ policy: match on an explicit build, prefer GRCh38 (the
+        // only build LRG carries) with no preference. The cache stores the
+        // build-agnostic parsed placement, so the build filter runs *after* the
+        // cache and cannot poison a later request for a different build.
+        crate::reference::provider::select_placement_for_build(
+            std::slice::from_ref(&placement),
+            build,
+            |a| self.infer_genome_build(a),
+        )
     }
 
     fn resolve_legacy_gene_selector(
@@ -4723,6 +4754,54 @@ mod tests {
         // An NG_ parent with no loaded RefSeqGene alignments gets no placement.
         let ng = crate::hgvs::variant::Accession::new("NG", "007485", Some(1));
         assert!(provider.genomic_placement(&ng).is_none());
+    }
+
+    /// `genomic_placement_on_build` must honour the requested build for LRG the
+    /// same way it does for `NG_` (#1903). The parsed LRG record carries a
+    /// single main-assembly (GRCh38) placement, so:
+    ///
+    /// - `None` (no preference) and the matching `Some("GRCh38")` both return it;
+    /// - an explicit `Some("GRCh37")` — a build the record does not carry —
+    ///   declines rather than returning the GRCh38 placement under a GRCh37
+    ///   request, which would anchor coordinates onto the wrong genome.
+    ///
+    /// The requests are ordered GRCh37-then-GRCh38 to pin that the placement
+    /// cache is not build-poisoned: a declined GRCh37 request must not stop the
+    /// later GRCh38 request from being served (the issue's "Note for whoever
+    /// picks this up").
+    #[test]
+    fn lrg_genomic_placement_honors_the_requested_build() {
+        let (mut provider, dir) = build_provider_with_test_genome();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        // LRG_XML_SAMPLE carries a GRCh38 `main_assembly` (NC_000017.11) and a
+        // GRCh37 `other_assembly` (NC_000017.10); the parser reads the former.
+        std::fs::write(xml_dir.join("LRG_999.xml"), LRG_XML_SAMPLE).unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+
+        let lrg = crate::hgvs::variant::Accession::new("LRG", "999", None);
+
+        // A GRCh37 request the record cannot serve must decline (not mis-anchor
+        // onto the GRCh38 placement). Issued first, before the cache is warm.
+        assert!(
+            provider
+                .genomic_placement_on_build(&lrg, Some("GRCh37"))
+                .is_none(),
+            "an LRG whose only placement is GRCh38 must decline a GRCh37 request"
+        );
+
+        // The matching build is served, and the declined request above did not
+        // poison the cache against it.
+        let on_38 = provider
+            .genomic_placement_on_build(&lrg, Some("GRCh38"))
+            .expect("the GRCh38 placement must be served for a GRCh38 request");
+        assert_eq!(on_38.nc.to_string(), "NC_000017.11");
+
+        // No preference resolves to the record's (GRCh38) placement.
+        let no_pref = provider
+            .genomic_placement_on_build(&lrg, None)
+            .expect("no-preference resolves to the record's placement");
+        assert_eq!(no_pref.nc.to_string(), "NC_000017.11");
     }
 
     /// An LRG that has **both** its own FASTA record and a chromosomal
