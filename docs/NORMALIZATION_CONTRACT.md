@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**34 adjudication records — 31 decided, 3 open.**
+**35 adjudication records — 32 decided, 3 open.**
 
 ## What this document is
 
@@ -107,6 +107,7 @@ for the knob and its traps.
 - [`inversion-vs-a-mixed-member-competitor`](#inversion-vs-a-mixed-member-competitor)
 - [`inversion-vs-two-delins-76-83`](#inversion-vs-two-delins-76-83)
 - [`inverted-duplication-is-derived-as-ins-range-inv`](#inverted-duplication-is-derived-as-ins-range-inv)
+- [`mosaic-chimeric-substitution-reference-allele-first`](#mosaic-chimeric-substitution-reference-allele-first)
 - [`projection-codon-exception-is-decided-by-the-rendered-axis`](#projection-codon-exception-is-decided-by-the-rendered-axis)
 - [`rna-axis-alignment-only-symbol-reach`](#rna-axis-alignment-only-symbol-reach)
 - [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
@@ -1430,6 +1431,36 @@ THE CONSUMER THAT WAS ACTUALLY BROKEN, AND IS THE REAL BLOCKER THIS DERIVATION H
 REPRESENTATION IMPACT: moves rows. Any stored description whose payload is the reverse complement of its abutting span, at or above the coincidence floor, re-spells from literal bases to `ins<range>inv`. The affected population cannot be quoted from the shape-family corpus, which has no inverted-copy family — a zero from it would be structural.
 
 IT ALSO COSTS A CONFLUENCE CLASS, IN BOTH DIRECTIONS. `converged` falls by one on each axis - 3': 11,271 to 11,270 with `split_two` 1 to 2; 5': 11,272 to 11,271 with `split_two` 0 to 1 - and it is the SAME class both ways - the confluence-corpus class s03-g-m4-sep1-p8-all-ins - whose two spellings differ in member geometry (3 members against 4). That is recorded here and not only in the PR body because `delins-recommendation-reach-when-the-input-arrives-split` is precedent for a record carrying its own confluence figures, and because a PR body is not durable. THE MECHANISM IS NOT ESTABLISHED. One hypothesis was raised and TESTED AND REFUTED, recorded so it is not re-raised: that the members, resting at different places, were being judged against different composition windows, and that fixing the composition window would restore the class. It does not - with `COMPOSITION_HALF_WIDTH` in place the censuses still measure 11,270 / 2 and 11,271 / 1. Whatever moves that class, it is not the window-extent dependence.
+
+#### `mosaic-chimeric-substitution-reference-allele-first`
+
+**Status:** decided
+
+**The question.** A mosaic (`/`) or chimeric (`//`) substitution allele carries one member describing a variant nucleotide and one describing the reference (`=`). Ferro accepted a variant-first spelling (`c.85T>C/=`) and left it as authored, neither reordering it nor refusing it. `DNA/substitution.md:49` states the reference allele is "always described first", but the clause is non-normative prose. Does ferro reorder to reference-first, refuse the variant-first spelling, or leave it alone?
+
+**Governing clause.**
+
+- `docs/recommendations/DNA/substitution.md:49`
+  > irrespective of the frequency in which each nucleotide was found, the reference is always described first
+
+**Also cited.**
+
+- `docs/recommendations/DNA/substitution.md:47`
+  > LRG_199t1:c.85=/T>C
+
+**The ruling.**
+
+OPERATOR RULING, 2026-08-16 (#2034) — REORDER TO REFERENCE-FIRST. A two-member mosaic/chimeric SUBSTITUTION allele is emitted reference-allele-first: `c.85T>C/=` normalizes to `c.85=/T>C`, and the chimeric `//` analogue to `c.85=//T>C`. The variant-first spelling is not refused; it is rewritten.
+
+AUTHORITY. `substitution.md:49` states it outright — "irrespective of the frequency in which each nucleotide was found, the reference is always described first" — and `:47` publishes the target `LRG_199t1:c.85=/T>C` as the spec's own worked mosaic example. The clause is lowercase prose, not an RFC 2119 keyword (per this repository's reading of the spec almost nothing in `recommendations/` is normative), so it is cited as GOVERNING in the sense of a positive statement of the rule ferro follows, not as a MUST. It aligns with the project's canonical-form doctrine (`canonical-form-choice-when-both-legal`): the form is derived rather than preserved from the input's spelling, and reference-first spellings are already fixed points, so this makes the two spellings of one mosaic converge on the one the spec prints.
+
+WHY REORDER RATHER THAN REFUSE. Refusing the variant-first spelling in strict was the alternative the issue enumerated. It is rejected on the same ground `absolute-prohibition-enforcement-stage` gives for output conformance: accepting a non-conformant input and normalizing it to the conformant form trades nothing, and a mode-dependent refusal would leave lenient/silent still emitting the disfavoured order. Reordering fixes every mode at once.
+
+SCOPE — SUBSTITUTION ONLY, DELIBERATELY. The ruling reaches a substitution beside a reference allele (`=`), which is the shape the issue names and the only one where reference-first is unambiguous: the reference-first compact form is `<pos>=/<edit>` and there is exactly one. A RANGE edit (`del`/`dup`) is OUT OF SCOPE and left as authored, because its reference-first spelling is ambiguous between the position-identity form `c.79_80=/del` and the whole-entity-identity form `c.=/79_80del`, and the spec does not adjudicate between them. A three-or-more-member mosaic, and a mosaic of two real edits (no reference member), are also out of scope — there is no single reference allele to move to the front. Those cases fall through unchanged and are owed their own ruling if raised.
+
+MECHANISM. Implemented in `Normalizer::normalize_allele` via `reorder_mosaic_chimeric_reference_first`: a two-member, non-predicted Mosaic/Chimeric allele whose first member is a certain substitution and whose second member is an identity (`=`, whole-entity or position-bound) is rewritten to `[<sub-location>=, <sub>]`, then re-dispatched. The rewrite is idempotent — its output is spelled reference-first and no longer matches the guard — so the re-dispatch runs at most once.
+
+REPRESENTATION IMPACT: a real, one-directional migration. Every previously-accepted variant-first mosaic/chimeric substitution (`<pos><ref>><alt>/=` and the `//` form) re-spells to reference-first. The synthetic shape-family corpus has no mosaic/chimeric family, so a count from it would be a STRUCTURAL zero; the move is disclosed in the PR's `Representation-Change:` trailer and pinned by `tests/it/issue_2034_mosaic_chimeric_reference_first.rs`.
 
 #### `projection-codon-exception-is-decided-by-the-rendered-axis`
 

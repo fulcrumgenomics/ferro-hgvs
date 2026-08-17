@@ -571,6 +571,7 @@ mod issue_1618_anchored_repeat_semantics;
 mod issue_1831_applier_member_order;
 mod issue_1832_reanchor_empty_alternate;
 mod issue_2000_nextest_stall_phase;
+mod issue_2034_mosaic_chimeric_reference_first;
 mod report_failure_degrades;
 mod report_failure_provenance;
 mod reported_confluence_pairs;

@@ -1379,6 +1379,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "unequal-length-block-a-placed-gap-is-not-a-separation",
         "decided",
     ),
+    // Ordering of the two members of a mosaic (`/`) / chimeric (`//`)
+    // **substitution** allele. **Decided reference-first by operator ruling
+    // (2026-08-16, #2034).** `substitution.md:49` states the reference allele
+    // "is always described first" — non-normative prose, but a positive
+    // statement of the rule ferro now follows, so it is the governing clause.
+    // A variant-first spelling `c.85T>C/=` is reordered to the spec compact
+    // reference-first form `c.85=/T>C`. Scoped to substitution: range edits
+    // (`del`/`dup`) have two competing reference-first compact forms and are
+    // left for a later ruling. Previously-accepted inputs migrate.
+    (
+        "mosaic-chimeric-substitution-reference-allele-first",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
