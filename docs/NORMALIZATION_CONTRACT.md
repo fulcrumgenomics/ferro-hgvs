@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**35 adjudication records — 32 decided, 3 open.**
+**36 adjudication records — 33 decided, 3 open.**
 
 ## What this document is
 
@@ -107,6 +107,7 @@ for the knob and its traps.
 - [`inversion-vs-a-mixed-member-competitor`](#inversion-vs-a-mixed-member-competitor)
 - [`inversion-vs-two-delins-76-83`](#inversion-vs-two-delins-76-83)
 - [`inverted-duplication-is-derived-as-ins-range-inv`](#inverted-duplication-is-derived-as-ins-range-inv)
+- [`past-cds-end-coordinate-is-non-conformant`](#past-cds-end-coordinate-is-non-conformant)
 - [`projection-codon-exception-is-decided-by-the-rendered-axis`](#projection-codon-exception-is-decided-by-the-rendered-axis)
 - [`rna-axis-alignment-only-symbol-reach`](#rna-axis-alignment-only-symbol-reach)
 - [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
@@ -1431,6 +1432,34 @@ THE CONSUMER THAT WAS ACTUALLY BROKEN, AND IS THE REAL BLOCKER THIS DERIVATION H
 REPRESENTATION IMPACT: moves rows. Any stored description whose payload is the reverse complement of its abutting span, at or above the coincidence floor, re-spells from literal bases to `ins<range>inv`. The affected population cannot be quoted from the shape-family corpus, which has no inverted-copy family — a zero from it would be structural.
 
 IT ALSO COSTS A CONFLUENCE CLASS, IN BOTH DIRECTIONS. `converged` falls by one on each axis - 3': 11,271 to 11,270 with `split_two` 1 to 2; 5': 11,272 to 11,271 with `split_two` 0 to 1 - and it is the SAME class both ways - the confluence-corpus class s03-g-m4-sep1-p8-all-ins - whose two spellings differ in member geometry (3 members against 4). That is recorded here and not only in the PR body because `delins-recommendation-reach-when-the-input-arrives-split` is precedent for a record carrying its own confluence figures, and because a PR body is not durable. THE MECHANISM IS NOT ESTABLISHED. One hypothesis was raised and TESTED AND REFUTED, recorded so it is not re-raised: that the members, resting at different places, were being judged against different composition windows, and that fixing the composition window would restore the class. It does not - with `COMPOSITION_HALF_WIDTH` in place the censuses still measure 11,270 / 2 and 11,271 / 1. Whatever moves that class, it is not the window-extent dependence.
+
+#### `past-cds-end-coordinate-is-non-conformant`
+
+**Status:** decided
+
+**The question.** A `c.N` coordinate with N greater than `cds_end` (e.g. `c.22` on a transcript whose CDS ends at `c.21`) names no base the coding axis defines. Ferro refused it in strict mode when it stood alone (`c.22del` -> W4004) but silently accepted and remapped it to `*1` inside a cis allele (`c.[22_23insG;*1G>A]` -> `c.21dup`). Which stage owns the refusal, and does the allele path get the same rule as the lone position?
+
+**Governing clause.**
+
+- `docs/background/numbering.md:21`
+  > numbering starts with `c.1` at the **`A`** of the `ATG` translation initiation (start) codon and ends with the last nucleotide of the translation termination (stop) codon
+
+**Also cited.**
+
+- `docs/background/numbering.md:30`
+  > nucleotides downstream (3') of the translation termination codon (stop) are marked with a `*` (asterisk) and numbered `c.*1`, `c.*2`, `c.*3`, etc., going further downstream
+
+**The ruling.**
+
+OPERATOR RULING, 2026-08-16 — DECIDED. A plain `c.N` coordinate with N greater than `cds_end` is a NON-CONFORMANT coordinate, not an alternate spelling of `*(N - cds_end)`. `numbering.md:21` ends the coding-DNA axis at "the last nucleotide of the translation termination (stop) codon"; `:30` then opens a SEPARATE zone the moment the stop codon ends, numbering it `c.*1`, `c.*2`, ... So `c.22` on a transcript whose CDS ends at `c.21` names no base the `c.` axis defines — the base one past the stop is spelled `c.*1`, and `c.22` is out-of-scheme numbering for it, not a second name for it.
+
+THE ENFORCEMENT STAGE IS MODE-DEPENDENT, AND THE RULE IS APPLIED IDENTICALLY ON BOTH VALIDATION PATHS. This follows the already-decided `absolute-prohibition-enforcement-stage` without adding any new mode policy: strict validates input conformance and REFUSES (`W4004 PositionPastEnd`); lenient does not validate conformance and instead REPAIRS the coordinate to its canonical `c.*(N - cds_end)` spelling where that lands in the 3'UTR, as a RECORDED correction (the same `W4004`, kept in the warning vector) rather than a silent remap; silent is lenient with the message suppressed, so the repair is applied without a warning. The output in the permissive modes is unchanged — it was already the repaired `*N` form, because the coordinate maps into the 3'UTR — what changes is that the repair is now DISCLOSED, and that strict refuses.
+
+THE DEFECT WAS THE DISAGREEMENT, NOT EITHER ANSWER. The lone-position path ran the bounds gate in `normalize_cds` (`check_cds_pos_past_end` + the strict-mode ladder in `normalize_core_checked`), so `c.22del` refused in strict and repaired-with-`W4004` in lenient. The cis-allele path never reached that gate: `merge::collapse_overlapping_cis_edits` converts each member to a sequence coordinate before per-member normalization, and a plain `c.22` classifies as an in-range `Region::Cds` position mapping to the same sequence coordinate as `c.*1` (`region_sequence_delta`), so the coordinate was silently remapped across the CDS/3'UTR seam with no diagnostic, in every mode. The same coordinate got two answers depending only on whether it had a sibling — which is not a property the spec makes meaningful (#2018). The fix emits `W4004` on the RAW allele members before the merge reinterprets them (mirroring `detect_insertion_overlaps`, which emits `W5002` pre-merge for the identical reason), so both paths now run one rule through the one machinery.
+
+REFUSED AT NORMALIZE, NOT PARSE, LIKE `c-description-against-an-unresolvable-cds-is-refused`: the input's spelling is conformant and whether `c.22` is in range is a REFERENCE fact (it depends on `cds_end`), which `parse_hgvs` holds no provider to see. `:52`/`:44` are supporting context, not authority here — `:52` is why the `n.` axis is untouched (a bare `n.` number is a flat offset with no CDS), and `:44` is the past-the-whole-transcript rule, which a coordinate that lands inside the 3'UTR does not engage. The 5'UTR (`c.-N`) and 3'UTR (`c.*N`) bound checks ride the same gate and are unchanged.
+
+REPRESENTATION IMPACT: strict newly REFUSES cis alleles carrying a past-`cds_end` `c.` member that it previously remapped and normalized; lenient/silent move no output (the repaired `*N` form was already emitted) but now DISCLOSE the correction as `W4004`. The lone-position path is unchanged. Quantified by the implementing PR against the synthetic corpus.
 
 #### `projection-codon-exception-is-decided-by-the-rendered-axis`
 

@@ -1677,6 +1677,32 @@
           "src/spdi/convert.rs::a_concrete_base_repeat_insertion_still_expands"
         ]
       }
+    },
+    {
+      "id": "past-cds-end-coordinate-is-non-conformant",
+      "question": "A `c.N` coordinate with N greater than `cds_end` (e.g. `c.22` on a transcript whose CDS ends at `c.21`) names no base the coding axis defines. Ferro refused it in strict mode when it stood alone (`c.22del` -> W4004) but silently accepted and remapped it to `*1` inside a cis allele (`c.[22_23insG;*1G>A]` -> `c.21dup`). Which stage owns the refusal, and does the allele path get the same rule as the lone position?",
+      "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/issue_2018_past_cds_end_mode_dependent.rs::the_lone_and_allele_paths_agree_on_a_past_cds_end_coordinate",
+          "tests/it/issue_2018_past_cds_end_mode_dependent.rs::strict_refuses_a_past_cds_end_coordinate_in_a_collapsing_cis_allele",
+          "tests/it/issue_2018_past_cds_end_mode_dependent.rs::strict_refuses_a_past_cds_end_member_in_a_non_collapsing_cis_allele",
+          "tests/it/issue_2018_past_cds_end_mode_dependent.rs::lenient_repairs_and_discloses_a_past_cds_end_member_in_a_cis_allele",
+          "tests/it/insertion_adjacency_defects.rs::pinned_past_cds_end_position_is_refused_alone_and_in_an_allele"
+        ]
+      },
+      "clauses": [
+        {
+          "clause": "docs/background/numbering.md:21",
+          "quote": "numbering starts with `c.1` at the **`A`** of the `ATG` translation initiation (start) codon and ends with the last nucleotide of the translation termination (stop) codon"
+        },
+        {
+          "clause": "docs/background/numbering.md:30",
+          "quote": "nucleotides downstream (3') of the translation termination codon (stop) are marked with a `*` (asterisk) and numbered `c.*1`, `c.*2`, `c.*3`, etc., going further downstream"
+        }
+      ],
+      "governing": "docs/background/numbering.md:21",
+      "rationale": "OPERATOR RULING, 2026-08-16 — DECIDED. A plain `c.N` coordinate with N greater than `cds_end` is a NON-CONFORMANT coordinate, not an alternate spelling of `*(N - cds_end)`. `numbering.md:21` ends the coding-DNA axis at \"the last nucleotide of the translation termination (stop) codon\"; `:30` then opens a SEPARATE zone the moment the stop codon ends, numbering it `c.*1`, `c.*2`, ... So `c.22` on a transcript whose CDS ends at `c.21` names no base the `c.` axis defines — the base one past the stop is spelled `c.*1`, and `c.22` is out-of-scheme numbering for it, not a second name for it.\n\nTHE ENFORCEMENT STAGE IS MODE-DEPENDENT, AND THE RULE IS APPLIED IDENTICALLY ON BOTH VALIDATION PATHS. This follows the already-decided `absolute-prohibition-enforcement-stage` without adding any new mode policy: strict validates input conformance and REFUSES (`W4004 PositionPastEnd`); lenient does not validate conformance and instead REPAIRS the coordinate to its canonical `c.*(N - cds_end)` spelling where that lands in the 3'UTR, as a RECORDED correction (the same `W4004`, kept in the warning vector) rather than a silent remap; silent is lenient with the message suppressed, so the repair is applied without a warning. The output in the permissive modes is unchanged — it was already the repaired `*N` form, because the coordinate maps into the 3'UTR — what changes is that the repair is now DISCLOSED, and that strict refuses.\n\nTHE DEFECT WAS THE DISAGREEMENT, NOT EITHER ANSWER. The lone-position path ran the bounds gate in `normalize_cds` (`check_cds_pos_past_end` + the strict-mode ladder in `normalize_core_checked`), so `c.22del` refused in strict and repaired-with-`W4004` in lenient. The cis-allele path never reached that gate: `merge::collapse_overlapping_cis_edits` converts each member to a sequence coordinate before per-member normalization, and a plain `c.22` classifies as an in-range `Region::Cds` position mapping to the same sequence coordinate as `c.*1` (`region_sequence_delta`), so the coordinate was silently remapped across the CDS/3'UTR seam with no diagnostic, in every mode. The same coordinate got two answers depending only on whether it had a sibling — which is not a property the spec makes meaningful (#2018). The fix emits `W4004` on the RAW allele members before the merge reinterprets them (mirroring `detect_insertion_overlaps`, which emits `W5002` pre-merge for the identical reason), so both paths now run one rule through the one machinery.\n\nREFUSED AT NORMALIZE, NOT PARSE, LIKE `c-description-against-an-unresolvable-cds-is-refused`: the input's spelling is conformant and whether `c.22` is in range is a REFERENCE fact (it depends on `cds_end`), which `parse_hgvs` holds no provider to see. `:52`/`:44` are supporting context, not authority here — `:52` is why the `n.` axis is untouched (a bare `n.` number is a flat offset with no CDS), and `:44` is the past-the-whole-transcript rule, which a coordinate that lands inside the 3'UTR does not engage. The 5'UTR (`c.-N`) and 3'UTR (`c.*N`) bound checks ride the same gate and are unchanged.\n\nREPRESENTATION IMPACT: strict newly REFUSES cis alleles carrying a past-`cds_end` `c.` member that it previously remapped and normalized; lenient/silent move no output (the repaired `*N` form was already emitted) but now DISCLOSE the correction as `W4004`. The lone-position path is unchanged. Quantified by the implementing PR against the synthetic corpus."
     }
   ]
 }
