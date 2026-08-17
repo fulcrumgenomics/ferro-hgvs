@@ -48,12 +48,12 @@ Ferro: a multi-base replacement is never a substitution; write it as a delins.
 
 > two variants separated by one or more nucleotides should be described individually
 
-Ferro: the separation rule (README rule 2); the exception folds two subs into one delins only when
+Ferro: the separation rule (ruleset rule 2); the exception folds two subs into one delins only when
 they sit one nucleotide apart and together change one amino acid.
 
 **Why.**
 <!-- why:START -->
-> **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (README rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
+> **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 <!-- why:END:separation-rule-force-modal-or-negation,codon-carve-out-shape-restriction -->
