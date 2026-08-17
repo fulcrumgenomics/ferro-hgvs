@@ -114,14 +114,14 @@ does, and both sequences are folded before anything reads them.
 
 ## Which rules it delivers
 
-This is the whole design, and it falls straight out of the four [normalization rules](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/README.md#normalization-rules):
+This is the whole design, and it falls straight out of the four [normalization rules](../reference/normalization-rules.md):
 
 | | rules delivered | force | needs |
 |---|---|---|---|
 | `from_sequences` | **1 (conformant)**, **4 (deterministic)** | both *absolute* | the caller's four arguments |
 | `normalize`, afterwards | **2 (recommended form)**, **3 (confluent)** | both *best effort* | the reference |
 
-Rules 1 and 4 are the two the [normalization rules](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/README.md#normalization-rules) call always achievable, so a function that has only
+Rules 1 and 4 are the two the [normalization rules](../reference/normalization-rules.md) call always achievable, so a function that has only
 the caller's arguments can still deliver both in full. Rules 2 and 3 need the reference: rule 2's
 scope names the 3' rule explicitly, and a reference-anchored shift is precisely what a
 window-local function cannot perform.

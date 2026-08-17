@@ -36,7 +36,7 @@ ceremony. Only the first kind is a finding.
 
 **It is not the ruleset.** What ferro's output is allowed to be, and what happens where the
 spec determines no answer, is stated once, in
-[README.md, *Normalization rules*](../README.md#normalization-rules), and is deliberately not
+[the normalization rules](src/reference/normalization-rules.md), and is deliberately not
 restated here.
 
 **It is not the records.** It says which record governs a stage; it does not reproduce the

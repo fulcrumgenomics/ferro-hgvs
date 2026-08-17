@@ -38,8 +38,8 @@ the recommendations prefer. The verdict describes **ferro's output** against tha
 
 ## What it is not
 
-It is not a second copy of the rules. The canonical ruleset lives in the project
-[README](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/README.md#normalization-rules), and
+It is not a second copy of the rules. The canonical ruleset lives in the
+[normalization rules](../reference/normalization-rules.md) page, and
 every adjudication is recorded once in the **ruling ledger**
 ([`hgvs_spec_normalization_overrides.json`](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/tests/fixtures/grammar/hgvs_spec_normalization_overrides.json),
 rendered for reading as
