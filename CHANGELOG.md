@@ -12,15 +12,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Representation changes
 
 - *(error_handling)* stop W4003 collapsing signed-endpoint ranges on the CDS seam ([#2152](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2152))
+  > lenient/silent stop dropping a base on
+  > CDS-start-seam ranges (c.-1_1del stays c.-1_1del) and strict stops
+  > falsely rejecting them; this is a bug fixed to the correct answer, not a
+  > form choice. The mode-less synthetic corpus harness
+  > (examples/dump_normalized_corpus) reports 0 of 96182 rows moved, but
+  > that is a STRUCTURAL zero: it normalizes with bare parse_hgvs +
+  > Normalizer::normalize and never applies ErrorConfig, so it cannot
+  > exercise the W4003 preprocessor at all. Measured directly through
+  > ErrorConfig over an enumerated 5'UTR/3'UTR seam probe (198 inputs,
+  > N=1..30 across del/dup/inv plus 18 genuine same-position controls): 180
+  > rows move in lenient/silent (90 c.-N_N + 90 c.*N_N, each retiring a
+  > base-drop) and 90 flip from false-reject to accept in strict (the c.-N_N
+  > family, valid as written); all 18 controls are unchanged.
+  > Previously-accepted inputs in lenient (a real migration for the
+  > consumer) and previously-rejected inputs in strict.
+  >
+  > Closes #2144
 - *(normalize)* refuse a past-cds-end coordinate on both the lone and cis-allele paths ([#2142](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2142))
+  > strict mode now REFUSES a cis allele carrying a
+  > past-`cds_end` `c.` member that it previously remapped and normalized
+  > without any diagnostic; lenient and silent modes move NO output (the
+  > repaired `c.*N` form was already emitted, because the coordinate maps
+  > into the 3'UTR) but lenient now DISCLOSES the correction as `W4004`. The
+  > lone-position path is unchanged in every mode.
+  >
+  > The synthetic corpus instrument (`examples/dump_normalized_corpus.rs`)
+  > is STRUCTURALLY BLIND to this change and cannot quantify it: the change
+  > keys on a cis-allele member whose `c.N` exceeds a real transcript
+  > `cds_end`, and the corpus generator builds transcripts with `CDS_START =
+  > 1` and geometry that never emits a past-`cds_end` member inside a cis
+  > allele, so a corpus diff is a structural zero rather than evidence of
+  > safety. The behavioural impact is the strict refusal described above,
+  > exercised against real `cds_end` values by the new tests.
 - *(project)* apply the codon-frame delins exception on a projected coding axis ([#2130](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2130))
+  > three projected axes move (c., n., r.); the
+  > genomic and protein axes are byte-identical. Projecting a variant whose
+  > accession is not the transcript — a genomic-authored or otherwise
+  > multi-member cis allele — now merges a same-codon gap-of-one pair into
+  > the spanning delins instead of leaving it split, which is the string
+  > normalize already produced for the coding-authored form of the same
+  > variant, so the change removes an entry-route disagreement rather than
+  > introducing a new form. Measured on NM_000059.4: c.[4C>A;6T>G] to
+  > c.4_6delinsACG, n.[203C>A;205T>G] to n.203_205delinsACG, r.[(4c>a;6u>g)]
+  > to r.(4_6delinsacg), with the g. and p. axes unchanged.
+  > Previously-accepted output, so a real migration for a consumer that
+  > projects onto a transcript axis and keys on the resulting string. Corpus
+  > movement is a STRUCTURAL ZERO and must not be read as a safety
 - *(spdi)* refuse an N-unit repeat instead of emitting a run of Ns ([#2141](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2141))
+  > SPDI-path decline only; 0 normalized rows move.
+  > On the HGVS→SPDI path, `N`-unit / `N`-containing repeats (`insN[k]`,
+  > `delinsN[k]`) now decline (`UnrepresentableInSpdi`) instead of emitting
+  > a run of literal `N`s — 6 such inputs in the release-asset corpus
+  > (`insN[18]`, `delinsN[341]` ×2, `insN[1200]`, `insN[320]`,
+  > `delinsN[155]`) go from a previously-emitted (wrong) SPDI triple to a
+  > clean decline, a real change for an SPDI consumer. This is not a
+  > normalization change: `dump_normalized_corpus` before/after is
+  > byte-identical and `--verify-spdi` is unchanged (13 differ / 67801 agree
+  > / 28368 unverifiable both sides), a structural zero because the
+  > shape-family corpus alphabet is {A,C,G,T} and builds no `N`.
 - refuse a cis collapse anchored 5' of the sequence's first base ([#2117](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2117))
+  > 96 of 96,182 corpus rows respell, all on the
+  > coding axis and all the reproducer shape — `c.[1dup;1X>Y]` moves from
+  > `c.-1_1insY` to `c.1delinsYX`. Every replaced string named a coordinate
+  > the transcript does not have, so this is a correction of out-of-range
+  > output rather than a choice between two valid spellings. A transcript
+  > with a real 5'UTR is untouched: the corpus carries 96 sibling rows of
+  > the identical input shape on `NM_TESTX.1`, and 0 of them move.
 - *(normalize)* derive a cis allele that straddles the CDS end ([#1819](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1819))
+  > 1671 of 96 182 corpus rows move (1.7%) — 1191
+  > were previously accepted forms (a migration) and 480 were not fixed
+  > points, so moving those is free. Every move is a cis allele straddling
+  > `cds_end` being re-derived from the bases it already denoted; no move
+  > changes what a description denotes, and `sequence_changed` is unchanged
+  > at 4/0. Both axis censuses are re-blessed on the current base: converged
+  > 11 016 -> 11 056 at 3' and 10 755 -> 10 803 at 5', with the three
+  > `split_*` decreases summing exactly to each gain (22+12+6 and 22+26+0),
+  > and `non_idempotent_outputs` 4 -> 0 in both directions.
 - *(normalize)* drop a cross-region identity member covered by a sibling ([#2049](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2049))
+  > `NM_TEST.1:c.[*1=;15_*1dup]` now normalizes to
+  > `NM_TEST.1:c.15_*1dup` — a cis identity member covered by a sibling
+  > whose span *starts* in a different region is dropped rather than kept.
+  > Previously accepted, so this is a migration on paper for a consumer
+  > keying on the normalized string; the old output named `c.*1` twice,
+  > which the apply oracle declines, so the migration is from a wrong string
+  > to a right one. 0 of 95,614 corpus rows move, and that is a STRUCTURAL
+  > zero rather than evidence of safety: `identity_member` is the only
+  > family feeding an identity in, and it always places its sibling two
+  > bases clear (`[{p(s)}_{p(s+1)}=;{p(s+3)}…]`), so no corpus row ever
+  > reaches the overlap test this change relaxes.
 - *(normalize)* derive ins<range>inv for an inverted duplication ([#2011](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2011))
+  > an insertion whose payload is the reverse
+  > complement of an abutting span on the same reference is now emitted as
+  > `ins<range>inv` naming that span instead of as literal
+  > reverse-complemented bases — `g.221_222insGCCGACTCCC` becomes
+  > `g.221_222ins212_221inv`. Genomic axis only; `c.`/`n.`/`r.`/`m.` still
+  > emit literals. The rule fires above a composition-aware coincidence
+  > floor read over a fixed 50-base half-window centred on the junction, so
+  > the emitted form no longer depends on `NormalizeConfig::window_size`; in
+  > the pinned fixture the boundary sits between an eight-base payload
+  > (stays literal) and a nine-base one (derives). It costs one confluence
+  > class in each shuffle direction — 3': 11,271 to 11,270, 5': 11,272 to
+  > 11,271 — whose two spellings previously converged and now settle apart;
+  > the census pins are re-blessed and the class `s03-g-m4-sep1-p8-all-ins`
+  > is named in `cis_confluence_axis.rs`, with the mechanism recorded as
+  > unestablished. Separately, `HgvsToVcfConverter` now returns
+  > `UnsupportedVariant` for an inserted payload that is a range, count or
+  > uncertainty instead of splicing its HGVS spelling into the ALT allele
+  > (which produced invalid records such as `ALT=C212_221inv`); that also
+  > changes behaviour for user-authored range payloads predating this
+  > derivation.
 - *(normalize)* keep a lone unequal-length delins whole ([#1908](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1908))
+  > 1798 rows move of 95614 corpus rows, 776
+  > previously-accepted — a real migration for any consumer keying on the
+  > normalized string, and a CORRECTION to this PR's earlier claim of 0
+  > previously-accepted. Re-measured armed against the prepared reference at
+  > base d8f08c1b, i.e. after #1899 deleted the input-relative weight bound;
+  > every figure here supersedes the pre-#1899 ones. Every moved row is on a
+  > coding axis (c. 1283, cx. 515; g. 0, n. 0), because the rule is gated to
+  > the coding DNA axis per
+  > rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]. The
+  > 776 migrating rows are all in the new lone_net_deletion_delins family
+  > and split c. 550 / cx. 226. 1797 of the moved rows are that family
+  > collapsing onto its span and 1 is a del_plus_sub row; every other family
+  > reads 0. Conformance convergence does NOT fall: spec_conformance_axis 3'
+  > converged holds at 11016 and 5' at 10755, every split_* bucket holds,
+  > guard_violations stays 0, and multi_member_cis_axis respelling_converged
+  > holds at 407 — this PR's earlier prediction that the fall belonged to
+  > the weight bound is confirmed, and the three re-pins it carried are
+  > reverted. The one census figure that moves is the coding-axis merge
+  > instrument, coding_axis_separation_two_or_more_merges 3 to 5, re-pinned
+  > and adjudicated row by row. No real GRCh37 row moves:
+  > NC_000002.11:g.47639670_47639673delinsTT keeps its split.
 - *(hgvs)* refuse an insertion sized by a count instead of its sequence ([#1797](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1797))
+  > 44 of 12,630,907 committed-corpus rows are newly
+  > refused. 39 unique strings, all previously accepted and re-emitted
+  > verbatim, so this is a real migration for a consumer round-tripping
+  > ClinVar. The conformance corpus's `prohibited_absolute_accepted` moves
+  > 32 to 8 in both directions; no output string changes, and no
+  > previously-refused input is newly accepted.
 
 ### Added
 
