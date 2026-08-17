@@ -1379,6 +1379,18 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "unequal-length-block-a-placed-gap-is-not-a-separation",
         "decided",
     ),
+    // Should an `N`-unit (or `N`-containing) repeat be REFUSED on the HGVS->SPDI
+    // path, or emitted as a run of literal `N`s? **House choice, decided 2026-08-16
+    // under `README.md` rule 5's silent limb** — the recommendations govern HGVS
+    // descriptions and say nothing about SPDI conversion. `N[341]` carries a
+    // *length*, not bases (`background/standards.md:30`: `N` = "A, C, G or T"), so
+    // emitting `insN[341]` as 341 literal `N`s asserts specific bases the input
+    // never named — a storable-but-wrong SPDI triple. That is the same information
+    // content as the `ins<length>` shape (`ins341`) SPDI already refuses (#1967),
+    // and per the #1747 precedent a plausible-but-wrong triple is worse than a
+    // clean decline. So ferro refuses with `UnrepresentableInSpdi`; a concrete-base
+    // repeat (`insACGT[3]`) is untouched. Pinned by `src/spdi/convert.rs`.
+    ("spdi-n-unit-repeat-refusal", "decided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
