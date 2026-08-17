@@ -11877,6 +11877,89 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
             .any(|junction| junction >= a.start && junction < a.end);
         let spans_sibling = spans_sibling_bases || spans_sibling_junction;
         if !spans_sibling {
+            // #2013: a repeat grown from a pure insertion states no junction, but
+            // the insertion it stands for has one — at the tract's 3' end. If the
+            // 3' shift that produced the repeat swept that junction across a
+            // sibling that blocks a shift, the inserted bases moved past bases (or
+            // a copy) the sibling contributes, reordering them and changing what
+            // the allele denotes — even though the tract itself does not overlap
+            // the sibling, so the `spans_sibling` tests above (which look only at
+            // the tract) do not see it. The reported case is an insertion 3' of a
+            // `dup` and 5' of a `del`: standalone it shuffles into `AG[3]`,
+            // carrying its `GAGA` payload clear over the `dup`'s base, and no pass
+            // caught it — the shift clamp declines a member that grew, the
+            // junction clamp reads no junction off a repeat, and the tract-
+            // spanning test here is 5' of the tract.
+            //
+            // Demote to the insertion at the tract's 3' end so
+            // `clamp_sibling_crossing_junctions`, immediately after, pulls the
+            // junction back to the sibling's edge. The crossing test mirrors that
+            // clamp's: a base-claiming sibling swept over is always a real
+            // crossing, while a junction sibling (`dup`/`ins`) is a crossing only
+            // when the two payloads do not commute at its junction — so a demotion
+            // here is exactly one the clamp will then act on, never a sequence-
+            // preserving repeat re-spelled to an insertion for nothing.
+            if !b.claims_bases && matches!(source, RepeatSource::Added) {
+                if let (Some(origin_junction), Some((payload, _))) =
+                    (b.junction, repeat_growth_as_insertion(&after[i], kind, a))
+                {
+                    let repeat_junction = a.end;
+                    let crosses = |variant: &HgvsVariant, s: &MemberSpan| -> bool {
+                        if s.region != a.region || s.accession != a.accession {
+                            return false;
+                        }
+                        if s.claims_bases {
+                            return s.start > origin_junction && s.start <= repeat_junction;
+                        }
+                        let Some(junction) = s.junction else {
+                            return false;
+                        };
+                        // Strictly inside the sweep, not up to it: a junction
+                        // sibling *at* the tract's 3' end (`repeat_junction`) is
+                        // flush against the payload rather than swept over — the
+                        // adjacency `coalesce_members_at_one_junction` combines
+                        // (#1325) — so the repeat must keep its span, not demote.
+                        if !(junction > origin_junction && junction < repeat_junction) {
+                            return false;
+                        }
+                        let commutes = match (
+                            payload_at_junction(
+                                &payload,
+                                repeat_junction,
+                                junction,
+                                &a.provider_key,
+                                provider,
+                            ),
+                            junction_payload(variant, kind, s, provider),
+                        ) {
+                            (Some(landed), Some(theirs)) => payloads_commute(&landed, &theirs),
+                            // A payload that cannot be read, or cannot legally
+                            // reach the junction, is treated as a crossing:
+                            // demoting is the conservative answer, and the clamp
+                            // makes the final call.
+                            _ => false,
+                        };
+                        !commutes
+                    };
+                    let swept = origin_junction < repeat_junction
+                        && (0..pre.len()).filter(|&j| j != i).any(|j| {
+                            pre[j].as_ref().is_some_and(|s| crosses(&before[j], s))
+                                || post[j].as_ref().is_some_and(|s| crosses(&after[j], s))
+                        });
+                    if swept {
+                        respell_at_gap(
+                            &mut after[i],
+                            a,
+                            a.end,
+                            NaEdit::Insertion {
+                                sequence: InsertedSequence::Literal(Sequence::new(payload)),
+                            },
+                            provider,
+                            TerminalOverrun::RespellAtBoundary,
+                        );
+                    }
+                }
+            }
             continue;
         }
         // Either way the equivalent edit sits on the 3'-most `length` bases of
