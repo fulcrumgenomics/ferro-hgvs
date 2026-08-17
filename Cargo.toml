@@ -531,39 +531,51 @@ opt-level = 3
 # run against an optimized `libferro_hgvs`: their work is compute-bound and a
 # constant factor on the library is multiplied a million times over.
 #
-# THE TEST DRIVER IS NOT LOWERED, and that is a measured answer rather than an
-# omission — #1964 asked for exactly such an override and the measurement refused
-# it. Recorded here so it is not re-derived.
+# opt-level is 2, NOT 3 (#1963). After #1960 this archive build is the workflow's
+# critical path — 161s of `cargo nextest archive --cargo-profile soak` on CI, of
+# which the optimizer is the dominant term (`test-build` compiles every test
+# binary at the `test` profile — opt-level 0 — in 82s). opt-level 2 cuts optimizer
+# time on `libferro_hgvs` unconditionally, for every PR; the trade is `sweeps` /
+# `censuses` run-time, which those jobs measure directly on CI.
+#
+# THE TEST DRIVER IS NOT LOWERED BELOW THE PROFILE DEFAULT, and that is a measured
+# answer rather than an omission — #1964 asked for exactly such a per-package
+# override and the measurement refused it. Recorded here so it is not re-derived.
 #
 # The premise was that the driver is loops and `format!`, so it could sit at a
-# low `opt-level` while `ferro-hgvs` stayed at 3. That became expressible with
-# #1964's split — `ferro-hgvs-soak-tests` is its own package, and profile
-# overrides are keyed on the package — and it does not pay. Measured on an M2 Max
-# (12 core), `user` CPU seconds because wall clock on a shared machine is not
-# reproducible; deps warm and the workspace artifacts scrubbed every rep the way
-# `rust-cache` scrubs them in CI. Build is the median of 5 reps, run the mean of
-# 2; "sweeps" is that job's selection at `FERRO_SWEEP_SEEDS=full` with all four
-# oracles armed, "censuses" is both of that job's steps:
+# lower `opt-level` than `ferro-hgvs`. That became expressible with #1964's split
+# — `ferro-hgvs-soak-tests` is its own package, and profile overrides are keyed on
+# the package — and it does not pay. Measured on an M2 Max (12 core), `user` CPU
+# seconds because wall clock on a shared machine is not reproducible; deps warm
+# and the workspace artifacts scrubbed every rep the way `rust-cache` scrubs them
+# in CI. THE LIBRARY WAS HELD AT opt-level 3 FOR THIS TABLE — it predates #1963,
+# and only the driver's per-package override varies across rows. Build is the
+# median of 5 reps, run the mean of 2; "sweeps" is that job's selection at
+# `FERRO_SWEEP_SEEDS=full` with all four oracles armed, "censuses" is both of
+# that job's steps:
 #
 #   driver opt-level | build (soak archive) | run: sweeps | run: censuses
 #   -----------------+----------------------+-------------+---------------
-#   3 (as shipped)   |                105.7 |       139.8 |          90.2
+#   3 (profile then) |                105.7 |       139.8 |          90.2
 #   2                |                105.1 |       141.2 |          89.7
 #   1                |                101.1 |       143.9 |          92.8
 #   0                |                 85.5 |       240.9 |         109.2
 #
-# So `opt-level = 0` buys ~20s of compile and gives back ~101s of run; 1 and 2
-# are a wash in both directions. The compile column is flat because of the
-# *other* half of #1964: this package compiles ~8k lines where the `it` crate is
-# 139k, so there is little left for a lower `opt-level` to save. The comparison
-# that pays is against what this job used to build — `--test it`, 394.8s — and
-# that is the split, not the `opt-level`.
+# So a driver `opt-level = 0` buys ~20s of compile and gives back ~101s of run; 1
+# and 2 are a wash in both directions against 3. The compile column is flat
+# because of the *other* half of #1964: this package compiles ~8k lines where the
+# `it` crate is 139k, so there is little left for a lower driver `opt-level` to
+# save. Two things follow for #1963: the driver inheriting the new profile default
+# of 2 rather than pinning its own override costs nothing here (2 and 3 are a wash
+# for it), and the #1963 saving therefore comes from the library — which this
+# table does not vary, so re-measure the library trade on CI rather than reading
+# it off these rows.
 #
 # `debug-assertions` and `overflow-checks` stay ON so this buys speed without
 # quietly weakening what the soak checks.
 [profile.soak]
 inherits = "test"
-opt-level = 3
+opt-level = 2
 debug = false
 debug-assertions = true
 overflow-checks = true
