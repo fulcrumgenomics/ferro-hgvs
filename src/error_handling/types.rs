@@ -1115,6 +1115,18 @@ impl ErrorType {
             ErrorType::ClinVarProseMultiAllelic => false,
             ErrorType::NonSpecMosaicForm => false,
 
+            // ---- Emitted unconditionally by the normalizer, with no consult
+            // site. `NormalizationWarning::MembersCoalesced` is pushed at the
+            // single normalization exit that compares the reported and
+            // normalized cis-member counts (`src/normalize/mod.rs`), in every
+            // mode. It reports provenance about ferro's own output rather than
+            // a defect in the input, so there is nothing to reject and nothing
+            // to correct — and correspondingly no `action_for` call to make.
+            // Declared here so `--ignore W5005` / `--reject W5005` say they are
+            // inert instead of silently doing nothing (#2092; the declaration
+            // drives the CLI diagnostic in `src/config.rs`).
+            ErrorType::MembersCoalescedFromReportedForm => false,
+
             // ---- Everything else reaches a consult site.
             ErrorType::LowercaseAminoAcid
             | ErrorType::SingleLetterAminoAcid
@@ -1158,8 +1170,7 @@ impl ErrorType {
             | ErrorType::AlignmentOnlySymbolInDescription
             | ErrorType::InsertionSizeCountWithoutSequence
             | ErrorType::NonCodingPositionOutsideTranscript
-            | ErrorType::GenomicPositionOffset
-            | ErrorType::MembersCoalescedFromReportedForm => true,
+            | ErrorType::GenomicPositionOffset => true,
         }
     }
 

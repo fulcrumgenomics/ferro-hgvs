@@ -54,6 +54,7 @@ pub mod codes;
 pub mod corrections;
 pub mod info_map;
 pub mod mutalyzer_map;
+pub mod normalizer_codes;
 mod preprocessor;
 pub mod registry;
 mod types;
@@ -70,8 +71,11 @@ pub use info_map::{
 pub use mutalyzer_map::{
     all_mutalyzer_codes, ferro_to_mutalyzer, mutalyzer_to_ferro, FerroErrorTag, MutalyzerCode,
 };
+pub use normalizer_codes::{has_normalizer_code_shape, NormalizerCode, NORMALIZER_CODES};
 pub use preprocessor::{CorrectionWarning, InputPreprocessor, PreprocessResult};
-pub use registry::{get_code_info, list_all_codes, list_error_codes, list_warning_codes};
+pub use registry::{
+    get_code_info, list_all_codes, list_error_codes, list_normalizer_codes, list_warning_codes,
+};
 pub use types::{ErrorMode, ErrorOverride, ErrorType, ResolvedAction};
 
 use std::collections::HashMap;

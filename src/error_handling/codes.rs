@@ -137,6 +137,13 @@ pub enum CodeCategory {
     Position,
     /// Semantic warnings (W5xxx)
     Semantic,
+    /// Normalizer diagnostics with no `W`-code counterpart — the
+    /// SCREAMING_SNAKE codes emitted by
+    /// [`NormalizationWarning`](crate::normalize::NormalizationWarning) and
+    /// [`NormalizationInfo`](crate::normalize::NormalizationInfo) that have no
+    /// [`ErrorType`](crate::error_handling::ErrorType) behind them, and so are
+    /// not reachable by `--error-mode` / `--ignore` / `--reject` (#2092).
+    NormalizerDiagnostic,
 }
 
 impl CodeCategory {
@@ -154,6 +161,7 @@ impl CodeCategory {
             CodeCategory::Format => "Format/Syntax",
             CodeCategory::Position => "Position/Range",
             CodeCategory::Semantic => "Semantic Issues",
+            CodeCategory::NormalizerDiagnostic => "Normalizer Diagnostics",
         }
     }
 }
@@ -256,8 +264,13 @@ impl CodeInfo {
             }
         }
 
-        // Ignore instructions (for warnings)
-        if self.is_warning() {
+        // Ignore instructions — only for warnings the error configuration can
+        // actually reach. A code with no `ModeBehavior` is not resolved through
+        // `ErrorConfig` (the `W-LOAD-*` loader warnings, and `W5005`, which is
+        // emitted unconditionally at the normalization exit), so printing
+        // `--ignore <CODE>` for it would advertise a flag that does nothing
+        // (#2092).
+        if self.is_warning() && self.mode_behavior.is_some() {
             output.push_str("To ignore this warning:\n");
             output.push_str(&format!(
                 "  ferro parse --ignore {} \"<input>\"\n\n",

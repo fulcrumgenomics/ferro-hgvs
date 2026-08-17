@@ -13,7 +13,8 @@ use ferro_hgvs::cli::{
 };
 use ferro_hgvs::config::{apply_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
-    get_code_info, list_all_codes, list_error_codes, list_warning_codes, ErrorConfig, ErrorMode,
+    get_code_info, list_all_codes, list_error_codes, list_warning_codes, CodeInfo, ErrorConfig,
+    ErrorMode,
 };
 use ferro_hgvs::reference::TranscriptDb;
 use ferro_hgvs::vcf::{generate_info_header_lines, open_vcf, VcfAnnotator, VcfRecord};
@@ -3496,6 +3497,59 @@ fn build_error_config(mode: &str, ignore: &[String], reject: &[String]) -> Error
 // parser cannot drift away from the registered W-code set the way an
 // independent hard-coded table did.
 
+/// The normalizer codes that have a `CodeInfo` of their own — i.e. those that
+/// do not alias a `W`-code already present in [`list_all_codes`].
+fn normalizer_only_entries() -> Vec<&'static CodeInfo> {
+    ferro_hgvs::error_handling::list_normalizer_codes()
+        .into_iter()
+        .filter(|(code, info)| *code == info.code)
+        .map(|(_, info)| info)
+        .collect()
+}
+
+/// The normalizer's SCREAMING_SNAKE codes, appended to the `--list` table as
+/// their own section (#2092).
+///
+/// A separate section rather than extra rows in the table above, because most
+/// of these resolve to a `W`-code that is already listed: merging them would
+/// print the same condition twice under two names with nothing saying they are
+/// one. The `Documented as` column is what carries that.
+fn print_normalizer_code_table() {
+    let normalizer_codes = ferro_hgvs::error_handling::list_normalizer_codes();
+    if normalizer_codes.is_empty() {
+        return;
+    }
+    println!();
+    println!("Normalizer codes (printed by `ferro normalize` as `warning[<CODE>]`):");
+    println!("{:<38} {:<14} Summary", "Code", "Documented as");
+    println!("{}", "-".repeat(78));
+    for (code, info) in normalizer_codes {
+        println!("{:<38} {:<14} {}", code, info.code, info.summary);
+    }
+}
+
+/// The message for a code `explain` cannot resolve.
+///
+/// #2092: the old message was a single undifferentiated "Unknown code", so a
+/// user who had just read a SCREAMING_SNAKE code out of `ferro normalize` could
+/// not tell "no such code" from "explain does not cover that namespace" — which
+/// was in fact the case. Naming both namespaces, with a real example of each,
+/// makes the two distinguishable.
+fn unknown_code_message(code_str: &str) -> String {
+    let namespace_hint =
+        if ferro_hgvs::error_handling::has_normalizer_code_shape(&code_str.to_uppercase()) {
+            "That is shaped like a normalizer code, but it is not one ferro emits. \
+         Normalizer codes are the SCREAMING_SNAKE names `ferro normalize` prints \
+         (e.g. REFSEQ_MISMATCH)"
+        } else {
+            "ferro codes are either preprocessor codes, numbered E<n>/W<n> (e.g. W3003), \
+         or the normalizer's SCREAMING_SNAKE names (e.g. REFSEQ_MISMATCH)"
+        };
+    format!(
+        "Unknown code: {code_str}. {namespace_hint}. Use 'ferro explain --list' to see all codes."
+    )
+}
+
 /// Run the explain command.
 fn run_explain(
     code: Option<&str>,
@@ -3520,7 +3574,19 @@ fn run_explain(
         match format {
             "json" => {
                 print!("[");
-                for (i, code_info) in codes.iter().enumerate() {
+                // The normalizer-only codes are appended as ordinary entries:
+                // they carry their own `CodeInfo` and appear nowhere else in
+                // the array. The *aliased* normalizer codes are deliberately
+                // not appended, because their entry is already in the array
+                // under its `W`-code and emitting it twice would double-count
+                // the condition for any consumer aggregating this output
+                // (#2092). The text listing shows the full alias table.
+                let extra: Vec<&'static CodeInfo> = if errors_only {
+                    Vec::new()
+                } else {
+                    normalizer_only_entries()
+                };
+                for (i, code_info) in codes.iter().copied().chain(extra).enumerate() {
                     if i > 0 {
                         print!(",");
                     }
@@ -3530,7 +3596,12 @@ fn run_explain(
             }
             "markdown" => {
                 println!("# ferro-hgvs Error and Warning Codes\n");
-                for code_info in codes {
+                let extra: Vec<&'static CodeInfo> = if errors_only {
+                    Vec::new()
+                } else {
+                    normalizer_only_entries()
+                };
+                for code_info in codes.into_iter().chain(extra) {
                     println!("{}", code_info.format_markdown());
                     println!("---\n");
                 }
@@ -3545,6 +3616,9 @@ fn run_explain(
                         code_info.code, code_info.name, code_info.summary
                     );
                 }
+                if !errors_only {
+                    print_normalizer_code_table();
+                }
                 println!();
                 println!("Run 'ferro explain <CODE>' for detailed documentation and URLs.");
             }
@@ -3552,17 +3626,24 @@ fn run_explain(
     } else if let Some(code_str) = code {
         // Explain a specific code
         if let Some(code_info) = get_code_info(code_str) {
+            // The two namespaces name some conditions twice, so say which entry
+            // answered when the user typed the other name (#2092). Without
+            // this, `ferro explain REFSEQ_MISMATCH` heads its output `W5001`
+            // with no stated connection to what was asked.
+            if !code_str.eq_ignore_ascii_case(code_info.code) && format != "json" {
+                println!(
+                    "Note: {} is the normalizer's name for {}; both describe the same condition.\n",
+                    code_str.to_uppercase(),
+                    code_info.code,
+                );
+            }
             match format {
                 "json" => println!("{}", code_info.format_json()),
                 "markdown" => println!("{}", code_info.format_markdown()),
                 _ => print!("{}", code_info.format_terminal(use_color)),
             }
         } else {
-            return Err(format!(
-                "Unknown code: {}. Use 'ferro explain --list' to see all codes.",
-                code_str
-            )
-            .into());
+            return Err(unknown_code_message(code_str).into());
         }
     } else {
         return Err("Please provide a code to explain or use --list to see all codes.".into());
