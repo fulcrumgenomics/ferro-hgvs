@@ -717,6 +717,37 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
             return variants;
         }
     }
+    // The 5' mirror of the refusal above (#2037), and the reason it is a
+    // separate statement rather than a second arm of it: this one needs no
+    // provider round-trip. Whether an endpoint falls *before* the first base is
+    // decided by `delta` alone, since the axis coordinate `p` sits at sequence
+    // position `p + delta` — the same identity `start0` is computed with.
+    //
+    // The case is the exact counterpart of #1327's: when the group nets to a
+    // pure insertion at the window's **5'** edge the anchor is
+    // `(del_start, del_start - 1)` with `del_start == w_lo == 1`, so `a_end` is
+    // the axis coordinate `0`. Where the axis has a 5'UTR that is a real base
+    // and `c.-1` is the right spelling; where `cds_start == 1` — or on `n.`/`r.`
+    // and `g.`/`m.`, which have no negative zone at all — it is not, and
+    // `name_on_zeroless_axis` renders it `c.-1`/`n.-1` regardless. The result
+    // parses, re-parses and is a fixed point while naming a nucleotide the
+    // reference does not have.
+    //
+    // **Refusing is what fixes it, not clamping.** Nothing downstream could
+    // repair the collapsed member, because every later pass is gated on the
+    // axis's positive body region and a member starting at `c.-1` is outside
+    // it — so `collect_canonical_edits` refuses the group and
+    // `canonicalize_from_sequence` never runs. Handing the *original* members
+    // back lets that pass run, and it already answers this shape correctly on
+    // every axis: `boundary_delins_anchor` re-spells a payload resting on a
+    // sequence bound as the single-position `delins` HGVS can express
+    // (`DNA/insertion.md:95-101`; #1205, #1217, #1202). So the group is still
+    // merged — `c.[1dup;1T>A]` -> `c.1delinsAT` — just by the pass that can
+    // place it.
+    let before_first_base = |p: i64| p.checked_add(delta).is_none_or(|v| v < 1);
+    if before_first_base(a_start) || before_first_base(a_end) {
+        return variants;
+    }
     let anchor = Anchor {
         region: body,
         start: a_start,
@@ -1491,10 +1522,37 @@ fn build_genome_merged(template: &GenomeVariant, merged: Anchor) -> GenomeVarian
 ///
 /// So on `n.` this is a strict improvement and not a resolution: it replaces
 /// `n.0`, which every mode rejects and which names a nucleotide no axis has,
-/// with `n.-1`, which strict still refuses. The residue is the same open
-/// question as the genomic axis's — what a cis group nets to a pure insertion 5'
-/// of the first base of a transcript should be called at all — and it belongs
-/// with #1772 rather than to this rename.
+/// with `n.-1`, which strict still refuses.
+///
+/// # That residue is closed, and this function is no longer where it lives
+///
+/// The open question — what a cis group netting to a pure insertion 5' of a
+/// transcript's first base should be *called* — is answered by **not naming it
+/// here at all**. #2037 gave [`collapse_overlapping_cis_edits`] the 5' mirror of
+/// its `past_end` refusal, so a group whose anchor endpoint falls before the
+/// sequence's first base is handed back to the per-member ladder, where
+/// [`boundary_delins_anchor`] spells it as the single-position `delins` the
+/// genomic axis has always used for the same shape. The refusal is keyed on the
+/// **sequence** coordinate, i.e. the axis coordinate plus the frame's `delta`.
+///
+/// What reaches this function **from the collapse** is therefore exactly the
+/// case the citations above license: an axis coordinate of `0` that does name a
+/// nucleotide, because the transcript has bases below `c.1`/`r.1`. Since `n.`'s
+/// axis coordinate `0` is transcript base `0` whatever the record, the collapse
+/// can no longer produce an `n.-1` anchor at all — so read the `n.` paragraph
+/// above as a statement about the naming rule, not about shipped output. Do not
+/// restore an `n.` case to
+/// [`a_five_prime_edge_insertion_anchors_below_one_not_on_zero`] on the strength
+/// of it; `a_five_prime_edge_anchor_off_the_sequence_is_refused` is the row that
+/// covers it.
+///
+/// **The scope of that is the collapse and nothing else.** [`build_merged`] is
+/// this function's other caller, reached from `merge_consecutive_edits`, and it
+/// carries no such refusal. No input has been found that drives it to a `0`
+/// anchor — those anchors come from the members' own spellings, and a member
+/// spelled `c.-1_1ins…` against a CDS starting at base 1 is already an
+/// out-of-range *input*, which is a different question — but that is an absence
+/// of evidence, not an audit.
 fn name_on_zeroless_axis(base: i64) -> i64 {
     if base == 0 {
         -1
@@ -14658,10 +14716,22 @@ mod tests {
     /// when those conversion arms are eventually retired (they are a separate
     /// change, needing their own ruling).
     ///
-    /// The `n.` axis has no such arm, which is why it is the one that escapes:
-    /// before this fix `NM_TEST.1:n.[1G>A;1dup]` normalized to the literal
-    /// `n.0_1insA`, a description `parse_hgvs` rejects. That is asserted too,
-    /// as the user-visible half. Issue #1772.
+    /// The `n.` axis has no such arm, which is why it was the one that escaped:
+    /// before that fix `NM_TEST.1:n.[1G>A;1dup]` normalized to the literal
+    /// `n.0_1insA`, a description `parse_hgvs` rejects. Issue #1772.
+    ///
+    /// # The `n.` row is no longer here, and that is #2037
+    ///
+    /// This fixture's `cds_start` is 13, so on `c.` and `r.` the axis
+    /// coordinate `0` is transcript base 12 — a real nucleotide, correctly
+    /// named `-1`. On `n.` it is transcript base **0**, which does not exist,
+    /// and #1772's own doc comment on [`name_on_zeroless_axis`] said in as many
+    /// words that renaming it `-1` was "a strict improvement and not a
+    /// resolution". The collapse now refuses that group rather than naming it,
+    /// which is what [`a_five_prime_edge_anchor_off_the_sequence_is_refused`]
+    /// below asserts. So the two rows left here are exactly the ones where the
+    /// `-1` anchor denotes a base, which is what makes this a guard on the
+    /// naming rule rather than on the axis.
     #[test]
     fn a_five_prime_edge_insertion_anchors_below_one_not_on_zero() {
         let provider = bounds_transcript_provider();
@@ -14670,10 +14740,6 @@ mod tests {
             (
                 ["NM_TEST.1:c.1A>G", "NM_TEST.1:c.1dup"],
                 "NM_TEST.1:c.-1_1insG",
-            ),
-            (
-                ["NM_TEST.1:n.1G>A", "NM_TEST.1:n.1dup"],
-                "NM_TEST.1:n.-1_1insA",
             ),
             (
                 ["NM_TEST.1:r.1a>g", "NM_TEST.1:r.1dup"],
@@ -14700,11 +14766,7 @@ mod tests {
             // `n.-N` at *strict* parse (`W4008`) while lenient, silent and this
             // entry keep accepting it, for the five real ClinVar rows named in
             // `src/hgvs/noncoding_zones.rs`. So this assertion says the output
-            // is readable on the entry every `ferro` subcommand uses — not that
-            // `n.-1_1insA` is conformant on the non-coding axis, which
-            // `numbering.md:52`/`:54` say it is not. See
-            // `name_on_zeroless_axis`'s doc comment for why that residue is
-            // still an improvement over `n.0`, and #1772 for where it is owed.
+            // is readable on the entry every `ferro` subcommand uses.
             for r in &rendered {
                 assert!(
                     parse_hgvs(r).is_ok(),
@@ -14712,6 +14774,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The other half of the case above: where the `-1` anchor would name no
+    /// nucleotide, the collapse refuses the group instead of naming it (#2037).
+    ///
+    /// The refusal is decided on the **sequence** coordinate — the axis
+    /// coordinate plus the frame's `delta` — never on the rendered spelling, so
+    /// the two `c.`/`r.` rows in the test above, whose `-1` is transcript base
+    /// 12 on this same fixture, are untouched. That pairing is the point:
+    /// asserting only the refusal would be satisfied by a guard that had
+    /// swallowed the whole 5' edge.
+    ///
+    /// Refusing is not a loss of the merge. The group goes back to the
+    /// per-member ladder, where `canonicalize_from_sequence`'s
+    /// [`boundary_delins_anchor`] re-spells a payload resting on a sequence
+    /// bound as the single-position `delins` HGVS can express — end to end this
+    /// input becomes `NM_TEST.1:n.1delinsAG`, which
+    /// `issue_1796_base_zero_names_no_nucleotide` pins.
+    #[test]
+    fn a_five_prime_edge_anchor_off_the_sequence_is_refused() {
+        let provider = bounds_transcript_provider();
+        // `n.1` is transcript base 1, so the interbase 5' of it is off the
+        // transcript. `n.` also has no negative zone at all
+        // (`numbering.md:52`/`:54`), which is why the pre-#2037 answer
+        // `n.-1_1insA` was non-conformant as well as out of range.
+        let members = ["NM_TEST.1:n.1G>A", "NM_TEST.1:n.1dup"];
+        let parsed: Vec<_> = members
+            .iter()
+            .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
+            .collect();
+        let collapsed = collapse_overlapping_cis_edits(parsed.clone(), AllelePhase::Cis, &provider);
+        let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
+        assert_eq!(
+            rendered,
+            parsed.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+            "the group must be handed back untouched, not named on a coordinate \
+             NM_TEST.1 does not have",
+        );
     }
 
     /// The same geometry away from the axis origin is untouched — the fix

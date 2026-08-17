@@ -252,12 +252,31 @@ fn the_rna_axis_has_no_end_to_end_case_and_this_records_why() {
 /// touched that axis, so it had no repairing arm and #1772 was *visible* there
 /// (it emitted the literal `n.0_1insA`, which ferro's own parser rejects). It
 /// must be unaffected by this change in either direction.
+///
+/// # The `n.` row moved, and #1796 is not what moved it
+///
+/// It read `n.-1_1insA` until #2037. On this fixture `cds_start` is 13, so the
+/// axis coordinate below `1` is transcript base 12 on `c.`/`r.` — a real
+/// nucleotide — and transcript base **0** on `n.`, which does not exist. #1772
+/// renamed that coordinate from `0` to `-1` and its own doc comment recorded
+/// the remainder as owed; #2037 pays it, by refusing the *collapse* rather than
+/// renaming its anchor. The group is still merged, one pass later, into the
+/// single-position `delins` that is the only spelling of an insertion resting
+/// on a sequence bound.
+///
+/// So the row is re-pinned rather than deleted, and the `c.`/`r.` rows beside
+/// it are what say this change is narrow: the refusal keys on the **sequence**
+/// coordinate, so an axis position of `-1` that names a base is untouched. A
+/// version of this test carrying only the moved row could not distinguish that
+/// from a guard that had swallowed the whole 5' edge.
 #[test]
 fn the_five_prime_edge_cis_collapse_is_unaffected() {
     for (input, expected) in [
         ("NM_TEST.1:c.[1A>G;1dup]", "NM_TEST.1:c.-1dup"),
         ("NM_TEST.1:r.[1a>g;1dup]", "NM_TEST.1:r.-1dup"),
-        ("NM_TEST.1:n.[1G>A;1dup]", "NM_TEST.1:n.-1_1insA"),
+        // #2037: `n.-1` names no base on this transcript, so the collapse
+        // declines and `boundary_delins_anchor` supplies the form instead.
+        ("NM_TEST.1:n.[1G>A;1dup]", "NM_TEST.1:n.1delinsAG"),
     ] {
         let variant = parse_hgvs(input).expect("input must parse");
         let output = normalize(&variant);
