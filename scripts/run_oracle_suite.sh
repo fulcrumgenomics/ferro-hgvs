@@ -64,11 +64,13 @@
 #   scripts/run_oracle_suite.sh --print-selection  # print what it would run, and stop
 #   scripts/run_oracle_suite.sh -E 'test(foo)'     # extra args go through to nextest
 #
-# The denoted-sequence oracle (`FERRO_ASSERT_SEQUENCE`) is deliberately NOT
-# among the flags this mirrors, because `test-oracle` does not set it. Nothing
-# has to be done here to keep that true: `oracle_flags` below READS the flag set
-# out of that job, so this script arms it on the day the job does and not
-# before.
+# The denoted-sequence oracle (`FERRO_ASSERT_SEQUENCE`) IS among the flags this
+# mirrors as of #1815, and this script needed no change to start arming it:
+# `oracle_flags` below READS the flag set out of that job, so it armed the fourth
+# oracle on the day the job did. What #1815 did have to teach it is the third
+# negated filter, `SEQUENCE_ORACLE_EXCLUDE` -- see the refusal on it below, and
+# note that a run which arms the flag WITHOUT negating that filter is red by
+# construction on the rows named there.
 #
 # The figure this header used to quote -- "5 further failures, all in
 # `spec_corpus_regressions`" -- was about `ORACLE_EXCLUDE`'s modules, which this
@@ -83,8 +85,19 @@
 # RE-MEASURED on `c9207d7e` once #1690 closed (#1990), same selection and flags:
 # `10904 tests run: 10902 passed, 2 failed, 306 skipped`. The 3
 # `issue_1487_canonical_window_overflow` rows are GONE and nothing new fired, so
-# the remaining blocker is `stranded_identity_member` alone -- #1690 is closed
-# and is no longer one.
+# the remaining blocker at that point was `stranded_identity_member` alone --
+# #1690 is closed and is no longer one.
+#
+# RE-MEASURED AGAIN for #1815 on `origin/main` @ 1aecc93a: `11202 tests run:
+# 11199 passed, 3 failed, 321 skipped`. THREE, not two -- #2051 had since added
+# `the_render_time_reference_matches_what_the_pipeline_was_given`, which
+# re-normalizes each corpus row outside `catch_unwind` and so aborts on 47 corpus
+# inputs (#2140, #1983, #2139). Those rows plus `stranded_identity_member` are what
+# `SEQUENCE_ORACLE_EXCLUDE` names, and with it negated the same selection is
+# `11197 passed, 0 failed`.
+#
+# The figure has now been taken three times in three days and read 5 / 2 / 3 --
+# it moves in BOTH directions, so READ IT OFF A RUN rather than off this header.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -179,6 +192,7 @@ oracle_flags() {
 EXCLUDE="$(folded_scalar ORACLE_EXCLUDE)"
 SWEEPS="$(folded_scalar SWEEP_FILTER)"
 CENSUSES="$(folded_scalar CENSUS_FILTER)"
+SEQUENCE_EXCLUDE="$(folded_scalar SEQUENCE_ORACLE_EXCLUDE)"
 TEMPLATE="$(oracle_selection_template)"
 # A read loop rather than `mapfile`, which is bash 4+: stock macOS still ships
 # bash 3.2 as /bin/bash, and a script that dies on `mapfile: command not found`
@@ -217,6 +231,25 @@ if [[ -z "$CENSUSES" ]]; then
     echo "  Its formatting changed; fix the awk in this script rather than inlining a copy." >&2
     exit 1
 fi
+# `SEQUENCE_ORACLE_EXCLUDE` (#1815) is the debt list `test-oracle` negates now that
+# it arms `FERRO_ASSERT_SEQUENCE`.
+#
+# Keyed on whether that job's `-E` STILL REFERENCES the variable, not on whether the
+# variable exists. Retiring the last row is a legitimate end state -- the variable
+# and the `not (...)` term go away together -- and an unconditional refusal here
+# would turn that cleanup into a broken script, which is how a correct change gets
+# reverted. What must not pass silently is the HALF-DONE retirement: the term still
+# in the selection with nothing to expand it to. The `$` refusal further down would
+# catch that too, but only as "references a variable this script does not expand",
+# which sends the reader to the awk rather than to the real cause.
+if [[ "$TEMPLATE" == *'$SEQUENCE_ORACLE_EXCLUDE'* && -z "$SEQUENCE_EXCLUDE" ]]; then
+    echo "error: could not read SEQUENCE_ORACLE_EXCLUDE from $CI_YML," >&2
+    echo "  but test-oracle's -E still references it. Either its formatting changed" >&2
+    echo "  (fix the awk in this script rather than inlining a copy), or the variable" >&2
+    echo "  was retired without removing the 'and not (\$SEQUENCE_ORACLE_EXCLUDE)'" >&2
+    echo "  term from that job's selection." >&2
+    exit 1
+fi
 if [[ -z "$TEMPLATE" ]]; then
     echo "error: could not read test-oracle's -E selection from $CI_YML." >&2
     echo "  Its formatting changed; fix the awk in this script rather than inlining a copy." >&2
@@ -226,6 +259,14 @@ fi
 # Expand the two references CI's expression carries. Substitution rather than
 # `eval`, so nothing in `ci.yml` can execute here.
 SELECTION="${TEMPLATE//\$SWEEP_FILTER/$SWEEPS}"
+# ORDER IS IMMATERIAL HERE, and it is worth saying so because it looks as though it
+# should not be: `ORACLE_EXCLUDE` is a suffix of `SEQUENCE_ORACLE_EXCLUDE`, so the
+# shorter substitution appears able to eat the longer reference. It cannot -- the
+# pattern includes the leading `$`, and `$SEQUENCE_ORACLE_EXCLUDE` contains no
+# second `$`. Measured both orders; the longer reference survives either way. Do not
+# "fix" this by reordering on the strength of the resemblance, and do not drop the
+# `$` from any of these patterns, which is what would make the resemblance real.
+SELECTION="${SELECTION//\$SEQUENCE_ORACLE_EXCLUDE/$SEQUENCE_EXCLUDE}"
 SELECTION="${SELECTION//\$ORACLE_EXCLUDE/$EXCLUDE}"
 SELECTION="${SELECTION//\$CENSUS_FILTER/$CENSUSES}"
 
@@ -243,6 +284,7 @@ if [[ "${1:-}" == "--print-selection" ]]; then
     printf 'ORACLE_EXCLUDE=%s\n' "$EXCLUDE"
     printf 'SWEEP_FILTER=%s\n' "$SWEEPS"
     printf 'CENSUS_FILTER=%s\n' "$CENSUSES"
+    printf 'SEQUENCE_ORACLE_EXCLUDE=%s\n' "$SEQUENCE_EXCLUDE"
     printf 'SELECTION=%s\n' "$SELECTION"
     for flag in "${FLAGS[@]}"; do printf 'FLAG=%s\n' "$flag"; done
     exit 0

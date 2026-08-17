@@ -124,6 +124,29 @@
 //! about an **authored** identity; nothing in the input here asserted `11=`.
 //! Distinguishing the two is a representation decision with a real trailer, so
 //! this file measures and pins rather than fixes.
+//!
+//! # Why this module is named in `SEQUENCE_ORACLE_EXCLUDE`
+//!
+//! The output above — an insertion at interbase 11|12 beside an identity
+//! claiming 11..12 — **denotes no sequence**, which is #1281's shape and which
+//! `FERRO_ASSERT_SEQUENCE` fires on. Two of this module's four tests do:
+//! `every_stranded_identity_is_non_confluent_with_its_surviving_member` and
+//! `the_wider_multi_member_census_is_what_the_header_says`. That is not a false
+//! positive — the oracle is right, and this module pins the defect it is right
+//! about, so a test that pins a defect and an oracle that aborts on it cannot
+//! both run. Exactly the class `ci.yml`'s `ORACLE_EXCLUDE` documents.
+//!
+//! So when #1815 armed that flag in `test-oracle`, this module was named in
+//! `ci.yml`'s `SEQUENCE_ORACLE_EXCLUDE` alongside the issue that retires the
+//! row: **#1655**. It still runs there under the other three oracles, in a
+//! second un-partitioned step of the same job, and it still runs in full in the
+//! plain `test` job — so arming the fourth oracle cost this file nothing.
+//!
+//! **Fixing #1655 means deleting this module's row from that filter**; rehoming
+//! the sweep the way `ORACLE_EXCLUDE`'s pinned-defect modules are homed is the
+//! other way out. Do not silence the fire at the seam — that hollows out the
+//! oracle, and this module's own measurement is the evidence the fire is
+//! correct.
 
 use std::collections::BTreeMap;
 

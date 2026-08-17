@@ -243,21 +243,30 @@ path now excludes it the same way, from the same source of truth.
 
 **The runner reads the whole `-E` selection and the flag set out of `ci.yml`**,
 so neither can drift into a second copy. "Whole" is load-bearing: `test-oracle`
-negates `test(proptest)`, `SWEEP_FILTER` and `CENSUS_FILTER` as well as
-`ORACLE_EXCLUDE`, and a runner that negated only `ORACLE_EXCLUDE` would run the
-proptest modules, the three exhaustive sweeps and the three slow censuses while
-reporting itself as mirroring that job. So the
+negates `test(proptest)`, `SWEEP_FILTER`, `CENSUS_FILTER` and — since #1815 —
+`SEQUENCE_ORACLE_EXCLUDE` as well as `ORACLE_EXCLUDE`, and a runner that negated
+only `ORACLE_EXCLUDE` would run the proptest modules, the three exhaustive sweeps
+and the three slow censuses while reporting itself as mirroring that job. So the
 shape of the expression is read too, and only its variable references are
 expanded — rebuilding it here from a hardcoded `not test(proptest) and not (…)`
-would trade today's drift for tomorrow's.
+would trade today's drift for tomorrow's. **Do not count the negated terms in
+prose**; that number has changed twice and is read off the file.
 
 `tests/it/oracle_exclude_invariant.rs` re-derives all of it in Rust — different
 anchors, deliberately — and compares; separately asserts that the agreed
-selection actually negates all three (a spelling-independent check, since both
-sides otherwise read the same line of `ci.yml` and a matching pair of wrong ones
-would satisfy the equality); and separately forbids the script from hardcoding a
-module name. Each of those guards is checked against a deliberate sabotage
-rather than assumed.
+selection actually negates each of the named filters (a spelling-independent
+check, since both sides otherwise read the same line of `ci.yml` and a matching
+pair of wrong ones would satisfy the equality); separately forbids the script from
+hardcoding a module name; and separately asserts that the rows withheld from the
+denoted-sequence oracle still run under the other three, which is what makes
+#1815 a superset rather than a trade. Each of those guards is checked against a
+deliberate sabotage rather than assumed.
+
+One anchor is worth knowing about because it is the non-obvious consequence of
+#1815: `test-oracle` now has **two** nextest steps, so "the flags of
+`test-oracle`" is no longer well-formed. The Rust side identifies the armed step
+by its `--partition`, and the runner's awk by the step's `name:` — deliberately
+different discriminators, so a rename breaks one and not the other.
 
 #### Normalization idempotency oracle
 
@@ -384,9 +393,12 @@ un-armed); the nightly sets it too, where it is the only place the check runs
 against true transcript and contig lengths.
 
 **The fourth flag is not set in all of those places, so do not read "all four"
-off this paragraph.** `FERRO_ASSERT_SEQUENCE` runs in `sweeps` and in the
-nightly, and deliberately not in `test-oracle` or in `censuses` — the reason, and
-what currently keeps it out, are under
+off this paragraph.** `FERRO_ASSERT_SEQUENCE` runs in `sweeps`, in the nightly,
+and — as of #1815 — in `test-oracle`, where it is armed over that job's selection
+minus a two-row debt list (`SEQUENCE_ORACLE_EXCLUDE`). It is still deliberately
+**not** set in `censuses`, whose armed step is now a strict subset of
+`test-oracle`'s flag set rather than a copy of it. The reason, and what the debt
+list holds, are under
 [Where it runs, and the one place it deliberately does not](#normalization-denoted-sequence-oracle)
 below and in `ci.yml`'s comment on the `test-oracle` job.
 
@@ -397,13 +409,17 @@ asks what the output **means** rather than how it is written: apply the input to
 the reference, apply the output, and assert the bases agree.
 
 ```bash
-FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev -E "$SWEEP_SELECTION"
+scripts/run_oracle_suite.sh    # arms all four, over test-oracle's own selection
 ```
 
-**`scripts/run_oracle_suite.sh` deliberately does NOT arm this one**, because
-`test-oracle` does not — the runner mirrors that job, and mirroring it faithfully
-means inheriting the gap. The job where this flag is green is `sweeps`, so scope
-a local run to that job's selection rather than to the whole suite. Added to
+**`scripts/run_oracle_suite.sh` DOES arm this one as of #1815**, because
+`test-oracle` now does — the runner reads that job's flag set rather than
+carrying its own, so it started arming the fourth oracle on the day the job did,
+with no change to its flag handling. What it did need teaching is the third
+negated filter, `SEQUENCE_ORACLE_EXCLUDE`; a local armed run that omits that
+negation is red by construction on the rows named there. (This paragraph used to
+say the runner deliberately does *not* arm it, "mirroring the gap" — that is the
+statement #1815 changed.) Added to
 `ORACLE_EXCLUDE`'s modules it raises **5** further failures beyond the
 idempotency oracle's own, all in `spec_corpus_regressions` and all the same shape
 as those: a test pinning the CDS-end defect that this oracle aborts on. (That 5
@@ -471,24 +487,43 @@ four when on — one provider fetch and two splices per normalization — so it 
 last in `assert_seam_oracles`, after the cheaper and more specific checks have
 had their chance to name the fault more precisely.
 
-**Where it runs, and the two places it deliberately does not.** `sweeps` sets it
-(gating, measured green over the full corpus) and the nightly sets it
-(non-gating). `test-oracle` does **not**, which is why the set of four is
-incomplete there. `censuses`' armed step does not either, and for a derived
-reason rather than a second one: that step exists to run what `test-oracle` ran,
-on a faster archive, so it inherits that job's flag set exactly — arming a fourth
-oracle there would make the move a change of instrument. Two rows in
-`test-oracle`'s selection used to fire, and both were real disagreements inside
-ferro rather than noise:
+**Where it runs, and the one place it deliberately does not.** `sweeps` sets it
+(gating, measured green over the full corpus), the nightly sets it (non-gating),
+and **`test-oracle` sets it as of #1815** — over that job's whole selection minus
+`SEQUENCE_ORACLE_EXCLUDE`, a debt list of two rows each carrying the open issue
+that retires it. Measured wired, at `1aecc93a`: `11200 tests run: 11200 passed`,
+all four flags armed, zero `Skipping:` lines.
+
+`censuses`' armed step still does **not** set it. That used to be a *derived*
+reason — the step exists to run what `test-oracle` ran, on a faster archive, so it
+inherited that job's flag set exactly, and arming a fourth oracle there would make
+the move a change of instrument. Since #1815 the derivation no longer holds: its
+flag set is now a strict **subset** of `test-oracle`'s, deliberately, and arming
+the fourth there has never been measured over `ORACLE_ONLY_FILTER`'s modules. So
+"restore parity with `test-oracle`" is now the plausible-looking wrong edit, and
+that job's header says so.
+
+**The debt list is what to read before believing any count in this section.** It
+has changed composition twice in three days, in both directions: it held
+`issue_1487_canonical_window_overflow` until #1990 closed #1690 (2026-08-15), and
+gained `dump_normalized_corpus`'s render-time gate when #2051 landed (2026-08-16).
+The selection-wide armed figure has read **5 → 2 → 3** across those three
+measurements. Read it off a run.
+
+Two rows in `test-oracle`'s selection used to fire before any of that, and both
+were real disagreements inside ferro rather than noise:
 
 | row | what disagreed | state |
 |---|---|---|
 | #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before `6116f84a` |
 | #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
 
-**Both are now green, and the flag is STILL not set here — the selection-wide
-run those two closures were blocking on has since been done, and it is RED.**
-The two-row measurement, on the #1619 branch, was this:
+**Both are now green, and that was still not enough — the selection-wide run
+those two closures were blocking on came back RED, three times, on a different
+set of rows each time.** The history below is why the flag is armed behind a debt
+list rather than armed outright, and why "the rows I know about are green" has
+never once been sufficient here. The two-row measurement, on the #1619 branch, was
+this:
 
 ```bash
 FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
@@ -542,11 +577,39 @@ on a census pin reading `unwindowed: 89` against a pinned `90` while
 `sequence_changed` stays `0`. That is the HEAD-drift this file already documents
 for that pin, and it is orthogonal to arming the flag.
 
-So arming it is blocked on finding a home for `stranded_identity_member`, and on
-that alone — **#1690 is closed and is no longer a blocker.** Do not read "both
-rows are green" as "it can be armed". `ci.yml`'s comment on the `test-oracle`
-job carries the full triage, including what a run with `FERRO_MANIFEST` set adds.
-Suppressing a row would still hollow out the oracle; that has not changed.
+**RE-MEASURED A THIRD TIME for #1815, at `1aecc93a`: `11202 tests run: 11199
+passed, 3 failed`.** Three, not two — and the third could not have been named by
+either reading above, because the test did not exist when they were taken. #2051
+(2026-08-16) added
+`dump_normalized_corpus::the_render_time_reference_matches_what_the_pipeline_was_given`,
+which re-normalizes each corpus row **itself, outside** the `catch_unwind` that
+`dump`'s own pass uses, so 47 corpus inputs abort it — **#2140** (38), **#1983**
+(8) and **#2139** (1). It passes unarmed in the same tree, so it is an oracle fire
+and not a pre-existing red.
+
+So arming it is **no longer blocked** — it is armed, behind those two rows.
+`SEQUENCE_ORACLE_EXCLUDE` names them, each with its retiring issue, and
+`test-oracle` gains a second un-partitioned step that re-runs exactly those rows
+under the other three oracles, so the file's oracle coverage is a strict superset
+of what it was rather than a trade. Suppressing a row **at the seam** would still
+hollow out the oracle; a visible, measured, issue-numbered selection term is a
+different thing, and that distinction is why the debt list is its own variable
+rather than two more entries on `ORACLE_EXCLUDE`.
+
+**Do not read "the rows I know about are green" as "it can be armed" — that
+reading has been wrong three times out of three.** `ci.yml`'s comment on the
+`test-oracle` job carries the full triage, including what a run with
+`FERRO_MANIFEST` set adds, and `scripts/run_oracle_suite.sh` reproduces the whole
+measurement locally in one command.
+
+**What #1815 still does NOT close is the manifest half.** `test-oracle` arms the
+flag but provisions no `FERRO_MANIFEST`, so the `mutalyzer_normalize_tests` /
+`biocommons_normalize_tests` axes early-return there exactly as they do in the
+plain `test` job, and nextest reports that skip path as **PASS**. A
+denoted-sequence violation on those axes still cannot redden a required check.
+Provisioning a reference per PR is not a small change — the nightly spends ~30 min
+in `ferro prepare` and the result is deliberately uncached (#1218) — so #1815 stays
+open on that half.
 
 **#1619's row was replaced before it was closed, and the swap is the whole
 point.** The
@@ -560,22 +623,32 @@ The row that stands in its place rides on **cdot's own annotation**.
 `NM_033517.1` is one of the 58 gapped builds, with a genuine 39-base hole
 between exon 10 (ends 1302) and exon 11 (starts 1342), and the fixture now
 carries its real table. So #1619 is demonstrated on real transcript geometry
-rather than on an artifact — which is a *stronger* reason to keep
+rather than on an artifact — which was, at the time, a *stronger* reason to keep
 `FERRO_ASSERT_SEQUENCE` out of `test-oracle`, and it hands the issue the
-reproducer the repair would otherwise have destroyed. The gap is exempted by
+reproducer the repair would otherwise have destroyed. (#1619 is closed and its row
+is green, so that reason no longer applies; the geometry argument is kept because
+it is why the fixture must not be re-flattened.) The gap is exempted by
 name in `CDOT_GAP_JUNCTIONS`
 (`tests/it/normalization_transcripts_exon_contract.rs`), never by loosening the
 contiguity rule.
 
-**No CI job arms the oracle where it fires** — checked, not assumed.
-`FERRO_ASSERT_SEQUENCE` is set in exactly two places: `ci.yml`'s `sweeps`, which
-selects `SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)`, and
-`nightly-mutalyzer.yml`, which selects every reference-aware module and is
-`continue-on-error`. `normalize_tests` is in neither selection, so the fire is
-reachable only by setting the flag by hand. (That nightly selection named
-**three** modules until the orphaned-guard sweep; `normalize_tests` was not one
-of the modules added, so this paragraph's conclusion is unchanged — but do not
-re-derive "the three modules" from it.)
+**A CI job now DOES arm the oracle over `normalize_tests`, and it is green** —
+corrected by #1815, which is the change this paragraph is about. It used to read
+"No CI job arms the oracle where it fires", on the true premise that
+`FERRO_ASSERT_SEQUENCE` was set only in `ci.yml`'s `sweeps` (selecting
+`SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)`) and in
+`nightly-mutalyzer.yml` (every reference-aware module, `continue-on-error`) —
+`normalize_tests` being in neither, so the #1619 fire was reachable only by hand.
+
+`test-oracle` now arms it, and nothing in that job's `-E` negates
+`normalize_tests`, so its 453 tests run armed on every PR. Measured green at
+`1aecc93a`. That is a *consequence* of #1619 having been closed rather than a
+contradiction of anything above: the fire the paragraph was written about is
+fixed, so the module can be armed without a debt row.
+
+(That nightly selection named **three** modules until the orphaned-guard sweep;
+`normalize_tests` was not one of the modules added, so do not re-derive "the three
+modules" from it.)
 
 **Here is the command the before/after comes from**, because a figure with no
 command is one nobody can re-derive. Swap only the fixture, and exclude the guard

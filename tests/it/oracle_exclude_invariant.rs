@@ -319,28 +319,96 @@ const LOCAL_RUNNER: &str = "scripts/run_oracle_suite.sh";
 /// rationale).
 ///
 /// Comment lines are skipped for the reason the awk skips them: the job's
-/// comment block *mentions* `FERRO_ASSERT_SEQUENCE` in prose, to explain why it
-/// is absent. A scan that read the prose as a setting would demand the runner
-/// arm an oracle CI does not — and the rows that comment names would then be red
-/// locally and green in CI. Note those rows are no longer #1618/#1619, which are
-/// both closed: a selection-wide run at `674e9c8b` put the count at 5, in
-/// `issue_1487_canonical_window_overflow` (issue #1690) and
-/// `stranded_identity_member`. Re-measured at `c9207d7e` once #1690 closed
-/// (#1990) the count is 2, all of it `stranded_identity_member`.
+/// comment block *mentions* every flag in prose, including the history of why
+/// `FERRO_ASSERT_SEQUENCE` used to be absent. A scan that read prose as a
+/// setting would demand the runner arm oracles CI does not, and the rows that
+/// prose names would then be red locally and green in CI.
+///
+/// **Scoped to the ARMED step, and that scoping is load-bearing as of #1815.**
+/// That change gave `test-oracle` a *second* step — the compensating run that
+/// re-executes `SEQUENCE_ORACLE_EXCLUDE`'s rows under the other three oracles —
+/// which sets three of the same keys. A whole-job scan therefore returns seven
+/// entries with three duplicated, against the awk's four, and this guard fails
+/// on a correctly-wired file. (It did, when the step was first added; that is
+/// how this scoping came to exist.)
+///
+/// The discriminator is deliberately **not** the step's `name:`, which is what
+/// [`LOCAL_RUNNER`]'s awk anchors on: the armed step is the one that
+/// `--partition`s the suite, and the compensating step is un-partitioned by
+/// design. Keying on the `run:` body rather than on the label keeps the two
+/// derivations independent — a renamed step breaks one of them and not the
+/// other, which is the whole point of having two.
 fn test_oracle_job_flags() -> Vec<String> {
-    test_oracle_job_lines()
+    let armed = test_oracle_steps()
         .into_iter()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with('#') {
-                return None;
+        .find(|step| step.runs.contains("--partition"))
+        .expect(
+            "ci.yml's test-oracle job has a step whose `run:` partitions the suite; \
+             its shape changed and this guard would otherwise read the wrong step's flags",
+        );
+    armed.flags
+}
+
+/// One step of the `test-oracle:` job: the `FERRO_ASSERT_*` keys its `env:`
+/// sets, and the text of its `run:`.
+struct OracleStep {
+    /// `FERRO_ASSERT_*` keys set to `"1"`, in file order, comments skipped.
+    flags: Vec<String>,
+    /// Every line of the step at or after its `run:`, joined.
+    runs: String,
+    /// The `-E` expression the step hands to nextest, if it passes one.
+    selection: Option<String>,
+}
+
+/// The `test-oracle:` job's steps, split on the `- name:` at step indent.
+///
+/// Exists because #1815 made that job carry two nextest steps with overlapping
+/// flag sets, so "the flags of `test-oracle`" stopped being a well-formed
+/// question — every guard below has to say *which* step it means.
+fn test_oracle_steps() -> Vec<OracleStep> {
+    let mut steps: Vec<OracleStep> = Vec::new();
+    let mut in_run = false;
+    for line in test_oracle_job_lines() {
+        let trimmed = line.trim();
+        // A step boundary: `- name:` at the job's step indent.
+        if line.starts_with("      - name:") {
+            steps.push(OracleStep {
+                flags: Vec::new(),
+                runs: String::new(),
+                selection: None,
+            });
+            in_run = false;
+            continue;
+        }
+        let Some(step) = steps.last_mut() else {
+            continue;
+        };
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed == "run: |" || trimmed.starts_with("run:") {
+            in_run = true;
+            continue;
+        }
+        if in_run {
+            step.runs.push('\n');
+            step.runs.push_str(&line);
+            if let Some(at) = line.find("-E \"") {
+                let rest = &line[at + "-E \"".len()..];
+                if let Some(end) = rest.find('"') {
+                    step.selection = Some(rest[..end].to_string());
+                }
             }
-            trimmed
-                .strip_suffix(": \"1\"")
-                .filter(|key| key.starts_with("FERRO_ASSERT_"))
-                .map(str::to_string)
-        })
-        .collect()
+            continue;
+        }
+        if let Some(key) = trimmed
+            .strip_suffix(": \"1\"")
+            .filter(|key| key.starts_with("FERRO_ASSERT_"))
+        {
+            step.flags.push(key.to_string());
+        }
+    }
+    steps
 }
 
 /// The lines of `ci.yml`'s `test-oracle:` job, bounded by indentation.
@@ -376,17 +444,27 @@ fn test_oracle_job_lines() -> Vec<String> {
 /// exclusion could not see that, which is why the whole expression is compared
 /// here.
 fn ci_oracle_selection() -> String {
-    let template = test_oracle_job_lines()
-        .iter()
-        .find_map(|line| {
-            let at = line.find("-E \"")? + "-E \"".len();
-            let rest = &line[at..];
-            rest.find('"').map(|end| rest[..end].to_string())
-        })
-        .expect("ci.yml's test-oracle job passes a -E selection to nextest");
+    // The ARMED step's selection, identified by `--partition` rather than by
+    // position. #1815 gave this job a second nextest step, and "the first `-E` in
+    // the job" is a positional accident rather than a statement about which step
+    // is meant — reordering them would silently retarget this whole comparison.
+    let template = test_oracle_steps()
+        .into_iter()
+        .find(|step| step.runs.contains("--partition"))
+        .and_then(|step| step.selection)
+        .expect("ci.yml's test-oracle job passes a -E selection to nextest in its armed step");
 
     let expanded = template
         .replace("$SWEEP_FILTER", ci_filter("SWEEP_FILTER").trim())
+        // Before `$ORACLE_EXCLUDE` only for readability — the order does not
+        // matter, because the pattern carries the leading `$` and
+        // `$SEQUENCE_ORACLE_EXCLUDE` holds no second one. Measured both ways.
+        // `scripts/run_oracle_suite.sh` carries the same note; the resemblance
+        // between the two names is the trap, and it is not a real one.
+        .replace(
+            "$SEQUENCE_ORACLE_EXCLUDE",
+            ci_filter("SEQUENCE_ORACLE_EXCLUDE").trim(),
+        )
         .replace("$ORACLE_EXCLUDE", ci_filter("ORACLE_EXCLUDE").trim())
         .replace("$CENSUS_FILTER", ci_filter("CENSUS_FILTER").trim());
     assert!(
@@ -526,7 +604,7 @@ fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_
          job owns at 125k cases per shard: {selection}"
     );
 
-    for key in ["SWEEP_FILTER", "ORACLE_EXCLUDE"] {
+    for key in ["SWEEP_FILTER", "ORACLE_EXCLUDE", "SEQUENCE_ORACLE_EXCLUDE"] {
         let value = ci_filter(key);
         let value = value.trim();
         assert!(
@@ -548,12 +626,21 @@ fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_
 ///
 /// Both directions matter and neither is symmetric with the other. Arming
 /// **fewer** makes a local run weaker than CI while reading as an oracle pass.
-/// Arming **more** — `FERRO_ASSERT_SEQUENCE` is the live candidate, since
-/// `test-oracle` deliberately withholds it — makes the runner red on rows no PR
-/// caused, which teaches the operator to ignore it. That is not hypothetical:
-/// arming it over this exact selection at `674e9c8b` is red, 5 tests, so a
-/// runner that armed it ahead of the job would be red on every PR. Still red at
-/// `c9207d7e` (#1990), at 2 tests rather than 5 — #1690 closed the other 3.
+/// Arming **more** makes the runner red on rows no PR caused, which teaches the
+/// operator to ignore it.
+///
+/// `FERRO_ASSERT_SEQUENCE` was the live candidate for the second failure until
+/// #1815, and its history is the argument for keeping this guard: armed over this
+/// selection it read red at 5 tests (`674e9c8b`), 2 (`c9207d7e`, after #1990
+/// closed #1690) and 3 (`1aecc93a`, after #2051 added a gate that fires) — so a
+/// runner that had armed it ahead of the job would have been red on every PR for
+/// months, at a count that moved in both directions. It is armed in both places
+/// now, and the runner did not have to be changed to follow: it reads the flag
+/// set out of the job.
+///
+/// The candidate has not gone away, it has moved. `censuses`' armed step now
+/// arms three where this job arms four, deliberately and unmeasured — see that
+/// job's header — so the next plausible "restore parity" edit is there.
 #[test]
 fn the_local_oracle_runner_arms_exactly_the_flags_test_oracle_arms() {
     let runner_flags = local_runner_selection().flags;
@@ -607,6 +694,213 @@ fn the_local_oracle_runner_does_not_hardcode_the_exclusion() {
          Two copies of one list drift, and this one drifts flatteringly — a stale copy \
          excludes a module CI still runs armed."
     );
+}
+
+/// Every row withheld from the denoted-sequence oracle must name something that
+/// exists.
+///
+/// `test()` is a substring predicate, so a typo does not error — it selects
+/// nothing. In `SEQUENCE_ORACLE_EXCLUDE` that fails in the **loud** direction
+/// (the armed job stops withholding the row and goes red on it), which is the
+/// good case and is why this is a cheap guard rather than a critical one. The
+/// expensive half is the compensating step: `--no-tests=fail` turns a filter that
+/// selects nothing into a red step, so a typo there is loud too, but a filter
+/// with *one* good row and one typo would keep the step green while silently
+/// dropping half of what it exists to re-run.
+///
+/// Checked against the **source tree** rather than by listing tests, so the guard
+/// does not need a nextest subprocess: each name must be either an integration
+/// module (`tests/it/<name>.rs`) or a `fn <name>(` somewhere under `tests/` or
+/// `examples/`. That is a floor and not a proof — it cannot tell a `#[test]` from
+/// a helper — but it catches the failure that actually happens, which is a
+/// misspelling or a rename.
+#[test]
+fn every_row_withheld_from_the_sequence_oracle_names_something_that_exists() {
+    let named = modules_named_in(&ci_filter("SEQUENCE_ORACLE_EXCLUDE"));
+    assert!(
+        !named.is_empty(),
+        "ci.yml's SEQUENCE_ORACLE_EXCLUDE names nothing; either its formatting changed \
+         (in which case fix it) or its last row retired — in which case delete the \
+         variable, the `and not (…)` term in test-oracle's -E, the compensating step, \
+         the block in scripts/run_oracle_suite.sh, and these guards, in one change."
+    );
+
+    let mut haystack = String::new();
+    for dir in ["tests", "examples"] {
+        collect_rust_sources(&repo_root().join(dir), &mut haystack);
+    }
+    assert!(
+        haystack.len() > 100_000,
+        "the source scan read only {} bytes, which cannot be the whole of tests/ and \
+         examples/ — this guard has gone vacuous",
+        haystack.len()
+    );
+
+    let missing: Vec<&String> = named
+        .iter()
+        .filter(|name| {
+            !repo_root().join(format!("tests/it/{name}.rs")).is_file()
+                && !haystack.contains(&format!("fn {name}("))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "SEQUENCE_ORACLE_EXCLUDE names these, and nothing in tests/ or examples/ \
+         defines them: {missing:#?}\n\
+         A `test()` term that matches nothing selects nothing, so the compensating \
+         step would silently stop re-running the row it is there to protect."
+    );
+}
+
+/// Append every `.rs` file under `dir`, recursively, to `into`.
+fn collect_rust_sources(dir: &std::path::Path, into: &mut String) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_sources(&path, into);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                into.push_str(&text);
+                into.push('\n');
+            }
+        }
+    }
+}
+
+/// The rows withheld from the denoted-sequence oracle must still run under the
+/// other three.
+///
+/// This is the guard that makes arming the fourth oracle a **superset** of what
+/// `test-oracle` ran before #1815 rather than a trade. A nextest `-E` is one
+/// expression, so the armed step's `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws
+/// those rows from all four oracles at once; the compensating step is what puts
+/// three of them back. Delete that step and the change quietly becomes "three
+/// oracles surrendered to gain one" — with nothing red, which is why it is
+/// asserted rather than left to the comment beside it.
+///
+/// Three things are checked, and the third is the one a reader would omit:
+///
+/// 1. the step exists and selects **exactly** `$SEQUENCE_ORACLE_EXCLUDE`, by
+///    reference and not by a copy of its value;
+/// 2. it arms exactly the other three oracles;
+/// 3. it does **not** arm `FERRO_ASSERT_SEQUENCE`. Without this, a copy-paste of
+///    the armed step's `env:` block would satisfy (2) as a subset check and make
+///    the step red on the very rows it exists to run — turning a green job red
+///    for a reason that looks like a real defect.
+#[test]
+fn the_sequence_oracle_exclusions_still_run_under_the_other_three_oracles() {
+    let steps = test_oracle_steps();
+    let armed = steps
+        .iter()
+        .find(|step| step.runs.contains("--partition"))
+        .expect("test-oracle has a partitioned, armed step");
+    assert!(
+        armed.flags.iter().any(|f| f == "FERRO_ASSERT_SEQUENCE"),
+        "test-oracle's armed step no longer sets FERRO_ASSERT_SEQUENCE, so there is \
+         nothing for SEQUENCE_ORACLE_EXCLUDE to withhold it from. If the flag is being \
+         un-armed, remove the filter and this guard in the same change rather than \
+         leaving a compensating step for an exclusion that excludes nothing."
+    );
+
+    let compensating: Vec<&OracleStep> = steps
+        .iter()
+        .filter(|step| {
+            step.selection.as_deref() == Some("$SEQUENCE_ORACLE_EXCLUDE")
+                && !step.runs.contains("--partition")
+        })
+        .collect();
+    assert_eq!(
+        compensating.len(),
+        1,
+        "expected exactly one un-partitioned step in test-oracle selecting \
+         `$SEQUENCE_ORACLE_EXCLUDE`, found {}.\n\
+         Without it, the armed step's `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws \
+         those rows from FERRO_ASSERT_IDEMPOTENT, _REPARSE and _IN_BOUNDS as well — \
+         which they pass — so arming the fourth oracle would cost three.\n\
+         Note the selection must be the VARIABLE REFERENCE, not a copy of its value: \
+         two copies of one list drift, and this one drifts flatteringly.",
+        compensating.len()
+    );
+    let compensating = compensating[0];
+
+    let mut expected: Vec<String> = armed
+        .flags
+        .iter()
+        .filter(|f| *f != "FERRO_ASSERT_SEQUENCE")
+        .cloned()
+        .collect();
+    let mut actual = compensating.flags.clone();
+    expected.sort();
+    actual.sort();
+    assert_eq!(
+        actual, expected,
+        "the compensating step must arm exactly the oracles the armed step arms MINUS \
+         FERRO_ASSERT_SEQUENCE.\n\
+         Armed step: {:?}\nCompensating step: {:?}\n\
+         Deriving the expectation from the armed step rather than from a literal list is \
+         deliberate — a fifth oracle added above must reach these rows too, and a hardcoded \
+         three would not notice.",
+        armed.flags, compensating.flags
+    );
+    assert!(
+        !compensating
+            .flags
+            .iter()
+            .any(|f| f == "FERRO_ASSERT_SEQUENCE"),
+        "the compensating step arms FERRO_ASSERT_SEQUENCE, which is the one oracle these \
+         rows are withheld from. It would fire on exactly the rows the step exists to run, \
+         reddening a job that is otherwise green — and the failure would read as a fresh \
+         normalizer defect rather than as this wiring mistake."
+    );
+    assert!(
+        compensating.runs.contains("--no-tests=fail"),
+        "the compensating step must pass --no-tests=fail. Its selection is five tests \
+         named by substring, so a rename that empties the filter would otherwise be a \
+         step that goes green having run nothing — the vacuous pass this repository \
+         keeps meeting."
+    );
+}
+
+/// The debt list must stay disjoint from the two permanent filters.
+///
+/// An overlap is not merely untidy here, unlike the sweep/oracle pair below. A
+/// row in both `ORACLE_EXCLUDE` and `SEQUENCE_ORACLE_EXCLUDE` is withheld from
+/// the armed step twice — harmless — but the compensating step would then run it
+/// under three oracles that the armed job deliberately never runs it under,
+/// because `ORACLE_EXCLUDE`'s whole point is that those instruments destroy each
+/// other on those modules. So the overlap would *create* the red that
+/// `ORACLE_EXCLUDE` exists to prevent, in a new step, for a reason nothing states.
+///
+/// The `SWEEP_FILTER` half is the milder version: those rows run in `sweeps` with
+/// all four oracles armed already, so re-running them here would be redundant
+/// rather than wrong — but it would also mean the debt list silently governs a
+/// job it says nothing about.
+#[test]
+fn the_sequence_oracle_exclude_is_disjoint_from_the_permanent_filters() {
+    let debt = modules_named_in(&ci_filter("SEQUENCE_ORACLE_EXCLUDE"));
+    assert!(
+        !debt.is_empty(),
+        "SEQUENCE_ORACLE_EXCLUDE names nothing; this guard has gone vacuous"
+    );
+    for key in ["ORACLE_EXCLUDE", "SWEEP_FILTER", "CENSUS_FILTER"] {
+        let other = modules_named_in(&ci_filter(key));
+        assert!(
+            !other.is_empty(),
+            "ci.yml's {key} names no module; this guard has gone vacuous"
+        );
+        let both: Vec<&String> = debt.iter().filter(|m| other.contains(m)).collect();
+        assert!(
+            both.is_empty(),
+            "these are named in BOTH SEQUENCE_ORACLE_EXCLUDE and {key}: {both:#?}\n\
+             The debt list is temporary and carries issue numbers; {key} is a standing \
+             statement about what the armed job must never run. A row in both means the \
+             compensating step re-runs, under three armed oracles, a module {key} \
+             withholds from them."
+        );
+    }
 }
 
 /// The two filters must stay disjoint.
