@@ -1012,12 +1012,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
     }
 
-    /// Non-variant-aware transcript fetch with caching. Kept for inline tests
+    /// Non-variant-aware transcript fetch with caching. Used by inline tests
     /// that need to populate a `Transcript` for `cached_ref_translation`
-    /// without constructing an `HgvsVariant`. Hot-path callers go through
-    /// [`Self::cached_get_transcript_for_variant`] so an NG/NC-parented input
-    /// resolves to the correct cdot build (issue #332).
-    #[cfg(test)]
+    /// without constructing an `HgvsVariant`, and by
+    /// [`Self::codon_pair_is_within_one_exon`], which wants the transcript's own
+    /// exon table by id irrespective of the projected input's accession.
+    /// Coordinate-mapping hot-path callers go through
+    /// [`Self::cached_get_transcript_for_variant`] instead, so an NG/NC-parented
+    /// input resolves to the correct cdot build (issue #332); the exon-membership
+    /// check does not need that, because a versioned `transcript_id` fixes the
+    /// transcript-coordinate exon offsets regardless of genome build.
     fn cached_get_transcript(&self, transcript_id: &str) -> Result<Arc<Transcript>, FerroError> {
         let key = (transcript_id.to_string(), None);
         if let Some(tx) = self
@@ -3761,7 +3765,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // projection names, rather than inheriting whatever the authoring axis
         // chose (#1664). Runs on the assembled projection so it can compare the
         // axis that carries the reading frame against the ones that do not.
-        projection = self.apply_codon_frame_exception(projection, variant, transcript_id)?;
+        projection = self.apply_codon_frame_exception(projection, transcript_id)?;
         // Withhold a genomic axis that came out as a non-flanking insertion
         // (#1264). Done here, on the assembled projection, so only the genomic
         // axis declines: the same variant's c./n./r./p. forms are unaffected by
@@ -3816,7 +3820,6 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     fn apply_codon_frame_exception(
         &self,
         mut projection: VariantProjection,
-        original: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
         use crate::project::codon_exception as codon;
@@ -3845,17 +3848,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // result instead of predicting it.
             let all_within_one_exon = !pairs.is_empty()
                 && pairs.iter().all(|&(left, right)| {
-                    self.codon_pair_is_within_one_exon(original, transcript_id, left, right)
+                    self.codon_pair_is_within_one_exon(transcript_id, left, right)
                 });
             if all_within_one_exon {
                 if let Ok(merged) = self.normalizer.normalize(&coding) {
                     if codon::member_count(&merged) < codon::member_count(&coding)
-                        && self.merged_members_stay_within_one_exon(
-                            original,
-                            transcript_id,
-                            &coding,
-                            &merged,
-                        )
+                        && self.merged_members_stay_within_one_exon(transcript_id, &coding, &merged)
                     {
                         // Terminates: `merged` has strictly fewer members, so
                         // the re-projection's coding axis cannot re-enter here.
@@ -3937,7 +3935,6 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// unservable transcript.
     fn merged_members_stay_within_one_exon(
         &self,
-        variant: &HgvsVariant,
         transcript_id: &str,
         coding: &HgvsVariant,
         merged: &HgvsVariant,
@@ -3946,9 +3943,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         else {
             return false;
         };
-        spans.iter().all(|&(first, last)| {
-            self.codon_pair_is_within_one_exon(variant, transcript_id, first, last)
-        })
+        spans
+            .iter()
+            .all(|&(first, last)| self.codon_pair_is_within_one_exon(transcript_id, first, last))
     }
 
     /// Do CDS positions `left` and `right` sit inside one exon of
@@ -3957,14 +3954,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `false` for an unservable transcript or one with no CDS: without an exon
     /// table there is no basis to claim the pair does not cross a junction, and
     /// the codon exception's caller declines on `false`.
-    fn codon_pair_is_within_one_exon(
-        &self,
-        variant: &HgvsVariant,
-        transcript_id: &str,
-        left: i64,
-        right: i64,
-    ) -> bool {
-        let Ok(transcript) = self.cached_get_transcript_for_variant(variant, transcript_id) else {
+    fn codon_pair_is_within_one_exon(&self, transcript_id: &str, left: i64, right: i64) -> bool {
+        // `cached_get_transcript`, not `cached_get_transcript_for_variant`: for a
+        // genomic-authored input the latter resolves the *chromosome* accession to
+        // a CDS-less transcript — an `Ok`, so the `ReferenceNotFound` fallback to
+        // `get_transcript(transcript_id)` never fires — which left `cds_start`
+        // `None` and declined every codon-frame merge on the projected coding
+        // axis, so `project --axis c` of a genomic cis allele disagreed with
+        // `normalize` of the coding-authored form (#2127).
+        let Ok(transcript) = self.cached_get_transcript(transcript_id) else {
             return false;
         };
         let Some(cds_start) = transcript.cds_start.and_then(|s| i64::try_from(s).ok()) else {
@@ -7387,17 +7385,61 @@ mod tests {
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
-        // Genomic sequence so the genomic-projection step of each member resolves:
-        // N*1000 + DELINS CDS + filler + SEP CDS + tail (plus strand → genomic
-        // bases equal the transcript bases at each exon offset).
+        // Genomic sequence so the genomic-projection step of each member resolves.
+        provider.add_genomic_sequence("chr1", multicodon_genome());
+        (projector, provider)
+    }
+
+    /// The `chr1` contig backing [`make_multicodon_provider_and_projector`]:
+    /// N*1000 + DELINS CDS + filler + SEP CDS + tail (plus strand → genomic
+    /// bases equal the transcript bases at each exon offset).
+    fn multicodon_genome() -> String {
         let mut genome = String::new();
         genome.push_str(&"N".repeat(1000));
         genome.push_str("ATGGATTATTAA"); // [1000, 1012)
         genome.push_str(&"N".repeat(2000 - 1012));
         genome.push_str("ATGGATTATTGCTAA"); // [2000, 2015)
         genome.push_str(&"N".repeat(100));
-        provider.add_genomic_sequence("chr1", genome);
-        (projector, provider)
+        genome
+    }
+
+    /// Register the multicodon fixture's `chr1` contig as a **CDS-less
+    /// transcript record**, which is what a
+    /// real `MultiFastaProvider` serves when asked for a chromosome accession:
+    /// `get_transcript` resolves the contig out of the genome FASTA index, finds
+    /// no cdot record and no supplemental CDS for it, and returns
+    /// `TranscriptMetadata::default()` — an `Ok` carrying `cds_start: None` and
+    /// an empty exon table (`multi_fasta.rs`'s `get_supplemental_cds_info`).
+    ///
+    /// Without this the mock answers `ReferenceNotFound` for a bare contig, so
+    /// `cached_get_transcript_for_variant`'s fallback to `get_transcript` fires
+    /// and resolves the *right* transcript anyway — which makes #2127
+    /// structurally unreachable on a `JsonProvider` and any guard against it
+    /// vacuous. Only `cds_start: None` is load-bearing (the codon-frame exon
+    /// guard returns `false` on it before reading the exon table); the sequence
+    /// and empty exons are carried so the record matches what the real provider
+    /// builds.
+    fn register_multicodon_contig_as_cds_less_transcript(provider: &mut MockProvider) {
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "chr1".to_string(),
+            gene_symbol: None,
+            strand: TxStrand::Plus,
+            sequence: Some(multicodon_genome()),
+            cds_start: None,
+            cds_end: None,
+            exons: Vec::new(),
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
     }
 
     /// Provider for the #1076 intron-split-codon test: `NM_SPLIT.1`, a two-exon
@@ -14513,6 +14555,114 @@ mod tests {
         assert_eq!(
             format!("{protein}"),
             "NP_DELINS.1:p.(Asp2_Tyr3delinsTyrCys)"
+        );
+    }
+
+    /// #2127: a genomic-authored cis allele whose two members sit one nucleotide
+    /// apart **within one codon** must project to the merged coding delins — the
+    /// same string `normalize` produces for the coding-authored form — not the
+    /// split it used to leave. `NM_SEP.1` codon 2 is `GAT` (`c.4_6`, `c.5`
+    /// unchanged) at `g.2004_2006`; `g.2004G>C` + `g.2006T>A` give `CAA` (Gln).
+    ///
+    /// The defect was axis-of-origin dependence: the projector's codon-frame
+    /// exon guard resolved the transcript from the *input's* accession, which for
+    /// a genomic input is a chromosome carrying no CDS, so `cds_start` was `None`
+    /// and every merge was declined. The coding-authored form
+    /// (`project_cis_adjacent_substitutions_combine_to_delins`, above) already
+    /// merged, so the two routes disagreed on one variant's `c.` string. The
+    /// junction-crossing negative control is
+    /// `project_cis_intron_split_codon_combines_to_single_missense`, which must
+    /// stay split — the guard now declines it on the exon test rather than on a
+    /// missing CDS.
+    ///
+    /// **Read this as a change detector, not as the arming guard.** Measured with
+    /// the fix reverted, this end-to-end assertion passes anyway, for two
+    /// separate reasons — so do not cite it as evidence the defect is caught.
+    /// First, a bare `JsonProvider` answers `ReferenceNotFound` for a contig,
+    /// which fires `cached_get_transcript_for_variant`'s fallback and resolves
+    /// `NM_SEP.1` regardless; `register_multicodon_contig_as_cds_less_transcript`
+    /// closes that half by serving what a real `MultiFastaProvider` serves for a
+    /// chromosome accession. Second, and not closable from here: since #2108 the
+    /// projector shares its transcript cache with its normalizer, and the
+    /// normalizer's own `get_transcript("NM_SEP.1")` populates
+    /// `("NM_SEP.1", None)` — the very key the pre-fix variant-aware lookup
+    /// computes for a bare `g.` input — *before* the codon guard runs, so the
+    /// pre-fix guard reads the right transcript out of the cache and merges.
+    ///
+    /// The guard that is actually armed against #2127 is
+    /// `the_codon_frame_exon_guard_resolves_the_transcript_by_id`, which asks
+    /// `codon_pair_is_within_one_exon` on a **cold** projector: measured `false`
+    /// pre-fix, `true` after. On the real reference the end-to-end defect is
+    /// live either way (`project --axis c` of
+    /// `NC_000013.11:g.[32316464C>A;32316466T>G]` onto `NM_000059.4` gave
+    /// `c.[4C>A;6T>G]` before and gives `c.4_6delinsACG` after).
+    #[test]
+    fn project_genomic_cis_same_codon_pair_merges_on_the_coding_axis() {
+        let (projector, mut provider) = make_multicodon_provider_and_projector();
+        register_multicodon_contig_as_cds_less_transcript(&mut provider);
+        let contig_record = provider.get_transcript("chr1").expect(
+            "the fixture must serve chr1 as a transcript record, as the real provider does",
+        );
+        assert!(
+            contig_record.cds_start.is_none(),
+            "the contig record must carry no CDS, or the pre-fix guard would have resolved one"
+        );
+        let vp = VariantProjector::new(projector, provider);
+        let v1 = crate::parse_hgvs("chr1:g.2004G>C").expect("v1 parse");
+        let v2 = crate::parse_hgvs("chr1:g.2006T>A").expect("v2 parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        let coding = proj.coding.as_ref().expect("coding present").to_string();
+        assert!(
+            coding.contains("c.4_6delinsCAA"),
+            "genomic cis same-codon pair must merge on the coding axis, got {coding}"
+        );
+    }
+
+    /// #2127, at the seam the fix changed: exon membership is a property of the
+    /// transcript the `c.` members are numbered on, so
+    /// [`VariantProjector::codon_pair_is_within_one_exon`] must resolve it by
+    /// `transcript_id` and never from the projected input's accession.
+    ///
+    /// This is the armed half of the pair — it calls the guard on a **cold**
+    /// projector, so no earlier fetch can have cached the right transcript under
+    /// the `(transcript_id, None)` key the pre-fix variant-aware lookup computes
+    /// for a bare `g.` input. Measured: `false` with the fix reverted (the
+    /// contig record's `cds_start` is `None`), `true` with it applied.
+    ///
+    /// The three negative halves are what the fix must NOT change: a pair
+    /// straddling an exon junction stays declined, a pair inside one exon of the
+    /// same two-exon transcript is still admitted, and a transcript with no CDS
+    /// (a contig, or an `NR_`/`n.` transcript) is still declined rather than
+    /// treated as one exon.
+    #[test]
+    fn the_codon_frame_exon_guard_resolves_the_transcript_by_id() {
+        let (projector, mut provider) = make_multicodon_provider_and_projector();
+        register_multicodon_contig_as_cds_less_transcript(&mut provider);
+        let vp = VariantProjector::new(projector, provider);
+        assert!(
+            vp.codon_pair_is_within_one_exon("NM_SEP.1", 4, 6),
+            "codon 2 of NM_SEP.1 is one exon deep in a single-exon transcript; the guard \
+             must read that transcript's exon table, not the contig the input names"
+        );
+        assert!(
+            !vp.codon_pair_is_within_one_exon("chr1", 4, 6),
+            "a CDS-less record (a contig, or an NR_ transcript) has no exon basis and \
+             must still decline"
+        );
+
+        let (projector, provider) = make_intron_split_codon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        assert!(
+            !vp.codon_pair_is_within_one_exon("NM_SPLIT.1", 4, 6),
+            "NM_SPLIT.1 c.4 ends exon 1 and c.6 sits in exon 2; the pair crosses the \
+             junction and must decline"
+        );
+        assert!(
+            vp.codon_pair_is_within_one_exon("NM_SPLIT.1", 5, 7),
+            "NM_SPLIT.1 c.5_7 is wholly inside exon 2 and must still be admitted"
         );
     }
 
