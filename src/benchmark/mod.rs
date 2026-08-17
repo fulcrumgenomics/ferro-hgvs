@@ -98,8 +98,8 @@ pub use parse::{parse_ferro, parse_ferro_unified};
 pub use runner::{load_existing_results, run_benchmark};
 // Re-export from the main prepare module (avoiding code duplication)
 pub use crate::prepare::{
-    check_references, prepare_references, LegacyMetadata, LegacyTranscript, LegacyTranscriptRecord,
-    PrepareConfig, ReferenceManifest,
+    check_references, prepare_references, LegacyMetadata, LegacyTranscript, PrepareConfig,
+    ReferenceManifest,
 };
 pub use report::generate_report;
 pub use sample::stratified_sample;

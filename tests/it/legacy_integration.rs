@@ -8,7 +8,7 @@
 
 #[cfg(feature = "benchmark")]
 mod legacy_tests {
-    use ferro_hgvs::benchmark::{LegacyMetadata, LegacyTranscriptRecord};
+    use ferro_hgvs::benchmark::{LegacyMetadata, LegacyTranscript};
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -19,12 +19,11 @@ mod legacy_tests {
             generated_at: "2024-01-01T00:00:00Z".to_string(),
             transcripts: [(
                 "NM_000051.3".to_string(),
-                LegacyTranscriptRecord {
+                LegacyTranscript {
                     id: "NM_000051.3".to_string(),
                     gene_symbol: Some("ATM".to_string()),
                     cds_start: Some(250),
                     cds_end: Some(9500),
-                    sequence_length: 10000,
                 },
             )]
             .into_iter()
@@ -36,10 +35,15 @@ mod legacy_tests {
         assert!(json.contains("ATM"));
         assert!(json.contains("cds_start"));
         assert!(json.contains("cds_end"));
+        // The derived length is no longer persisted (#2064).
+        assert!(!json.contains("sequence_length"));
     }
 
     #[test]
     fn test_legacy_metadata_deserialization() {
+        // A pre-#2064 on-disk file still carries `sequence_length`. It must still
+        // load: serde ignores the now-unknown field rather than failing, so an
+        // older reference is readable by the field-free type.
         let json = r#"{
             "generated_at": "2024-01-01T00:00:00Z",
             "transcripts": {
@@ -61,22 +65,20 @@ mod legacy_tests {
         assert_eq!(record.gene_symbol, Some("ATM".to_string()));
         assert_eq!(record.cds_start, Some(250));
         assert_eq!(record.cds_end, Some(9500));
-        assert_eq!(record.sequence_length, 10000);
     }
 
     #[test]
     fn test_legacy_transcript_optional_fields() {
         // Test that optional fields can be None on the on-disk record.
-        let record = LegacyTranscriptRecord {
+        let record = LegacyTranscript {
             id: "NM_000001.1".to_string(),
             gene_symbol: None,
             cds_start: None,
             cds_end: None,
-            sequence_length: 5000,
         };
 
         let json = serde_json::to_string(&record).unwrap();
-        let parsed: LegacyTranscriptRecord = serde_json::from_str(&json).unwrap();
+        let parsed: LegacyTranscript = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.gene_symbol, None);
         assert_eq!(parsed.cds_start, None);
@@ -190,36 +192,38 @@ mod legacy_tests {
     }
 }
 
-/// The sourced/derived split for legacy-transcript metadata (#2085).
+/// The derived length is no longer persisted for legacy-transcript metadata
+/// (#2064, completing #2085 move 3).
 ///
-/// These pin the structural invariant introduced by the first increment of
-/// #2085: the *authority* type [`LegacyTranscript`] carries only sourced fields
-/// and structurally cannot hold the derived `sequence_length`, while the on-disk
-/// [`LegacyTranscriptRecord`] remains the sole carrier of the derived length so
-/// the serialized bytes — and therefore the content stamps and the blessed
-/// reference identity (`aa8b3246d83055cc`) — do not move.
+/// These pin that the on-disk row [`LegacyTranscript`] carries only sourced
+/// fields (accession, gene symbol, CDS bounds) and can no longer represent the
+/// derived `sequence_length` — the field is *unrepresentable*, not merely
+/// unread. Removing it changes the serialized bytes of the content-stamped
+/// legacy metadata artifacts, and so deliberately BUMPS the blessed reference
+/// identity from `aa8b3246d83055cc` to `f329e62bd95d8020` (#905/#933). This is
+/// the opposite property to #2087, whose on-disk bytes were identity-neutral.
 #[cfg(feature = "benchmark")]
-mod sourced_derived_split {
-    use ferro_hgvs::benchmark::{LegacyMetadata, LegacyTranscript, LegacyTranscriptRecord};
+mod legacy_metadata_no_derived_length {
+    use ferro_hgvs::benchmark::{LegacyMetadata, LegacyTranscript};
     use ferro_hgvs::prepare::identity::fnv1a_hex;
 
-    /// The exact pre-split serialization of a single-record metadata file, so the
-    /// identity-neutrality assertions below compare against a fixed golden rather
-    /// than against the code under test. A single transcript keeps the map order
-    /// deterministic; `cds_end: null` pins that `None` still serializes as before.
-    const GOLDEN_PRETTY: &str = "{\n  \"generated_at\": \"2024-01-01T00:00:00Z\",\n  \"transcripts\": {\n    \"NM_000051.3\": {\n      \"id\": \"NM_000051.3\",\n      \"gene_symbol\": \"ATM\",\n      \"cds_start\": 250,\n      \"cds_end\": null,\n      \"sequence_length\": 10000\n    }\n  }\n}";
+    /// The exact post-#2064 serialization of a single-record metadata file, so
+    /// the byte/stamp assertions below compare against a fixed golden rather than
+    /// against the code under test. A single transcript keeps the map order
+    /// deterministic; `cds_end: null` pins that `None` still serializes, and the
+    /// absence of any `sequence_length` line is the change this whole PR is about.
+    const GOLDEN_PRETTY: &str = "{\n  \"generated_at\": \"2024-01-01T00:00:00Z\",\n  \"transcripts\": {\n    \"NM_000051.3\": {\n      \"id\": \"NM_000051.3\",\n      \"gene_symbol\": \"ATM\",\n      \"cds_start\": 250,\n      \"cds_end\": null\n    }\n  }\n}";
 
     fn golden_metadata() -> LegacyMetadata {
         LegacyMetadata {
             generated_at: "2024-01-01T00:00:00Z".to_string(),
             transcripts: [(
                 "NM_000051.3".to_string(),
-                LegacyTranscriptRecord {
+                LegacyTranscript {
                     id: "NM_000051.3".to_string(),
                     gene_symbol: Some("ATM".to_string()),
                     cds_start: Some(250),
                     cds_end: None,
-                    sequence_length: 10000,
                 },
             )]
             .into_iter()
@@ -227,89 +231,50 @@ mod sourced_derived_split {
         }
     }
 
-    /// The sourced authority type cannot carry a derived length: it has no such
-    /// field, so it never serializes one. This is the structural core of #2085 —
-    /// a persisted length can no longer masquerade as a sourced fact.
+    /// The on-disk row cannot carry a derived length: it has no such field, so it
+    /// never serializes one. This is the structural core of #2064 — a persisted
+    /// length is no longer representable, not merely unread.
     #[test]
-    fn sourced_authority_type_has_no_length_field() {
-        let sourced = LegacyTranscript {
+    fn legacy_metadata_carries_no_derived_length() {
+        let record = LegacyTranscript {
             id: "NM_000051.3".to_string(),
             gene_symbol: Some("ATM".to_string()),
             cds_start: Some(250),
             cds_end: Some(9500),
         };
-        let json = serde_json::to_string(&sourced).unwrap();
+        let json = serde_json::to_string(&record).unwrap();
         assert!(
             !json.contains("sequence_length"),
-            "sourced LegacyTranscript must not serialize a derived length: {json}"
+            "LegacyTranscript must not serialize a derived length: {json}"
         );
         assert!(json.contains("\"id\":\"NM_000051.3\""));
         assert!(json.contains("\"cds_start\":250"));
     }
 
-    /// The on-disk bytes are byte-for-byte unchanged from the pre-split format,
-    /// so the derived-artifact content stamps and the blessed reference identity
-    /// do not move. This is what makes the increment identity-neutral (#905/#933).
+    /// The exact on-disk bytes after the field removal, pinned as a golden. This
+    /// is the byte change that moves the content stamp and hence the identity.
     #[test]
-    fn on_disk_bytes_are_identity_neutral() {
+    fn on_disk_bytes_drop_the_length_field() {
         let serialized = serde_json::to_string_pretty(&golden_metadata()).unwrap();
         assert_eq!(serialized, GOLDEN_PRETTY);
+        assert!(!serialized.contains("sequence_length"));
     }
 
     /// The FNV-1a content stamp `src/prepare/identity.rs` injects into the
     /// reference identity, pinned as a literal digest.
     ///
     /// The literal is what makes this falsifiable. Comparing
-    /// `fnv1a_hex(serialized)` against `fnv1a_hex(GOLDEN_PRETTY)` — which this
-    /// test used to do — is `f(x) == f(x)` once the sibling above has asserted
-    /// `serialized == GOLDEN_PRETTY`, so it holds for *any* hash function and
-    /// any golden. The digest below was derived independently of ferro (FNV-1a
-    /// 64-bit over the golden's 228 bytes, offset basis `cbf29ce484222325`,
-    /// prime `100000001b3`), so it pins the stamp rather than restating the
-    /// assertion above it.
+    /// `fnv1a_hex(serialized)` against `fnv1a_hex(GOLDEN_PRETTY)` would be
+    /// `f(x) == f(x)` once the sibling above has asserted `serialized ==
+    /// GOLDEN_PRETTY`, so it would hold for *any* hash function and any golden.
+    /// The digest below was derived independently of ferro (FNV-1a 64-bit over
+    /// the golden's bytes, offset basis `cbf29ce484222325`, prime
+    /// `100000001b3`), so it pins the stamp rather than restating the assertion
+    /// above it. It differs from the pre-#2064 digest (`3135b86e16384d04`)
+    /// because the removed `sequence_length` line changed the bytes.
     #[test]
     fn content_stamp_is_the_pinned_digest() {
         let serialized = serde_json::to_string_pretty(&golden_metadata()).unwrap();
-        assert_eq!(fnv1a_hex(serialized.as_bytes()), "3135b86e16384d04");
-    }
-
-    /// The persisted `sequence_length` is exactly the FASTA-derived length
-    /// (`seq.len()`), i.e. fully redundant with its authority — the very property
-    /// that makes it derived. `into_record` pairs the sourced authority with that
-    /// derived length; `sourced()` projects back, dropping it.
-    #[test]
-    fn persisted_length_is_the_fasta_derived_length() {
-        let seq = "ACGTACGTAC"; // stands in for the FASTA bases (authority)
-        let sourced = LegacyTranscript {
-            id: "NM_000001.1".to_string(),
-            gene_symbol: None,
-            cds_start: Some(1),
-            cds_end: Some(9),
-        };
-        let record = sourced.clone().into_record(seq.len());
-
-        // The persisted copy equals the authority's length, byte-for-byte.
-        assert_eq!(record.sequence_length, seq.len());
-        // Projecting back to the authority recovers exactly the sourced fields,
-        // with no length surviving the round trip.
-        assert_eq!(record.sourced(), sourced);
-    }
-
-    /// `sourced_transcripts()` is the length-free view consumers should read, so
-    /// a persisted length can never be mistaken for the source of truth (#2085).
-    #[test]
-    fn sourced_transcripts_view_drops_the_derived_length() {
-        let metadata = golden_metadata();
-        let sourced = metadata.sourced_transcripts();
-        assert_eq!(sourced.len(), 1);
-        let view = &sourced["NM_000051.3"];
-        assert_eq!(view.id, "NM_000051.3");
-        assert_eq!(view.gene_symbol, Some("ATM".to_string()));
-        assert_eq!(view.cds_start, Some(250));
-        assert_eq!(view.cds_end, None);
-        // A serialized sourced view carries no length key.
-        assert!(!serde_json::to_string(view)
-            .unwrap()
-            .contains("sequence_length"));
+        assert_eq!(fnv1a_hex(serialized.as_bytes()), "bdd80d2adb01c7c1");
     }
 }
