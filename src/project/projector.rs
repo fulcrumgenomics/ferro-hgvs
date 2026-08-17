@@ -2343,7 +2343,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// with no known placement or an endpoint outside the placed span, and
     /// [`FerroError::InvalidCoordinates`] for an uncertain/compound endpoint
     /// (#655) — rather than emit a chromosome coordinate under the parent
-    /// accession (invalid HGVS).
+    /// accession (invalid HGVS). When a placement exists but only on a build
+    /// other than the requested one (an LRG/NG declining an explicit `GRCh37`
+    /// request whose only placement is `GRCh38`, #2089), the decline names the
+    /// build the placement is on and points at re-running under it, rather than
+    /// reporting the placement as unknown (#2103).
     fn reanchor_genome_output(
         &self,
         gv: crate::hgvs::variant::GenomeVariant,
@@ -2354,12 +2358,44 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .genomic_placement_on_build(&gv.accession, build)
         {
             Some(placement) => Self::reanchor_genome_to_parent(gv, &placement)?,
-            // No placement: an `NC_` chromosome parent is already in the genome
-            // frame and passes through unchanged, but an `NG_`/`LRG_` parent
-            // cannot be re-anchored (cdot carries only the transcript's `NC_`
-            // alignment). Emitting the `NC_` coordinate under the `NG_`/`LRG_`
-            // accession would be invalid HGVS, so decline instead (#480/#655).
+            // No placement for the requested build: an `NC_` chromosome parent
+            // is already in the genome frame and passes through unchanged, but
+            // an `NG_`/`LRG_` parent cannot be re-anchored (cdot carries only
+            // the transcript's `NC_` alignment). Emitting the `NC_` coordinate
+            // under the `NG_`/`LRG_` accession would be invalid HGVS, so decline
+            // instead (#480/#655).
             None if &*gv.accession.prefix == "NG" || gv.accession.is_lrg() => {
+                // Distinguish a genuine data gap (no placement on any build)
+                // from a placement that exists on a *different* build than the
+                // one requested (#2103). After #2089 an LRG/NG whose only
+                // chromosomal placement is GRCh38 declines an explicit GRCh37
+                // request, and the two causes want different user actions: the
+                // first is unplaceable, the second is answerable by re-running
+                // under the build the placement actually carries. A build was
+                // requested only when `build.is_some()`; with no preference a
+                // `None` here is a genuine data gap (the no-preference lookup
+                // returns the first available placement).
+                let placed_on_other_build = build.and_then(|_| {
+                    self.provider
+                        .genomic_placement_on_build(&gv.accession, None)
+                });
+                if let Some(available) = placed_on_other_build {
+                    let requested = build.unwrap_or("the requested build");
+                    let available_build = self
+                        .provider
+                        .infer_genome_build(&available.nc)
+                        .unwrap_or("another build");
+                    return Err(FerroError::UnsupportedProjection {
+                        reason: format!(
+                            "cannot project to the {} parent frame on {requested}: its \
+                             chromosomal placement is on {available_build} ({}), not \
+                             {requested}; re-run with --assembly {available_build} to \
+                             project against the placement's own build (#480/#2103)",
+                            gv.accession.transcript_accession(),
+                            available.nc,
+                        ),
+                    });
+                }
                 return Err(FerroError::UnsupportedProjection {
                     reason: format!(
                         "cannot project to the {} parent frame: no chromosomal \
@@ -10613,6 +10649,104 @@ mod tests {
                 FerroError::UnsupportedProjection { reason } => assert!(
                     reason.contains("outside the placed genomic span"),
                     "expected an out-of-span decline, got: {reason}"
+                ),
+                other => panic!("expected UnsupportedProjection, got: {other:?}"),
+            }
+        }
+
+        /// After #2089 an LRG/NG whose only chromosomal placement is GRCh38
+        /// declines an explicit GRCh37 request. The decline must name the build
+        /// the placement *is* on and point at re-running under it, rather than
+        /// claim no placement is known: the two causes want different user
+        /// actions — an unplaced parent is a data gap, a placed-elsewhere parent
+        /// is answerable by re-running with `--assembly GRCh38` (#2103).
+        #[test]
+        fn reanchor_ng_parent_placed_on_other_build_names_the_available_build() {
+            let (projector, mut provider) = make_test_provider_and_projector();
+            // NG_TEST.1 is placed only on GRCh38 (NC_000017.11).
+            provider.add_genomic_placement(
+                "NG_TEST.1",
+                crate::reference::GenomicPlacement {
+                    nc: Accession::new("NC", "000017", Some(11)),
+                    parent_start: 1,
+                    nc_start: 50_182_096,
+                    nc_end: 50_182_106,
+                    strand: crate::reference::Strand::Plus,
+                    gaps: Vec::new(),
+                },
+            );
+            let vp = VariantProjector::new(projector, provider);
+            // A chromosome-frame genome variant stamped with the NG parent, as
+            // `project_to_genomic` hands to `reanchor_genome_output`.
+            let gv = GenomeVariant {
+                accession: ng_parent("TEST", 1),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(50_182_100)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let err = vp
+                .reanchor_genome_output(gv, Some("GRCh37"))
+                .expect_err("a GRCh37 request on a GRCh38-only placement must decline");
+            match err {
+                FerroError::UnsupportedProjection { reason } => {
+                    assert!(
+                        reason.contains("GRCh38") && reason.contains("GRCh37"),
+                        "decline must name both the available (GRCh38) and requested \
+                         (GRCh37) builds, got: {reason}"
+                    );
+                    assert!(
+                        reason.contains("--assembly GRCh38"),
+                        "decline must point at re-running under the placement's own \
+                         build, got: {reason}"
+                    );
+                    assert!(
+                        !reason.contains("no chromosomal placement is known"),
+                        "decline must not claim the placement is unknown when it exists \
+                         on GRCh38, got: {reason}"
+                    );
+                    assert!(
+                        reason.contains("NC_000017.11"),
+                        "decline should name the placement's chromosome accession, \
+                         got: {reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedProjection, got: {other:?}"),
+            }
+        }
+
+        /// The genuine data-gap case is unchanged (#2103): an NG/LRG with no
+        /// placement on any build still declines with the "no chromosomal
+        /// placement is known" message, even when a build is explicitly
+        /// requested. The build-aware branch must not swallow the unplaced case
+        /// into the placed-elsewhere message.
+        #[test]
+        fn reanchor_ng_parent_with_no_placement_on_any_build_still_reports_unknown() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let gv = GenomeVariant {
+                accession: ng_parent("TEST", 1),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(1003)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::A,
+                    },
+                ),
+            };
+            let err = vp
+                .reanchor_genome_output(gv, Some("GRCh37"))
+                .expect_err("no placement on any build must decline");
+            match err {
+                FerroError::UnsupportedProjection { reason } => assert!(
+                    reason.contains("no chromosomal placement is known")
+                        && reason.contains("NG_TEST.1"),
+                    "expected the unplaced-parent message, got: {reason}"
                 ),
                 other => panic!("expected UnsupportedProjection, got: {other:?}"),
             }
