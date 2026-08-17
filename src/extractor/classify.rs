@@ -3,6 +3,7 @@
 //! Classifies raw edits into HGVS-compatible types.
 
 use super::align::RawEdit;
+use crate::error::FerroError;
 
 /// Classification of an edit for HGVS notation.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,11 +64,11 @@ pub fn classify_edit(
     reference: &str,
     detect_dup: bool,
     detect_inv: bool,
-) -> EditClassification {
+) -> Result<EditClassification, FerroError> {
     let ref_len = edit.ref_seq.len();
     let obs_len = edit.obs_seq.len();
 
-    match (ref_len, obs_len) {
+    let classification = match (ref_len, obs_len) {
         // Single substitution
         (1, 1) => EditClassification::Substitution {
             ref_base: edit.ref_seq.chars().next().unwrap(),
@@ -81,7 +82,7 @@ pub fn classify_edit(
 
         // Insertion - check for duplication
         (0, a) if a > 0 => {
-            if detect_dup && is_duplication(reference, edit.ref_start, &edit.obs_seq) {
+            if detect_dup && is_duplication(reference, edit.ref_start, &edit.obs_seq)? {
                 EditClassification::Duplication {
                     sequence: edit.obs_seq.clone(),
                 }
@@ -119,30 +120,53 @@ pub fn classify_edit(
                 inserted: edit.obs_seq.clone(),
             }
         }
-    }
+    };
+
+    Ok(classification)
 }
 
 /// Check if an insertion is a duplication of the preceding sequence.
 ///
 /// According to HGVS, an insertion is a duplication if the inserted sequence
 /// is identical to the sequence immediately 5' of the insertion point.
-pub fn is_duplication(reference: &str, position: u64, inserted: &str) -> bool {
+///
+/// `position` is the alignment's 1-based `ref_start` for the insertion, so a
+/// trailing insertion reports `position == reference.len() + 1`. Reading the
+/// preceding bases at `reference[pos - ins_len..pos]` would then run past the
+/// end of the reference and panic (#2128), which reached a user-facing CLI
+/// entry point (`ferro describe`) as process exit 101 on well-formed input.
+/// The out-of-range case now returns a typed [`FerroError::InvalidCoordinates`]
+/// so the caller can decline cleanly instead.
+pub fn is_duplication(reference: &str, position: u64, inserted: &str) -> Result<bool, FerroError> {
     if inserted.is_empty() {
-        return false;
+        return Ok(false);
     }
 
     let pos = position as usize;
     let ins_len = inserted.len();
 
-    // Check if there's enough sequence before the insertion point
-    if pos < ins_len {
-        return false;
+    // The insertion point must lie within the reference for the preceding-bases
+    // read below to be in bounds. A point past the end is an unresolvable
+    // coordinate, not a duplication — decline rather than panic.
+    if pos > reference.len() {
+        return Err(FerroError::InvalidCoordinates {
+            msg: format!(
+                "insertion point {pos} is past the end of the {}-base reference",
+                reference.len()
+            ),
+        });
     }
 
-    // Get the sequence immediately before the insertion point
+    // Check if there's enough sequence before the insertion point
+    if pos < ins_len {
+        return Ok(false);
+    }
+
+    // Get the sequence immediately before the insertion point. Both `pos <=
+    // reference.len()` and `pos >= ins_len` hold here, so the slice is in bounds.
     let preceding = &reference[pos - ins_len..pos];
 
-    preceding == inserted
+    Ok(preceding == inserted)
 }
 
 /// Whether an equal-length delins is really an inversion — its replacement is
@@ -236,7 +260,7 @@ mod tests {
     #[test]
     fn test_classify_substitution() {
         let edit = make_edit(3, "G", "A");
-        let class = classify_edit(&edit, "ATGC", true, true);
+        let class = classify_edit(&edit, "ATGC", true, true).unwrap();
 
         match class {
             EditClassification::Substitution { ref_base, alt_base } => {
@@ -250,7 +274,7 @@ mod tests {
     #[test]
     fn test_classify_deletion() {
         let edit = make_edit(3, "GC", "");
-        let class = classify_edit(&edit, "ATGCAT", true, true);
+        let class = classify_edit(&edit, "ATGCAT", true, true).unwrap();
 
         match class {
             EditClassification::Deletion { deleted } => {
@@ -263,7 +287,7 @@ mod tests {
     #[test]
     fn test_classify_insertion() {
         let edit = make_edit(3, "", "T");
-        let class = classify_edit(&edit, "ATGC", true, true);
+        let class = classify_edit(&edit, "ATGC", true, true).unwrap();
 
         match class {
             EditClassification::Insertion { inserted } => {
@@ -279,7 +303,7 @@ mod tests {
         // Position 3 is 'G', so inserting "G" after it is a duplication
         // The preceding character (at index 2, position 3) is 'G'
         let edit = make_edit(3, "", "G");
-        let class = classify_edit(&edit, "ATGC", true, true);
+        let class = classify_edit(&edit, "ATGC", true, true).unwrap();
 
         match class {
             EditClassification::Duplication { sequence } => {
@@ -292,7 +316,7 @@ mod tests {
     #[test]
     fn test_classify_delins() {
         let edit = make_edit(3, "GC", "TT");
-        let class = classify_edit(&edit, "ATGCAT", true, true);
+        let class = classify_edit(&edit, "ATGCAT", true, true).unwrap();
 
         match class {
             EditClassification::Delins { deleted, inserted } => {
@@ -307,13 +331,29 @@ mod tests {
     fn test_is_duplication() {
         // "ATGCAT" - inserting "CAT" at position 7 (after the full sequence)
         // Preceding "CAT" (positions 4-6) matches
-        assert!(is_duplication("ATGCAT", 6, "CAT"));
+        assert!(is_duplication("ATGCAT", 6, "CAT").unwrap());
 
         // Not a duplication - different sequence
-        assert!(!is_duplication("ATGCAT", 6, "TTT"));
+        assert!(!is_duplication("ATGCAT", 6, "TTT").unwrap());
 
         // Not enough preceding sequence
-        assert!(!is_duplication("AT", 2, "ATGC"));
+        assert!(!is_duplication("AT", 2, "ATGC").unwrap());
+    }
+
+    /// An insertion point past the end of the reference is an unresolvable
+    /// coordinate and must decline with a typed error rather than panic on the
+    /// preceding-bases slice (#2128).
+    #[test]
+    fn is_duplication_past_the_reference_end_is_a_typed_error() {
+        // pos = reference.len() + 1, as the alignment reports for a trailing
+        // insertion.
+        match is_duplication("ATG", 4, "G") {
+            Err(FerroError::InvalidCoordinates { .. }) => {}
+            other => panic!("expected InvalidCoordinates, got {other:?}"),
+        }
+
+        // The boundary `pos == reference.len()` stays in bounds and resolves.
+        assert!(is_duplication("ATG", 3, "G").unwrap());
     }
 
     #[test]
