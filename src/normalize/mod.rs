@@ -3630,6 +3630,39 @@ impl<P: ReferenceProvider> Normalizer<P> {
         edit.inner().is_some()
     }
 
+    /// Whether a (non-allele) variant is on the genomic axis (`g.`/`m.`), used to
+    /// gate the sequence-first core rederive in [`Self::sequence_first_pass`] to
+    /// the axes this prototype scopes (issue #2155). A cis allele's axis is read
+    /// from its first member — `member_axis_endpoints` refuses a mixed-molecule
+    /// allele upstream, so the first member's molecule is the allele's.
+    fn is_genomic_axis_member(variant: &HgvsVariant) -> bool {
+        matches!(variant, HV::Genome(_) | HV::Mt(_))
+    }
+
+    /// Whether a genomic/mito member carries an uncertain/predicted (`(…)`)
+    /// wrapper — the sequence round-trip does not preserve it (#1063), so such a
+    /// member must not take the core-rederive path in [`Self::sequence_first_pass`].
+    fn member_is_uncertain(variant: &HgvsVariant) -> bool {
+        match variant {
+            HV::Genome(g) => g.loc_edit.edit.is_uncertain(),
+            HV::Mt(m) => m.loc_edit.edit.is_uncertain(),
+            _ => false,
+        }
+    }
+
+    /// Whether a genomic/mito member's edit is a pure insertion. A lone insertion
+    /// has no partition decision for the core to improve, and re-deriving it un-does
+    /// the contig-end insertion clamp (#1205/#1217/#1327), so it is left to
+    /// `normalize_genome` in [`Self::sequence_first_pass`].
+    fn member_is_pure_insertion(variant: &HgvsVariant) -> bool {
+        let edit = match variant {
+            HV::Genome(g) => g.loc_edit.edit.inner(),
+            HV::Mt(m) => m.loc_edit.edit.inner(),
+            _ => None,
+        };
+        matches!(edit, Some(NaEdit::Insertion { .. }))
+    }
+
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
     ///
     /// The per-member pipeline normalizes each cis-allele member in isolation,
@@ -3819,6 +3852,70 @@ impl<P: ReferenceProvider> Normalizer<P> {
         {
             return None;
         }
+        // PROTOTYPE (issue #2155): make the sequence-first CORE the primary
+        // canonicalizer on the genomic axis. `merge::canonicalize_from_sequence`
+        // (surface B) works on the member list and can leave a stranded `=`
+        // identity member and an input-relative spelling in place; the core
+        // (`derive_block_members`, surface A, reached here via the same
+        // `to_sequences -> from_sequences_detailed` round-trip `sequence_normalize`
+        // uses) trims common flanks by construction, so it emits no `=` member and
+        // its form is a pure function of the resulting sequence. The outer
+        // `canonicalize_from_sequence` loop hands this back to `normalize_core`,
+        // which re-applies the genomic post-passes the raw core does not perform —
+        // repeat `X[n]` rendering and the `ins<range>inv` inverted-duplication
+        // re-spell (`normalize_genome`, `rules::inverted_adjacent_copy_span`).
+        //
+        // Scoped to `g.`/`m.` on purpose: the transcript axes (`c.`/`n.`/`r.`)
+        // layer adjudicated frame/junction rules on the raw re-derivation and are
+        // out of this prototype's scope, so they keep surface B below.
+        //
+        // TODO(readjudicate #2155): the resulting genomic form (dropping the `=`
+        // member, the core's repeat anchor, the merge/split it derives) is what the
+        // operator re-adjudicates. Kept swappable behind this axis gate.
+        // Two shapes fall through to surface B below, because the core round-trip
+        // would either drop or undo a property the per-member pipeline owns:
+        //
+        //  - Uncertain/predicted members: `to_sequences` does not carry the `(…)`
+        //    wrapper through the sequence round-trip, so re-deriving strips it
+        //    (#1063). Surface B preserves it.
+        //  - A lone pure insertion: it has no partition decision for the core to
+        //    improve, and re-deriving a terminal insertion un-does the contig-end
+        //    `ins -> delins` clamp (#1205/#1217/#1327), re-anchoring a coordinate
+        //    past the sequence terminus — an in-bounds violation, not a form
+        //    preference. `normalize_genome`'s dup/inverted-dup/clamp passes already
+        //    own the lone-insertion case, so nothing is lost by leaving it to them.
+        let core_would_regress = members.iter().any(Self::member_is_uncertain)
+            || (members.len() == 1 && Self::member_is_pure_insertion(&members[0]));
+        if Self::is_genomic_axis_member(&members[0]) && !core_would_regress {
+            let options = crate::normalize::from_sequences::FromSequencesOptions {
+                direction: self.config.shuffle_direction,
+                ..Default::default()
+            };
+            // A core decline (a window the derivation refuses, a grid past the
+            // cost bound) is treated as "no re-derivation to offer" — the outer
+            // loop then keeps the per-member pipeline's output, exactly as a
+            // surface-B `None` does. `normalize = false` so this does not recurse
+            // back through `normalize_core_canonical`.
+            return match self.sequence_normalize(variant, &options, false) {
+                Ok(rederived) => {
+                    // The raw core does not apply surface B's terminal-insertion
+                    // clamp (`boundary_delins_anchor`), so near a contig end it
+                    // un-derives a clamped `g.Ndelins…` back into the minimal
+                    // `g.N_N+1ins…` that names a coordinate past the terminus.
+                    // Adopting that would oscillate with the per-member pipeline,
+                    // which re-clamps it, and land on the out-of-bounds spelling.
+                    // Rejecting it here keeps the pipeline's clamped, in-bounds
+                    // form (#1205/#1217/#1327).
+                    if merge::first_out_of_bounds_coordinate(&rederived, &self.provider).is_some() {
+                        None
+                    } else {
+                        Some(rederived)
+                    }
+                }
+                Err(_) => None,
+            };
+        }
+
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
