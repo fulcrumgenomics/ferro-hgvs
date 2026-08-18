@@ -2552,35 +2552,33 @@ const MIN_SEPARATION_NO_FRAME: u32 = 1;
 /// [`RAISED_PIECE_SEPARATION`], and [`split_buys_no_higher_priority_type`] —
 /// exist to **disbelieve** a separation that survives only because payload
 /// bases coincide with reference bases. That is `:44-47`'s construction and
-/// nothing else, and the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes it to
-/// `c.` **and nothing else**.
+/// nothing else. The operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` originally
+/// scoped this to `c.` and nothing else; it was **superseded to all DNA axes**
+/// (2026-08-17, #2155) — `c./g./m./n.` are all in reach, and `r.` remains out.
 ///
-/// Off that axis `general.md:34` / `DNA/delins.md:17` — "two variants separated
-/// by one or more nucleotides should be described individually and **not** as a
-/// 'delins'" — govern unopposed, so a split across one unchanged base may not
-/// be refused. Merging it anyway is what the *rejected* SVD-WG010 proposal
-/// would have required, which is why `spec_conformance_axis` counts it as a
-/// negative guard rather than as a representation choice.
+/// Off the DNA axes `general.md:34` / `RNA/delins.md:17` govern unopposed, so a
+/// split across one unchanged base may not be refused there. Merging it anyway
+/// is what the *rejected* SVD-WG010 proposal would have required, which is why
+/// `spec_conformance_axis` counts it as a negative guard rather than as a
+/// representation choice.
 ///
-/// **Not a reading-frame gate**, and the ruling says so in terms: a coding `r.`
-/// carries a reading frame and is still out of reach, because a `DNA/` clause
-/// has no jurisdiction over the RNA axis. [`AxisFrame::is_coding_dna`] is the
-/// predicate; `n.` is a DNA axis and is also out, on `:47`'s stated reason —
-/// preventing "incorrect predictions for the consequences on protein level" —
-/// having nothing to bite on where no protein is coded.
+/// **Not a reading-frame gate.** A coding `r.` carries a reading frame and is
+/// still out of reach, because a `DNA/` clause has no jurisdiction over the RNA
+/// axis regardless of how widely the DNA scope itself is drawn.
+/// [`AxisFrame::is_dna`] is the predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoincidenceCarveOut {
-    /// The coding DNA axis, `c.`: a coincidental separation may be disbelieved.
+    /// A DNA axis (`c./g./m./n.`): a coincidental separation may be disbelieved.
     InReach,
-    /// Every other axis: `general.md:34` governs and the split stands.
+    /// The RNA axis, `r.`: `general.md:34` governs and the split stands.
     OutOfReach,
 }
 
 impl CoincidenceCarveOut {
     /// Which side of the ruling above `kind` falls on.
     fn for_axis(kind: CisKind) -> Self {
-        if AxisFrame::is_coding_dna(kind) {
+        if AxisFrame::is_dna(kind) {
             Self::InReach
         } else {
             Self::OutOfReach
@@ -4843,37 +4841,52 @@ impl AxisFrame {
     /// Is `kind` the **coding DNA** axis, `c.`?
     ///
     /// The gate for a rule whose authority is stated *only* under `DNA/`.
-    /// `DNA/delins.md:47`'s payload-coincidence carve-out is the standing
-    /// example, and the operator ruling
-    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
-    /// scopes it to `c.` **and nothing else**. Getting that wrong is what this
-    /// pair of predicates exists to prevent.
-    ///
-    /// The other axes are excluded for two different reasons, and collapsing
-    /// them into one is how the scope gets restated too narrowly. `r.` is out
-    /// on **jurisdiction** — a `DNA/` clause cannot scope the RNA axis, and
-    /// `RNA/delins.md` states no `:47` counterpart that could carry the
-    /// carve-out there. `g.`/`m.`/`o.`/`n.` are DNA axes, so jurisdiction is no
-    /// objection at all; they are out because `:47`'s stated reason is
-    /// preventing "incorrect predictions for the consequences on protein
-    /// level", which has nothing to bite on where no protein is coded, and
-    /// `general.md:34` governs there instead. Note `n.` in particular *is* a
-    /// DNA axis — reading "DNA-only" as "everything except `r.`" would admit
-    /// it, which the ruling forbids.
+    /// `DNA/delins.md:47`'s payload-coincidence carve-out used to be scoped
+    /// here by the operator ruling
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    /// (2026-08-11); that ruling was **superseded to all DNA axes**
+    /// (2026-08-17, #2155), so the carve-out's own gates now use
+    /// [`Self::is_dna`] instead. This predicate is retained for the
+    /// codon-adjacent scoping questions it still answers correctly (nothing
+    /// in [`Self::carries_translated_frame`]'s reasoning changed) and for the
+    /// predicate-pin test that exercises it directly.
     ///
     /// Takes the [`CisKind`] rather than `&self`, unlike its sibling
     /// [`Self::carries_translated_frame`], and the asymmetry is the #1241
     /// point rather than an inconsistency: whether an axis *translates* is not
     /// answerable from the kind alone, whereas whether it is coding DNA is.
-    /// The one gate that asks this — [`payload_coalesce_applies`] — accordingly
-    /// runs where no [`AxisFrame`] has been resolved.
     ///
     /// Exhaustive on [`CisKind`] with no wildcard, so a new axis is a compile
     /// error here rather than a silent default.
+    ///
+    /// `#[allow(dead_code)]`: with all three gate sites now on
+    /// [`Self::is_dna`], this function's only remaining call site is the
+    /// `#[cfg(test)]` predicate-pin test (`a_coding_rna_axis_separates_the_two_scopes`
+    /// and its sibling), so a plain `--features dev` build (no `--tests`) sees
+    /// it as unused. Left in place rather than deleted, per this change's
+    /// scope.
+    #[allow(dead_code)]
     fn is_coding_dna(kind: CisKind) -> bool {
         match kind {
             CisKind::Cds => true,
             CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
+        }
+    }
+
+    /// Is `kind` a **DNA** axis — `c./g./m./n.` — i.e. anything but `r.`?
+    ///
+    /// The gate for the `DNA/delins.md:47` payload-coincidence carve-out after
+    /// the ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    /// was superseded (2026-08-17, #2155) from coding-DNA-only to all DNA
+    /// axes. `r.` is excluded on **jurisdiction**: a `DNA/` clause cannot scope
+    /// the RNA axis and `RNA/delins.md` states no `:47` counterpart. Exhaustive
+    /// match, so a new `CisKind` is a compile error to be decided rather than
+    /// defaulted. `o.` (`HgvsVariant::Circular`) has no `CisKind` and never
+    /// reaches these passes.
+    fn is_dna(kind: CisKind) -> bool {
+        match kind {
+            CisKind::Cds | CisKind::Genome | CisKind::Mt | CisKind::Tx => true,
+            CisKind::Rna => false,
         }
     }
 }
@@ -8425,10 +8438,11 @@ fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
 ///
 /// Two conditions. The pass is a [`PartitionRule::CanonicalCoalesced`] behaviour,
 /// and — per the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11) —
-/// `:47`'s carve-out reaches the **coding DNA axis only**.
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`, superseded
+/// (2026-08-17, #2155) to all DNA axes — `:47`'s carve-out reaches **every
+/// cis-reachable DNA axis** (`c./g./m./n.`) and not `r.`.
 ///
-/// # Why this keys on [`CisKind::Cds`] and not on `AxisFrame::reading_frame`
+/// # Why this keys on [`AxisFrame::is_dna`] and not on `AxisFrame::reading_frame`
 ///
 /// The two are not the same question, and the difference is a jurisdiction
 /// boundary rather than a detail. `reading_frame` is true for [`CisKind::Rna`]
@@ -8438,22 +8452,22 @@ fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
 /// counterpart that could carry the carve-out there. RNA is outside the ruling
 /// rather than decided against, so the arm must not merge on it.
 ///
-/// The axis half is [`AxisFrame::is_coding_dna`] rather than a `match` here, so
-/// the scope is written once; its `match` is exhaustive on purpose, for the
-/// reason [`PartitionRule::cuts_with_canonical`] gives: a new axis must be
-/// decided rather than defaulted.
+/// The axis half is [`AxisFrame::is_dna`] rather than a `match` here, so the
+/// scope is written once; its `match` is exhaustive on purpose, for the reason
+/// [`PartitionRule::cuts_with_canonical`] gives: a new axis must be decided
+/// rather than defaulted.
 ///
 /// A free function rather than an inline conjunction because `partition_rule()`
 /// caches its read in a `OnceLock`, so one test binary can never exercise two
 /// arms through the call site. This half is pure and therefore pinnable — see
 /// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`.
 fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
-    // The scope test is [`AxisFrame::is_coding_dna`], not a second copy of it.
-    // This gate and that predicate answer the same question, and while a new
+    // The scope test is [`AxisFrame::is_dna`], not a second copy of it. This
+    // gate and that predicate answer the same question, and while a new
     // `CisKind` is a compile error in either, two exhaustive matches can still
     // be given *different* arms — and would compile, so the drift would be
     // silent. One rule, written once.
-    rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_coding_dna(kind)
+    rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_dna(kind)
 }
 
 /// Whether [`coalesce_compensating_gap_split`] applies, given the arm and the
@@ -8479,24 +8493,26 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// inside the population `general.md:34` governs: "two variants separated by one
 /// or more nucleotides should be described individually and **not** as a
 /// 'delins'". The only clause that overrides it for this shape is
-/// `DNA/delins.md:47`, and the decided operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
-/// scopes `:47` to the coding DNA axis "and nothing else"; its sibling
-/// `delins-merge-vs-individual-gap-two-or-more` says the same thing from the
-/// other side — "rows on an axis with no reading frame … remain violations and
-/// are untouched by this ruling".
+/// `DNA/delins.md:47`.
 ///
-/// So the merge had no licence off `c.`, and six rows of the spec conformance
-/// corpus were counted by that corpus's own negative guard for the **rejected**
-/// SVD-WG010 proposal: two variants one unchanged base apart, on `g.` and `n.`,
-/// merged into one spanning `delins`. See #1711.
+/// At the time #1711 was filed, the decided operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
+/// scoped `:47` to the coding DNA axis "and nothing else", and six rows of the
+/// spec conformance corpus were counted by that corpus's own negative guard for
+/// the **rejected** SVD-WG010 proposal: two variants one unchanged base apart,
+/// on `g.` and `n.`, merged into one spanning `delins`. **That ruling has since
+/// been superseded to all DNA axes (2026-08-17, #2155)**, so `:47`'s carve-out
+/// now reaches `c./g./m./n.` uniformly and those six rows are no longer a
+/// violation of it — only `r.` remains outside the scope, on jurisdiction: a
+/// `DNA/` clause cannot scope the RNA axis, and `RNA/delins.md` states no `:47`
+/// counterpart.
 ///
 /// # It is the AXIS KIND, not `AxisFrame::reading_frame`
 ///
 /// The same trap [`payload_coalesce_applies`] documents, for the same reason:
 /// `reading_frame` is true for a coding `r.` too, and a `DNA/` clause has no
 /// jurisdiction over the RNA axis (`RNA/delins.md` states no `:47` counterpart).
-/// Keying on the frame flag would extend a DNA-only carve-out onto an axis the
+/// Keying on the frame flag would extend the DNA carve-out onto an axis the
 /// ruling deliberately does not reach.
 ///
 /// # What this does NOT claim
@@ -8567,7 +8583,7 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// the one a decided ruling names.
 fn compensating_gap_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
     // As above: one spelling of the axis scope, shared with the sibling gate.
-    rule.cuts_with_canonical() && AxisFrame::is_coding_dna(kind)
+    rule.cuts_with_canonical() && AxisFrame::is_dna(kind)
 }
 
 /// Re-spell a multi-member allele as the single `delins` the spec recommends,
