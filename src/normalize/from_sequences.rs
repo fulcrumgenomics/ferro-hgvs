@@ -314,6 +314,99 @@ pub fn from_sequences_detailed(
     })
 }
 
+/// The coding-axis (`c.`) analogue of [`from_sequences_detailed`] — the issue
+/// #2155 follow-up that teaches the sequence-first core the coding axis.
+///
+/// Re-derives a coding description from the transcript-sequence window through
+/// the same core, under the coding [`DerivationFrame`]. The caller
+/// ([`crate::Normalizer::sequence_normalize`]'s coding path) supplies:
+///
+/// - `w_lo`: the window's low coordinate on the **member axis** (c.-axis), i.e.
+///   `transcript_offset - (cds_start - 1)`, so the core's `same_codon` and the
+///   anchor renderer reason in the c. frame;
+/// - `reference`/`alternate`: the transcript-sequence window bases, which
+///   `to_sequences` produces (SPDI already refuses an intronic position, so this
+///   path never sees one);
+/// - `template`: the coding variant itself, for `build_merged`'s dispatch and the
+///   identity fallback.
+///
+/// A shape the core cannot represent on the coding axis — most importantly a UTR
+/// member, refused by `collect_canonical_edits`'s body-region check inside
+/// [`verify_round_trip`] — comes back as `Err`. The caller treats that as "fall
+/// through to the existing per-member path", not a failure: the coding core is
+/// primary only for the CDS-body shapes it can derive faithfully.
+pub(crate) fn from_coding_detailed(
+    accession: &str,
+    w_lo: i64,
+    reference: &str,
+    alternate: &str,
+    options: &FromSequencesOptions,
+    frame: DerivationFrame,
+    template: HgvsVariant,
+) -> Result<DerivedDescription, FerroError> {
+    let (reference, alternate) = (
+        reference.to_ascii_uppercase().into_bytes(),
+        alternate.to_ascii_uppercase().into_bytes(),
+    );
+    let (reference, alternate) = (reference.as_slice(), alternate.as_slice());
+
+    let block = derive_block_members(
+        reference,
+        alternate,
+        &template,
+        w_lo,
+        options.direction,
+        options.max_grid_cells,
+        frame,
+    )
+    .map_err(|decline| match decline {
+        BlockDecline::GridTooLarge { ref_len, alt_len } => {
+            grid_refusal(ref_len, alt_len, options.max_grid_cells)
+        }
+        BlockDecline::WouldNotRender => FerroError::ConversionError {
+            msg: format!(
+                "could not render the derived coding partition of {accession} as HGVS members"
+            ),
+        },
+    })?;
+
+    if block.anchors_before_window {
+        return Err(five_prime_anchor_refusal(accession, w_lo.max(0) as u64));
+    }
+
+    let mut members = block.members;
+    // A no-op on the coding axis today: `retype_inversions` handles `Genome`/`Mt`
+    // only, so an inverted coding block stays a `delins` here rather than being
+    // sharpened to `inv`. Coding inversion re-typing is deferred.
+    retype_inversions(&mut members, reference, w_lo);
+
+    let variant = match members.len() {
+        // An empty derivation is an identity. Unlike the genomic path — whose
+        // template is a `g.=` identity — the coding `template` here is the input
+        // allele's first *member* (a real edit), so returning it would spell an
+        // identity as a change. Refuse instead and let the caller fall through to
+        // surface B, which renders a coding identity correctly.
+        0 => {
+            return Err(FerroError::ConversionError {
+                msg: format!(
+                    "coding rederive of {accession} trimmed to an identity; \
+                     deferring to the per-member path"
+                ),
+            })
+        }
+        1 => members.into_iter().next().expect("length checked"),
+        _ => HgvsVariant::Allele(AlleleVariant::new(members, AllelePhase::Cis)),
+    };
+
+    verify_round_trip(&variant, w_lo, reference, alternate)?;
+
+    Ok(DerivedDescription {
+        variant,
+        bounded_at_start: block.bounded_at_start,
+        bounded_at_end: block.bounded_at_end,
+    })
+}
+
 /// The refusal for a pure insertion resting on the window's 5' edge.
 ///
 /// See [`crate::normalize::merge::DerivedBlock::anchors_before_window`] for why
