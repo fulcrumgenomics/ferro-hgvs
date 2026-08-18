@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**37 adjudication records — 34 decided, 3 open.**
+**38 adjudication records — 35 decided, 3 open.**
 
 ## What this document is
 
@@ -97,6 +97,7 @@ for the knob and its traps.
 - [`conflicting-member-geometry-refusal-scope`](#conflicting-member-geometry-refusal-scope)
 - [`confluence-gate-is-apply-equality-on-every-determined-axis`](#confluence-gate-is-apply-equality-on-every-determined-axis)
 - [`contiguous-insertion-split-by-a-blocked-derivation`](#contiguous-insertion-split-by-a-blocked-derivation)
+- [`cross-zone-c-positions-order-by-transcript-coordinate`](#cross-zone-c-positions-order-by-transcript-coordinate)
 - [`delins-adjacent-members-when-both-consume-reference`](#delins-adjacent-members-when-both-consume-reference)
 - [`delins-codon-carve-out-gap-one`](#delins-codon-carve-out-gap-one)
 - [`delins-merge-vs-individual-gap-two-or-more`](#delins-merge-vs-individual-gap-two-or-more)
@@ -833,6 +834,41 @@ FERRO DOES NOT DO THIS TODAY, AND THE DEFECT IS NON-CONFLUENCE RATHER THAN A BAD
 RECORDED BECAUSE IT WAS ADJUDICATED THE OTHER WAY ONCE. A sweep document dated 2026-08-08 derived `g.[4_5insC;4_5dup;15del]` as the correct answer from the observation that `4_5insC` and `4_5dup` are separation 1 rather than separation 0 — a `dup` of `4_5` inserts its copy at junction 5|6, so base 5 lies between them. The arithmetic is right; the inference is not, because it evaluates `:33` on the spelling. `open-issues.md:77-78` records that the committee agrees the underlying gap is a gap, which is why this is settled by scope and by the re-derivation ruling rather than by finding a clause that names the shape.
 
 REPRESENTATION EFFECT, SO THE COST IS ON THE RECORD. Closing this moves any stored allele whose members are a junction-adjacent `ins`+`dup` pair sitting beside a third member far enough away to block the derivation, from the multi-member spelling to a single insertion. It moves nothing today: this record changes no output, and the pins above hold the current strings.
+
+#### `cross-zone-c-positions-order-by-transcript-coordinate`
+
+**Status:** decided
+
+**The question.** The `c.` axis has three numbering zones — `c.-n` upstream of the ATG (5'UTR), plain `c.n` in the CDS, and `c.*n` downstream of the stop (3'UTR) — and a cis allele's members can sit in different ones. To sort members into merge order, detect overlap, and decide the separation `general.md:33` keys on, ferro needs to compare two positions that may be in different zones. `background/numbering.md` defines each zone (`:21`, `:29`, `:30`) and the flat transcript numbering (`:52`) but states no rule for comparing a position in one zone against a position in another, and never speaks about alleles or members at all. On what basis are two cross-zone `c.` positions ordered?
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 5 (silent limb) where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** THE ZONED `(Region, base)` SCALAR (the arithmetic this module was built on). Rejected: each position is tagged with its `Region` and a region-local integer — positive in the CDS and 3'UTR, negative in the 5'UTR — and the base counter RESETS to 1 at each zone. `c.72` and the adjacent `c.*1` are one nucleotide apart on the transcript yet far apart in scalar space, so a comparison keyed on `(Region, base)` is not monotone across the transcript: it orders positions by the `Region` enum's declaration index rather than by where the bases actually sit, and a span numbered on two zones has no single scalar at all. That non-monotonicity is a fact about the arithmetic, not about HGVS — `c.72_*1` is an ordinary real range (`c.15_*1del` deletes across a stop codon) — and keying member order, overlap and separation on it is what makes the same variant sort, overlap and separate differently depending only on which zone a member's spelling names. CITING THE SPEC FOR THE ORDER. Rejected: `background/numbering.md` defines the three zones and, at `:52`, the flat `n.` numbering `from the first to the last nucleotide of the reference sequence`, but it states no rule for comparing a position in one zone against one in another. It contains zero occurrences of `allele` and zero of `member`, and `refseq.md`'s two `allele` hits (`:264-265`) are the population-genetics sense, not cis-allele membership. So there is no clause to hold governing: the recommendations are silent on cross-zone comparison, which is `README.md` rule 5's silent limb, and an ordering rule would be an upstream feature request rather than a bug report. PRESERVING THE INPUT'S SPELLING OR PREVIOUSLY-SHIPPED ORDER. Rejected: `canonical-form-choice-when-both-legal` already decides that a canonical form is derived from the resulting sequence, not from the input's spelling or the previously-shipped string. Ordering members by anything the input happened to write in would reintroduce exactly the input-dependence that record removes. MAKING THE ORDER A COMPARISON THAT REFUSES ACROSS ZONES (`join_pos` returning `None` for a cross-zone pair). Rejected as a comparison rule, though it is retained where a single one-zone axis genuinely IS needed. A refusal is the right answer for a pass that must render one interval on one axis; it is the WRONG answer for a pass that only COMPARES members, where a refused comparison does not make the pass conservative — it makes the boundary-crossing member INVISIBLE as a sibling (`#1482`), which is how `c.[15_*1del;15_*1insCC]` came to normalize into an allele ferro's own parser rejects.
+
+**Also cited.**
+
+- `docs/background/numbering.md:21`
+  > numbering starts with `c.1` at the **`A`** of the `ATG` translation initiation (start) codon and ends with the last nucleotide of the translation termination (stop) codon
+- `docs/background/numbering.md:29`
+  > nucleotides upstream (5') of the `ATG`-translation initiation codon (start) are marked with a `-` (hyphen-minus) and numbered `c.-1`, `c.-2`, `c.-3`, etc., going further upstream
+- `docs/background/numbering.md:30`
+  > nucleotides downstream (3') of the translation termination codon (stop) are marked with a `*` (asterisk) and numbered `c.*1`, `c.*2`, `c.*3`, etc., going further downstream
+- `docs/background/numbering.md:52`
+  > nucleotide numbering is `n.1`, `n.2`, `n.3`, ..., etc., from the first to the last nucleotide of the reference sequence.
+
+**The ruling.**
+
+HOUSE CHOICE — DECIDED (rule 5, silent limb): two `c.` positions in different numbering zones are ordered by their TRANSCRIPT-SEQUENCE OFFSET, the unambiguous flat coordinate `numbering.md:52` numbers `n.1..n.length` along, and the `c.` spelling is a presentation of that offset. Never cite the spec for the order: the recommendations define the zones and are silent on comparing across them.
+
+THE MAP. Each zone is one affine shift onto the contiguous transcript sequence, and `region_sequence_delta` (`src/normalize/merge.rs`) computes it: `c.n` (CDS) -> `n + cds_start - 1`, `c.-n` (5'UTR) -> `cds_start - n`, `c.*n` (3'UTR) -> `cds_end + n`. Under that map `c.-1 < c.1 < c.72 < c.*1` because their transcript offsets are `cds_start-1 < cds_start < ... < cds_end+1` — the order the bases actually sit in — whereas the zoned `(Region, base)` scalar orders them by the `Region` enum's declaration index and puts `c.72` before `c.-1`. `region_span_delta` widens the same map to the two `n.` regions that lie OUTSIDE the served sequence (`n.-n` -> `1 - n`, `n.*n` -> `length + n`) for COMPARISON only, so a member no base can be read for is still ordered against its siblings rather than dropped.
+
+WHY IT IS A HOUSE CHOICE, NOT A CLAUSE RULING. `background/numbering.md` defines the zones (`:21`, `:29`, `:30`) and the flat `n.` numbering (`:52`) but states no cross-zone comparison, and neither it nor `refseq.md` speaks about cis alleles. No clause governs the order, so this is `README.md` rule 5's silent limb and must never be cited as conformance.
+
+RELATION TO SETTLED RECORDS. This is the ordering counterpart of `c-and-n-positions-are-flat-transcript-offsets`, which decides the coordinate SPACE a single known `c.`/`n.` number lives in (a flat transcript offset, not an exon walk); this record decides how two such offsets in different zones COMPARE. It is consistent with `canonical-form-choice-when-both-legal` (derive from the resulting sequence, not the input's spelling): a transcript-coordinate order does not depend on how a member was spelled.
+
+WHERE, AND SCOPE. The comparison-side passes already honour this policy through `region_span_delta`: cross-zone overlap and separation detection, and the drop of an identity member covered by a boundary-crossing sibling, all convert each endpoint onto the transcript offset before comparing (`#1482`, `#1508`). This record makes that policy explicit and pins it. It does NOT itself change the `canonical-coalesced` merge arm, whose seam handling (the CDS/3'UTR and 5'UTR/CDS boundaries) is the code work of #1856; any representation movement from wiring the policy into that arm is disclosed by the change that does it, not by this record. `join_pos`'s cross-zone REFUSAL is retained where a pass genuinely renders one interval on one single-zone axis — a refusal there means `this pass cannot express that span`, never `that span is malformed`.
+
+REPRESENTATION IMPACT: none by this record. It documents a policy the comparison passes already enforce; no normalized HGVS string moves on its account.
 
 #### `delins-adjacent-members-when-both-consume-reference`
 

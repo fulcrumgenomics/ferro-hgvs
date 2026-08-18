@@ -1415,6 +1415,21 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // The refusal code + its pin test shipped in #1747; this is the missing record.
     // Pinned by `src/convert/mapper.rs::cds_to_tx_refuses_an_unknown_position`.
     ("cds-unknown-position-is-refused-at-conversion", "decided"),
+    // On what basis are two `c.` positions in DIFFERENT numbering zones
+    // (`c.-n` 5'UTR / `c.n` CDS / `c.*n` 3'UTR) ordered, for member sort,
+    // overlap and separation? **House choice, decided under `README.md` rule 5's
+    // silent limb** — `background/numbering.md` defines each zone (`:21`/`:29`/`:30`)
+    // and the flat `n.` numbering (`:52`) but states no cross-zone comparison, and
+    // never speaks of alleles. Ferro orders by the TRANSCRIPT-SEQUENCE OFFSET
+    // (`region_sequence_delta`: `c.n`->`n+cds_start-1`, `c.-n`->`cds_start-n`,
+    // `c.*n`->`cds_end+n`), so `c.-1 < c.1 < c.72 < c.*1` — the order the bases sit
+    // in — not the zoned `(Region, base)` scalar whose base counter resets per zone.
+    // Never cite the spec for it. Pinned by the #1482/#1508 cross-zone comparison
+    // guards.
+    (
+        "cross-zone-c-positions-order-by-transcript-coordinate",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
