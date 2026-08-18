@@ -85,7 +85,7 @@ use crate::hgvs::interval::UncertainBoundary;
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{AllelePhase, AlleleVariant, HgvsVariant};
 use crate::normalize::merge::{
-    denoted_bases, derive_block_members, BlockDecline, MAX_SEQFIRST_GRID_CELLS,
+    denoted_bases, derive_block_members, BlockDecline, DerivationFrame, MAX_SEQFIRST_GRID_CELLS,
 };
 use crate::normalize::ShuffleDirection;
 
@@ -275,6 +275,10 @@ pub fn from_sequences_detailed(
         w_lo,
         options.direction,
         options.max_grid_cells,
+        // Genomic/mito surface: the frame is the core's original, unframed
+        // behaviour, so `from_sequences` on `g.`/`m.` is byte-identical. The
+        // coding frame is threaded only by the coding entry point.
+        DerivationFrame::genomic(),
     )
     .map_err(|decline| match decline {
         BlockDecline::GridTooLarge { ref_len, alt_len } => {
