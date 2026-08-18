@@ -56,6 +56,7 @@ mod issue_2075_apply_triples_reference_mismatch;
 mod issue_2092_explain_normalizer_codes;
 mod issue_2155_from_sequences_collapse;
 mod issue_2155_payload_coincidence_all_dna;
+mod issue_2161_substitution_fast_path;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;

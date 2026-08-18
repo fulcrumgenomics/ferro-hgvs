@@ -3631,6 +3631,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
         edit.inner().is_some()
     }
 
+    /// A lone single-base substitution on a nucleotide axis.
+    ///
+    /// Such a variant is a **fixed point of the sequence-first re-derivation**:
+    /// a substitution changes exactly one reference base, and the minimal,
+    /// unique re-derivation of a one-base difference is that same substitution —
+    /// there is no alternative spelling to prefer (`canonicalize_from_sequence`'s
+    /// whole job is choosing between competing spellings and shifting members,
+    /// and a single-base change offers neither a competitor nor room to shift).
+    /// So the pass, if run, applies the variant to the reference, re-derives it,
+    /// and hands back the same substitution — a no-op that
+    /// [`Self::sequence_first_pass`] short-circuits by treating as "already
+    /// canonical" (returning `None`). This is a pure performance guard (#2161):
+    /// the per-call apply + align + partition machinery is the whole regression
+    /// on substitution-heavy corpora, and it produces nothing here.
+    ///
+    /// Deliberately narrow: only `NaEdit::Substitution`, which HGVS defines as a
+    /// single base (`ref>alt`). Every other single-member edit — del, ins, dup,
+    /// inv, delins, repeat — can be respelled or shifted by the re-derivation and
+    /// must still run it.
+    fn is_lone_single_base_substitution(variant: &HgvsVariant) -> bool {
+        let edit = match variant {
+            HV::Genome(g) => &g.loc_edit.edit,
+            HV::Mt(m) => &m.loc_edit.edit,
+            HV::Cds(c) => &c.loc_edit.edit,
+            HV::Tx(t) => &t.loc_edit.edit,
+            HV::Rna(r) => &r.loc_edit.edit,
+            _ => return false,
+        };
+        matches!(edit.inner(), Some(NaEdit::Substitution { .. }))
+    }
+
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
     ///
     /// The per-member pipeline normalizes each cis-allele member in isolation,
@@ -3748,6 +3779,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// One sequence-first re-derivation. `None` when the variant is not a shape
     /// the pass serves (protein, trans alleles, fusions, and so on).
     fn sequence_first_pass(&self, variant: &HgvsVariant) -> Option<HgvsVariant> {
+        // Fast path (#2161): a lone single-base substitution is a fixed point of
+        // this pass, so skip the apply + align + partition machinery entirely.
+        // Returning `None` is exactly what a full run would produce here — the
+        // caller's loop reads `None` as "already canonical" and keeps the input —
+        // but without the per-call allocation that dominates substitution-heavy
+        // throughput. See [`Self::is_lone_single_base_substitution`] for why this
+        // is provably output-preserving rather than a heuristic.
+        if Self::is_lone_single_base_substitution(variant) {
+            return None;
+        }
         // Only shapes where a partition decision can exist. The allele arm takes
         // a non-uncertain `Cis` allele with two or more members; the
         // single-member arm takes whatever `is_splittable_single_member` admits
