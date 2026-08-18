@@ -2591,6 +2591,64 @@ impl CoincidenceCarveOut {
     }
 }
 
+/// How the sequence-first core ([`derive_block_members`]) should type and render
+/// a block for a given denoting axis.
+///
+/// The core is provider-free: it takes this as a **value** computed by the caller
+/// (which holds the provider), so the pure derivation stays pure. The default is
+/// the genomic axis, which is byte-for-byte the behaviour the core had before the
+/// frame existed — every genomic/mito caller passes [`DerivationFrame::genomic`]
+/// and nothing about `g.`/`m.` moves.
+///
+/// The coding (`c.`) frame is what issue #2155's follow-up ("teach `rederive` the
+/// c. axis") threads in: it runs the one-amino-acid codon exception
+/// (`general.md:35`) on the derived pieces and renders each piece on its own
+/// CDS/UTR region. `w_lo` handed to the core is the **axis** coordinate (c.-axis
+/// for `c.`), so `same_codon` and the anchor renderer see the coordinate the
+/// description is written in; the caller converts the transcript offset with
+/// `axis = transcript_offset - (cds_start - 1)`. The payload-coincidence merge
+/// (`delins.md:44-47`) is NOT the frame's job — `derive_block_members` runs it via
+/// the shared coalesce passes gated on the template axis
+/// (`payload_coalesce_applies` / `is_dna`), the same as
+/// `canonicalize_from_sequence`.
+#[derive(Clone, Copy)]
+pub(crate) struct DerivationFrame {
+    /// The region each rendered piece is anchored on (`Region::Genome` for
+    /// `g.`/`m.`, `Region::Cds` for the coding body). Passed straight to
+    /// [`rebuild_members`].
+    body: Region,
+    /// Whether this axis carries a reading frame, so the coding one-amino-acid
+    /// exception ([`apply_coding_codon_exception`]) has something to reason about.
+    /// False on every genomic axis.
+    reading_frame: bool,
+    /// The CDS end on the member axis (`cds_end - (cds_start - 1)`), for the
+    /// terminal-insertion clamp and the codon exception's within-CDS guard.
+    /// `None` wherever there is no CDS.
+    cds_end_axis: Option<i64>,
+}
+
+impl DerivationFrame {
+    /// The genomic/mitochondrial frame — the core's original, unframed behaviour.
+    /// Every `g.`/`m.` caller passes this, so their output is unchanged.
+    pub(crate) fn genomic() -> Self {
+        Self {
+            body: Region::Genome,
+            reading_frame: false,
+            cds_end_axis: None,
+        }
+    }
+
+    /// The coding-DNA (`c.`) frame. `cds_end_axis` is the CDS length on the
+    /// member axis; a reading frame is present by construction on `c.`.
+    pub(crate) fn coding(cds_end_axis: Option<i64>) -> Self {
+        Self {
+            body: Region::Cds,
+            reading_frame: true,
+            cds_end_axis,
+        }
+    }
+}
+
 /// One derived edit: a maximal run of change over the reference window, as
 /// 0-based half-open offsets into that window plus its replacement bases.
 ///
@@ -10488,6 +10546,7 @@ pub(crate) fn derive_block_members(
     w_lo: i64,
     direction: ShuffleDirection,
     max_grid_cells: usize,
+    frame: DerivationFrame,
 ) -> Result<DerivedBlock, BlockDecline> {
     let (lo, hi_ref, hi_alt) = trim_common_flanks(reference, observed);
     if lo == hi_ref && lo == hi_alt {
@@ -10577,6 +10636,19 @@ pub(crate) fn derive_block_members(
             coalesce_compensating_gap_split(&mut pieces, reference);
         }
     }
+    // Coding one-amino-acid exception (`general.md:35`), woven into the
+    // derivation on a reading-frame axis: merge the `[Sub; =; Sub]` triplet whose
+    // two substitutions share a codon (issue #2155 follow-up). A no-op on every
+    // genomic axis, where `frame.reading_frame` is false — this is the same pass
+    // surface B runs, applied to the pieces the core just cut. `w_lo` is the
+    // member axis coordinate, so `same_codon` reasons in the c. frame.
+    apply_coding_codon_exception(
+        &mut pieces,
+        frame.reading_frame,
+        w_lo,
+        reference,
+        frame.cds_end_axis,
+    );
 
     // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
     // interbase 0 from the one window where the anchor genuinely does not exist.
@@ -10696,7 +10768,7 @@ pub(crate) fn derive_block_members(
     let members = rebuild_members(
         &pieces,
         template,
-        Region::Genome,
+        frame.body,
         w_lo,
         reference,
         // The caller's window is a slice of somebody's reference and this path
@@ -10704,7 +10776,7 @@ pub(crate) fn derive_block_members(
         // terminal-insertion clamp rather than claiming an end that may not be
         // there; `placement_bounded_by_window` is what reports the uncertainty.
         SequenceEnds::INTERIOR,
-        None,
+        frame.cds_end_axis,
     )
     .ok_or(BlockDecline::WouldNotRender)?;
     Ok(DerivedBlock {
