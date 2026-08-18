@@ -479,6 +479,10 @@ name = "measure_spdi_key_grouping"
 required-features = ["dev"]
 test = true
 
+[[example]]
+name = "spike_rederive"
+required-features = ["dev"]
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"
