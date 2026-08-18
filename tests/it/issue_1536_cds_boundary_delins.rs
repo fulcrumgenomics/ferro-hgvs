@@ -704,34 +704,47 @@ fn one_and_two_base_payloads() -> Vec<String> {
     payloads
 }
 
-/// #1650, **closed**: the multi-member spelling of one variant converges with
-/// its `inv` spelling once the members straddle `cds_end`.
+/// The multi-member spelling of one variant does **not** yet converge with its
+/// `inv` spelling once the members straddle `cds_end` — deferred to #1816.
 ///
-/// This was the `merge::join_pos` / `collect_canonical_edits` refusal the module
-/// docs above disentangle from #1536 — a real capability gap, and a genuine
-/// second pair of fixed points, but a different symptom with a different cause.
-/// It was `#[ignore]`d and red by design against #1650 until
-/// `merge::ExtendedBody` folded `c.*N` onto `cds_len + N`, giving the window
-/// arithmetic one line of comparable integers to run on.
+/// # RED BY DESIGN AGAINST #1816 SINCE #1703 — the canonical form flipped, and
+/// the multi-member spelling cannot yet reach it across the boundary
 ///
-/// Measured on the 40-mer, `CDS 11..=26`, with the block at transcript 23..=30 —
-/// the placement whose CDS-interior twin *is* split into three members. Before
-/// and after, so the guard records what moved rather than only that it is green:
+/// #1650 (`merge::ExtendedBody`, folding `c.*N` onto `cds_len + N`) made this
+/// converge, on the **split** — `general.md:56` ranked the two substitution
+/// competitors above the inversion, so `c.13_*4inv` reduced to
+/// `c.[13_15delinsCTA;*2T>G;*4G>T]` and the multi-member spelling was already
+/// there.
 ///
-/// ```text
-/// CDS 11..=30  c.[13_15delinsCTA;18T>G;20G>T] -> itself
-///              c.13_20inv                     -> c.[13_15delinsCTA;18T>G;20G>T]   converged
-/// CDS 11..=26  before  c.[13_15delinsCTA;*2T>G;*4G>T] -> itself
-///                      c.13_*4inv                     -> c.13_*4inv               did NOT
-/// CDS 11..=26  after   both                           -> c.[13_15delinsCTA;*2T>G;*4G>T]
-/// ```
+/// `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+/// 2026-08-13, #1703) **overturns #1230's competitor-type ranking**: an exact
+/// whole-span reverse complement is typed `inv` uniformly, so the canonical form
+/// of this variant is now `c.13_*4inv`. Two spellings reach it —
+/// `c.13_*4inv` stays `inv`, and the single `c.13_*4delinsCTACGGAT` is typed
+/// `inv` by the per-member pipeline — and
+/// `the_boundary_class_converges_on_the_inv_from_a_single_block` pins that.
 ///
-/// The assertion is deliberately still **convergence**, not the string: which
-/// form a class converges on is derived, and
-/// `canonical-form-choice-when-both-legal` is what says it is derived rather than
-/// chosen. The string is pinned separately, next door, so a change that made both
-/// sides converge on the *wrong* form could not pass by satisfying this one.
+/// The MULTI-MEMBER spelling does not converge, and the cause is a pre-existing
+/// limitation the inversion ruling explicitly leaves untouched ("where a
+/// whole-span reverse complement's boundaries fall … untouched"). To merge the
+/// three members into one `inv`, `canonicalize_from_sequence` derives the whole
+/// block correctly — `coalesce_inversion_runs` produces the single
+/// `13_*4inv` piece — but `rebuild_members` → `render_on_its_own_region` then
+/// **refuses a straddling anchor**: `Anchor` carries one `Region` for both
+/// endpoints, and a member running from `c.<cds_len-1>` to `c.*2` has none. That
+/// refusal, and its fix (widen `Anchor` to a region per endpoint), are the
+/// deferred **#1816**. So the group falls back to the per-member pipeline, which
+/// normalizes each member in isolation and cannot merge them — leaving the split.
+///
+/// It is `#[ignore]`d, red by design against #1816, exactly like this module's
+/// other capability-gap guards (the #1536 and #1650 doc comments above). The
+/// CDS-interior twin — where no anchor straddles — DOES converge on the `inv`
+/// today and is pinned live by `the_multi_member_spelling_converges_inside_the_cds`,
+/// so the mechanism is proven and only the straddling-anchor rendering is owed.
 #[test]
+#[ignore = "#1816: rendering a merged whole-span inv member that straddles the \
+            CDS/3'UTR boundary needs a per-endpoint-region Anchor; until then the \
+            multi-member spelling cannot converge on the c.13_*4inv the ruling makes canonical"]
 fn a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
     let provider = transcript_provider(WIDE_CORE, 11, 26);
     let allele = "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]";
@@ -745,31 +758,36 @@ fn a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
     }
 }
 
-/// The form the class above converges **on**, measured rather than inferred, and
-/// with the third spelling #1650 names as the "lone-`delins` symptom" beside it.
+/// The form the single-block spellings converge **on**, measured rather than
+/// inferred.
 ///
-/// #1651 left `c.13_*4delinsCTACGGAT` converging with `c.13_*4inv` while *neither*
-/// was split into the three members its CDS-interior twin is split into. All
-/// three spellings now reach one point, and it is the split — which is what
-/// `general.md:56` predicts once the derivation is allowed to run, since two of
-/// the three competing members are substitutions and substitution outranks
-/// inversion. (`inversion-vs-two-delins-76-83` is the record for the *other*
-/// case: a whole-block reverse complement stays `inv` when the members it
-/// competes with are all `delins`, which `:56` does not rank. Here they are not.)
+/// # RE-PINNED BY #1703 — the canonical is the `inv`, not the split
+///
+/// This test used to assert all three spellings derive to the SPLIT
+/// `c.[13_15delinsCTA;*2T>G;*4G>T]`, on the reasoning that "two of the three
+/// competing members are substitutions and substitution outranks inversion
+/// (`general.md:56`)". That is the #1230 competitor-type ranking, and
+/// `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+/// 2026-08-13, #1703) **overturns it**: an exact whole-span reverse complement is
+/// typed `inv` uniformly, whatever the competing partition is made of. So the
+/// canonical form of this variant is `c.13_*4inv`, and this pins that the two
+/// SINGLE-BLOCK spellings reach it — `c.13_*4inv` stays `inv`, and the single
+/// `c.13_*4delinsCTACGGAT` is typed `inv` by the per-member pipeline.
+///
+/// The MULTI-MEMBER spelling `c.[13_15delinsCTA;*2T>G;*4G>T]` is deliberately not
+/// in this set: it cannot yet reach the `inv` across the CDS/3'UTR boundary — a
+/// straddling-`Anchor` limitation deferred to #1816 — and that gap is pinned,
+/// red-by-design, by `a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary`.
 #[test]
-fn the_boundary_class_converges_on_the_split_its_cds_twin_gets() {
+fn the_boundary_class_converges_on_the_inv_from_a_single_block() {
     let provider = transcript_provider(WIDE_CORE, 11, 26);
-    let expected = "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]";
-    for spelling in [
-        "NM_TEST.1:c.[13_15delinsCTA;*2T>G;*4G>T]",
-        "NM_TEST.1:c.13_*4inv",
-        "NM_TEST.1:c.13_*4delinsCTACGGAT",
-    ] {
+    let expected = "NM_TEST.1:c.13_*4inv";
+    for spelling in ["NM_TEST.1:c.13_*4inv", "NM_TEST.1:c.13_*4delinsCTACGGAT"] {
         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
             assert_eq!(
                 normalize(&provider, spelling, direction),
                 expected,
-                "{spelling} must derive to the split form"
+                "{spelling} is an exact whole-span reverse complement and must type as one `inv`"
             );
         }
     }
@@ -842,11 +860,16 @@ fn the_same_pair_one_codon_earlier_still_merges() {
     );
 }
 
-/// The control for the guard above, so its `#[ignore]` cannot quietly become
-/// vacuous: the identical design converges when the members sit inside the CDS.
+/// The live control for the `#[ignore]`d
+/// `a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary`, so
+/// that guard's ignore cannot quietly become vacuous: the identical design
+/// converges when the members sit **inside** the CDS, where no anchor straddles
+/// the CDS/3'UTR boundary. Post-#1703 both spellings converge on the `inv`
+/// (`c.13_20inv`), which is what proves the merge mechanism works and isolates the
+/// boundary guard's failure to the straddling-`Anchor` limitation (#1816) alone.
 ///
-/// If this ever goes red, the multi-member guard is no longer measuring the
-/// boundary and its record needs rewriting rather than un-ignoring.
+/// If this ever goes red, the merge itself has regressed and the boundary guard's
+/// record needs rewriting rather than un-ignoring.
 #[test]
 fn the_multi_member_spelling_converges_inside_the_cds() {
     let provider = transcript_provider(WIDE_CORE, 11, 30);

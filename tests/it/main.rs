@@ -322,6 +322,7 @@ mod issue_1631_repeat_label_repair;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_1691_homopolymer_convergence;
+mod issue_1703_whole_span_inv;
 mod issue_1716_codon_frame_merged_span;
 mod issue_180_allele_3prime_shift;
 mod issue_182_postcanon_adjacency;

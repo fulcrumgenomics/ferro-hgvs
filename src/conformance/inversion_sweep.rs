@@ -193,20 +193,22 @@ pub enum SweepOutcome {
     /// partitioner, so every row stayed a lone edit and the invariant was
     /// written as "never split into members". #1484 widened that gate to
     /// `c.`/`n.`/`r.`, and 155 of these 2,075 rows repartitioned; #1706's
-    /// post-hoc run scan then absorbed 62 of them, leaving **93** — the count
-    /// pinned as `CENSUS_REPARTITIONED` in `tests/it/inversion_sweep.rs`, which
-    /// is where to read it rather than from this prose. That split was once
-    /// read as the *decided* direction for the substitution case, on
+    /// post-hoc run scan then absorbed 62 of them, leaving **93** (92 on the
+    /// default arm after #1835). That split was once read as the *decided*
+    /// direction for the substitution case, on
     /// `rulings[inversion-vs-two-delins-76-83]`'s note that "#1230's
-    /// substitution case is untouched and still splits". **That reading is
-    /// superseded**: `rulings[whole-span-reverse-complement-types-as-inv]`
-    /// (2026-08-13) types a whole-span reverse complement `inv` uniformly, so
-    /// all 93 — every one of them the all-substitutions case after #1706 — are
-    /// decided *against* and are expected to stop repartitioning once
-    /// #1703/#1541/#1575 implement it.
+    /// substitution case is untouched and still splits". **That reading was
+    /// superseded and is now implemented**:
+    /// `rulings[whole-span-reverse-complement-types-as-inv]` (2026-08-13) types a
+    /// whole-span reverse complement `inv` uniformly, and #1703's
+    /// `whole_span_reverse_complement` pass makes it so — all 93 (every one the
+    /// all-substitutions case after #1706) are now one `inv`, so
+    /// `CENSUS_REPARTITIONED` in `tests/it/inversion_sweep.rs` is **0**. This
+    /// variant is therefore no longer produced by any authored inversion in the
+    /// sweep; read the count off that constant rather than from this prose.
     ///
-    /// So a split is no longer evidence of a defect by itself, and the weight
-    /// moves onto the two checks that *are* still falsifiable: no member may
+    /// The variant is retained so a *regression* — a whole-span inversion sliding
+    /// back into members — is still expressible and still checked: no member may
     /// change the sequence's length (below), and the members must jointly
     /// reproduce the inverted span
     /// ([`apply_member_edits`], asserted per row in the gate).

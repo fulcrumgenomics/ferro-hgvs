@@ -6792,6 +6792,21 @@ fn coalesce_inversion_runs(
     if pieces.len() != before || pieces.is_empty() {
         return;
     }
+    // The **exact** whole-span reverse complement, asked of the block and typed
+    // UNGATED. `rulings[whole-span-reverse-complement-types-as-inv]` (2026-08-13)
+    // types such a span as one `inv` uniformly, regardless of the competing
+    // partition — overturning #1230's competitor-type distinction — so it must run
+    // ahead of and outside `inversion_gate_admits` below, which reads that
+    // competing description. Route 0 above reaches the same shape only when the
+    // pieces' hull happens to survive `shift_pieces` AND the competitor passes its
+    // internal gate; this catches the all-substitutions class both of those miss
+    // (#1541's `TCGT`/`ACGA`, #1230's two-lone-substitution spans). The gated
+    // FLANKED shape stays below: it invents members and is not a whole-span reverse
+    // complement, so the ruling does not reach it. See `whole_span_reverse_complement`.
+    if let Some(members) = whole_span_reverse_complement(ref_block, result_block, block_lo) {
+        *pieces = members;
+        return;
+    }
     // Routes A and B — the BLOCK, asked directly.
     //
     // Deliberately not asked through the pieces. Whether a block is an inversion
@@ -6963,6 +6978,55 @@ fn inversion_gate_admits(pieces: &[Piece]) -> bool {
             || not_every_piece_is_a_lone_substitution(pieces))
 }
 
+/// The `inv` an **exact** whole-span reverse complement spells, typed WITHOUT
+/// consulting the competing partition.
+///
+/// A span whose whole content is replaced by its exact reverse complement is one
+/// `inv`, uniformly — regardless of how much of the interior coincides with the
+/// reference, and regardless of whether the competing partition is substitutions,
+/// a `delins`, or anything else. So this is the half of [`block_inversion`] that
+/// runs **ungated** in [`coalesce_inversion_runs`], ahead of and outside
+/// [`inversion_gate_admits`]: that gate reads the shape of the competing
+/// description, and this ruling makes it irrelevant to the exact whole-span case.
+///
+/// Governed by `rulings[whole-span-reverse-complement-types-as-inv]`
+/// (`DNA/inversion.md:5`, 2026-08-13), which types the span, not the competitor,
+/// and overturns #1230's competitor-type distinction. `inversion.md:5` states the
+/// property — "**more than one nucleotide** replacing the original sequence is the
+/// reverse complement of the original sequence" — over the whole span, with no
+/// term for interior columns.
+///
+/// Read off the block (`ref_block`/`result_block`), never the pieces: by the time
+/// this runs [`shift_pieces`] has moved every pure indel 3', so the pieces' hull is
+/// routinely a base off the block they were cut from, and `revcomp` does not
+/// survive that (`revcomp(x)[k..]` is `revcomp(x[..len - k])`). That is why
+/// [`coalesce_whole_block_inversion`] (route 0), which reads the hull *and* gates on
+/// the competitor, declines exactly this class — #1541's `TCGT`/`ACGA` and #1230's
+/// two-lone-substitution spans, whose changed columns do not dominate the span.
+///
+/// Returns `None` unless `span >= 2` (a one-nucleotide inversion is a substitution,
+/// `inversion.md:16`) and the whole `result_block` equals `revcomp(ref_block)`. The
+/// resulting piece denotes `result_block` verbatim, so it is sequence-preserving by
+/// construction.
+fn whole_span_reverse_complement(
+    ref_block: &[u8],
+    result_block: &[u8],
+    block_lo: usize,
+) -> Option<Vec<Piece>> {
+    let span = ref_block.len();
+    if span < 2 || result_block.len() != span {
+        return None;
+    }
+    let rc = reverse_complement_bytes(ref_block)?;
+    (result_block == rc.as_slice()).then(|| {
+        vec![Piece {
+            ref_start: block_lo,
+            ref_end: block_lo + span,
+            alt: result_block.to_vec(),
+        }]
+    })
+}
+
 /// The inversion a whole changed block spells, as the pieces that describe it.
 ///
 /// `reference` starts at `block_lo` inside the caller's window and must be at
@@ -7003,21 +7067,18 @@ fn block_inversion(
     block_lo: usize,
     pieces: usize,
 ) -> Option<Vec<Piece>> {
+    // The **exact** shape, shared with the ungated call in
+    // [`coalesce_inversion_runs`]: one definition of "the whole span is a reverse
+    // complement", so the gated and ungated routes cannot answer it differently.
+    if let Some(exact) = whole_span_reverse_complement(ref_block, result_block, block_lo) {
+        return Some(exact);
+    }
     let payload = result_block.len();
     let span = ref_block.len();
     if span < 2 {
         return None;
     }
     let rc = reverse_complement_bytes(ref_block)?;
-    if payload == span {
-        return (result_block == rc.as_slice()).then(|| {
-            vec![Piece {
-                ref_start: block_lo,
-                ref_end: block_lo + span,
-                alt: result_block.to_vec(),
-            }]
-        });
-    }
     if payload < 2 || payload > span || payload.checked_mul(2)? <= span {
         return None;
     }
@@ -17741,17 +17802,24 @@ mod tests {
             );
         }
 
-        /// The new route does not admit the pairs the earlier routes were
-        /// calibrated to refuse.
+        /// The density gate route refuses low-density pairs — which is now what
+        /// keeps it out of the FLANKED shape only.
         ///
-        /// Both are length-preserving, where counting payload columns is
-        /// identical to counting reference width — so widening the *measure*
-        /// cannot widen the *verdict* for them. Asserted rather than argued,
-        /// because `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`
-        /// and #1230's guard are integration tests, and a predicate is cheaper
-        /// to bisect than a pipeline.
+        /// These pairs used to "stay split" outright. Since
+        /// `rulings[whole-span-reverse-complement-types-as-inv]` (#1703),
+        /// [`whole_span_reverse_complement`] types the exact whole-span reverse
+        /// complement `inv` ahead of and outside this gate, so `AAGCTA -> TAGCTT`
+        /// and #1230's `GATG -> CATC` are now one `inv` at the pipeline level.
+        /// What this predicate-level test still pins is that the *gate route*
+        /// itself — [`payload_columns_dominate_the_span`], which governs the
+        /// member-inventing flanked shape — is unchanged by that: it still refuses
+        /// a low-density separated pair in isolation, so widening the *measure*
+        /// cannot widen the *verdict* for the flanked shape. Asserted rather than
+        /// argued, because the pipeline behaviour is pinned by the integration
+        /// tests (`issue_1703_whole_span_inv`, #1230's guard) and a predicate is
+        /// cheaper to bisect than a pipeline.
         #[test]
-        fn payload_columns_still_refuse_the_pairs_that_must_stay_split() {
+        fn the_density_gate_still_refuses_low_density_pairs() {
             // `AAGCTA -> TAGCTT`: a whole reverse complement whose first and
             // last bases change, four unchanged bases between them.
             let separated = vec![
@@ -17768,8 +17836,10 @@ mod tests {
             ];
             assert!(!payload_columns_dominate_the_span(&separated));
 
-            // #1230's `GATG -> CATC`: two substitutions two bases apart, which
-            // `general.md:56` ranks above the spanning inversion.
+            // #1230's `GATG -> CATC`: two substitutions two bases apart. The gate
+            // route refuses it (low density); the ungated whole-span check now
+            // types it `inv` regardless — `general.md:56`'s ranking is declined
+            // per `rulings[whole-span-reverse-complement-types-as-inv]`.
             let two_subs = vec![
                 Piece {
                     ref_start: 0,
@@ -20206,52 +20276,71 @@ mod tests {
             }
         }
 
-        /// The #1040 negative control, and the single most important row here.
+        /// The #1040 shape, and the single most important row here: an exact
+        /// whole-span reverse complement whose competitor is two lone
+        /// substitutions.
         ///
         /// `AAGCTA -> TAGCTT` **is** an exact whole-span reverse complement —
-        /// its interior `AGCT` is self-reverse-complementary — and it must stay
-        /// two substitutions, because `general.md:56` ranks substitution above
-        /// inversion and every competing member here is a one-base
-        /// substitution. Asserted at the block level (where routes A/B live)
-        /// and at the window level, because the two read the gate separately.
+        /// its interior `AGCT` is self-reverse-complementary. #1230 held such a
+        /// span stays two substitutions, because `general.md:56` ranks
+        /// substitution above inversion. **That is overturned.**
+        /// `rulings[whole-span-reverse-complement-types-as-inv]`
+        /// (`DNA/inversion.md:5`, 2026-08-13) types a whole-span reverse
+        /// complement as one `inv` uniformly, regardless of how much of the
+        /// interior coincides and regardless of the competing partition's type —
+        /// the load-bearing ground being that both sides of #1230 argued over
+        /// `general.md:56`, which `adjudication-precedence-order`'s decided E1
+        /// holds "cannot settle a merge-versus-split question at all". So the
+        /// ungated [`whole_span_reverse_complement`] coalesces this to one `inv`
+        /// ahead of and outside `inversion_gate_admits`, which still refuses the
+        /// lone-substitution competitor — keeping the GATE route out of the
+        /// FLANKED shape alone.
         #[test]
-        fn the_two_substitution_control_is_refused_at_every_arity() {
+        fn a_whole_span_revcomp_of_two_substitutions_types_as_inv() {
             let reference = b"AAGCTA";
             let result = b"TAGCTT";
-            assert_eq!(rc(reference), result.to_vec(), "the control IS a revcomp");
+            assert_eq!(rc(reference), result.to_vec(), "the fixture IS a revcomp");
             let pieces = vec![piece(0, 1, b"T"), piece(5, 6, b"T")];
             assert!(
                 !inversion_gate_admits(&pieces),
-                "two lone substitutions are exactly what `general.md:56` ranks \
-                 above an inversion"
+                "the gate route still refuses two lone substitutions; the ungated \
+                 whole-span check is what now types them `inv`"
             );
             let mut scanned = pieces.clone();
             coalesce_inversion_runs(&mut scanned, reference, 0, reference, result);
-            assert_eq!(scanned, pieces, "the control must survive the scan intact");
+            assert_eq!(
+                scanned,
+                vec![piece(0, 6, result)],
+                "an exact whole-span reverse complement is one `inv`, per \
+                 `rulings[whole-span-reverse-complement-types-as-inv]`"
+            );
         }
 
-        /// #1230's `GATG -> CATC`, the other pinned two-substitution split.
+        /// #1230's `GATG -> CATC`, the substitution split #1230 pinned. Now one
+        /// `inv`, per `rulings[whole-span-reverse-complement-types-as-inv]`,
+        /// which overturns #1230.
         #[test]
-        fn the_1230_substitution_pair_is_refused() {
+        fn the_1230_substitution_pair_types_as_inv() {
             let reference = b"GATG";
             let result = b"CATC";
             assert_eq!(rc(reference), result.to_vec());
             let pieces = vec![piece(0, 1, b"C"), piece(3, 4, b"C")];
             let mut scanned = pieces.clone();
             coalesce_inversion_runs(&mut scanned, reference, 0, reference, result);
-            assert_eq!(scanned, pieces);
+            assert_eq!(scanned, vec![piece(0, 4, result)]);
         }
 
-        /// A three-substitution competitor is refused for the same reason a
-        /// two-substitution one is, which is worth pinning because the widened
-        /// gate is stated on "every piece", not "two pieces".
+        /// A three-substitution competitor types as one `inv` for the same
+        /// reason a two-substitution one does, which is worth pinning because
+        /// the ungated whole-span check keys on the span, not on a piece count.
         #[test]
-        fn an_all_substitution_competitor_is_refused_at_arity_three() {
+        fn an_all_substitution_competitor_types_as_inv_at_arity_three() {
             // Changed columns of a reverse complement come in MIRROR PAIRS, plus
             // the centre column of an odd span, so three separated substitutions
             // need a 9-mer whose changes fall at 0, 4 and 8. Every separation is
-            // 3, which is what keeps the pre-existing separation route from
-            // admitting this on adjacency alone.
+            // 3, which kept the pre-existing separation route from admitting this
+            // on adjacency alone — the ungated whole-span check reaches it
+            // regardless, per `rulings[whole-span-reverse-complement-types-as-inv]`.
             let reference = b"AGTCAGACA";
             let result = rc(reference);
             let pieces: Vec<Piece> = (0..9)
@@ -20266,8 +20355,9 @@ mod tests {
             let mut scanned = pieces.clone();
             coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
             assert_eq!(
-                scanned, pieces,
-                "an all-substitution competitor is refused whatever its arity"
+                scanned,
+                vec![piece(0, 9, &result)],
+                "an all-substitution competitor types `inv` whatever its arity"
             );
         }
 

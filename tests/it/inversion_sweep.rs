@@ -29,7 +29,7 @@
 //!    only if the shift is wrong — so the other layers can stay green while a
 //!    string a downstream consumer stores has moved, which is exactly the
 //!    representation change this project requires to be declared.
-//! 2. [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] — the
+//! 2. [`every_within_exon_output_reproduces_the_authored_inversion_bases`] — the
 //!    sequence oracle, and the layer that carries the weight. It applies the
 //!    output's own members to the committed bases and compares against the
 //!    authored span replaced by its reverse complement, so an output that
@@ -44,53 +44,42 @@
 //!    constants, so a bulk re-bless that shifts the **distribution** is visible
 //!    in a diff and has to be argued for.
 //!
-//! # A split is a legal outcome here, and it did not used to be
+//! # A split was once a legal outcome here; #1703 removed it
 //!
 //! This corpus was authored against a tree where the `c.` axis did not run the
 //! sequence-derived partitioner, and its invariant read "an authored `inv` is
 //! never split into allele members". **#1484 widened that gate to
-//! `c.`/`n.`/`r.`**, and 155 of these 2,075 rows repartitioned — the generator
-//! refused to pin them on the first run after the rebase, which is how this was
-//! found rather than absorbed. **#1706's post-hoc run scan then put 62 of those
-//! back together, leaving [`CENSUS_REPARTITIONED`] = 93**, and **#1835's flip of
-//! the default partition rule to `canonical-coalesced` took one more, leaving
-//! 92**; read the count off that constant rather than from this prose, which has
-//! been stale against it twice already.
+//! `c.`/`n.`/`r.`**, and 155 of these 2,075 rows repartitioned. **#1706's
+//! post-hoc run scan put 62 of those back together, leaving 93**, and **#1835's
+//! flip of the default partition rule to `canonical-coalesced` took one more,
+//! leaving 92**.
 //!
-//! **That direction has since been decided the other way, and against every one
-//! of them.** This paragraph used to read that the split was decided "at
-//! least in part", on `rulings[inversion-vs-two-delins-76-83]`'s note that
-//! "#1230's substitution case is untouched and still splits" since
-//! `general.md:56` ranks substitution. The `decided` record
-//! `rulings[whole-span-reverse-complement-types-as-inv]` (2026-08-13) supersedes
-//! that: a whole-span reverse complement is typed `inv` uniformly, keyed on the
-//! span rather than on the type of the competing partition, and `general.md:56`
-//! is declined on `rulings[adjudication-precedence-order]`'s E1. So the shape
-//! invariant below — no retype, no member on another accession, no member that
-//! changes the sequence's length — is still the right invariant, but the rows
-//! it tolerates are now a **decided-against** census bucket rather than a
-//! partly-endorsed one.
+//! **That direction was then decided the other way, against every one of them,
+//! and #1703 implemented it — so [`CENSUS_REPARTITIONED`] is now 0.** The
+//! `decided` record `rulings[whole-span-reverse-complement-types-as-inv]`
+//! (2026-08-13) types a whole-span reverse complement `inv` uniformly, keyed on
+//! the span rather than on the type of the competing partition, superseding
+//! `rulings[inversion-vs-two-delins-76-83]`'s note that "#1230's substitution
+//! case is untouched and still splits" (`general.md:56` is declined on
+//! `rulings[adjudication-precedence-order]`'s E1). `whole_span_reverse_complement`
+//! in `merge.rs` types the exact whole-span shape before the competitor gate, so
+//! no authored inversion in this corpus is repartitioned any more.
 //!
-//! **The sub-shapes no longer differ in status, and that is the change — but
-//! the population is not the one #1575 costed, in either direction.** At 155 it
-//! split 87 substitutions-only, 43 an `inv` core with flanking substitutions,
-//! and 25 members including a `delins`. #1706 absorbed all 43 of the `inv`-core
-//! rows and 19 of the 25, so **all 93 that then remained on `live` are the
-//! all-substitutions case** — the population `general.md:56` was read as
-//! deciding, and the one this ruling overturns. (#1835's flip of the default
-//! partition rule has since taken one more, so the default arm leaves 92; the
-//! shape of the population is unchanged.) Six of them still *render* a `delins`
-//! member
-//! (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`); that is the coding
-//! codon carve-out merging two isolated substitutions after the fact, not a
-//! `delins` in the partition, and [`CENSUS_REPARTITIONED`] says so at length.
-//! So the ruling reaches a **narrower** row set than the 155 the record was
-//! costed on and a **wider** one than #1575's 25 — quote
-//! [`CENSUS_REPARTITIONED`], and quote the commit it was measured on. All of
-//! them stay pinned here as characterization —
-//! every one denotes the right bases (layer 2 checks each), so this remains a
-//! question about which legal spelling ships rather than about correctness, and
-//! the pins move with the implementing change, not with this comment.
+//! **The population that moved was the all-substitutions case, and it is not the
+//! one #1575 costed, in either direction.** At 155 the split was 87
+//! substitutions-only, 43 an `inv` core with flanking substitutions, and 25
+//! members including a `delins`. #1706 absorbed all 43 of the `inv`-core rows and
+//! 19 of the 25, so **all 93 that then remained on `live` (92 on the default arm)
+//! were the all-substitutions case** — the population `general.md:56` was read as
+//! deciding, and the one this ruling overturns. Six of them used to *render* a
+//! `delins` member (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`): the
+//! coding codon carve-out merging two isolated substitutions after the partition,
+//! not a `delins` in the partition itself — those are now one `inv` too. So the
+//! ruling reached a **narrower** row set than the 155 the record was costed on
+//! and a **wider** one than #1575's 25; the 92 moved to [`CENSUS_UNCHANGED`] (75)
+//! and [`CENSUS_SHIFTED_STILL_INV`] (17). Every one still denotes the right bases
+//! (layer 2 checks each), so this was a question about which legal spelling ships
+//! rather than about correctness.
 //!
 //! # Which rows are adjudications, and which are characterization
 //!
@@ -199,15 +188,25 @@ const REGENERATE: &str = "cargo run --features dev --example extract_inversion_s
 /// **1,491 once `canonical-coalesced` became the default arm.** Exactly one
 /// further row — `NM_004006.2:c.759_766inv` — joins them, moving out of
 /// [`CENSUS_REPARTITIONED`]; see that constant for why the flip reaches it and
-/// `live` does not. It is the *only* row of the 2,075 this change moves.
-const CENSUS_UNCHANGED: usize = 1_491;
+/// `live` does not.
+///
+/// **1,566 after #1703.** Implementing
+/// `rulings[whole-span-reverse-complement-types-as-inv]` types every whole-span
+/// reverse complement as one `inv`, so the 92 rows [`CENSUS_REPARTITIONED`]
+/// counted stop being repartitioned; 75 of them return character-for-character
+/// as authored and land here (the other 17 in [`CENSUS_SHIFTED_STILL_INV`]).
+const CENSUS_UNCHANGED: usize = 1_566;
 /// Rows that stayed a lone `inv` at a different span — narrowed to the minimal
 /// block whose replacement is still the reverse complement, or 3'-shifted.
 ///
 /// **460 before the run scan and 466 after it** (#1575): the other 6 of the 62
 /// recovered rows come back as one `inv` at a narrowed span rather than at the
 /// authored one.
-const CENSUS_SHIFTED_STILL_INV: usize = 466;
+///
+/// **483 after #1703.** The 17 of [`CENSUS_REPARTITIONED`]'s 92 rows whose `inv`
+/// falls at a narrowed or shifted span join here when the uniform whole-span
+/// typing lands (the other 75 in [`CENSUS_UNCHANGED`]).
+const CENSUS_SHIFTED_STILL_INV: usize = 483;
 /// Rows that became a no-op `=`: the authored span is its own reverse
 /// complement, so inverting it changes nothing.
 const CENSUS_PALINDROMIC_NO_OP: usize = 26;
@@ -231,7 +230,7 @@ const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// Re-deriving it needs piece-level instrumentation this corpus does not carry;
 /// `dump_partitions` reads a corpus path, not one description. What DOES hold
 /// unconditionally on both arms is the sequence oracle
-/// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] and the
+/// [`every_within_exon_output_reproduces_the_authored_inversion_bases`] and the
 /// shape invariant [`no_authored_inversion_leaves_the_inversion_family`], both
 /// of which pass — so no row here has been retyped or moved off its bases.
 ///
@@ -250,22 +249,24 @@ const CENSUS_PALINDROMIC_NO_OP: usize = 26;
 /// supersedes that: a whole-span reverse complement is typed `inv` uniformly,
 /// keyed on the span rather than on what the competing partition looks like,
 /// and `:56` is declined on `rulings[adjudication-precedence-order]`'s E1. So
-/// every row this constant counts is decided *against* — the 92 the default
-/// arm leaves as much as the 93 `live` leaves — and this number is expected to
-/// fall to 0 once #1703/#1541/#1575 implement the ruling; **re-bless it with
-/// the implementing change** rather than treating a move as drift.
+/// every row this constant used to count is decided *against* — the 92 the
+/// default arm left as much as the 93 `live` left.
 ///
-/// Six of them nevertheless *render* with a `delins` member
-/// (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`), and reading that as a
-/// counter-example is the trap: the `delins` is the coding codon carve-out
+/// **Now 0, implemented by #1703.** `whole_span_reverse_complement` in `merge.rs`
+/// types every whole-span reverse complement as one `inv` before the competitor
+/// gate is consulted, so no authored inversion in this corpus is repartitioned
+/// any more: the 92 move to [`CENSUS_UNCHANGED`] (75) and
+/// [`CENSUS_SHIFTED_STILL_INV`] (17). Re-blessed here with the implementing
+/// change, per the instruction this doc used to carry; a move back above 0 is a
+/// regression against the ruling, not drift to re-bless.
+///
+/// Before #1703, six of the 92 nevertheless *rendered* with a `delins` member
+/// (`c.367_374inv -> c.[367_369delinsTTC;372G>T;374A>C]`); reading that as a
+/// counter-example was the trap — the `delins` was the coding codon carve-out
 /// (`general.md:35`, `DNA/delins.md:18`) merging two isolated substitutions one
-/// base apart, applied *after* this pass. The partition the gate reads holds no
-/// `delins` at all. Count these by the pieces, never by the rendered members.
-///
-/// What still has to hold is that the members denote the same bases, which
-/// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] checks
-/// against the committed sequence.
-const CENSUS_REPARTITIONED: usize = 92;
+/// base apart, applied *after* the partition, which itself held no `delins`.
+/// Those rows are now one `inv`.
+const CENSUS_REPARTITIONED: usize = 0;
 /// Rows whose authored `c.` span crosses an exon junction. Pinned because it is
 /// the geometry #1478 records as unreachable in the generated corpora — if it
 /// ever reads 0, this corpus has stopped covering the thing it was built for.
@@ -517,7 +518,7 @@ fn every_authored_inversion_produces_its_pinned_output() {
 /// not, whatever else is true of it.
 ///
 /// **This is the weaker of the two invariants and it is deliberately kept.**
-/// [`the_members_of_every_repartitioned_row_reproduce_the_inversion`] is
+/// [`every_within_exon_output_reproduces_the_authored_inversion_bases`] is
 /// strictly stronger where it applies — it compares bases, not shapes — but it
 /// can only apply to the 1,950 rows that lie in one exon. This one covers all
 /// 2,075, including the junction-crossing rows whose bases are not on the
@@ -662,15 +663,18 @@ fn the_no_op_rows_are_exactly_the_self_reverse_complementary_spans() {
     );
 }
 
-/// The members of a repartitioned row must denote exactly the bases the
-/// authored inversion denotes.
+/// Every within-exon output must denote exactly the bases the authored inversion
+/// denotes — whatever shape ferro gives it.
 ///
-/// This is the check that carries the weight now that a split is a legal
-/// outcome. It is not a claim about ferro's classification of anything: the
-/// expected sequence is built from the **committed transcript bases** by
-/// replacing the authored span with its reverse complement — `DNA/inversion.md:5`
-/// applied directly — and the observed sequence by applying the output's own
-/// members to those same bases through
+/// This is the sequence-preservation check that carries the weight. It once
+/// mattered most for the repartitioned rows (a split into members that could drop
+/// or double a base); #1703's uniform whole-span `inv` typing has since taken
+/// [`CENSUS_REPARTITIONED`] to 0, so the rows it now guards are the single `inv`s
+/// (unchanged, shifted, or narrowed). It is not a claim about ferro's
+/// classification of anything: the expected sequence is built from the
+/// **committed transcript bases** by replacing the authored span with its reverse
+/// complement — `DNA/inversion.md:5` applied directly — and the observed sequence
+/// by applying the output's own members to those same bases through
 /// [`apply_member_edits`](ferro_hgvs::conformance::inversion_sweep::apply_member_edits),
 /// which never calls the normalizer. A repartition that drops a base, doubles
 /// one, or picks the wrong block fails here even though every member is
@@ -688,7 +692,7 @@ fn the_no_op_rows_are_exactly_the_self_reverse_complementary_spans() {
 /// junction-crossing count is pinned, so the restriction cannot quietly grow to
 /// cover the corpus.
 #[test]
-fn the_members_of_every_repartitioned_row_reproduce_the_inversion() {
+fn every_within_exon_output_reproduces_the_authored_inversion_bases() {
     let transcript = TranscriptBases::from_fixture(&window_fixture());
     let (rows, provider) = run_sweep();
     assert_the_slice_answered(&provider, rows.len());
@@ -768,12 +772,25 @@ fn the_members_of_every_repartitioned_row_reproduce_the_inversion() {
         rows.len(),
         "every row must be either checked against the bases or counted as junction-crossing"
     );
-    // Zero here would mean the check ran over the corpus and never met the
-    // shape it exists for, which reads identically to it passing.
+    // Non-vacuity: the sequence check must actually have run over rows. Keyed on
+    // `checked` rather than on `repartitions_checked`, because #1703's uniform
+    // whole-span `inv` typing takes the repartitioned population to zero (see
+    // [`CENSUS_REPARTITIONED`]) — a zero that used to read as "the check never met
+    // its shape" is now the ruling's guarantee, asserted directly just below.
     assert!(
-        repartitions_checked > 0,
-        "no repartitioned row was checked against the bases, so this test proves nothing about \
-         the outcome it was written for"
+        checked > 0,
+        "no within-exon row was checked against the bases, so this test proves nothing"
+    );
+    // The ruling's guarantee, made a live guard rather than a silent consequence:
+    // `rulings[whole-span-reverse-complement-types-as-inv]` types every whole-span
+    // reverse complement as one `inv`, so no authored inversion in this corpus is
+    // repartitioned. A row reappearing in the `Repartitioned` bucket is a
+    // regression against that ruling.
+    assert_eq!(
+        repartitions_checked, 0,
+        "an authored inversion was repartitioned into members again — \
+         `rulings[whole-span-reverse-complement-types-as-inv]` (#1703) types the whole span `inv`, \
+         so this must stay 0"
     );
 }
 

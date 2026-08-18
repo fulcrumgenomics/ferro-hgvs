@@ -3178,15 +3178,25 @@ mod tests {
     /// assertion was measuring a threshold this corpus cannot reach even when the
     /// number is right.
     ///
-    /// # …and the STRADDLE is asserted, not left to the cores' arithmetic
+    /// # …and past the gate the family is UNIFORMLY `inv` (#1703)
     ///
-    /// Importing the bound fixes half of it. The other half is that the two long
-    /// cores must land on **opposite sides** of the gate, which is a relation
-    /// between them and not a property of either — no length assertion can see
-    /// it, because the gate reads the changed interval and a length assertion
-    /// reads the core. The third assertion below pins that relation directly,
-    /// and it is the one that fails if the `2 * EDGE_PERTURBATION` offset in
-    /// [`long_corpus_sequences`] is dropped.
+    /// This section used to assert the opposite: that the two long cores land on
+    /// **opposite sides** of the gate, one re-derived into substitutions below it
+    /// and one kept as `inv` above it — a straddle. That straddle is gone, and it
+    /// was removed by the ruling this corpus now measures.
+    /// `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+    /// 2026-08-13, #1703) types an **exact** whole-span reverse complement as one
+    /// `inv` UNIFORMLY, with no length or window bound: below the gate
+    /// `coalesce_inversion_runs`' ungated whole-span check types it `inv` before
+    /// any cut, and above the gate `canonicalize_from_sequence` declines on width
+    /// and the per-member pipeline keeps the single `inv`. Both sides now agree,
+    /// which is the whole point of the ruling. A near-palindrome core is an exact
+    /// whole-span reverse complement, so this family can no longer straddle the
+    /// gate by verdict, and the `2 * EDGE_PERTURBATION` offset in
+    /// [`long_corpus_sequences`] no longer changes the inv-vs-subs answer (it stays
+    /// `inv` either way). The third assertion below therefore pins the uniform
+    /// verdict — every measured past-cap core is kept as `inv` — rather than the
+    /// straddle, which the ruling made unexpressible for this family.
     #[test]
     fn the_corpus_emits_a_block_past_the_split_cap() {
         use std::collections::BTreeSet;
@@ -3229,23 +3239,13 @@ mod tests {
             past_cap.iter().map(|r| &r.output).collect::<Vec<_>>()
         );
 
-        // Measuring *at* the scale is still not STRADDLING the gate, and neither
-        // assertion above can tell those apart. Both read a **length** —
-        // `longest_span` is the span the input names, which is the core — while
-        // the gate reads the **changed interval**, which `near_palindromic_core`
-        // leaves `2 * EDGE_PERTURBATION` bases narrower than the core it is cut
-        // from. Drop that offset from `long_corpus_sequences` and the cores sit
-        // at exactly the limit and `+2`, with *both* intervals comfortably under
-        // it: `longest` is still past the cap, neither row is a sentinel, and the
-        // two cores derive identically. The corpus would straddle nothing while
-        // every assertion above stayed green — #1925 recurring one level up, and
-        // measured: that sabotage passes without this.
-        //
-        // So pin the RELATION between the cores rather than either core's size.
-        // The verdict is read off the output's spelling, which is how the dump
-        // reports it: an accepted block is re-derived into substitutions, a
-        // refused one keeps its `inv` (trimmed to the changed interval, but an
-        // `inv` still).
+        // Post-#1703 the verdict is UNIFORM, not a straddle: an exact whole-span
+        // reverse complement is typed `inv` on both sides of the gate, so every
+        // measured past-cap near-palindrome core keeps its `inv`. The verdict is
+        // read off the output's spelling, which is how the dump reports it — a
+        // core kept as `inv` ends its output with `inv` (trimmed to the changed
+        // interval, but an `inv` still); a core re-derived into substitutions
+        // would not. Per the ruling, none is re-derived.
         let refused: BTreeSet<&str> = measured
             .iter()
             .filter(|row| row.output.ends_with("inv"))
@@ -3257,10 +3257,10 @@ mod tests {
             .map(|row| row.reference.as_str())
             .collect();
         assert!(
-            !refused.is_empty() && !derived.is_empty() && refused != derived,
-            "every past-cap core reached the same verdict (re-derived: {derived:?}, kept as \
-             `inv`: {refused:?}), so the long family straddles nothing — the gate reads the \
-             CHANGED INTERVAL, `len - 2 * EDGE_PERTURBATION`, and not the core length: {:?}",
+            !refused.is_empty() && derived.is_empty(),
+            "per `rulings[whole-span-reverse-complement-types-as-inv]` every measured past-cap \
+             core is an exact whole-span reverse complement and must keep its `inv`; kept as \
+             `inv`: {refused:?}, but re-derived into substitutions (must be empty): {derived:?} — {:?}",
             measured
                 .iter()
                 .map(|row| (&row.reference, &row.input, &row.output))

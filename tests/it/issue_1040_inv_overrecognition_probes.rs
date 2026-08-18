@@ -280,34 +280,35 @@ fn every_spelling_of_a_derived_whole_block_inversion_converges_on_inv() {
 }
 
 #[test]
-fn a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation() {
-    // The control for the two tests above, and the reason they pin `inv` rather
-    // than merely "one member". AAGCTA -> TAGCTT is *also* a whole-span reverse
-    // complement, but only its first and last bases change and four unchanged
-    // bases lie between them.
+fn a_whole_span_reverse_complement_with_a_wide_unchanged_interior_is_an_inversion() {
+    // `AAGCTA -> TAGCTT` is a whole-span reverse complement whose only changed
+    // columns are its first and last, with four unchanged bases between them.
     //
-    // `general.md:34` describes two variants separated by one or more
-    // nucleotides individually; its letter names only `delins`, but its
-    // rationale (`delins.md:81-84` — the variants may have been reported, or may
-    // occur, individually) reaches any single spanning description. At four
-    // unchanged bases these are two independent changes rather than interior
-    // columns of one reverse-complement relation, so
-    // `coalesce_whole_block_inversion`'s admission gate must refuse them. Every
-    // surviving route does: 2 changed columns of 6, no piece wider than one
-    // base, and a payload of 2 against a span of 6. (The gate used to open on
-    // `every_separation_is_a_single_base`, whose gap of 4 refused it first; that
-    // disjunct has since been removed as subsumed by the payload route.)
+    // This case used to stay split (`g.[257A>T;262A>T]`), on the reading that
+    // four unchanged interior bases make the ends "two independent changes rather
+    // than interior columns of one reverse-complement relation", so
+    // `coalesce_whole_block_inversion`'s admission gate refused it.
     //
-    // Without this case the two tests above would pass just as well against a
-    // rule that merged *any* whole-span reverse complement — the shape, not the
-    // thing they name.
-    let expected = format!("{G}:g.[257A>T;262A>T]");
+    // **That reading is overturned** by
+    // `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+    // 2026-08-13): a span whose whole content is the exact reverse complement of
+    // the reference is one `inv`, uniformly — however much of the interior
+    // coincides. Complementation is an involution, so interior coincidence carries
+    // no information (column `i` coincides exactly when its mirror does), and
+    // `inversion.md:5` states the property over the whole span with no term for it.
+    // So the exact whole-span shape is typed ahead of and outside that competitor
+    // gate. Closes #1703. (`whole_span_reverse_complement` in `merge.rs`.)
+    let expected = format!("{G}:g.257_262inv");
     assert_eq!(
         assert_padded_preserving("AAGCTA", &format!("{G}:g.[257A>T;262A>T]")),
         expected,
     );
     assert_eq!(
         assert_padded_preserving("AAGCTA", &format!("{G}:g.257_262delinsTAGCTT")),
+        expected,
+    );
+    assert_eq!(
+        assert_padded_preserving("AAGCTA", &format!("{G}:g.257_262inv")),
         expected,
     );
 }

@@ -20,25 +20,40 @@
 //!
 //! There is no gap to place, so there is nothing to search and nothing for the
 //! cap to protect — the partition is position-wise and linear. Capping it anyway
-//! cost confluence, because the un-partitioned whole block is then refused by the
-//! weight bound whenever the input was spelled as its individual changes:
+//! cost confluence, because the un-partitioned whole block was then handled
+//! differently from the same variant spelled as its individual changes:
 //!
 //! ```text
 //! a 1100 nt near-palindrome at 257_1356, differing from its own reverse
 //! complement at exactly two mirror pairs (257/1356 and 267/1346)
 //!
 //! g.257_1356inv                                 stable
-//! g.[257C>A;267A>C;1346G>T;1356T>G]             stable, and denotes the same bases
+//! g.[257C>A;267A>C;1346G>T;1356T>G]             denotes the same bases
 //! ```
 //!
-//! One variant, two stable normal forms. The cap boundary was exact — 1024
-//! confluent, 1026 not — which is the signature of a length short-circuit rather
-//! than anything about the sequence.
+//! One variant, and both spellings must reach one normal form. The cap boundary
+//! was exact — 1024 confluent, 1026 not — which is the signature of a length
+//! short-circuit rather than anything about the sequence.
 //!
-//! The four substitutions are the canonical form here, and not merely the
-//! lighter one: an inversion whose interior is unchanged is the #1230 shape from
-//! #1235's own table ("inv over-recognized (unchanged interior) -> separate
-//! subs"). A 1100 nt inversion that alters four bases is not an inversion.
+//! ## The canonical form is the inversion, not the four substitutions
+//!
+//! `g.257_1356inv` replaces its whole span with its exact reverse complement, so
+//! `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+//! 2026-08-13, closing #1703) types it as one `inv` — and it does so **uniformly,
+//! with no length or density bound**: a 1100 nt span whose reverse complement
+//! coincides with the reference at all but four columns is one `inv` exactly as a
+//! 4 nt span is. The ruling considered and **refused** a density floor by name
+//! ("supplies no length or density bound … The obvious bound was already refuted
+//! by measurement … A later bound would be a new ruling"), and its own withdrawn-
+//! costings paragraph names this exact `long_block_inversion`/`near_palindromic_core`
+//! shape (four one-column runs at length 1100) as a case it reaches. This
+//! overturns the earlier #1230 reading ("inv over-recognized (unchanged interior)
+//! -> separate subs") that a prior version of this test asserted.
+//!
+//! So what this file still pins above the split cap is the cap-lifting itself and
+//! confluence: an equal-length block wider than `MAX_SPLIT_BLOCK` is handled (not
+//! refused or broken), and both spellings of the one variant converge on the same
+//! `inv`.
 //!
 //! ## What still bounds the cost
 //!
@@ -109,23 +124,18 @@ fn changed_positions() -> Vec<usize> {
 }
 
 #[test]
-fn the_inversion_spelling_reduces_to_its_four_substitutions() {
+fn the_whole_span_reverse_complement_types_as_one_inv() {
     let core = near_palindrome();
     let output = assert_padded_preserving(&core, "NC_TEST.1:g.257_1356inv");
-    assert!(
-        !output.contains("inv"),
-        "a 1100 nt inversion that alters four bases must not stay an inversion: {output}"
-    );
-    // Not pinned as a literal string — the bases come from `near_palindrome`, so
-    // pinning one would restate the generator rather than check it. Pinned
-    // against the member list that generator implies instead, which checks the
-    // substituted bases and not only the positions. Containment on the bare
-    // positions was the weaker earlier form: `257` also matches inside `1257`,
-    // and nothing there read the payload at all.
+    // Per `rulings[whole-span-reverse-complement-types-as-inv]` a span replaced by
+    // its exact reverse complement is one `inv`, uniformly and with no length or
+    // density bound — so this 1100 nt near-palindrome, altering only four bases,
+    // stays a single inversion rather than reducing to those four substitutions.
+    // Pinned as the exact string: the input already IS the canonical form, so the
+    // normalizer must return it unchanged.
     assert_eq!(
-        output,
-        substitution_spelling(&core),
-        "the inversion must reduce to exactly the four substitutions it performs"
+        output, "NC_TEST.1:g.257_1356inv",
+        "a whole-span reverse complement is one `inv`, not its interior substitutions"
     );
 }
 

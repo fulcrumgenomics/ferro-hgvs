@@ -976,7 +976,21 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
     // coding DNA axis, which is why this instrument moves and `guard_violations`
     // directly above stays 0.
-    coding_axis_separation_two_or_more_merges: 5,
+    //
+    // #1703: 5 -> 19. The 14 added rows are whole-span reverse complements the
+    // decided `rulings[whole-span-reverse-complement-types-as-inv]` types as one
+    // `inv`, uniformly, regardless of interior coincidence — 8 authored as a
+    // triple of `delins` members (`m3-all-delins`, separation 2) and 6 as a pair
+    // (`pair-delins-delins`, separations up to 8), every one length-preserving so
+    // its resulting block equals `revcomp` of the reference block. They are NOT
+    // `general.md:34` deviations: a whole-span inversion is ONE variant, so `:34`
+    // ("two variants separated by...") has no antecedent (the ruling's GROUND 2),
+    // and `sequence_changed` / `converged` below are unchanged in both directions,
+    // so nothing lost confluence and no output denotes different bases. The pre-
+    // existing 5 are the two net-deletion families (`pair-del-sub` x2,
+    // `pair-inv-del` x3), which are shorter than their span and so cannot be a
+    // whole-span reverse complement — this pass does not reach them.
+    coding_axis_separation_two_or_more_merges: 19,
 };
 
 /// The 5'-direction census, pinned.
@@ -1096,7 +1110,21 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
     // coding DNA axis, which is why this instrument moves and `guard_violations`
     // directly above stays 0.
-    coding_axis_separation_two_or_more_merges: 5,
+    //
+    // #1703: 5 -> 19. The 14 added rows are whole-span reverse complements the
+    // decided `rulings[whole-span-reverse-complement-types-as-inv]` types as one
+    // `inv`, uniformly, regardless of interior coincidence — 8 authored as a
+    // triple of `delins` members (`m3-all-delins`, separation 2) and 6 as a pair
+    // (`pair-delins-delins`, separations up to 8), every one length-preserving so
+    // its resulting block equals `revcomp` of the reference block. They are NOT
+    // `general.md:34` deviations: a whole-span inversion is ONE variant, so `:34`
+    // ("two variants separated by...") has no antecedent (the ruling's GROUND 2),
+    // and `sequence_changed` / `converged` below are unchanged in both directions,
+    // so nothing lost confluence and no output denotes different bases. The pre-
+    // existing 5 are the two net-deletion families (`pair-del-sub` x2,
+    // `pair-inv-del` x3), which are shorter than their span and so cannot be a
+    // whole-span reverse complement — this pass does not reach them.
+    coding_axis_separation_two_or_more_merges: 19,
 };
 
 /// Assert one direction's census against its pin, printing the measured numbers
