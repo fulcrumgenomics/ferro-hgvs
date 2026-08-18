@@ -2844,27 +2844,35 @@ impl PartitionRule {
 ///   surface exactly where it is, so a comparison quoting a `from_sequences`
 ///   figure is comparing a moved surface against a fixed one.
 ///
-/// **Why [`PartitionRule::Canonical`] and not
-/// [`PartitionRule::CanonicalCoalesced`].** The two differ only through
-/// [`payload_coalesce_applies`] and [`compensating_gap_coalesce_applies`], both
-/// gated by the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`; and
-/// `from_sequences` emits `g.` and `m.` descriptions only, refusing every other
-/// accession class (`from_sequences::reference_template`).
+/// **Now [`PartitionRule::CanonicalCoalesced`] (2026-08-17, #2155 task 3c),
+/// having been [`PartitionRule::Canonical`] before.** The two differ only
+/// through [`payload_coalesce_applies`] and [`compensating_gap_coalesce_applies`],
+/// both gated by the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (superseded to
+/// all DNA axes); and `from_sequences` emits `g.` and `m.` descriptions only,
+/// refusing every other accession class (`from_sequences::reference_template`)
+/// — both squarely inside the widened scope.
 ///
-/// **This paragraph's original ground no longer holds, and is recorded rather
-/// than quietly dropped.** It used to read that the two arms are the same rule
-/// on this surface because `g.`/`m.` sat outside the carve-out's `c.`-only
-/// scope — the same jurisdictional argument that kept `r.` out. The ruling was
-/// superseded to all DNA axes (2026-08-17, #2155): `g.`/`m.` are now squarely
-/// in reach, so [`PartitionRule::Canonical`] and [`PartitionRule::CanonicalCoalesced`]
-/// are **no longer known to be the same rule** on `from_sequences`'s output —
-/// whether the coalesce passes' other conditions (a gap-bearing insert, a
-/// payload that embeds as an ordered subsequence, a net loss of length) ever
-/// fire on a `derive_block_members`-produced `g.`/`m.` block is not measured
-/// here. Until that is measured, read this pin as unjustified by the axis
-/// argument rather than as proven equivalent; it still asserts
-/// [`DERIVED_BLOCK_PARTITION_RULE`] `== Canonical`, which is unchanged.
+/// **The paragraph this replaces recorded that equivalence as unmeasured, and
+/// it no longer is.** [`derive_block_members`] now runs both coalesce passes
+/// itself, in the same order [`canonicalize_from_sequence`] runs them, gated
+/// on this constant and [`AxisFrame::is_dna`] exactly as the normalization
+/// surface's call sites are — see [`derive_block_members`]'s own doc for the
+/// call and `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+/// for the guard: `from_sequences`'s output on a payload-coincidence block and
+/// `Normalizer::normalize`'s output on the same block, over the same
+/// reference, are now byte-identical. Picking [`PartitionRule::Canonical`]
+/// instead would leave [`payload_coalesce_applies`] permanently `false` here
+/// (it requires `rule == CanonicalCoalesced` exactly, not merely
+/// [`PartitionRule::cuts_with_canonical`]), so the sibling pass would still
+/// never fire and this surface would still fragment.
+///
+/// [`partition_block_for_derivation`] is unaffected by the flip:
+/// `PartitionRule::Canonical | PartitionRule::CanonicalCoalesced` both select
+/// [`partition_block_canonical_within`] there (see that dispatch's own
+/// comment), so this constant changes which **coalesce** passes
+/// `derive_block_members` runs and nothing about which partitioner cuts the
+/// block.
 ///
 /// **This names a rule and nothing else.** The grid budget is a second axis on
 /// which the two surfaces already differ — `from_sequences` takes the caller's
@@ -2876,7 +2884,7 @@ impl PartitionRule {
 /// **Unstable, like the switch it shares a vocabulary with.** `FERRO_PARTITION`
 /// is expected to be removed once the normalization rule is settled; what this
 /// constant states outlives it, but its spelling may not.
-const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::Canonical;
+const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoalesced;
 
 /// The pin above must name an arm that genuinely cuts with
 /// [`partition_block_canonical_within`], because
@@ -10421,9 +10429,24 @@ pub(crate) struct DerivedBlock {
 ///   [`changed_columns_of_edits`] over the *input's* edits and there are none.
 ///   A sequence pair has no spelling for a bound to be relative to, which is why
 ///   this entry point cannot inherit #1440;
-/// * no [`coalesce_compensating_gap_split`]. That pass judges a split's
-///   boundaries to be an alignment coincidence, and the boundaries here come
-///   from [`partition_block_canonical`], whose premise is that they are not.
+/// * ~~no [`coalesce_compensating_gap_split`]~~ **corrected 2026-08-17,
+///   #2155 task 3c.** This bullet used to read that the pass was withheld
+///   because "that pass judges a split's boundaries to be an alignment
+///   coincidence, and the boundaries here come from
+///   [`partition_block_canonical`], whose premise is that they are not." That
+///   had it backwards: [`coalesce_compensating_gap_split`]'s own doc states the
+///   defect the other way round — [`partition_block_canonical`] is exactly the
+///   partitioner *free* to manufacture a compensating gap (unlike
+///   [`partition_block`], whose single-gap search cannot), which is why the
+///   normalization surface scopes that pass to
+///   [`PartitionRule::cuts_with_canonical`] rather than withholding it there.
+///   This surface serves that family and nothing else
+///   ([`partition_block_for_derivation`]), so the defect is exactly as
+///   reachable here as it is from [`canonicalize_from_sequence`]. Both
+///   coalesce passes now run, gated the same way the normalization surface
+///   gates them ([`payload_coalesce_applies`], [`compensating_gap_coalesce_applies`]
+///   against [`DERIVED_BLOCK_PARTITION_RULE`] and the template's [`CisKind`]) —
+///   see the call site below.
 ///
 /// **Which partitioner, and why it is not the one `normalize` uses.** This
 /// surface is pinned to [`DERIVED_BLOCK_PARTITION_RULE`] and does not read
@@ -10506,6 +10529,40 @@ pub(crate) fn derive_block_members(
     shift_pieces(&mut pieces, reference, direction);
     coalesce_adjacent_pieces(&mut pieces);
     shrink_pieces_to_differences(&mut pieces, reference);
+
+    // `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task 3c),
+    // run exactly as `canonicalize_from_sequence` runs it: same two gates
+    // (`payload_coalesce_applies`, `compensating_gap_coalesce_applies`), same
+    // order, against the same rule this surface is pinned to
+    // (`DERIVED_BLOCK_PARTITION_RULE`). Without this the derivation surface
+    // never ran the coalesce at all — see this function's own doc, corrected
+    // 2026-08-17 — so it fragmented exactly the block the normalization
+    // surface collapses, and #2155's headline reproduction (`from_sequences`)
+    // still showed the defect after the earlier tasks in this series widened
+    // only `canonicalize_from_sequence`'s call sites.
+    //
+    // Gated on the template's axis, not unconditionally: `from_sequences`
+    // only ever builds a `Genome` or `Mt` template (`reference_template`
+    // refuses every other accession class), both squarely inside the widened
+    // DNA scope, so this reaches exactly `g.`/`m.`. `cis_kind_of` returning
+    // `None` (an axis this module does not serve at all) skips both passes,
+    // leaving the pre-existing pieces untouched — the same behaviour this
+    // surface always had before this change.
+    //
+    // The convergence this buys is pinned by
+    // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`:
+    // `from_sequences`'s output and `Normalizer::normalize`'s output agree,
+    // byte for byte, on this block. If a future edit moves this call out of
+    // step with `canonicalize_from_sequence`'s own order, that guard is what
+    // catches it.
+    if let Some(kind) = cis_kind_of(template) {
+        if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+            coalesce_payload_alignment_split(&mut pieces, reference);
+        }
+        if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+            coalesce_compensating_gap_split(&mut pieces, reference);
+        }
+    }
 
     // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
     // interbase 0 from the one window where the anchor genuinely does not exist.
@@ -17111,6 +17168,35 @@ mod tests {
         /// reason `the_suite_runs_on_the_default_rule` gives. The environment
         /// guard is repeated here so that failure names its cause rather than
         /// reading as a drifted pin.
+        ///
+        /// **RE-PINNED 2026-08-17 (#2155 task 3c): both now
+        /// [`PartitionRule::CanonicalCoalesced`].** Before this, the pair
+        /// differed in *name* only as far as [`partition_block_for_derivation`]
+        /// was concerned — both arms `cuts_with_canonical()`, so the dispatch
+        /// there always selected [`partition_block_canonical_within`] either
+        /// way — but [`derive_block_members`] never called
+        /// [`payload_coalesce_applies`]/[`compensating_gap_coalesce_applies`]
+        /// at all, so no value of this constant could have made the coalesce
+        /// passes fire. `derive_block_members` now calls both, gated exactly
+        /// as [`canonicalize_from_sequence`] gates them, so the value genuinely
+        /// matters now: `PartitionRule::Canonical` would leave
+        /// [`payload_coalesce_applies`] permanently `false` (it requires
+        /// `rule == CanonicalCoalesced` exactly), so `CanonicalCoalesced` is
+        /// the only value that activates both passes.
+        ///
+        /// **What re-pinning the RIGHT value to match the LEFT buys, and what
+        /// it does not.** `from_sequences` and `normalize` now agree, byte for
+        /// byte, on a payload-coincidence `g.`/`m.` block —
+        /// `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+        /// is that guard. It does **not** close #1834's wider gap: that 32/79
+        /// (3') / 36/79 (5') figure was measured over a corpus this change
+        /// does not re-measure, and `derive_block_members` still runs none of
+        /// `canonicalize_from_sequence`'s other passes —
+        /// `coalesce_coding_frame_separation`, `split_concealed_separations`,
+        /// `coalesce_inversion_runs`, `apply_coding_codon_exception` — so the
+        /// two surfaces remain genuinely different pipelines outside the
+        /// payload-coincidence shape this task targets. Re-measure #1834's gap
+        /// rather than reading this pin as having closed it.
         #[test]
         fn the_two_surfaces_cut_with_a_pinned_pair_of_rules() {
             assert!(
@@ -17119,15 +17205,23 @@ mod tests {
             );
             assert_eq!(
                 (partition_rule(), DERIVED_BLOCK_PARTITION_RULE),
-                (PartitionRule::CanonicalCoalesced, PartitionRule::Canonical),
+                (
+                    PartitionRule::CanonicalCoalesced,
+                    PartitionRule::CanonicalCoalesced
+                ),
                 "the two surfaces' partition rules moved apart without being \
                  re-pinned together -- `normalize` cuts with the first and \
                  `from_sequences` with the second, and #1834 is the record of \
-                 what that costs. LEFT MOVED Live -> CanonicalCoalesced with \
-                 #1835, which made canonical-coalesced the shipped default; the \
-                 right value is unchanged, so the two surfaces are now one step \
-                 closer and #1834's gap is correspondingly smaller. Re-measure \
-                 that gap rather than carrying its 32/79 and 36/79 figures over"
+                 what that costs. RIGHT MOVED Canonical -> CanonicalCoalesced \
+                 with #2155 task 3c, which wired `derive_block_members` to run \
+                 the same payload-coincidence coalesce passes \
+                 `canonicalize_from_sequence` runs, gated on this constant; the \
+                 left value is unchanged. The two surfaces now converge on a \
+                 payload-coincidence g./m. block \
+                 (`issue_2155_from_sequences_collapse`), but #1834's wider gap \
+                 -- every other pass `derive_block_members` still omits -- is \
+                 untouched. Re-measure that gap rather than carrying its \
+                 32/79 and 36/79 figures over"
             );
         }
 
