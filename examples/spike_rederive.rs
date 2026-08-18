@@ -408,6 +408,14 @@ fn main() -> ExitCode {
     if std::env::var_os("SPIKE").is_some() {
         return spike_main(cli.seeds);
     }
+    // CONVERGE (#2155 characterization): TRUE cross-entry confluence check on the
+    // genomic/mito axes. For each g./m. row, compare the RENDERED STRING of
+    // `normalize(input)` against `sequence_normalize(input, normalize=true)` — both
+    // on the input's own accession frame, so string equality is the confluence
+    // relation. Any disagreement is a live cross-entry confluence break on `main`.
+    if std::env::var_os("CONVERGE").is_some() {
+        return converge_main(cli.seeds);
+    }
     if let (Some(before), Some(after)) = (&cli.compare, &cli.against) {
         return match compare(before, after) {
             Ok(report) => {
@@ -516,6 +524,99 @@ fn rederive_through(normalizer: &Normalizer<MockProvider>, input: &str) -> Strin
         Ok(Err(_)) => "<declined>".to_string(),
         Err(_) => "<panic>".to_string(),
     }
+}
+
+/// `sequence_normalize(input, normalize=true)` rendered, on the input's own frame.
+/// Same sentinel vocabulary as `normalize_through` so the two are comparable.
+fn sequence_normalize_through(normalizer: &Normalizer<MockProvider>, input: &str) -> String {
+    let Ok(variant) = parse_hgvs(input) else {
+        return "<parse-error>".to_string();
+    };
+    let opts = ferro_hgvs::normalize::from_sequences::FromSequencesOptions::default();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        normalizer.sequence_normalize(&variant, &opts, true)
+    })) {
+        Ok(Ok(v)) => v.to_string(),
+        Ok(Err(_)) => "<declined>".to_string(),
+        Err(_) => "<panic>".to_string(),
+    }
+}
+
+/// CONVERGE mode (#2155): true string-level confluence check on g./m. rows.
+fn converge_main(seeds: u32) -> ExitCode {
+    let rows = dump(seeds);
+    let bad = |s: &str| s.starts_with('<');
+    let (mut same, mut diff, mut skip) = (0usize, 0usize, 0usize);
+    let mut examples: Vec<(String, String, String)> = Vec::new();
+    // classify EVERY divergence (not just the sample) so the bucket totals are real.
+    let classify = |n: &str, s: &str| -> &'static str {
+        let nb = n.contains('[');
+        let sb = s.contains('[');
+        if n.contains("inv") && !s.contains("inv") {
+            "inv-shred (norm=inv, seq=split)"
+        } else if has_repeat(n) && has_repeat(s) {
+            "repeat-tract count/anchor differs"
+        } else if n.contains('=') && !s.contains('=') {
+            "identity-member kept by norm, dropped by seq"
+        } else if s.contains('=') && !n.contains('=') {
+            "identity-member kept by seq, dropped by norm"
+        } else if nb && !sb {
+            "norm multi-member, seq single"
+        } else if !nb && sb {
+            "norm single, seq multi-member"
+        } else {
+            "other"
+        }
+    };
+    let mut buckets: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for row in &rows {
+        if row.axis != "g" && row.axis != "m" {
+            continue;
+        }
+        let direction = match row.direction {
+            "5prime" => ShuffleDirection::FivePrime,
+            _ => ShuffleDirection::ThreePrime,
+        };
+        let normalizer = normalizer_for(row.axis, &row.core, direction);
+        let a = normalize_through(&normalizer, &row.input);
+        let b = sequence_normalize_through(&normalizer, &row.input);
+        if bad(&a) || bad(&b) {
+            skip += 1;
+            continue;
+        }
+        if a == b {
+            same += 1;
+        } else {
+            diff += 1;
+            *buckets.entry(classify(&a, &b)).or_insert(0) += 1;
+            if examples.len() < 80 {
+                examples.push((row.input.clone(), a.clone(), b.clone()));
+            }
+        }
+    }
+    println!("(CONVERGE: normalize vs sequence_normalize(normalize=true), g./m. rows, same frame)");
+    println!("converged={same}\tdiverged={diff}\tskip(sentinel)={skip}");
+    println!("\n-- bucket totals over ALL {diff} divergences --");
+    let mut ordered: Vec<_> = buckets.iter().collect();
+    ordered.sort_by(|a, b| b.1.cmp(a.1));
+    for (k, v) in ordered {
+        println!("{v:>6}  {k}");
+    }
+    println!(
+        "\n-- divergences ({} shown) : input | normalize | sequence_normalize --",
+        examples.len()
+    );
+    for (i, a, b) in &examples {
+        println!("{i} | {a} | {b}");
+    }
+    ExitCode::SUCCESS
+}
+
+/// True if the rendering contains a repeat `[<digits>]` (e.g. `ACG[35]`), as
+/// opposed to a member list `[a;b]`.
+fn has_repeat(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.windows(2).any(|w| w[0] == b'[' && w[1].is_ascii_digit())
 }
 
 /// Members in a rendered variant: `[a;b;c]` -> 3, a lone edit -> 1.
