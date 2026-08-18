@@ -519,21 +519,35 @@ fn the_confluence_classes_converge() {
 /// because the #1542 re-instrument changed *which* rows are readable, and a
 /// floor cannot tell a widening from a narrowing.
 ///
-/// **12 after #1703, 15 before it, and 9 when this constant was written.** The
-/// pin was first measured on a base that predated #1835's flip of the default
-/// partition rule to `canonical-coalesced`; under that rule six further corpus
-/// rows were re-partitioned from the resulting sequence into a multi-member
-/// output (9 -> 15). #1703 then moves it the other way: the decided
+/// **15 before either move, and 9 when this constant was first written.** The
+/// 9 -> 15 widening predates both #1703 and #2155: it was measured on a base that
+/// predated #1835's flip of the default partition rule to `canonical-coalesced`,
+/// under which six further corpus rows were re-partitioned from the resulting
+/// sequence into a multi-member output.
+///
+/// Two independent narrowings then apply on this rebased branch:
+///
+/// **#1703 (from main) collapses three rows.** The decided
 /// `whole-span-reverse-complement-types-as-inv` types a whole-span reverse
-/// complement as one `inv`, so **three** corpus rows that were multi-member
+/// complement as one `inv`, so three corpus rows that were multi-member
 /// reverse-complement shreddings collapse to a single `inv` and stop being
 /// examined — among them the 457 nt `NC_000013.10:g.100809575_100810031inv`,
-/// whose 133-member re-derivation was the row this guard fired on. That is the
-/// denominator narrowing for a named reason, and the guard's own claim — no
-/// emitted output puts two members on consecutive nucleotides — is still **zero**
-/// over the smaller set (indeed #1703 is what took the 457 nt row's violation to
-/// zero).
-const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 12;
+/// whose 133-member re-derivation was the row this guard fired on.
+///
+/// **#2155 (this PR) collapses two more.**
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided, scoped
+/// to the coding DNA axis) is superseded by #2155 to cover every DNA axis, so
+/// `NC_000002.12:g.166052896_166052909delinsTGTG` and
+/// `NC_000002.11:g.47639670_47639673delinsTT` — both previously split into
+/// two-or-three-member outputs by the coding-only carve-out — now re-coalesce on
+/// their `g.` axis into a single spanning `delins` member apiece.
+///
+/// A one-member output has no adjacent pair to examine at all, so each collapsed
+/// row leaves the denominator; the guard's own claim — no emitted output puts two
+/// members on consecutive nucleotides — is still **zero** over the smaller set.
+/// RE-MEASURE after rebase: if the two rulings' collapsed rows are disjoint the
+/// value is 15 - 3 - 2 = 10; measure it rather than assuming disjointness.
+const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 10;
 
 /// No emitted output puts two members on consecutive nucleotides
 /// (`DNA/delins.md:16`).

@@ -111,17 +111,46 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     // about equal-length blocks having no alignment choice to make; that was a
     // property of one partitioner, not of the shape.
     //
+    // # RE-PINNED AGAIN BY #2155's ALL-DNA-AXES PAYLOAD-COINCIDENCE WIDEN
+    //
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided,
+    // scoped above to the coding DNA axis) is superseded by #2155 to cover
+    // every DNA axis — this is a `g.` row, so `DNA/delins.md:47` now reaches it
+    // too. The 21-member gapped split above was itself built by choosing a
+    // shifted (1 del + 19 sub + 1 ins, cost 21) alignment over the naive
+    // position-wise one (39 sub, cost 39) because it was cheaper — but every one
+    // of that shifted alignment's "unchanged" interior columns (positions
+    // 2, 4, 6, …, 18, 22, …, 38) is unchanged only as an ARTIFACT of picking
+    // that particular shift; none of them holds under the natural,
+    // non-shifted reading, where every position 1-40 except 20 differs. Only
+    // position 20 is a genuine, forced separator — it is the one base this test
+    // deliberately sets equal to the reference (`replacement[19] = core[19]`,
+    // above), so it is unchanged under every reading, shifted or not.
+    //
+    // With the carve-out now reaching `g.`, the coincidental separations
+    // collapse and only the forced one survives, which is exactly the
+    // non-shifted, position-wise partition: one run of 19 changed bases
+    // (1_19), the one genuinely unchanged base (20), then a run of 20 changed
+    // bases (21_40) — `delins.md:16`'s "two or more CONSECUTIVE nucleotides"
+    // read against the natural alignment rather than the shifted one.
+    //
+    // THE FILE'S OWN THESIS IS STILL UNCHANGED: a delins must split at its
+    // (genuinely) unchanged bases regardless of length, and this row still
+    // asserts exactly that — now at the one base the test constructs to BE
+    // genuinely unchanged, rather than at the coincidental columns a
+    // particular alignment happened to expose.
+    //
     // Pinned as a literal rather than rebuilt from `replacement`, because the
     // answer is no longer a simple function of it — deriving the expected string
     // would mean reimplementing the aligner in the test, which is how a pin stops
     // being independent evidence.
-    // The `\` continuations below elide the newline and the following
-    // indentation, so this is one unbroken description.
-    let expected = "NC_TEST.1:g.[1del;3G>A;5A>G;7G>A;9A>G;11G>A;13A>G;15G>A;17A>G;19G>A;\
-                    21A>T;23G>A;25A>G;27G>A;29A>G;31G>A;33A>G;35G>A;37A>G;39G>A;40_41insG]";
+    let expected = "NC_TEST.1:g.[1_19delinsCATGCATGCATGCATGCAT;\
+                    21_40delinsCATGCATGCATGCATGCATG]";
     assert_eq!(
         out, expected,
-        "a 40 nt delins must split at the unchanged bases of its MINIMAL alignment"
+        "a 40 nt delins must split at the GENUINELY unchanged bases of its \
+         minimal alignment, not at columns that are unchanged only by \
+         payload coincidence"
     );
 }
 
@@ -168,29 +197,18 @@ fn a_long_net_deletion_stays_one_spanning_delins() {
     // piece. That guard is `partition_block`'s and is not on the canonical path,
     // so under the new default the block splits into fourteen pure deletions.
     //
-    // LICENSED TWICE OVER, and both legs are worth stating because either alone
-    // would settle it.
-    //
-    // (1) THE AXIS. `DNA/delins.md:47` is what recommends the spanning form for a
-    // payload-coincidence split, and `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-    // (decided) scopes it to the coding DNA axis. This is a `g.` row, so `:47`
-    // does not reach it and `general.md:34` governs unqualified. Note the doc
-    // above says raising the bound "turned one correct protein consequence into
-    // three bogus ones" — that is `:47`'s own stated ground, and the axis ruling's
-    // reasoning is precisely that it has nothing to bite on off the coding axis:
-    // a genomic reference predicts no protein consequence, correctly or
-    // otherwise. The comment describes the `c.`-sited original
-    // (`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`), which is a different row on a
-    // different axis and is unaffected.
-    //
-    // (2) THE MECHANISM, which would settle it even on a `c.` axis. Every one of
-    // the fourteen members below is a PURE DELETION — no member supplies a base.
+    // WHY IT SPLITS is the MECHANISM, not the axis. #2155 widens the
+    // payload-coincidence carve-out to every DNA axis, so
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped`'s old
+    // coding-only limb no longer settles a `g.` row — `DNA/delins.md:47` now
+    // reaches this axis. What keeps the row split is that every one of the
+    // fourteen members below is a PURE DELETION — no member supplies a base.
     // `delins-recommendation-reach-when-the-input-arrives-split` (decided,
     // operator ruling 2026-08-12) rules that `:47` reaches a split only where an
     // INSERTED SEQUENCE re-aligned, i.e. where some derived member supplies bases
     // while consuming a different number of reference bases. "A split of pure
     // deletions inserts nothing, so nothing re-aligned, so `general.md:34`/`:17`
-    // govern it unqualified." That is this row exactly.
+    // govern it unqualified." That is this row exactly, on any DNA axis.
     //
     // WHY THIS DIFFERS FROM `:44-47`'s OWN EXAMPLE, which merges. The record
     // records that `c.850_901delinsTTCCTCGATGCCTG` derives to
@@ -208,7 +226,8 @@ fn a_long_net_deletion_stays_one_spanning_delins() {
     assert_eq!(
         out, expected,
         "a 52 nt -> 14 nt net deletion on a genomic reference splits at its \
-         unchanged bases: `delins.md:47` is coding-axis-scoped, and every member \
-         here is a pure deletion so `:46`'s re-alignment mechanism never occurred"
+         unchanged bases: every member here is a pure deletion, so `:46`'s \
+         re-alignment mechanism never occurred and \
+         `delins-recommendation-reach-when-the-input-arrives-split` keeps it split"
     );
 }

@@ -189,12 +189,12 @@
     },
     {
       "input": "NC_000002.12:g.166052896_166052909delinsTGTG",
-      "expected": "NC_000002.12:g.[166052896del;166052898_166052903delinsG;166052906_166052909del]",
+      "expected": "NC_000002.12:g.166052896_166052909delinsTGTG",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000002.12:g.166052896_166052909delinsTGTG`. A `g.` row, so `DNA/delins.md:47` cannot recommend the spanning form — `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided) scopes it to the coding DNA axis — and `general.md:34` describes the members of the re-derived minimal alignment individually. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries. #2155 PAYLOAD-COINCIDENCE ALL-DNA-AXES WIDEN: re-pinned from `NC_000002.12:g.[166052896del;166052898_166052903delinsG;166052906_166052909del]`. `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided, scoped to the coding DNA axis) is superseded by #2155 to cover every DNA axis (`c./g./m./n.`, `r.` excluded), so `DNA/delins.md:47` now recommends the spanning form on this `g.` row too, and the three split members re-coalesce into the input spelling. Still a stability pin, not a correctness claim; the movement is declared as a representation change."
     },
     {
       "input": "NC_000012.12:g.4517618_4518810delinsTCATAA",
@@ -207,12 +207,12 @@
     },
     {
       "input": "NC_000002.11:g.47639670_47639673delinsTT",
-      "expected": "NC_000002.11:g.[47639670_47639671delinsT;47639673del]",
+      "expected": "NC_000002.11:g.47639670_47639673delinsTT",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. CORRECTION TO A PRIOR AUDIT: that audit recorded this row as returning itself. It does not, and never did -- it splits, identically on a pre-#1535 binary and on the main tip. The reference span reads AGTG and the split is sequence-equivalent to the input. Also the only GRCh37 primary contig in the corpus, so it keeps the build-selection path covered. #1835 PARTITION DEFAULT FLIP: re-pinned from `NC_000002.11:g.[47639670_47639671del;47639673G>T]`. Both the old and the new form are two members separated by the same unchanged base, so `general.md:34` is satisfied by each and no clause selects between them; `canonical-form-choice-when-both-legal` (decided) assigns the choice to the derivation. Stability pin only."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. CORRECTION TO A PRIOR AUDIT: that audit recorded this row as returning itself. On a pre-#2155 binary it did not -- it split, identically on a pre-#1535 binary and on the pre-#2155 main tip. The reference span reads AGTG and the split was sequence-equivalent to the input. #2155 PAYLOAD-COINCIDENCE ALL-DNA-AXES WIDEN: re-pinned from `NC_000002.11:g.[47639670_47639671delinsT;47639673del]`. `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided, scoped to the coding DNA axis) is superseded by #2155 to cover every DNA axis, so the two-member split now re-coalesces to the spanning form on this `g.` row -- which coincidentally makes the row read as returning itself again, as the original pre-#1535 audit claimed, for an unrelated and now-current reason. Also the only GRCh37 primary contig in the corpus, so it keeps the build-selection path covered. Stability pin only."
     },
     {
       "input": "NC_000013.10:g.100809575_100810031inv",

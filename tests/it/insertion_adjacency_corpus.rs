@@ -176,10 +176,20 @@ fn insertion_abutting_an_inversion_on_its_five_prime_side_is_accepted() {
 /// reverse-complementing `302..306` leaves both ends unchanged and the
 /// unchanged flanks are not part of the change (`DNA/complex.md:50`, the 3'
 /// rule as "maintaining the longest unchanged sequence").
+///
+/// **#2155 re-pin: from `[303_305inv;306_307insG]` to `303_306delinsTAGAG`.**
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided,
+/// scoped to the coding DNA axis) is superseded by #2155 to cover every DNA
+/// axis — this is a `g.` row (`LOCAL_CONTIG`) — so `DNA/delins.md:47` now
+/// recommends the spanning form here too: the trimmed inversion (`303_305`,
+/// reference `CTA`, reverse complement payload `TAG`) plus the unchanged base
+/// at `306` (`A`) plus the inserted `G` re-coalesce into one member spanning
+/// `303_306`, whose payload is `TAG` + `A` + `G` = `TAGAG`. Still merges,
+/// still accepted; only the member count and spelling changed.
 #[test]
 fn insertion_abutting_an_inversion_on_its_three_prime_side_is_accepted() {
     assert_eq!((base_at(302), base_at(306)), (b'T', b'A'));
-    assert_normalizes("[302_306inv;306_307insG]", "[303_305inv;306_307insG]");
+    assert_normalizes("[302_306inv;306_307insG]", "303_306delinsTAGAG");
 }
 
 /// An insertion immediately 5' of a duplication.
