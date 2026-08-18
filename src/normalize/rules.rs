@@ -1980,7 +1980,7 @@ fn shared_affix_lengths(deleted: &[u8], inserted: &[u8]) -> (usize, usize) {
 /// [`is_complementary_pair`]: on a soft-masked reference `deleted` arrives
 /// lower-case while `inserted` comes from the author's upper-case description
 /// (#1318).
-fn is_revcomp(deleted: &[u8], inserted: &[u8]) -> bool {
+pub(crate) fn is_revcomp(deleted: &[u8], inserted: &[u8]) -> bool {
     deleted.len() == inserted.len()
         && deleted
             .iter()

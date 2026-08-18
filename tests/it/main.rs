@@ -514,6 +514,7 @@ mod protein_split_decline_reparse;
 mod protein_stop_codon_canonicalization;
 mod protein_substitution_alternatives;
 mod protein_unknown_roundtrip;
+mod proto_genomic_rederive;
 mod real_data_normalization_tests;
 mod reject_coord_system_mismatch;
 mod reject_dupins;

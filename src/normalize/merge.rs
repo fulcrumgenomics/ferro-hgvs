@@ -10443,38 +10443,62 @@ pub(crate) fn derive_block_members(
     }
 
     let (block_ref, block_alt) = (&reference[lo..hi_ref], &observed[lo..hi_alt]);
-    let too_large = || BlockDecline::GridTooLarge {
-        ref_len: block_ref.len(),
-        alt_len: block_alt.len(),
-    };
-    // Checked before building, because `(n + 1) * (m + 1)` on two lengths is
-    // itself an overflow site — the same order `partition_block_sequence_first`
-    // uses, and for the same reason. An overflow is reported as an oversized
-    // grid, which is what it is.
-    let cells = block_ref
-        .len()
-        .checked_add(1)
-        .and_then(|n| n.checked_mul(block_alt.len().checked_add(1)?))
-        .ok_or_else(too_large)?;
-    if cells > max_grid_cells {
-        return Err(too_large());
-    }
 
-    // The rule is this surface's pin, not `partition_rule()`'s reading of
-    // `FERRO_PARTITION` — see `DERIVED_BLOCK_PARTITION_RULE` and this
-    // function's doc.
+    // In-cut inversion typing (issue #2155 inv follow-up, prototype). A whole-span
+    // reverse-complement IS one inversion. Emit a single whole-block piece and
+    // skip the min-edit partition, which would otherwise split the block at its
+    // interior self-coincidences and shred the inversion into per-column
+    // subs/indels (`retype_inversions` is per-member and cannot re-coalesce an
+    // already-split block, which is why the raw `from_sequences` path — the one
+    // the free Python `from_sequences` uses — shredded whole-span inversions).
+    // The single whole-block delins is typed `inv` downstream by
+    // `retype_inversions`. This is O(n) and builds no grid, so it also types
+    // inversions wider than the grid cap. `len >= 2` because a 1 bp
+    // reverse-complement is a substitution, not an inversion (`inversion.md:14`).
     //
-    // The budget is threaded through rather than left to the callee's default:
-    // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
-    // silently overridden there, and the refusal surfaced as a render failure
-    // naming ferro rather than the knob the caller had just raised.
-    let mut pieces = partition_block_for_derivation(
-        DERIVED_BLOCK_PARTITION_RULE,
-        block_ref,
-        block_alt,
-        max_grid_cells,
-    )
-    .ok_or(BlockDecline::WouldNotRender)?;
+    // TODO(readjudicate #2155): R1 — precedence when a whole-block revcomp AND a
+    // dup / inverted-dup both fit the block, and whether a *sub-block* revcomp
+    // inside a larger change should type `inv` (this only types the WHOLE block).
+    let mut pieces = if block_ref.len() >= 2 && super::rules::is_revcomp(block_ref, block_alt) {
+        vec![Piece {
+            ref_start: 0,
+            ref_end: block_ref.len(),
+            alt: block_alt.to_vec(),
+        }]
+    } else {
+        let too_large = || BlockDecline::GridTooLarge {
+            ref_len: block_ref.len(),
+            alt_len: block_alt.len(),
+        };
+        // Checked before building, because `(n + 1) * (m + 1)` on two lengths is
+        // itself an overflow site — the same order `partition_block_sequence_first`
+        // uses, and for the same reason. An overflow is reported as an oversized
+        // grid, which is what it is.
+        let cells = block_ref
+            .len()
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(block_alt.len().checked_add(1)?))
+            .ok_or_else(too_large)?;
+        if cells > max_grid_cells {
+            return Err(too_large());
+        }
+
+        // The rule is this surface's pin, not `partition_rule()`'s reading of
+        // `FERRO_PARTITION` — see `DERIVED_BLOCK_PARTITION_RULE` and this
+        // function's doc.
+        //
+        // The budget is threaded through rather than left to the callee's default:
+        // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
+        // silently overridden there, and the refusal surfaced as a render failure
+        // naming ferro rather than the knob the caller had just raised.
+        partition_block_for_derivation(
+            DERIVED_BLOCK_PARTITION_RULE,
+            block_ref,
+            block_alt,
+            max_grid_cells,
+        )
+        .ok_or(BlockDecline::WouldNotRender)?
+    };
     for piece in &mut pieces {
         piece.ref_start += lo;
         piece.ref_end += lo;
