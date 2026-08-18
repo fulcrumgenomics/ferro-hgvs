@@ -114,13 +114,14 @@
 //! [`the_four_mer_inversion_pair_converges`] is no longer `#[ignore]`d — it had
 //! been passing while gating nothing, since no CI job passes `--run-ignored`.
 //!
-//! **#1541 itself stays open, and this is not the claim that it is fixed.** The
-//! issue asked for a *ruling on which form governs* and then convergence on it;
-//! convergence arrived as a side effect and no ruling was made. So the class's
-//! rows keep `expected: null` — the corpus's category for an open governing
-//! ruling — and the exact form is held only as a **stability tripwire**, on
-//! `background/basics.md:38`. See [`CYP21A2_TARGET`] for why the `general.md:56`
-//! grounding this file used to give for that form does not stand.
+//! **#1541 is now ruled and implemented (via #1703).** The issue asked for a
+//! *ruling on which form governs* and then convergence on it. The decided
+//! `whole-span-reverse-complement-types-as-inv` chose the `inv`, and #1703's
+//! `whole_span_reverse_complement` pass makes all three spellings converge on
+//! `c.710_713inv`. The class's rows keep `expected: null` (the corpus's category,
+//! set by the blessed inputs), but [`CYP21A2_TARGET`] is now the **adjudicated**
+//! form rather than a bare stability tripwire — see its doc for why the
+//! `general.md:56` grounding this file used to give does not stand.
 //!
 //! # One measurement in the brief did not reproduce
 //!
@@ -518,15 +519,21 @@ fn the_confluence_classes_converge() {
 /// because the #1542 re-instrument changed *which* rows are readable, and a
 /// floor cannot tell a widening from a narrowing.
 ///
-/// **15 on `main`, and it was 9 when this constant was written.** The pin was
-/// first measured on a base that predated #1835's flip of the default partition
-/// rule to `canonical-coalesced`; under that rule six further corpus rows are
-/// re-partitioned from the resulting sequence into a multi-member output, so
-/// this guard *examines* six more rows than it did. That is the denominator
-/// widening, which is the direction this pin exists to make visible — the
-/// guard's own claim, that no emitted output puts two members on consecutive
-/// nucleotides, is still **zero** over the larger set.
-const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 15;
+/// **12 after #1703, 15 before it, and 9 when this constant was written.** The
+/// pin was first measured on a base that predated #1835's flip of the default
+/// partition rule to `canonical-coalesced`; under that rule six further corpus
+/// rows were re-partitioned from the resulting sequence into a multi-member
+/// output (9 -> 15). #1703 then moves it the other way: the decided
+/// `whole-span-reverse-complement-types-as-inv` types a whole-span reverse
+/// complement as one `inv`, so **three** corpus rows that were multi-member
+/// reverse-complement shreddings collapse to a single `inv` and stop being
+/// examined — among them the 457 nt `NC_000013.10:g.100809575_100810031inv`,
+/// whose 133-member re-derivation was the row this guard fired on. That is the
+/// denominator narrowing for a named reason, and the guard's own claim — no
+/// emitted output puts two members on consecutive nucleotides — is still **zero**
+/// over the smaller set (indeed #1703 is what took the 457 nt row's violation to
+/// zero).
+const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 12;
 
 /// No emitted output puts two members on consecutive nucleotides
 /// (`DNA/delins.md:16`).
@@ -1180,25 +1187,28 @@ fn the_arfgef2_pair_denotes_one_sequence() {
 /// spec-correctness claims. It fires if the form moves, which is what it is for:
 /// #1541's own 2026-08-12 status records that this locus is a live member of the
 /// #1703 family and that "whichever way that is ruled, this row moves with it".
-/// **It has now been ruled, and this constant is on the losing side** — the
-/// decided target is `NM_000500.9:c.710_713inv`. The pin is deliberately left
-/// at today's value here, because the ruling ships no code and this file must
-/// stay green until #1541/#1703 implement it; re-bless it **in that change**,
-/// citing the ruling, rather than deleting the pin.
-const CYP21A2_TARGET: &str = "NM_000500.9:c.[710T>A;713T>A]";
+/// **It has now been ruled and implemented (#1703).** The decided record
+/// `whole-span-reverse-complement-types-as-inv` (`DNA/inversion.md:5`,
+/// 2026-08-13) types a whole-span reverse complement as one `inv` uniformly —
+/// `c.710_713` is `TCGT`, `revcomp` `ACGA`, the interior `CG` self-complementary
+/// — so all three spellings now converge on the `inv`. This constant is
+/// therefore the **adjudicated target**, not the stability pin it was: re-blessed
+/// citing that ruling.
+const CYP21A2_TARGET: &str = "NM_000500.9:c.710_713inv";
 
 /// #1541 — `NM_000500.9:c.[710T>A;713T>A]`, `c.710_713inv` and
 /// `c.710_713delinsACGA` are one variant and converge on [`CYP21A2_TARGET`].
 ///
-/// **Two assertions with different standing, and the difference is the point.**
-/// That the three agree is a correctness claim the project holds outright: the
-/// `decided` record `confluence-gate-is-apply-equality-on-every-determined-axis`
-/// makes "normalize is constant on each equivalence class" the release gate, and
-/// these three spellings were verified sequence-equivalent from raw FASTA (see
+/// **Two assertions, and both are now correctness claims.** That the three agree
+/// is held outright: the `decided` record
+/// `confluence-gate-is-apply-equality-on-every-determined-axis` makes "normalize
+/// is constant on each equivalence class" the release gate, and these three
+/// spellings were verified sequence-equivalent from raw FASTA (see
 /// [`the_cyp21a2_block_inverts_to_the_two_substitutions_the_sibling_row_writes`],
 /// which reads the bases rather than restating them). That they agree on
-/// *[`CYP21A2_TARGET`] specifically* is a **stability pin** on an unruled form —
-/// read that constant's doc before treating it as an adjudication.
+/// *[`CYP21A2_TARGET`] specifically* is now **adjudicated**, not a bare stability
+/// pin: `whole-span-reverse-complement-types-as-inv` types this whole-span reverse
+/// complement `inv` uniformly — read that constant's doc.
 ///
 /// **Why it was `#[ignore]`d, and why it no longer is.** The class did not
 /// converge while `Normalizer::is_splittable_single_member` matched only
@@ -1213,9 +1223,10 @@ const CYP21A2_TARGET: &str = "NM_000500.9:c.[710T>A;713T>A]";
 /// `api_comparison_tests`, and `--ignored` selects *only* ignored tests, so
 /// lifting the attribute here takes nothing away from it.
 ///
-/// **This is not a claim that #1541 is fixed.** It asked for a ruling on which
-/// form governs and then convergence on it; convergence arrived as a side
-/// effect, no ruling was made, and the issue stays open.
+/// **#1541 is now ruled and implemented (via #1703).** It asked for a ruling on
+/// which form governs and then convergence on it; the ruling
+/// `whole-span-reverse-complement-types-as-inv` chose the `inv`, and #1703's
+/// `whole_span_reverse_complement` pass makes all three spellings converge on it.
 ///
 /// Two green companions bound it. The premise is
 /// [`the_cyp21a2_block_inverts_to_the_two_substitutions_the_sibling_row_writes`];
@@ -1264,11 +1275,11 @@ fn the_four_mer_inversion_pair_converges() {
     assert_eq!(
         distinct.iter().map(String::as_str).next(),
         Some(CYP21A2_TARGET),
-        "#1541: the class converged, but not on the form ferro has been shipping. This half is a \
-         STABILITY pin on background/basics.md:38, not an adjudication — the form is unruled, so \
-         do not simply re-point it at whatever came out. If a ruling on the #1703 family moved it \
-         (see CYP21A2_TARGET), re-bless this constant citing that ruling; if nothing was ruled, \
-         this is an undeclared representation change. Expected {CYP21A2_TARGET}:\n{rendered}"
+        "#1541: the class must converge on the adjudicated `inv`. The decided ruling \
+         `whole-span-reverse-complement-types-as-inv` (DNA/inversion.md:5) types this whole-span \
+         reverse complement as one `inv` uniformly, so this is an ADJUDICATED target, not a bare \
+         stability pin — a move away from it is a regression against that ruling, not merely an \
+         undeclared representation change. Expected {CYP21A2_TARGET}:\n{rendered}"
     );
 }
 

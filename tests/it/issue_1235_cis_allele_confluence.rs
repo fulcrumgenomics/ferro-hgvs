@@ -111,20 +111,27 @@ fn issue_1229_adjacent_inv_member_coalesces() {
     );
 }
 
-/// #1230 — an `inv` whose interior bases are unchanged is really the end
-/// substitutions.
+/// #1230 — an `inv` whose interior bases are unchanged stays one `inv`.
 ///
-/// Ref `GATG` at 20-23 becomes `CATC`. Only positions 20 and 23 change; the
-/// interior `AT` is a complementary pair and is untouched. Changes separated by
-/// unchanged nucleotides are described individually (`inversion.md:21`), and
-/// prioritisation ranks substitution above inversion (`general.md:56`).
+/// Ref `GATG` at 20-23 becomes `CATC` = `revcomp(GATG)`. Only positions 20 and
+/// 23 change; the interior `AT` is a complementary pair and is untouched. #1230
+/// (CLOSED) held this splits into the two end substitutions, ranking substitution
+/// above inversion via `general.md:56`.
 ///
-/// The spec has no worked example of an inversion with an unchanged interior,
-/// so this direction is a documented implementer's choice, not a spec citation.
+/// **That is overturned.** `rulings[whole-span-reverse-complement-types-as-inv]`
+/// (`DNA/inversion.md:5`, 2026-08-13) types a whole-span reverse complement as one
+/// `inv` uniformly — regardless of how much of the interior coincides with the
+/// reference, and regardless of whether the competing partition is substitutions,
+/// `delins` or anything else. `inversion.md:5` states the property over the whole
+/// span, with no term for interior columns; the load-bearing ground for dropping
+/// the competitor-type distinction is that both sides of #1230 argued over
+/// `general.md:56`, which `adjudication-precedence-order`'s decided E1 holds
+/// "cannot settle a merge-versus-split question at all". A rule 6 choice among
+/// conformant forms, not a rule 1 correction. This closes #1703.
 #[test]
-fn issue_1230_inv_with_unchanged_interior_becomes_substitutions() {
+fn issue_1230_inv_with_unchanged_interior_stays_inv() {
     converges_to(
-        "TEMPLATE:g.[20G>C;23G>C]",
+        "TEMPLATE:g.20_23inv",
         &[
             "TEMPLATE:g.20_23inv",
             "TEMPLATE:g.20_23delinsCATC",

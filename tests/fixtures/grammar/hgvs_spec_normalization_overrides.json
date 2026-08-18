@@ -406,7 +406,6 @@
       "guard": {
         "tests": [
           "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_delins_members_is_an_inversion",
-          "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_substitutions_stays_split",
           "tests/it/inversion_sweep.rs::the_delins_spelling_converges_on_the_spec_inversion"
         ]
       },
@@ -1523,7 +1522,13 @@
       "question": "A span whose whole content is replaced by its exact reverse complement always admits a competing partition at the columns where the complement coincides with the reference. `inversion-vs-two-delins-76-83` typed the span `inv` because that partition was two `delins`, which `general.md:55` does not rank; #1230 split the span because that partition was substitutions, which `:55` ranks above inversion. Does the TYPE of the competing partition decide the typing, or does the span?",
       "status": "decided",
       "guard": {
-        "none": "Decided and deliberately unguarded until the implementation lands. The record ships no code — the normalizer is unchanged, and the moves it decides are #1703's, #1541's and #1575's — so nothing in the tree can fail when this ruling stops holding. Every pin it decides AGAINST is left green on purpose: `CENSUS_REPARTITIONED`, the inversion sweep's `cases.tsv` and `CYP21A2_TARGET` all pin the overturned behaviour, so naming one here would guard the opposite of the ruling. The guard is owed by the implementing change, with the real-corpus representation measurement this record does not supply."
+        "tests": [
+          "tests/it/issue_1703_whole_span_inv.rs::every_whole_span_reverse_complement_types_as_one_inv_regardless_of_interior",
+          "tests/it/issue_1703_whole_span_inv.rs::the_coding_axis_types_a_whole_span_reverse_complement_as_inv",
+          "tests/it/issue_1517_inv_priority_over_delins.rs::a_reverse_complement_competing_with_substitutions_is_an_inversion",
+          "tests/it/issue_1235_cis_allele_confluence.rs::issue_1230_inv_with_unchanged_interior_stays_inv",
+          "tests/it/inversion_sweep.rs::every_within_exon_output_reproduces_the_authored_inversion_bases"
+        ]
       },
       "governing": "docs/recommendations/DNA/inversion.md:5",
       "clauses": [

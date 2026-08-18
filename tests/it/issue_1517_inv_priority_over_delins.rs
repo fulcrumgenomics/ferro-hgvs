@@ -140,17 +140,21 @@ fn a_reverse_complement_competing_with_delins_members_is_an_inversion() {
     );
 }
 
-/// The competing members are **substitutions**, so the split wins
-/// (`general.md:56` ranks substitution first, above inversion).
+/// The competing members are **substitutions**, and the span is still one `inv`.
 ///
-/// This is #1230's case, and it must keep its answer: the rule introduced for
-/// #1517 ranks by member *type*, so it must not disturb a block whose
-/// alternative outranks inversion. Without this control the new rule could be
-/// written as "always prefer `inv`" and still look correct.
+/// This is #1230's case. It used to stay split, on the reading that `general.md:56`
+/// ranks substitution above inversion, so the #1517 rule ranked by member *type*.
+/// **That distinction is overturned** by
+/// `rulings[whole-span-reverse-complement-types-as-inv]` (`DNA/inversion.md:5`,
+/// 2026-08-13): a whole-span reverse complement is typed `inv` uniformly, whatever
+/// the competing partition is made of — `:56` "cannot settle a merge-versus-split
+/// question at all" (`adjudication-precedence-order` E1). So the member-type rule
+/// is retired, not widened, and this case joins the `inv` answers above rather than
+/// standing as their control. Closes #1703.
 #[test]
-fn a_reverse_complement_competing_with_substitutions_stays_split() {
+fn a_reverse_complement_competing_with_substitutions_is_an_inversion() {
     converges_to(
-        "TEMPLATE:g.[11G>C;14G>C]",
+        "TEMPLATE:g.11_14inv",
         &[
             "TEMPLATE:g.11_14inv",
             "TEMPLATE:g.11_14delinsCATC",
