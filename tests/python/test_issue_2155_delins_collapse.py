@@ -23,50 +23,45 @@ the single spanning ``g.10_17delinsAAACAAAC``.
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import ferro_hgvs
 
 #: Same reference and block as the two Rust test files above, so the expected
 #: strings here can be checked against those files rather than re-derived.
 REFERENCE = "AGAACCCCCCTTAGTTAAGAACAAAAGCAACAATCTTCGTGGTCCTGG"
+#: ``REFERENCE`` with the 1-based 10_17 block replaced by ``AAACAAAC``.
+ALT = "AGAACCCCCAAACAAACAGAACAAAAGCAACAATCTTCGTGGTCCTGG"
 FRAGMENTED = "TEMPLATE:g.[10_12delinsAA;14_16delinsCAA;17_18insC]"
 COLLAPSED = "TEMPLATE:g.10_17delinsAAACAAAC"
 
 
-def test_normalize_collapses_a_genomic_payload_coincidence_change() -> None:
-    """The ``Normalizer.normalize`` entry point, against a genomic-only
-    reference (no transcripts, just ``genomic_sequences`` — a `g.`
-    normalization needs nothing else)."""
-    reference = {"genomic_sequences": {"TEMPLATE": REFERENCE}}
-    path = Path(tempfile.mkdtemp()) / "reference.json"
-    path.write_text(json.dumps(reference))
-    normalizer = ferro_hgvs.Normalizer(reference_json=str(path))
+def _normalizer(tmp_path) -> "ferro_hgvs.Normalizer":
+    """A ``Normalizer`` over a genomic-only reference (no transcripts, just
+    ``genomic_sequences`` — a ``g.`` normalization needs nothing else). Uses
+    pytest's ``tmp_path`` so the reference file is cleaned up automatically."""
+    path = tmp_path / "reference.json"
+    path.write_text(json.dumps({"genomic_sequences": {"TEMPLATE": REFERENCE}}))
+    return ferro_hgvs.Normalizer(reference_json=str(path))
 
-    assert normalizer.normalize(FRAGMENTED) == COLLAPSED
+
+def test_normalize_collapses_a_genomic_payload_coincidence_change(tmp_path) -> None:
+    """The ``Normalizer.normalize`` entry point collapses the fragmented input
+    to the single spanning ``delins``."""
+    assert _normalizer(tmp_path).normalize(FRAGMENTED) == COLLAPSED
 
 
 def test_from_sequences_collapses_the_same_change() -> None:
     """The ``from_sequences`` entry point: a pure function of the reference and
-    alternate bases, no provider at all. ``ALT`` is ``REFERENCE`` with the
-    10_17 block replaced by ``AAACAAAC``."""
-    alt = "AGAACCCCCAAACAAACAGAACAAAAGCAACAATCTTCGTGGTCCTGG"
-    derived = ferro_hgvs.from_sequences("TEMPLATE", 1, REFERENCE, alt)
+    alternate bases, no provider at all."""
+    derived = ferro_hgvs.from_sequences("TEMPLATE", 1, REFERENCE, ALT)
     assert str(derived) == COLLAPSED
 
 
-def test_both_entry_points_agree() -> None:
+def test_both_entry_points_agree(tmp_path) -> None:
     """The two surfaces reach the fix through different code paths — see the
     module docstring — so their agreement is itself worth pinning, not only
     each one's own answer."""
-    reference = {"genomic_sequences": {"TEMPLATE": REFERENCE}}
-    path = Path(tempfile.mkdtemp()) / "reference.json"
-    path.write_text(json.dumps(reference))
-    normalizer = ferro_hgvs.Normalizer(reference_json=str(path))
-
-    alt = "AGAACCCCCAAACAAACAGAACAAAAGCAACAATCTTCGTGGTCCTGG"
-    from_normalize = normalizer.normalize(FRAGMENTED)
-    from_derivation = str(ferro_hgvs.from_sequences("TEMPLATE", 1, REFERENCE, alt))
+    from_normalize = _normalizer(tmp_path).normalize(FRAGMENTED)
+    from_derivation = str(ferro_hgvs.from_sequences("TEMPLATE", 1, REFERENCE, ALT))
 
     assert from_normalize == from_derivation == COLLAPSED
