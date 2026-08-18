@@ -1131,6 +1131,11 @@ fn a_length_changing_block_the_exception_still_cannot_reach() {
 /// This is the axis **#1610 was filed on**, so as of #2155 that issue's own
 /// reproduction is closed on this axis too. See the module docs of
 /// `issue_1610_lone_unequal_length_delins`.
+///
+/// NOTE: the function name is kept for continuity with the pre-#2155 history
+/// above; despite reading "keeps_the_split", this test now asserts the block
+/// **merges** on `n.` (see the assertion below). The name is left stable so
+/// cross-references do not churn — the doc comment is the source of truth.
 #[test]
 fn non_coding_length_changing_block_keeps_the_split() {
     let result = normalize_with_provider(
