@@ -488,13 +488,39 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // while its `c.` form merges, which is the axis scope doing exactly what it
     // says and is worth reading as the clearest single demonstration of it.
     //
+    // **SUPERSEDED, 2026-08-17 (#2155) — see the correction immediately below.**
+    // The `g.` axis no longer splits this row; the carve-out that used to stop
+    // at `c.` was widened to every DNA axis, and `g.` is one of them.
+    //
     // The `LRG_199t1:c.992_1004delinsAC` family reaches
     // `c.[992_993del;995_997del;999_1004del]` — three PURE deletions, so
     // `delins-recommendation-reach-when-the-input-arrives-split` (decided) keeps
     // `:47` away from it on every axis: nothing was inserted, so `:46`'s
     // re-alignment mechanism cannot have occurred. That record cites this very
     // derivation by name.
-    (Status::ProjectionSplitsSingleMember, 21),
+    //
+    // # 21 -> 19 (#2155, the all-DNA-axis widen)
+    //
+    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]` was
+    // widened from the coding DNA axis alone to every DNA axis — `c./g./m./n.`
+    // — on the same simplicity ground `:47` already gives, `r.` still out on
+    // jurisdiction. Two rows leave this status, both `project-g`, both from the
+    // paragraph directly above that this widen makes stale:
+    //
+    // ```text
+    // project-g/LRG_199t1:c.850_901delinsTTCCTCGATGCCTG -> LRG_199:g.646630_646681delinsTTCCTCGATGCCTG
+    // project-g/LRG_199t1:c.9002_9009delinsTTT           -> LRG_199:g.1900047_1900054delinsTTT
+    // ```
+    //
+    // Both are payload-coincidence shapes on the genomic axis that the
+    // `c.`-only carve-out used to leave split; widened to `g.`, the carve-out
+    // now merges them into the single spanning `delins` `:47` recommends, same
+    // as their `c.` form already read. `PASSING_CENSUS`'s `ProjectionPinned`
+    // rises by the same two (1154 -> 1156), so the pair still moves in equal
+    // and opposite steps and no row left the enumeration — verified by a
+    // row-id diff of the enumeration regenerated on both sides of the widen,
+    // not by the counts agreeing.
+    (Status::ProjectionSplitsSingleMember, 19),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -657,7 +683,14 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // in DIVERGENCE_BUDGET's `InvariantViolationMust` — all five
     // `project-*/c.5439_5440ins6` axes become `projection-error-pinned` once the
     // size-number form is refused. Verified by row-id diff, not by the counts.
-    (Status::ProjectionPinned, 1154),
+    //
+    // 1154 -> 1156 (#2155, the all-DNA-axis widen). The two `project-g` rows
+    // that leave `ProjectionSplitsSingleMember` above — the two `delins.md:44`
+    // family rows now merging on the genomic axis under the widened
+    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]` —
+    // land here as the single spanning `delins` `:47` recommends. Equal and
+    // opposite, as this pair must always be read.
+    (Status::ProjectionPinned, 1156),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.
