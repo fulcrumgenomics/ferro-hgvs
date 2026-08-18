@@ -5167,7 +5167,114 @@ fn enclosing_exon<P: ReferenceProvider>(
     })
 }
 
-/// Resolve the group's [`AxisFrame`], or refuse the group.
+/// Whether the members of a cis group span an exon/exon junction of their own
+/// transcript, measured on the **input** span exactly as
+/// `canonicalize_from_sequence_with_rule` measures it before its own #1450
+/// refusal.
+///
+/// The experimental coding rederive path (`Normalizer::sequence_first_pass`)
+/// consults this before deriving, because the check has to see the input:
+/// once the derivation collapses two members into one run, the merged piece
+/// sits inside a single exon and no check on the output can tell a junction was
+/// crossed (`c.[10del;13del]` -> `c.32_33del`, #1450). Anything this cannot
+/// establish — no cis axis, no frame, members it cannot collect — answers
+/// `true`, so the caller keeps the per-member path rather than deriving blind.
+pub(crate) fn cis_members_cross_exon_junction<P: ReferenceProvider>(
+    variants: &[HgvsVariant],
+    provider: &P,
+) -> bool {
+    cis_member_span(variants, provider)
+        .map(|span| {
+            crosses_exon_junction(
+                span.kind,
+                &span.accession,
+                provider,
+                &span.frame,
+                span.lo,
+                span.hi,
+            )
+        })
+        .unwrap_or(true)
+}
+
+/// Whether a coding rederive moved the group out of the exon its **input**
+/// occupies.
+///
+/// The companion to [`cis_members_cross_exon_junction`] for the case that check
+/// cannot see: an input wholly inside one exon whose *derived* placement shifts
+/// past that exon's edge. `derive_block_members` shifts each piece within the
+/// sequence window alone, so a lone deletion at an exon's last base in a run
+/// that continues into the next exon is carried across the junction —
+/// `NM_001234.1:c.11del` derives to `c.33del`, two exons on. Surface B clamps
+/// that shift to the enclosing exon (`enclosing_exon`, #1450); this predicate
+/// lets the rederive path detect the escape and defer to it.
+///
+/// Anything it cannot establish — either span, or an enclosing exon for the
+/// input — answers `true`, so the caller keeps surface B rather than trusting an
+/// unchecked placement.
+pub(crate) fn rederived_leaves_input_exon<P: ReferenceProvider>(
+    input: &[HgvsVariant],
+    derived: &HgvsVariant,
+    provider: &P,
+) -> bool {
+    let leaves = || -> Option<bool> {
+        let before = cis_member_span(input, provider)?;
+        let derived_members = match derived {
+            HgvsVariant::Allele(allele) => allele.variants.as_slice(),
+            single => std::slice::from_ref(single),
+        };
+        let after = cis_member_span(derived_members, provider)?;
+        let (exon_lo, exon_hi) = enclosing_exon(
+            before.kind,
+            &before.accession,
+            provider,
+            &before.frame,
+            before.lo,
+            before.hi,
+        )?;
+        Some(after.lo < exon_lo || after.hi > exon_hi)
+    };
+    leaves().unwrap_or(true)
+}
+
+/// The axis, frame and member-span union of a cis group, as
+/// `canonicalize_from_sequence_with_rule` computes them before its exon checks.
+struct CisMemberSpan {
+    kind: CisKind,
+    accession: SmolStr,
+    frame: AxisFrame,
+    lo: i64,
+    hi: i64,
+}
+
+/// `None` when any piece of that is unavailable — no cis axis, no frame, or
+/// members `collect_canonical_edits` cannot collect on the body region.
+fn cis_member_span<P: ReferenceProvider>(
+    variants: &[HgvsVariant],
+    provider: &P,
+) -> Option<CisMemberSpan> {
+    let kind = cis_kind_of(variants.first()?)?;
+    let (template_accession, _, _, _) = member_axis_endpoints(&variants[0], kind)?;
+    let template_accession = template_accession.clone();
+    let frame = axis_frame(kind, &template_accession, provider)?;
+    let accession = template_accession.transcript_accession_smol();
+    let edits = collect_canonical_edits(
+        variants,
+        kind,
+        body_region(kind),
+        &template_accession,
+        ExtendedBody::OFF,
+    )?;
+    let (lo, hi) = edit_span_union(&edits)?;
+    Some(CisMemberSpan {
+        kind,
+        accession,
+        frame,
+        lo,
+        hi,
+    })
+}
+
 /// Whether `[lo, hi]` — a member-span union in axis coordinates — crosses an
 /// exon/exon junction of its own transcript (#1450).
 ///
@@ -14913,13 +15020,16 @@ fn rna_axis_is_transcript_relative<P: ReferenceProvider>(span: &MemberSpan, prov
 /// Carries what the panic message needs and nothing more; every field is read
 /// by `Normalizer::assert_in_bounds`.
 ///
-/// Gated like the rest of this chain: `assert_in_bounds` and its
-/// `in_bounds_self_check_enabled` flag are `#[cfg(debug_assertions)]`, and so is
-/// the `use merge::OutOfBoundsCoordinate` that imports this, so in release these
-/// items had no caller at all and only added compile time and dead code to the
-/// binary. `test` rides along so the unit tests below still build under
-/// `cargo test --release`, where `cfg(test)` holds but `debug_assertions` does not.
-#[cfg(any(debug_assertions, test))]
+/// **Not** gated on `debug_assertions`, unlike `assert_in_bounds` and its
+/// `in_bounds_self_check_enabled` flag. This chain used to be, because the oracle
+/// was its only caller; the experimental coding rederive path in
+/// `Normalizer::sequence_first_pass` now calls [`first_out_of_bounds_coordinate`]
+/// to refuse a rederived form naming a coordinate past its sequence, and that
+/// check must hold in release too — cfg-ing out the call instead would ship the
+/// unchecked form. That caller reads only whether a coordinate overran, so in
+/// release — where the oracle that reads the fields is compiled out — the fields
+/// are unread, hence the release-only `dead_code` allow.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct OutOfBoundsCoordinate {
     /// The provider key the length was read under, not the accession as
@@ -14979,7 +15089,6 @@ pub(crate) struct OutOfBoundsCoordinate {
 /// - **A provider that cannot report a length** leaves the member unchecked,
 ///   rather than failing a run for a reference that simply does not know. The
 ///   oracle only ever fires on a *known* overrun.
-#[cfg(any(debug_assertions, test))]
 pub(crate) fn first_out_of_bounds_coordinate<P: ReferenceProvider>(
     variant: &HgvsVariant,
     provider: &P,
@@ -14994,7 +15103,6 @@ pub(crate) fn first_out_of_bounds_coordinate<P: ReferenceProvider>(
 }
 
 /// [`first_out_of_bounds_coordinate`] for one member.
-#[cfg(any(debug_assertions, test))]
 fn member_out_of_bounds_coordinate<P: ReferenceProvider>(
     member: &HgvsVariant,
     provider: &P,
@@ -15038,7 +15146,6 @@ fn member_out_of_bounds_coordinate<P: ReferenceProvider>(
 /// the oracle blames normalization for a coordinate the caller wrote. Reading the
 /// ends independently sees the input's `5000`, and W4004 `PositionPastEnd`
 /// remains the mechanism that reports it.
-#[cfg(any(debug_assertions, test))]
 fn readable_endpoints(v: &HgvsVariant) -> [Option<(Region, i64)>; 2] {
     fn ends<T>(
         interval: &Interval<T>,
