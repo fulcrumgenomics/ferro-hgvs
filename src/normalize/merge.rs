@@ -6594,6 +6594,20 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
         ref_end: end,
         alt: denoted_by(pieces, start, end, ref_bytes),
     }];
+    // The span above is `pieces[0].ref_start .. pieces[last].ref_end` as they
+    // stood AFTER `shift_pieces`, so a pure indel this merge swallows can carry
+    // a flanking base that direction alone moved into (or out of) that range —
+    // 3' and 5' can push a boundary indel onto different, mutually-coincident
+    // reference bases, and this merge takes whichever boundary it is handed
+    // without asking whether it is minimal. Re-derive the merged piece's own
+    // hull the same way every other widening pass' output is trimmed
+    // (`shrink_pieces_to_differences`, a pure function of the reference and the
+    // payload) so the member this returns does not depend on which direction
+    // parked the boundary piece. See `direction_symmetry` in this module's
+    // tests for the case this closes (#2155's all-DNA-axis widen exposed it on
+    // `g.`; it was unreachable pre-widen because `coalesce_coding_frame_separation`
+    // already closed the relevant one-base gaps on `c.` before this pass ran).
+    shrink_pieces_to_differences(pieces, ref_bytes);
 }
 
 /// Merge a run of pieces that together span one inversion back into that single
@@ -20968,7 +20982,8 @@ mod tests {
             out
         }
 
-        /// The corpus: every 4-base core, replaced by every 5-base payload.
+        /// Every `core_len`-base core crossed with every `payload_len`-base
+        /// payload.
         ///
         /// **The shape is chosen because it is the one that reaches the
         /// partitioner**, not because it is where the defect happened to be
@@ -20978,12 +20993,12 @@ mod tests {
         /// function under test; a corpus of already-split alleles would mostly
         /// be refused before reaching it.
         ///
-        /// Cores are enumerated exhaustively rather than sampled. The rows that
-        /// exhibited the defect on the shipped default are 12 of the 256 cores,
-        /// and no stride over them could have been justified after the fact.
-        fn corpus() -> Vec<(String, String)> {
-            let payloads = words(5);
-            words(4)
+        /// Cores are enumerated exhaustively rather than sampled. `payloads` is
+        /// built once and shared across every core rather than regenerated per
+        /// core.
+        fn cores_by_payloads(core_len: usize, payload_len: usize) -> Vec<(String, String)> {
+            let payloads = words(payload_len);
+            words(core_len)
                 .into_iter()
                 .flat_map(|core| {
                     payloads
@@ -20993,40 +21008,49 @@ mod tests {
                 .collect()
         }
 
-        #[test]
-        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
+        /// Assert the re-derived member count is independent of shuffle
+        /// direction over `corpus`, on every partition arm this build
+        /// advertises. Shared by the net-insertion and net-deletion sweeps,
+        /// which differ only in their corpus, their comparison floor, and the
+        /// `what` label — the fan-out harness, the arm loop, and the two floors
+        /// are identical.
+        ///
+        /// The span is each row's core length, so the same helper serves a
+        /// net-insertion corpus (payload longer than core) and a net-deletion
+        /// one (payload shorter).
+        fn assert_direction_independent_member_count(
+            corpus: &[(String, String)],
+            min_comparisons: usize,
+            what: &str,
+        ) {
             let lo = PAD.len() + 1;
-            let hi = PAD.len() + 4;
-
-            // Parallel over the corpus: 256 cores x 1024 payloads x 4 arms is
-            // 1,048,576 re-derivations, which is ~68 s single-threaded — past
-            // nextest's 60 s SLOW threshold. Nothing is shared: each row builds
-            // its own `MockProvider`, so this is a pure fan-out and the corpus
-            // did not have to be sampled down to fit a time budget.
-            let corpus = corpus();
             let mut arms = 0usize;
             let mut compared = 0usize;
             let mut disagreements: Vec<String> = Vec::new();
 
+            // Parallel over the corpus x arms. Nothing is shared: each row builds
+            // its own `MockProvider`, so this is a pure fan-out and the corpus
+            // did not have to be sampled down to fit nextest's SLOW threshold.
+            //
+            // Each row yields `None` if it was skipped (equal payload/core, or an
+            // input that does not parse), `Some(None)` if it compared and the two
+            // directions agreed, or `Some(Some(msg))` if they disagreed.
             for name in PARTITION_RULE_NAMES {
                 let rule = partition_rule_from_env(Some(name))
                     .unwrap_or_else(|e| panic!("{name} is an arm this build has: {e}"));
                 arms += 1;
 
-                let found: Vec<(usize, Vec<String>)> = corpus
+                let rows: Vec<Option<Option<String>>> = corpus
                     .par_iter()
                     .map(|(core, payload)| {
-                        let mut compared = 0usize;
-                        let mut disagreements = Vec::new();
                         if payload == core {
-                            return (compared, disagreements);
+                            return None;
                         }
+                        let hi = lo + core.len() - 1;
                         let mut provider = MockProvider::new();
                         provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
                         let input = format!("NC_TEST.1:g.{lo}_{hi}delins{payload}");
-                        let Ok(variant) = parse_hgvs(&input) else {
-                            return (compared, disagreements);
-                        };
+                        let variant = parse_hgvs(&input).ok()?;
                         let members = [variant];
 
                         let three = canonicalize_from_sequence_with_rule(
@@ -21046,27 +21070,28 @@ mod tests {
 
                         // A row one direction re-derives and the other declines
                         // is a disagreement of the same kind, so the two `None`s
-                        // are compared rather than skipped: skipping them would
-                        // let a change that made the pass decline on one
-                        // direction read as a clean run.
-                        match (&three, &five) {
-                            (None, None) => {}
-                            (Some(three), Some(five)) if three.len() == five.len() => {}
-                            _ => disagreements.push(format!(
+                        // compare equal (agreed) rather than being skipped:
+                        // skipping them would let a change that made the pass
+                        // decline on one direction read as a clean run.
+                        let agreed = three.as_ref().map(Vec::len) == five.as_ref().map(Vec::len);
+                        Some(if agreed {
+                            None
+                        } else {
+                            Some(format!(
                                 "  FERRO_PARTITION={name} core={core} {input}\n    3': {}\n    \
                                  5': {}",
                                 describe(&three),
                                 describe(&five),
-                            )),
-                        }
-                        compared += 1;
-                        (compared, disagreements)
+                            ))
+                        })
                     })
                     .collect();
 
-                for (rows, mut found) in found {
-                    compared += rows;
-                    disagreements.append(&mut found);
+                for row in rows.into_iter().flatten() {
+                    compared += 1;
+                    if let Some(msg) = row {
+                        disagreements.push(msg);
+                    }
                 }
             }
 
@@ -21079,25 +21104,58 @@ mod tests {
                 "every arm this build advertises must be measured"
             );
             assert!(
-                compared >= 4 * 250_000,
-                "the corpus collapsed to {compared} comparisons, so a zero below says nothing"
+                compared >= min_comparisons,
+                "the {what} corpus collapsed to {compared} comparisons, so a zero below says \
+                 nothing"
             );
             assert!(
                 disagreements.is_empty(),
-                "{} row(s) re-derive a different number of members depending only on the shuffle \\
-                 direction. Direction moves a member's placement; it may not change how many \\
-                 members there are, or the partition is being read off a placement rather than \\
-                 off the sequence — which `canonical-form-choice-when-both-legal` (derive from \\
-                 the resulting sequence) and \\
-                 `separation-is-a-property-of-the-spelling-not-of-the-variant` both rule \\
-                 against. Showing the first 20:\\n{}",
+                "{} {what} row(s) re-derive a different number of members depending only on the \
+                 shuffle direction. Direction moves a member's placement; it may not change how \
+                 many members there are, or the partition is being read off a placement rather \
+                 than off the sequence — which `canonical-form-choice-when-both-legal` (derive \
+                 from the resulting sequence) and \
+                 `separation-is-a-property-of-the-spelling-not-of-the-variant` both rule against. \
+                 Showing the first 20:\n{}",
                 disagreements.len(),
                 disagreements
                     .iter()
                     .take(20)
                     .cloned()
                     .collect::<Vec<_>>()
-                    .join("\\n")
+                    .join("\n")
+            );
+        }
+
+        /// Net-insertion: a 4-base span replaced by every 5-base payload.
+        ///
+        /// 256 cores x 1024 payloads x 4 arms is 1,048,576 re-derivations
+        /// (~68 s single-threaded, past nextest's 60 s SLOW threshold), so the
+        /// harness runs it in parallel. The rows that exhibited the defect on
+        /// the shipped default are 12 of the 256 cores, and no stride over them
+        /// could have been justified after the fact.
+        #[test]
+        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
+            assert_direction_independent_member_count(
+                &cores_by_payloads(4, 5),
+                4 * 250_000,
+                "net-insertion",
+            );
+        }
+
+        /// Net-deletion: a 4-base span replaced by every 3-base payload.
+        ///
+        /// The net-insertion corpus above never reaches
+        /// [`place_direction_symmetrically`]'s `payload.len() < span.len()`
+        /// branch — the very branch #2155's direction-symmetry fix acts on.
+        /// This exercises it. A smaller payload than the sibling keeps it well
+        /// under nextest's SLOW threshold.
+        #[test]
+        fn the_member_count_does_not_depend_on_direction_for_a_net_deletion() {
+            assert_direction_independent_member_count(
+                &cores_by_payloads(4, 3),
+                4 * 16_000,
+                "net-deletion",
             );
         }
 
