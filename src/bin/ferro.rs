@@ -370,6 +370,51 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
         reject: Vec<String>,
     },
 
+    /// Show a Mutalyzer-style multi-axis view of a variant: the normalized form
+    /// plus the equivalent g/c/n/r/p axes, computed by ferro (values are ferro's
+    /// own conformant output and can differ from Mutalyzer's)
+    Mutalyzer {
+        /// HGVS variant to resolve
+        variant: Option<String>,
+
+        /// Transcript accession to resolve onto (required for a bare g. input)
+        #[arg(long)]
+        transcript: Option<String>,
+
+        /// Input file (one variant per line)
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format
+        #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+
+        /// Reference directory (with manifest.json from 'ferro prepare')
+        #[arg(long, required = true)]
+        reference: PathBuf,
+
+        /// Hard-fail if the reference's content does not match its recorded
+        /// identity (drifted in place). Default: warn and proceed (#1001).
+        #[arg(long)]
+        strict_reference: bool,
+
+        /// Error handling mode: strict, lenient, or silent
+        #[arg(long, default_value = "strict", value_parser = ["strict", "lenient", "silent"])]
+        error_mode: String,
+
+        /// Warning codes to ignore (comma-separated, e.g., W1001,W2001)
+        #[arg(long, value_delimiter = ',')]
+        ignore: Vec<String>,
+
+        /// Warning codes to always reject (comma-separated, e.g., W3003)
+        #[arg(long, value_delimiter = ',')]
+        reject: Vec<String>,
+    },
+
     /// Parse HGVS variants (validation only)
     Parse {
         /// HGVS variant to parse
@@ -894,6 +939,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_project(
                 variant.as_deref(),
                 &axis,
+                transcript.as_deref(),
+                input.as_ref(),
+                output.as_ref(),
+                &format,
+                &reference,
+                strict_reference,
+                &config,
+            )
+        }
+        Commands::Mutalyzer {
+            variant,
+            transcript,
+            input,
+            output,
+            format,
+            reference,
+            strict_reference,
+            error_mode,
+            ignore,
+            reject,
+        } => {
+            let config = build_error_config(&error_mode, &ignore, &reject);
+            run_mutalyzer(
+                variant.as_deref(),
                 transcript.as_deref(),
                 input.as_ref(),
                 output.as_ref(),
@@ -2150,6 +2219,174 @@ fn run_project(
 
     if error_count > 0 {
         Err(format!("{} variant(s) failed to project", error_count).into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Resolve the transcript a `ferro mutalyzer` view is computed against.
+///
+/// `--transcript` wins when given. Otherwise a transcript-coordinate input
+/// (`c.`/`n.`/`r.`) carries its transcript in its own accession; a genomic (or
+/// any other) input names none, so `--transcript` is required — returned as the
+/// `Err` message to print, so the common mistake earns a clear diagnosis rather
+/// than an obscure projection failure against a chromosome accession.
+fn resolve_mutalyzer_transcript(
+    parsed: &ferro_hgvs::HgvsVariant,
+    transcript: Option<&str>,
+) -> Result<String, String> {
+    use ferro_hgvs::CoordinateAxis;
+    if let Some(t) = transcript {
+        return Ok(t.to_string());
+    }
+    match parsed.coordinate_axis() {
+        Some(CoordinateAxis::Coding | CoordinateAxis::NonCoding | CoordinateAxis::Rna) => parsed
+            .accession()
+            .map(|accession| accession.to_string())
+            .ok_or_else(|| "--transcript is required".to_string()),
+        _ => Err("--transcript is required for a genomic input".to_string()),
+    }
+}
+
+/// `ferro mutalyzer`: a Mutalyzer-style multi-axis view of each input, computed
+/// by ferro. Interface-compatible with Mutalyzer's `/normalize` (one object with
+/// the normalized form plus the equivalent axes and warnings); the values are
+/// ferro's own conformant output. Reuses `run_project`'s reference-loading path.
+#[allow(clippy::too_many_arguments)]
+fn run_mutalyzer(
+    variant: Option<&str>,
+    transcript: Option<&str>,
+    input: Option<&PathBuf>,
+    output: Option<&PathBuf>,
+    format: &str,
+    reference: &Path,
+    strict_reference: bool,
+    error_config: &ErrorConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::data::cdot::CdotMapper;
+    use ferro_hgvs::data::projection::Projector;
+    use ferro_hgvs::project::VariantProjector;
+    use ferro_hgvs::reference::multi_fasta::{LoadOptions, MultiFastaProvider};
+    use std::sync::Arc;
+
+    // Parse once so errors can be reported in the requested format (parity with
+    // `run_project`, whose error stream stays parseable under `--format json`).
+    let out_format: OutputFormat = format.parse().unwrap_or_default();
+    let want_json = out_format == OutputFormat::Json;
+
+    // Build the projector (same reference-loading path as `run_project`).
+    let manifest_path = reference.join("manifest.json");
+    let provider = MultiFastaProvider::from_manifest_with_options(
+        &manifest_path,
+        LoadOptions {
+            strict_identity: strict_reference,
+            ..Default::default()
+        },
+    )?;
+    let cdot = provider
+        .cdot_mapper()
+        .cloned()
+        .unwrap_or_else(CdotMapper::new);
+    let provider = Arc::new(provider);
+    let projector = VariantProjector::new(Projector::new(cdot), provider).with_normalize_config(
+        ferro_hgvs::normalize::NormalizeConfig::for_entry_point(
+            ferro_hgvs::normalize::ShuffleDirection::ThreePrime,
+            error_config.clone(),
+        ),
+    );
+
+    // The `--ignore`/`--reject` preprocessing stage, same as `run_normalize` and
+    // `run_parse` build it (#1181 family): `--reject` rejects the input here and
+    // `--ignore` suppresses preprocessing warnings. The normalizer-directed half
+    // of the same `ErrorConfig` reaches projection via `for_entry_point` above,
+    // so this closes the gap `run_project` still carries.
+    let preprocessor = error_config.preprocessor();
+
+    let mut writer: Box<dyn Write> = match output {
+        Some(path) => Box::new(BufWriter::new(File::create(path)?)),
+        None => Box::new(io::stdout()),
+    };
+    let mut error_count = 0usize;
+
+    let process = |v: &str, writer: &mut dyn Write, line: Option<usize>| -> bool {
+        // Preprocess first so `--reject`/`--ignore` take effect. Errors echo the
+        // raw `v`; parsing and projection use the (possibly corrected) result,
+        // and `MutalyzerResult.input` echoes what was actually resolved.
+        let mut pre = preprocessor.preprocess(v);
+        if let Some(rejection) = pre.take_rejection_error() {
+            let _ =
+                cli_output_error_with_context(&mut io::stderr(), v, &rejection, out_format, line);
+            return false;
+        }
+        let parsed = match parse_hgvs(&pre.preprocessed) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = cli_output_error_with_context(&mut io::stderr(), v, &e, out_format, line);
+                return false;
+            }
+        };
+        let tx = match resolve_mutalyzer_transcript(&parsed, transcript) {
+            Ok(tx) => tx,
+            Err(msg) => {
+                let _ = writeln!(io::stderr(), "ERROR: {v}: {msg}");
+                return false;
+            }
+        };
+        match projector.mutalyzer(&pre.preprocessed, &tx) {
+            Ok(result) => {
+                let rendered = if want_json {
+                    serde_json::to_writer(&mut *writer, &result)
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| writeln!(writer).map_err(|e| e.to_string()))
+                } else {
+                    // `Display` does not end in a newline, so a single trailing
+                    // blank line separates records consistently in text mode.
+                    write!(writer, "{result}\n\n").map_err(|e| e.to_string())
+                };
+                if let Err(e) = rendered {
+                    let _ = writeln!(io::stderr(), "ERROR: failed writing output for {v}: {e}");
+                    return false;
+                }
+                true
+            }
+            Err(e) => {
+                let _ = cli_output_error_with_context(&mut io::stderr(), v, &e, out_format, line);
+                false
+            }
+        }
+    };
+
+    if let Some(v) = variant {
+        if !process(v, &mut writer, None) {
+            error_count += 1;
+        }
+    } else if let Some(input_path) = input {
+        let file = std::fs::File::open(input_path)?;
+        let reader = io::BufReader::new(file);
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if let Some(vs) = process_input_line(&line, line_num == 0) {
+                if !process(vs, &mut writer, Some(line_num + 1)) {
+                    error_count += 1;
+                }
+            }
+        }
+    } else {
+        let stdin = io::stdin();
+        for (line_num, line) in stdin.lock().lines().enumerate() {
+            let line = line?;
+            if let Some(vs) = process_input_line(&line, line_num == 0) {
+                if !process(vs, &mut writer, Some(line_num + 1)) {
+                    error_count += 1;
+                }
+            }
+        }
+    }
+
+    writer.flush()?;
+
+    if error_count > 0 {
+        Err(format!("{} variant(s) failed", error_count).into())
     } else {
         Ok(())
     }
@@ -4159,6 +4396,70 @@ mod tests {
         assert!(
             help.contains("FERRO_PARTITION"),
             "the switch itself must be named in the help"
+        );
+    }
+
+    #[test]
+    fn mutalyzer_subcommand_parses_its_arguments() {
+        use clap::Parser;
+        let cli = super::Cli::try_parse_from([
+            "ferro",
+            "mutalyzer",
+            "NM_000088.3:c.589G>T",
+            "--transcript",
+            "NM_000088.3",
+            "--reference",
+            "reference-dir",
+            "--format",
+            "json",
+        ])
+        .expect("`ferro mutalyzer` arguments should parse");
+        match cli.command {
+            super::Commands::Mutalyzer {
+                variant,
+                transcript,
+                reference,
+                format,
+                ..
+            } => {
+                assert_eq!(variant.as_deref(), Some("NM_000088.3:c.589G>T"));
+                assert_eq!(transcript.as_deref(), Some("NM_000088.3"));
+                assert_eq!(reference, std::path::PathBuf::from("reference-dir"));
+                assert_eq!(format, "json");
+            }
+            _ => panic!("expected Commands::Mutalyzer"),
+        }
+    }
+
+    #[test]
+    fn mutalyzer_transcript_resolution_prefers_the_flag_and_guards_genomic_input() {
+        use super::resolve_mutalyzer_transcript;
+
+        // An explicit --transcript always wins, whatever the input's own axis.
+        let coding = parse_hgvs("NM_000059.4:c.6T>G").expect("valid coding HGVS");
+        assert_eq!(
+            resolve_mutalyzer_transcript(&coding, Some("NM_other.1")).unwrap(),
+            "NM_other.1"
+        );
+
+        // A transcript-coordinate input falls back to its own accession.
+        assert_eq!(
+            resolve_mutalyzer_transcript(&coding, None).unwrap(),
+            "NM_000059.4"
+        );
+
+        // A genomic input with no --transcript is a clear, specific error — not a
+        // fall-through that later fails obscurely against a chromosome accession.
+        let genomic = parse_hgvs("NC_000013.11:g.32316466T>G").expect("valid genomic HGVS");
+        assert_eq!(
+            resolve_mutalyzer_transcript(&genomic, None).unwrap_err(),
+            "--transcript is required for a genomic input"
+        );
+
+        // ...but with --transcript the genomic input resolves.
+        assert_eq!(
+            resolve_mutalyzer_transcript(&genomic, Some("NM_000059.4")).unwrap(),
+            "NM_000059.4"
         );
     }
 
