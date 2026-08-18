@@ -733,8 +733,8 @@
 //! rows.
 //!
 //! **#2155 supersedes that ruling to all DNA axes.** `CoincidenceCarveOut::for_axis`
-//! now gates on `AxisFrame::is_dna` (`c./g./m./n.`) instead of
-//! `AxisFrame::is_coding_dna` (`c.` alone) — see `merge.rs`'s doc comment on
+//! now gates on `AxisFrame::is_dna` (`c./g./m./n.`) instead of the removed
+//! coding-DNA-only predicate (`c.` alone) — see `merge.rs`'s doc comment on
 //! `CoincidenceCarveOut` for the mechanism. The frameless axes this guard's rows
 //! live on are squarely inside `is_dna`'s domain, so the carve-out now reaches
 //! exactly the rows it used to be excluded from, and the guard fires:
@@ -1240,8 +1240,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // construction — it is an ordinary rank-2 confluence gain, in the
     // direction the ratchet welcomes, and needed no separate adjudication
     // beyond naming the cause. Verified by diffing the full divergence-id list
-    // against the pre-#2155 scoping (`AxisFrame::is_coding_dna` at all three
-    // `merge.rs` call sites `CoincidenceCarveOut::for_axis`,
+    // against the pre-#2155 scoping (the removed coding-DNA-only predicate, at
+    // all three `merge.rs` call sites `CoincidenceCarveOut::for_axis`,
     // `payload_coalesce_applies` and `compensating_gap_coalesce_applies`
     // gate): those two ids are the only ones removed, none added, and 3' is
     // byte-identical on the same diff (its `THREE_PRIME` pins are untouched by
