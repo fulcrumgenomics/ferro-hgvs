@@ -6594,6 +6594,20 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
         ref_end: end,
         alt: denoted_by(pieces, start, end, ref_bytes),
     }];
+    // The span above is `pieces[0].ref_start .. pieces[last].ref_end` as they
+    // stood AFTER `shift_pieces`, so a pure indel this merge swallows can carry
+    // a flanking base that direction alone moved into (or out of) that range —
+    // 3' and 5' can push a boundary indel onto different, mutually-coincident
+    // reference bases, and this merge takes whichever boundary it is handed
+    // without asking whether it is minimal. Re-derive the merged piece's own
+    // hull the same way every other widening pass' output is trimmed
+    // (`shrink_pieces_to_differences`, a pure function of the reference and the
+    // payload) so the member this returns does not depend on which direction
+    // parked the boundary piece. See `direction_symmetry` in this module's
+    // tests for the case this closes (#2155's all-DNA-axis widen exposed it on
+    // `g.`; it was unreachable pre-widen because `coalesce_coding_frame_separation`
+    // already closed the relevant one-base gaps on `c.` before this pass ran).
+    shrink_pieces_to_differences(pieces, ref_bytes);
 }
 
 /// Merge a run of pieces that together span one inversion back into that single
