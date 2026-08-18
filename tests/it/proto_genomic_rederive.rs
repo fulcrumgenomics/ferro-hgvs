@@ -134,3 +134,64 @@ fn a_whole_span_inversion_is_not_shredded_in_the_raw_derivation() {
         "whole-span revcomp must be one inv in the raw derivation, not shredded"
     );
 }
+
+/// Phase 3 safety: the in-cut inversion predicate must NOT mis-type a
+/// duplication as `inv`. A dup is a pure insertion (empty reference block), and
+/// the predicate requires `block_ref.len() >= 2`, so it structurally cannot
+/// fire — verified here on both `normalize` and the raw `from_sequences` path,
+/// including the adversarial case of a duplicated unit that is its own
+/// reverse-complement palindrome.
+#[test]
+fn a_duplication_survives_and_is_not_mistyped_as_inversion() {
+    let contig = "NC_TEST.1";
+    let opts = FromSequencesOptions::default();
+
+    // Isolated tandem dup of ACGT at g.11_14.
+    {
+        let refseq = "GGGGGGGGGGACGTCCCCCCCCCC";
+        let altseq = "GGGGGGGGGGACGTACGTCCCCCCCCCC";
+        let p = provider(contig, refseq);
+        let n = Normalizer::new(p.clone());
+        assert_eq!(
+            norm(&p, &format!("{contig}:g.11_14dup")),
+            format!("{contig}:g.11_14dup")
+        );
+        let raw = n
+            .from_sequences(contig, 1, refseq, altseq, &opts, false)
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            raw,
+            format!("{contig}:g.11_14dup"),
+            "raw derivation of a dup is a dup"
+        );
+    }
+
+    // Adversarial: the duplicated unit GAATTC is its own reverse complement, so a
+    // naive whole-block revcomp test could mis-fire. It must still be a dup.
+    {
+        let unit = "GAATTC";
+        assert_eq!(
+            revcomp(unit),
+            unit,
+            "fixture: GAATTC is a revcomp palindrome"
+        );
+        let refseq = format!("GGGGGGGGGG{unit}CCCCCCCCCC");
+        let altseq = format!("GGGGGGGGGG{unit}{unit}CCCCCCCCCC");
+        let p = provider(contig, &refseq);
+        let n = Normalizer::new(p.clone());
+        assert_eq!(
+            norm(&p, &format!("{contig}:g.11_16dup")),
+            format!("{contig}:g.11_16dup")
+        );
+        let raw = n
+            .from_sequences(contig, 1, &refseq, &altseq, &opts, false)
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            raw,
+            format!("{contig}:g.11_16dup"),
+            "a palindrome-unit dup must stay a dup, not become an inv"
+        );
+    }
+}
