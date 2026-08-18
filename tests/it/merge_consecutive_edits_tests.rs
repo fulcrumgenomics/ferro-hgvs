@@ -1067,7 +1067,9 @@ fn coding_length_changing_block_across_codons_is_described_individually() {
         ),
         "NM_TEST.1:n.2_5delinsAAC",
         "#2155 widens `delins.md:47`'s carve-out to every DNA axis, so `n.` is \
-         now in reach and the block merges just as `c.` does",
+         now in reach and the block merges just as `c.` does. This is the axis \
+         #1610 was filed on, so that issue's reproduction is closed here too — \
+         see `issue_1610_lone_unequal_length_delins`",
     );
     assert_eq!(
         normalize_with_provider(
@@ -1107,40 +1109,6 @@ fn a_length_changing_block_the_exception_still_cannot_reach() {
         "NM_TEST.1:c.[2T>C;4del]",
         "`c.2` and `c.4` sit in different codons, so `general.md:35`'s \
          one-amino-acid conjunct is unmet and the members stay individual",
-    );
-}
-
-/// The same block on `n.`, asserted on its own so the axis half of the rule
-/// keeps a test of its own rather than living only as the control above. The
-/// deletion 3'-shifts down the `A` run at `n.5-9`, which is why the coding
-/// exception has to be evaluated *before* the shift: afterwards the two runs
-/// are four bases apart and no one-base rule could rejoin them even where the
-/// codon test allows it.
-///
-/// # UNMOVED BY #1610, RE-PINNED BY #2155
-///
-/// An earlier revision of this branch (pre-#1610) pinned this to the whole
-/// `n.2_5delinsAAC`, then #1610 shipped `split_is_a_placed_gap_coincidence`
-/// scoped to the coding DNA axis only, moving `n.` to the split pinned above
-/// for a time. **#2155 supersedes that scope to every DNA axis**
-/// (`rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`), so
-/// `n.` is back in reach and this row returns to the whole form — the same
-/// string the pre-#1610 revision carried, though for the current, wider-scope
-/// reason rather than the original axis-blind one.
-///
-/// This is the axis **#1610 was filed on**, so as of #2155 that issue's own
-/// reproduction is closed on this axis too. See the module docs of
-/// `issue_1610_lone_unequal_length_delins`.
-#[test]
-fn non_coding_length_changing_block_keeps_the_split() {
-    let result = normalize_with_provider(
-        provider_with_simple_transcript(),
-        "NM_TEST.1:n.2_5delinsAAC",
-    );
-    assert_eq!(
-        result, "NM_TEST.1:n.2_5delinsAAC",
-        "#2155 widens `delins.md:47`'s carve-out to every DNA axis, so `n.` \
-         merges the block whole just as `c.` does",
     );
 }
 
