@@ -13,6 +13,7 @@
 - [Normalize variants](guide/normalize-variants.md)
 - [Normalize or rederive?](guide/normalize-or-rederive.md)
 - [Project to another axis](guide/project-variants.md)
+- [A Mutalyzer-style multi-axis view](guide/mutalyzer-view.md)
 - [Deriving a description from sequences](guide/deriving-from-sequences.md)
 - [Reference data](guide/reference-data.md)
 - [Error handling](guide/error-handling.md)
