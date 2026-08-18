@@ -53,12 +53,16 @@
 //! merging this row back into one would contradict the only clause that reaches
 //! it. That needs a ruling; it is not a confluence fix.
 //!
-//! ## Row 2 — MSH2, UNEQUAL length. Ferro VIOLATES a decided ruling.
+//! ## Row 2 — MSH2, UNEQUAL length. Since #2155, ferro FOLLOWS `delins.md:47`.
 //!
 //! ```text
 //! NC_000002.11:g.47639670_47639673delinsTT
-//!   -> NC_000002.11:g.[47639670_47639671del;47639673G>T]
+//!   -> NC_000002.11:g.47639670_47639673delinsTT
 //! ```
+//!
+//! (Unchanged: the spanning form is already what the input names. See the
+//! 2026-08-17 correction section below for why this row moved and what it
+//! used to read.)
 //!
 //! The span is 4 nt and the payload is 2 nt — net **-2**. There is no
 //! column-for-column reading available, so nothing about the input forces any
@@ -69,8 +73,9 @@
 //! That coincidence is precisely the construction `delins.md:46` builds — "parts
 //! of the inserted sequence *align* with the reference sequence, giving an
 //! alternative description" — and `delins.md:47` answers it: **"The `delins`
-//! format is recommended"**. Ferro emits the alignment-driven split that `:47`
-//! advises against.
+//! format is recommended"**. Since #2155, ferro emits exactly that spanning
+//! form — see the 2026-08-17 correction section below; before that date it
+//! emitted the alignment-driven split `:47` advises against.
 //!
 //! **The ruling is `delins-merge-vs-individual-gap-two-or-more`**, in
 //! `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, status
@@ -87,7 +92,8 @@
 //! `g.47639670_47639673delinsTT` is minimal (reference `A,G,T,G` against payload
 //! `T,T` shares neither a prefix nor a suffix, so it cannot be trimmed), and the
 //! split exists only because of the payload/reference coincidence. That is the
-//! ruling's case.
+//! ruling's case — and, since #2155 widened the axis the ruling's carve-out
+//! reaches, it is now honoured on this `g.` row too.
 //!
 //! ### One boundary caveat, recorded so the next reader does not trip on it
 //!
@@ -135,18 +141,29 @@
 //! narrower of the two. Read them in that order.
 //!
 //! **The row's SPLIT nevertheless moved**, which is a separate and much smaller
-//! fact: the partition default flip re-derives the block from the resulting
-//! sequence, so the cut lands at a different place inside the same span. Both the
-//! old and the new spelling are two members separated by an unchanged base, so
-//! `general.md:34` is satisfied by each and `canonical-form-choice-when-both-legal`
-//! selects between them by derivation. That is an output-moving change and owes
-//! the release a `Representation-Change:` trailer, which #1835 carries.
+//! fact — as of the history through #1835, before the correction below: the
+//! partition default flip re-derives the block from the resulting sequence, so
+//! the cut lands at a different place inside the same span. Both the old and
+//! the new spelling were two members separated by an unchanged base, so
+//! `general.md:34` was satisfied by each and `canonical-form-choice-when-both-legal`
+//! selected between them by derivation. That was an output-moving change and
+//! owed the release a `Representation-Change:` trailer, which #1835 carried.
 //!
-//! The contrast this module exists for is intact. Row 1 (equal-length) and row 2
-//! (unequal-length) still both split, and they still split for the reason the
-//! module argues — not because of a merge rule neither of them meets.
+//! **This section's own claim that "row 2 was never going to merge" is now
+//! superseded — see the 2026-08-17 correction below.** It was true of the
+//! ruling as scoped through #1835; it stopped being true the day the axis scope
+//! widened.
 //!
-//! # #1610 CONSIDERED MOVING ROW 2, AND THE AXIS SCOPE IS WHY IT DOES NOT
+//! # CORRECTED 2026-08-17 (#2155): row 2 DOES merge now — the axis scope widened
+//!
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` was **superseded
+//! to all DNA axes** on 2026-08-17 (#2155): `:47`'s carve-out now reaches
+//! `c./g./m./n.`, not `c.` alone. Row 2 is `NC_000002.11:g.`, one of the axes
+//! newly in reach. So both paragraphs above — "So `:47` does not reach it" and
+//! "Row 2's split is therefore conformant" — describe the ruling as it stood
+//! before that date, not as it stands now.
+//!
+//! # #1610 predicted this outcome BEFORE it happened, and the axis is why it now does
 //!
 //! `unequal-length-block-a-placed-gap-is-not-a-separation` (decided) keeps a
 //! lone unequal-length net-deletion `delins` whole where the derived split is a
@@ -155,19 +172,26 @@
 //! derived members sit one unchanged base apart, and that base is a payload `T`
 //! landing on a reference `T`.
 //!
-//! It is nevertheless unmoved, because that rule is gated on
-//! `CoincidenceCarveOut::may_disbelieve_a_separation` — i.e. on the same
-//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` this module
-//! already argues from. Row 2 is `g.`, so `:47` does not reach it and
-//! `general.md:34` governs unqualified, which is precisely this module's
-//! position. The record and this module now agree; they did not always.
+//! This section used to say row 2 was "nevertheless unmoved", because #1610's
+//! rule is gated on `CoincidenceCarveOut::may_disbelieve_a_separation` — the
+//! same gate this module already argues from — and that gate answered `false`
+//! for `g.`. **It now answers `true`.** #2155 widened the same
+//! `CoincidenceCarveOut` the axis scope above names, so #1610's rule reaches
+//! row 2's shape and merges it: exactly the shape-match this section already
+//! established, now actually taken.
 //!
-//! An earlier revision of #1610 shipped the rule axis-blind and **did** move this
-//! row, inverting the negative guard below to match. That was measured to take
-//! `spec_conformance_axis`'s `guard_violations` from 0 to 5 — the rejected
-//! SVD-WG010 shape on the frameless axes — and was reverted along with the guard
-//! when the rule took the gate. So the guard below stands as written. Do not
-//! invert it without answering that rank-1 cost.
+//! An earlier revision of #1610 shipped the rule axis-blind — reaching every
+//! axis rather than none off `c.` — and that measured a **rank-1 regression**:
+//! `spec_conformance_axis`'s `guard_violations` moved 0 to 5, the rejected
+//! SVD-WG010 shape on the frameless axes generally, not scoped to this row's own
+//! shape. #2155 is a different change: a **deliberate, adjudicated** widening of
+//! the carve-out itself (see `delins-payload-coincidence-carve-out-is-coding-
+//! dna-scoped`'s supersession note), not an accidental axis-blind gate. Its own
+//! measured cost on the same guard is `guard_violations` 0 -> 12 in both
+//! directions (`spec_conformance_axis.rs`), disclosed and accepted as the
+//! ruling's own rule-2 deviation — not reverted. So the guard below now asserts
+//! the **positive** — that row 2 reaches the spanning form — rather than the
+//! negative it asserted through #1835.
 //!
 //! # Gating, and the hermetic companion that covers what this file cannot
 //!
@@ -182,6 +206,18 @@
 //! only thing separating the two verdicts. Read the two together: the hermetic
 //! file is the gate, and this file is the reality check that the synthetic shape
 //! still matches biology.
+//!
+//! **The two files' unequal rows no longer land the same way, and that is
+//! expected, not a divergence to reconcile.** Row 2 here (`AGTG` -> `TT`)
+//! derives a placed gap plus a `delins`-rendering member, meets every one of
+//! #1610's shape conditions, and merges under the widened axis. The hermetic
+//! file's unequal arm (`ATG` -> `TC`) derives a placed gap plus a plain
+//! **substitution**, which #1610's own fourth condition excludes regardless of
+//! axis, so it stays split. The hermetic file's own positive control
+//! (`the_widened_carve_out_now_merges_a_placed_gap_shape_on_g`) reproduces this
+//! row's shape hermetically and merges, which is what actually verifies the
+//! widening on every PR — this file only verifies it against real biology, in
+//! the nightly.
 //!
 //! The gate
 //! is the strict form (the one `issue_806_effect_real_residues.rs` uses): an
@@ -226,31 +262,41 @@ const BRCA2_EQUAL_LENGTH: Row = Row {
     bases: "GTG",
 };
 
-/// Unequal length, and split — which `general.md:34` governs unqualified,
-/// because `delins.md:47` is scoped to the coding DNA axis and this is a `g.`
-/// row.
+/// Unequal length, and — since #2155 (2026-08-17) — MERGED: `delins.md:47`'s
+/// carve-out now reaches this `g.` row, so `general.md:34`'s default no longer
+/// governs it unqualified. `expected` is the spanning form, identical to
+/// `input`.
 ///
-/// **The assert-then-flip is withdrawn (#1835)** — see the module docs. `expected`
-/// is a conformant output, not "the current, wrong" one. It moved within the
-/// span when the partition default flipped (was
-/// `g.[47639670_47639671del;47639673G>T]`); both spellings are two members
-/// separated by the unchanged base at 47639672, and
-/// `canonical-form-choice-when-both-legal` selects between them by derivation.
+/// **History, kept because it explains why `expected` changed twice.** Through
+/// #1835 the split moved *within the span* when the partition default flipped
+/// (from `g.[47639670_47639671del;47639673G>T]` to
+/// `g.[47639670_47639671delinsT;47639673del]`) while staying a split — both
+/// spellings were two members separated by the unchanged base at 47639672, and
+/// `canonical-form-choice-when-both-legal` selected between them by
+/// derivation. #2155 is a second, independent move: the axis scope widened, so
+/// the split — whichever spelling it was — no longer survives at all. See the
+/// module docs' 2026-08-17 correction section for the full argument.
 const MSH2_UNEQUAL_LENGTH: Row = Row {
     input: "NC_000002.11:g.47639670_47639673delinsTT",
-    expected: "NC_000002.11:g.[47639670_47639671delinsT;47639673del]",
+    expected: "NC_000002.11:g.47639670_47639673delinsTT",
     accession: "NC_000002.11",
     span: (47_639_670, 47_639_673),
     bases: "AGTG",
 };
 
-/// The form `delins.md:47` would recommend **if it reached this axis**. It does
-/// not, so ferro must NOT emit this.
+/// The split form `general.md:34` used to require and `delins.md:47` always
+/// recommended against, kept as a negative guard now that `expected` **is**
+/// the spanning form: the assertion below requires ferro's answer to differ
+/// from this, so a regression back to the pre-#2155 split is caught rather
+/// than silently re-blessed.
 ///
-/// Kept, and repurposed from a flip target into a negative guard: the assertion
-/// below requires ferro's answer to differ from it. Named rather than left in
-/// prose so it stays greppable from the ruling record.
-const MSH2_SPANNING_FORM_OFF_AXIS: &str = "NC_000002.11:g.47639670_47639673delinsTT";
+/// Named rather than left in prose so it stays greppable from the ruling
+/// record. Previously named `MSH2_SPANNING_FORM_OFF_AXIS` and used the other
+/// way around (asserted equal to nothing, not-equal to `expected`); the rename
+/// and the pinned string both changed to the split spelling #1835 last shipped,
+/// since that is now the form to guard *against* rather than the form to guard
+/// *for*.
+const MSH2_SPLIT_FORM_PRE_2155: &str = "NC_000002.11:g.[47639670_47639671delinsT;47639673del]";
 
 /// Both rows, side by side. See the module docs for the whole argument.
 ///
@@ -313,26 +359,27 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts() {
         BRCA2_EQUAL_LENGTH.input
     );
 
-    // Row 2 — CONFORMANT, and no longer an assert-then-flip. See the module docs.
+    // Row 2 — since #2155, MERGED. See the module docs' 2026-08-17 correction.
     assert_eq!(
         normalize(MSH2_UNEQUAL_LENGTH.input),
         MSH2_UNEQUAL_LENGTH.expected,
-        "unequal-length {} is split at the unchanged base at 47639672, which is what \
-         `general.md:34` requires. `delins.md:47` would recommend the spanning \
-         {MSH2_SPANNING_FORM_OFF_AXIS} instead, but \
-         `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47` to the coding \
-         DNA axis and this is a genomic reference, so it does not reach this row. If this just \
-         failed with the SPANNING form, that is a REGRESSION against the axis scope, not the \
-         fix an older revision of this message promised — read the module docs before re-pinning",
+        "unequal-length {} must collapse to the spanning form: the derived split is a placed \
+         gap (`47639673del`) plus a `delins`-rendering member (`47639670_47639671delinsT`), \
+         which is exactly `unequal-length-block-a-placed-gap-is-not-a-separation`'s (#1610) \
+         shape, and since #2155 widened `delins-payload-coincidence-carve-out-is-coding-dna-\
+         scoped` to every DNA axis, `:47`'s carve-out now reaches this `g.` row and recommends \
+         the spanning form it always would have off that axis restriction. If this just failed \
+         with the split form {MSH2_SPLIT_FORM_PRE_2155}, that is a REGRESSION against the \
+         widened axis scope, not the pre-#2155 conformant answer an older revision of this \
+         message asserted — read the module docs before re-pinning",
         MSH2_UNEQUAL_LENGTH.input
     );
 
-    // The negative guard the flip target became: ferro must not reach the
-    // off-axis spanning form.
+    // The positive guard: ferro must not regress back to the pre-#2155 split.
     assert_ne!(
-        MSH2_UNEQUAL_LENGTH.expected, MSH2_SPANNING_FORM_OFF_AXIS,
-        "the pinned output equals the off-axis spanning form — `delins.md:47` does not reach a \
-         `g.` row, so pinning its recommendation here would encode a violation of the decided \
-         `delins-payload-coincidence-carve-out-is-coding-dna-scoped`"
+        MSH2_UNEQUAL_LENGTH.expected, MSH2_SPLIT_FORM_PRE_2155,
+        "the pinned output equals the pre-#2155 split form — `delins.md:47`'s carve-out reaches \
+         every DNA axis now, so pinning the split here would encode a regression against the \
+         widened `delins-payload-coincidence-carve-out-is-coding-dna-scoped`"
     );
 }

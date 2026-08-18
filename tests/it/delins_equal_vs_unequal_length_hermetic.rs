@@ -36,11 +36,21 @@
 //! partition rather than the shuffle.
 //!
 //! ```text
-//! EQUAL    NC_TEST.1:g.264_266delinsCTC -> NC_TEST.1:g.[264A>C;266G>C]
-//! UNEQUAL  NC_TEST.1:g.264_266delinsTC  -> NC_TEST.1:g.[264del;266G>C]
+//! EQUAL    NC_TEST.1:g.264_266delinsCTC  -> NC_TEST.1:g.[264A>C;266G>C]
+//! UNEQUAL  NC_TEST.1:g.264_266delinsTC   -> NC_TEST.1:g.[264del;266G>C]
 //! ```
 //!
 //! Both strings above are copy-pasted from this base's output.
+//!
+//! A third, separate arm — [`MERGE_INPUT`], on its own contig — demonstrates
+//! the thing neither of the two above can: since #2155, `:47`'s carve-out
+//! reaches this axis too, and a block whose derived split is a placed gap plus
+//! a `delins`-rendering member (not [`UNEQUAL_INPUT`]'s plain substitution) now
+//! collapses to the spanning form on `g.`, exactly as it already did on `c.`.
+//! See [`MERGE_INPUT`]'s doc comment for the construction and the module
+//! section "The unequal arm still does not merge" for why the two arms above
+//! land differently even though both are net-deletion, single-unchanged-base
+//! blocks.
 //!
 //! ## The two arms differ only in payload length. Asserted, not asserted-in-prose.
 //!
@@ -73,17 +83,19 @@
 //! reach this arm either: at equal length the interior column is retained by
 //! denotation, not by the payload/reference coincidence that ruling is scoped to.
 //!
-//! **Unequal (3 -> 2): ferro's split is CONFORMANT, and the clause that would
-//! have condemned it does not reach a `g.` description.** There is no
-//! column-for-column reading, so nothing in the input forces the `T` at 265 to
-//! be retained. It survives into ferro's output *only* because the payload
-//! happens to open with a `T` that an aligner can pair it with. That coincidence
-//! is the construction `delins.md:46` builds — "parts of the inserted sequence
-//! *align* with the reference sequence, giving an alternative description" — and
-//! `delins.md:47` answers it: **"The `delins` format is recommended"**.
+//! **Unequal (3 -> 2): ferro's split is still CONFORMANT, but no longer because
+//! `:47` is off this axis — it isn't, any more.** There is no column-for-column
+//! reading, so nothing in the input forces the `T` at 265 to be retained. It
+//! survives into ferro's output *only* because the payload happens to open with
+//! a `T` that an aligner can pair it with. That coincidence is the construction
+//! `delins.md:46` builds — "parts of the inserted sequence *align* with the
+//! reference sequence, giving an alternative description" — and `delins.md:47`
+//! answers it: **"The `delins` format is recommended"**.
 //!
-//! But `:47` is scoped off this axis. See the withdrawal section below before
-//! reading the record quotations that follow as an indictment of this arm.
+//! Read the section below ("The unequal arm still does not merge") before
+//! reading the record quotations that follow as an indictment of this arm — the
+//! axis half of that indictment was retired by #2155, and what is left is a
+//! *type* argument, not an axis one.
 //!
 //! The governing record is the ruling `delins-merge-vs-individual-gap-two-or-more`
 //! in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, status
@@ -141,6 +153,33 @@
 //! the identical instruction for its own `g.` row under #1835, on this reasoning.
 //! The withdrawal was applied to one of the two siblings and not the other; this
 //! is the other.
+//!
+//! # CORRECTED 2026-08-17 (#2155): the axis half of the paragraph above is now
+//! # wrong. The unequal arm still does not merge — read on for why.
+//!
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` was **superseded
+//! to all DNA axes** on 2026-08-17 (#2155): `:47`'s carve-out now reaches
+//! `c./g./m./n.`, and `NC_TEST.1:g.` is one of them. So the sentence above
+//! reading "`:47` does not reach them" is no longer true, and if this file is
+//! read only that far it now looks like a defect that this arm still splits.
+//! It is not one. [`MERGE_INPUT`] below shows the axis genuinely reaches this
+//! contig now: same axis, same net-deletion, same single-unchanged-base shape,
+//! and it merges.
+//!
+//! What still keeps *this* arm split is the other half of
+//! [`UNEQUAL_SPANNING_FORM`]'s doc comment, which was already on record before
+//! this correction and needed no change: the derived split
+//! `[264del;266G>C]` has a lone **substitution** as its second member, and
+//! `merge.rs`'s `piece_renders_as_delins` excludes exactly that shape (a
+//! single reference base replaced by a single payload base is a real,
+//! rank-1 type the split buys — see `split_buys_no_higher_priority_type`'s doc
+//! comment — not an alignment artefact). The carve-out's own machinery
+//! (`split_is_a_placed_gap_coincidence`) requires every non-gap member to
+//! render as a `delins`; a plain substitution never does, on any axis. So this
+//! arm now declines the merge on **type**, where it used to decline on
+//! **axis** — the outcome is unchanged, the reason is not, and a reader citing
+//! the axis for it after today would be citing a superseded reason for a
+//! still-correct output.
 //!
 //! # Both arms are also checked against the bases they denote
 //!
@@ -202,57 +241,120 @@ const EQUAL_INPUT: &str = "NC_TEST.1:g.264_266delinsCTC";
 const EQUAL_EXPECTED: &str = "NC_TEST.1:g.[264A>C;266G>C]";
 
 /// UNEQUAL arm — the same span, the same reference bases, one fewer payload
-/// base. `delins.md:47` would recommend the spanning form, but
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes that clause
-/// to the coding DNA axis and this is `g.`, so `general.md:34` governs and the
-/// members stay individual.
+/// base. `delins.md:47` recommends the spanning form for this shape, and since
+/// #2155 its carve-out reaches this axis (`g.`) — but the derived split still
+/// declines to merge, on **type**: see [`UNEQUAL_SPANNING_FORM`]'s doc comment.
 const UNEQUAL_INPUT: &str = "NC_TEST.1:g.264_266delinsTC";
 
-/// Measured on this base, and **conformant** — see the withdrawal section in the
-/// module docs. This is not an assert-then-flip; there is no flip owed.
+/// Measured on this base, and **conformant** — see the module docs' 2026-08-17
+/// correction. This is not an assert-then-flip; there is no flip owed, before
+/// or after #2155.
 const UNEQUAL_EXPECTED: &str = "NC_TEST.1:g.[264del;266G>C]";
 
 /// The spanning form, named only so the guard below can assert ferro does **not**
-/// emit it on this axis.
+/// emit it here.
 ///
 /// It was previously called `UNEQUAL_RULING_CONFORMANT` and documented as the
-/// answer a future implementation should reach. That was wrong — `delins.md:47`
-/// does not reach a `g.` description — and the rename is deliberate, so a reader
-/// grepping the old name from the ruling record lands on this correction rather
-/// than on an instruction to flip.
+/// answer a future implementation should reach. That was wrong — the rename is
+/// deliberate, so a reader grepping the old name from the ruling record lands on
+/// a correction rather than on an instruction to flip.
 ///
-/// # #1610 DOES NOT REACH THIS ARM, TWICE OVER
+/// # #1610 still does not reach this arm — but only for ONE of its two reasons now
 ///
 /// #1610 implements a neighbouring rule in the partitioner — see
 /// `unequal-length-block-a-placed-gap-is-not-a-separation` — so the obvious
-/// inference is that this arm should have moved with it. It does not, for two
-/// independent reasons, and either alone would be enough.
+/// inference is that this arm should have moved with it. It has not, but this
+/// doc comment used to give **two** independent reasons and now only one of
+/// them still holds.
 ///
-/// The first is the record's fourth condition: this block's derived split is
+/// **Still true: the record's fourth condition.** This block's derived split is
 /// `[264del;266G>C]`, whose second member is a lone **substitution**. A
-/// substitution is a rank-1 type the split genuinely buys, so the rule declines
-/// and the members stay individual.
+/// substitution is a rank-1 type the split genuinely buys
+/// (`piece_renders_as_delins` excludes exactly this shape), so
+/// `split_is_a_placed_gap_coincidence` declines and the members stay
+/// individual. This reason does not depend on the axis at all — it would hold
+/// identically on `c.`.
 ///
-/// The second is the axis. #1610's rule is gated on
+/// **No longer true, corrected 2026-08-17 (#2155): the axis half.** This doc
+/// comment used to add a second, independent reason — "#1610's rule is gated on
 /// `CoincidenceCarveOut::may_disbelieve_a_separation`, so it does not run on a
-/// `g.` description at all — which is the same scoping this constant's rename
-/// records, reached from the partitioner side.
+/// `g.` description at all." `delins-payload-coincidence-carve-out-is-coding-
+/// dna-scoped` was superseded to all DNA axes that day, so
+/// `may_disbelieve_a_separation` now answers `true` for `g.` too and #1610's
+/// rule DOES run on this description. It just still declines, on the type
+/// reason alone. See [`MERGE_INPUT`] for a shape where the axis reason used to
+/// be doing real work and the merge now goes through.
 const UNEQUAL_SPANNING_FORM: &str = "NC_TEST.1:g.264_266delinsTC";
+
+/// A second, independent contig demonstrating what [`UNEQUAL_INPUT`] cannot:
+/// the #2155 axis widening actually reaching a `g.` block and merging it.
+///
+/// Net deletion (4 nt span, 2 nt payload), one unchanged interior base, same
+/// shape class as [`UNEQUAL_INPUT`] — but the derived split here is a placed
+/// gap (`AG` -> `T`, a `delins`-rendering piece) plus a pure deletion (`G` ->
+/// nothing), **not** a plain substitution. Both derived pieces satisfy
+/// `split_is_a_placed_gap_coincidence`'s "placed gap or renders-as-`delins`"
+/// requirement, so nothing blocks the merge on type, and since #2155 nothing
+/// blocks it on axis either. This is the same shape as the real MSH2 locus in
+/// `delins_equal_vs_unequal_length_discriminator.rs`
+/// (`NC_000002.11:g.47639670_47639673delinsTT`, `AGTG` -> `TT`), reproduced
+/// here hermetically.
+const MERGE_CONTIG: &str = "NC_TEST2.1";
+
+/// Flanking `C` on each side, chosen only so neither the first nor the last
+/// reference base of [`MERGE_SPAN_BASES`] repeats into its flank — `A`/`C` and
+/// `G`/`C` both differ, so nothing here can 3'-shift and what is measured is
+/// the partition rather than the shuffle. Asserted, not assumed —
+/// [`the_merge_fixture_is_the_one_it_was_measured_on`].
+const MERGE_PAD: usize = 64;
+
+/// 1-based inclusive genomic span, on [`MERGE_CONTIG`].
+const MERGE_SPAN: (u64, u64) = (MERGE_PAD as u64 + 1, MERGE_PAD as u64 + 4);
+
+/// The reference bases at [`MERGE_SPAN`]. Asserted against the provider, not
+/// quoted.
+const MERGE_SPAN_BASES: &str = "AGTG";
+
+/// Minimal against [`MERGE_SPAN_BASES`]: `A` vs `T` at the front, `G` vs `T` at
+/// the back — neither end shares a base, so the description cannot be trimmed
+/// and the ruling's minimality precondition holds.
+const MERGE_INPUT: &str = "NC_TEST2.1:g.65_68delinsTT";
+
+/// Measured on this base. Identical to [`MERGE_INPUT`] itself: the spanning
+/// form of a `delins` whose own span and payload are what it already names, so
+/// a normalizer that keeps the block whole reports back the same string it was
+/// given (`changed: false` in the CLI's own vocabulary — see
+/// `MEMBERS_COALESCED_FROM_REPORTED_FORM`, which fires only when the *input*
+/// named more than one member and this one names one throughout).
+const MERGE_EXPECTED: &str = "NC_TEST2.1:g.65_68delinsTT";
 
 fn padded_contig() -> String {
     let pad = "ACGT".repeat(PAD_OFFSET / 4);
     format!("{pad}{CORE}{pad}")
 }
 
+/// [`MERGE_CONTIG`]'s sequence: [`MERGE_SPAN_BASES`] flanked by non-repeating
+/// `C` padding, per [`MERGE_PAD`].
+fn merge_padded_contig() -> String {
+    let pad = "C".repeat(MERGE_PAD);
+    format!("{pad}{MERGE_SPAN_BASES}{pad}")
+}
+
 fn provider() -> JsonProvider {
     let mut provider = JsonProvider::new();
     provider.add_genomic_sequence(CONTIG, padded_contig());
+    provider.add_genomic_sequence(MERGE_CONTIG, merge_padded_contig());
     provider
 }
 
 /// The bases of `padded_contig()` over a 1-based inclusive span.
 fn bases(start: u64, end: u64) -> String {
     padded_contig()[(start as usize - 1)..(end as usize)].to_string()
+}
+
+/// The bases of `merge_padded_contig()` over a 1-based inclusive span.
+fn merge_bases(start: u64, end: u64) -> String {
+    merge_padded_contig()[(start as usize - 1)..(end as usize)].to_string()
 }
 
 fn normalize(input: &str) -> String {
@@ -279,6 +381,12 @@ fn normalize(input: &str) -> String {
 /// to remove.
 fn denotes(description: &str) -> String {
     apply_reason(&provider(), &padded_contig(), description)
+        .unwrap_or_else(|why| panic!("{description} denotes no single sequence: {why:?}"))
+}
+
+/// [`denotes`], against [`MERGE_CONTIG`]'s sequence instead of [`CONTIG`]'s.
+fn merge_denotes(description: &str) -> String {
+    apply_reason(&provider(), &merge_padded_contig(), description)
         .unwrap_or_else(|why| panic!("{description} denotes no single sequence: {why:?}"))
 }
 
@@ -341,6 +449,35 @@ fn the_fixture_is_the_one_the_arms_were_measured_on() {
         SPAN_BASES.as_bytes()[1] as char,
         'T',
         "the interior base must be the one both payloads carry"
+    );
+}
+
+/// The fixture [`MERGE_INPUT`]/[`MERGE_EXPECTED`] were measured on.
+///
+/// Without this, an edit to [`MERGE_SPAN_BASES`] or [`MERGE_PAD`] silently
+/// re-points the arm at different bases and the module docs stop describing
+/// what runs — the same discipline
+/// [`the_fixture_is_the_one_the_arms_were_measured_on`] applies to the other
+/// two arms, on the second contig.
+#[test]
+fn the_merge_fixture_is_the_one_it_was_measured_on() {
+    let (start, end) = MERGE_SPAN;
+    assert_eq!(
+        merge_bases(start, end),
+        MERGE_SPAN_BASES,
+        "{MERGE_CONTIG}:{start}_{end} must read {MERGE_SPAN_BASES} for this arm's argument to hold"
+    );
+    assert_ne!(
+        merge_bases(start - 1, start - 1).chars().next().unwrap(),
+        MERGE_SPAN_BASES.chars().next().unwrap(),
+        "the 5' flank must differ from the span's first base, or the block could 3'-shift and \
+         this would measure the shuffle rather than the partition"
+    );
+    assert_ne!(
+        merge_bases(end + 1, end + 1).chars().next().unwrap(),
+        MERGE_SPAN_BASES.chars().last().unwrap(),
+        "the 3' flank must differ from the span's last base, or the block could 3'-shift and \
+         this would measure the shuffle rather than the partition"
     );
 }
 
@@ -436,18 +573,23 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts_hermetically() {
         ),
     );
 
-    // UNEQUAL — conformant on this axis. See the withdrawal section above.
+    // UNEQUAL — still conformant, but see the module docs' 2026-08-17
+    // correction before reading this as "off axis": since #2155 the axis
+    // reaches `g.` too. What keeps this specific arm split is the derived
+    // split's TYPE, not its axis — see [`UNEQUAL_SPANNING_FORM`].
     assert_normalizes_preserving(
         UNEQUAL_INPUT,
         UNEQUAL_EXPECTED,
         &format!(
             "unequal-length {UNEQUAL_INPUT} is split on a payload/reference coincidence at 265, \
              which is the alignment-driven split `delins.md:46` constructs and `delins.md:47` \
-             advises against — but `:47` is scoped to the coding DNA axis by \
-             `delins-payload-coincidence-carve-out-is-coding-dna-scoped` and this is `g.`, so \
-             `general.md:34` governs and this split is CONFORMANT. If this assertion just \
-             failed with {UNEQUAL_SPANNING_FORM}, that is a REGRESSION, not a fix: something \
-             has applied the coding-axis carve-out off its axis. Do not flip the expectation"
+             advises against. Since #2155 `:47`'s carve-out reaches this axis (`g.`), so the \
+             axis is not what keeps this split; what does is that the derived split's second \
+             member, 266G>C, is a lone substitution — a real type the split buys, not payload \
+             coincidence — so `split_is_a_placed_gap_coincidence` declines regardless of axis. \
+             If this assertion just failed with {UNEQUAL_SPANNING_FORM}, that would mean the \
+             carve-out started merging across a real substitution, which is a correctness \
+             regression, not a fix: read the module docs before re-pinning"
         ),
     );
 
@@ -458,5 +600,28 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts_hermetically() {
         UNEQUAL_EXPECTED, UNEQUAL_SPANNING_FORM,
         "the pinned output equals the spanning form, so this file no longer distinguishes the \
          two descriptions it exists to keep apart"
+    );
+}
+
+/// The #2155 positive control: a placed-gap-plus-`delins` block, which used to
+/// stay split on `g.` for axis reasons alone, now collapses to the spanning
+/// form — the same collapse [`UNEQUAL_INPUT`] cannot show, because its derived
+/// split carries a plain substitution instead. See [`MERGE_INPUT`]'s doc
+/// comment for the construction.
+#[test]
+fn the_widened_carve_out_now_merges_a_placed_gap_shape_on_g() {
+    let actual = normalize(MERGE_INPUT);
+    assert_eq!(
+        actual, MERGE_EXPECTED,
+        "{MERGE_INPUT} must collapse to the spanning form: `AG`->`T` renders as a `delins` and \
+         `G`->nothing is a placed gap, so every derived piece satisfies \
+         `split_is_a_placed_gap_coincidence`'s \"placed gap or renders-as-`delins`\" test, and \
+         #2155 widened the axis this carve-out reaches to include `g.`. If this assertion just \
+         failed with the split form, the widening has regressed"
+    );
+    assert_eq!(
+        merge_denotes(&actual),
+        merge_denotes(MERGE_INPUT),
+        "{MERGE_INPUT} -> {actual} is not a re-spelling: it denotes different bases"
     );
 }

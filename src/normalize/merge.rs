@@ -4806,8 +4806,7 @@ pub(crate) struct AxisFrame {
     /// frame happens to exist. `general.md:23` makes the prefix a claim about
     /// that type, and the two questions are not the same one: a rule stated
     /// only in `DNA/` cannot reach `r.` however well-framed the transcript is.
-    /// See [`AxisFrame::carries_translated_frame`] and
-    /// [`AxisFrame::is_coding_dna`].
+    /// See [`AxisFrame::carries_translated_frame`] and [`AxisFrame::is_dna`].
     kind: CisKind,
 }
 
@@ -4836,41 +4835,6 @@ impl AxisFrame {
             CisKind::Genome | CisKind::Mt | CisKind::Tx => false,
         };
         axis_may_translate && self.reading_frame
-    }
-
-    /// Is `kind` the **coding DNA** axis, `c.`?
-    ///
-    /// The gate for a rule whose authority is stated *only* under `DNA/`.
-    /// `DNA/delins.md:47`'s payload-coincidence carve-out used to be scoped
-    /// here by the operator ruling
-    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-    /// (2026-08-11); that ruling was **superseded to all DNA axes**
-    /// (2026-08-17, #2155), so the carve-out's own gates now use
-    /// [`Self::is_dna`] instead. This predicate is retained for the
-    /// codon-adjacent scoping questions it still answers correctly (nothing
-    /// in [`Self::carries_translated_frame`]'s reasoning changed) and for the
-    /// predicate-pin test that exercises it directly.
-    ///
-    /// Takes the [`CisKind`] rather than `&self`, unlike its sibling
-    /// [`Self::carries_translated_frame`], and the asymmetry is the #1241
-    /// point rather than an inconsistency: whether an axis *translates* is not
-    /// answerable from the kind alone, whereas whether it is coding DNA is.
-    ///
-    /// Exhaustive on [`CisKind`] with no wildcard, so a new axis is a compile
-    /// error here rather than a silent default.
-    ///
-    /// `#[allow(dead_code)]`: with all three gate sites now on
-    /// [`Self::is_dna`], this function's only remaining call site is the
-    /// `#[cfg(test)]` predicate-pin test (`a_coding_rna_axis_separates_the_two_scopes`
-    /// and its sibling), so a plain `--features dev` build (no `--tests`) sees
-    /// it as unused. Left in place rather than deleted, per this change's
-    /// scope.
-    #[allow(dead_code)]
-    fn is_coding_dna(kind: CisKind) -> bool {
-        match kind {
-            CisKind::Cds => true,
-            CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
-        }
     }
 
     /// Is `kind` a **DNA** axis — `c./g./m./n.` — i.e. anything but `r.`?
@@ -8460,7 +8424,7 @@ fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
 /// A free function rather than an inline conjunction because `partition_rule()`
 /// caches its read in a `OnceLock`, so one test binary can never exercise two
 /// arms through the call site. This half is pure and therefore pinnable — see
-/// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`.
+/// `the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`.
 fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
     // The scope test is [`AxisFrame::is_dna`], not a second copy of it. This
     // gate and that predicate answer the same question, and while a new
@@ -14404,16 +14368,24 @@ mod tests {
     /// citation's job, at each rule site.
     #[test]
     fn every_axis_declares_which_rule_scope_it_is_in() {
-        // (kind, reading_frame, translated, coding_dna)
+        // (kind, reading_frame, translated, is_dna)
+        //
+        // The third column used to be `coding_dna`, true on `c.` alone under a
+        // predicate that has since been removed: `delins-payload-coincidence-
+        // carve-out-is-coding-dna-scoped` was superseded to all DNA axes
+        // (2026-08-17, #2155), so every gate that used to key on it now keys
+        // on `AxisFrame::is_dna` instead, and this pin follows the gates.
         let cases = [
-            (CisKind::Genome, false, false, false),
-            (CisKind::Mt, false, false, false),
-            (CisKind::Tx, false, false, false),
+            (CisKind::Genome, false, false, true),
+            (CisKind::Mt, false, false, true),
+            (CisKind::Tx, false, false, true),
             (CisKind::Cds, true, true, true),
             // A coding transcript: RNA authority (`RNA/delins.md:18`) reaches
-            // it, DNA-only authority does not. This row is the whole point.
+            // it, DNA-only authority does not. This row is the whole point --
+            // it is the one axis where the two predicates disagree.
             (CisKind::Rna, true, true, false),
             // A non-coding transcript has no CDS, so no frame either (#1241).
+            // Still not a DNA axis, so `is_dna` is unchanged from the row above.
             (CisKind::Rna, false, false, false),
             // The three rows below are UNREACHABLE through `axis_frame`, which
             // never stamps a frame onto a genomic, mitochondrial or `n.` axis.
@@ -14429,12 +14401,12 @@ mod tests {
             // reading `projection-codon-exception-is-decided-by-the-rendered-
             // axis` states, and pinning it here decides nothing that record
             // leaves open (which is how *projection* renders `n.`, not whether
-            // `n.` has a frame).
-            (CisKind::Genome, true, false, false),
-            (CisKind::Mt, true, false, false),
-            (CisKind::Tx, true, false, false),
+            // `n.` has a frame). It is still a DNA axis, so `is_dna` stays true.
+            (CisKind::Genome, true, false, true),
+            (CisKind::Mt, true, false, true),
+            (CisKind::Tx, true, false, true),
         ];
-        for (kind, reading_frame, translated, coding_dna) in cases {
+        for (kind, reading_frame, translated, is_dna) in cases {
             let frame = AxisFrame {
                 delta: 0,
                 reading_frame,
@@ -14446,9 +14418,9 @@ mod tests {
                 "{kind:?} (reading_frame={reading_frame}): carries_translated_frame"
             );
             assert_eq!(
-                AxisFrame::is_coding_dna(kind),
-                coding_dna,
-                "{kind:?} (reading_frame={reading_frame}): is_coding_dna"
+                AxisFrame::is_dna(kind),
+                is_dna,
+                "{kind:?} (reading_frame={reading_frame}): is_dna"
             );
         }
     }
@@ -14471,8 +14443,8 @@ mod tests {
             "a coding `r.` translates, so RNA-stated rules reach it"
         );
         assert!(
-            !AxisFrame::is_coding_dna(frame.kind),
-            "a coding `r.` is not a DNA axis, so `DNA/`-only rules must not"
+            !AxisFrame::is_dna(frame.kind),
+            "a coding `r.` is still not a DNA axis"
         );
     }
 
@@ -17323,33 +17295,37 @@ mod tests {
             }
         }
 
-        /// `delins.md:44-47`'s re-spelling needs **both** the arm and the coding
-        /// DNA axis.
+        /// `delins.md:44-47`'s re-spelling needs **both** the arm and a DNA
+        /// axis.
         ///
         /// The operator ruling
         /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-        /// (2026-08-11) scopes `:47`'s carve-out to `c.`, because its stated
-        /// reason — preventing "incorrect predictions for the consequences on
-        /// protein level" — has nothing to bite on off the coding axis. On every
-        /// other axis the arm must behave exactly like `canonical`.
+        /// (2026-08-11) originally scoped `:47`'s carve-out to `c.` alone; it
+        /// was **superseded to all DNA axes** (2026-08-17, #2155) — `c./g./m./n.`
+        /// — because its stated reason, preventing "incorrect predictions for
+        /// the consequences on protein level", has nothing to bite on off a
+        /// reading frame either way, so there was no ground to stop at `c.`
+        /// specifically. `r.` stays out on jurisdiction: a `DNA/` clause cannot
+        /// scope the RNA axis. On every other rule the arm must behave exactly
+        /// like `canonical`.
         ///
         /// Pinning the pure predicate rather than the call site is deliberate:
         /// `partition_rule()` caches in a `OnceLock`, so one test binary cannot
         /// drive two arms through `canonicalize_from_sequence`.
         #[test]
-        fn the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis() {
-            assert!(
-                payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Cds),
-                "the carve-out must still fire on `c.` -- that is the axis \
-                 `delins.md:44-47`'s own worked example is written on"
-            );
-            for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+        fn the_payload_coalesce_needs_both_the_arm_and_a_dna_axis() {
+            for kind in [CisKind::Cds, CisKind::Genome, CisKind::Mt, CisKind::Tx] {
                 assert!(
-                    !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
-                    "{kind:?} is outside `DNA/delins.md:47`'s scope; \
-                     `general.md:34` governs and the members stay individual"
+                    payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    "{kind:?} is a DNA axis; the carve-out reaches `c./g./m./n.` \
+                     as of #2155"
                 );
             }
+            assert!(
+                !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Rna),
+                "`r.` is outside `DNA/delins.md:47`'s scope on jurisdiction; \
+                 `general.md:34` governs and the members stay individual"
+            );
             for rule in [
                 PartitionRule::Live,
                 PartitionRule::Shadow,
@@ -17384,23 +17360,29 @@ mod tests {
         /// [`PartitionRule::Canonical`], whose partitioner is the one that
         /// manufactures the split in the first place.
         ///
+        /// The axis half itself widened under #2155, from `c.`-only to every DNA
+        /// axis (`c./g./m./n.`) — see [`the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`]
+        /// for why. `g.`/`m.`/`n.` therefore now assert alongside `c.` instead of
+        /// alongside `r.`.
+        ///
         /// The pure predicate rather than the call site, for the reason the test
         /// directly above states: `partition_rule()` caches in a `OnceLock`.
         #[test]
-        fn the_compensating_gap_coalesce_needs_both_a_canonical_arm_and_the_coding_dna_axis() {
+        fn the_compensating_gap_coalesce_needs_both_a_canonical_arm_and_a_dna_axis() {
             for rule in [PartitionRule::Canonical, PartitionRule::CanonicalCoalesced] {
-                assert!(
-                    compensating_gap_coalesce_applies(rule, CisKind::Cds),
-                    "{rule:?} cuts with `partition_block_canonical`, so it is the \
-                     partitioner whose compensating gaps this pass exists to undo"
-                );
-                for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+                for kind in [CisKind::Cds, CisKind::Genome, CisKind::Mt, CisKind::Tx] {
                     assert!(
-                        !compensating_gap_coalesce_applies(rule, kind),
-                        "{kind:?} is outside `DNA/delins.md:47`'s scope; `general.md:34` \
-                         governs and the members stay individual (#1711)"
+                        compensating_gap_coalesce_applies(rule, kind),
+                        "{rule:?} cuts with `partition_block_canonical`, so it is the \
+                         partitioner whose compensating gaps this pass exists to undo, \
+                         and {kind:?} is a DNA axis reached by #2155"
                     );
                 }
+                assert!(
+                    !compensating_gap_coalesce_applies(rule, CisKind::Rna),
+                    "`r.` is outside `DNA/delins.md:47`'s scope on jurisdiction; \
+                     `general.md:34` governs and the members stay individual (#1711)"
+                );
             }
             for rule in [PartitionRule::Live, PartitionRule::Shadow] {
                 for kind in [
@@ -17459,7 +17441,7 @@ mod tests {
         /// of its own either. Unauthorised in both directions, so excluded.
         ///
         /// The regression this guards is invisible to
-        /// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`
+        /// `the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`
         /// alone if that test is ever rewritten in terms of a frame flag, which
         /// is exactly how the defect arose.
         #[test]
