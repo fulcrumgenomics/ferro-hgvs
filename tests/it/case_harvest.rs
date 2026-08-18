@@ -518,15 +518,25 @@ fn the_confluence_classes_converge() {
 /// because the #1542 re-instrument changed *which* rows are readable, and a
 /// floor cannot tell a widening from a narrowing.
 ///
-/// **15 on `main`, and it was 9 when this constant was written.** The pin was
-/// first measured on a base that predated #1835's flip of the default partition
-/// rule to `canonical-coalesced`; under that rule six further corpus rows are
-/// re-partitioned from the resulting sequence into a multi-member output, so
-/// this guard *examines* six more rows than it did. That is the denominator
-/// widening, which is the direction this pin exists to make visible — the
-/// guard's own claim, that no emitted output puts two members on consecutive
-/// nucleotides, is still **zero** over the larger set.
-const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 15;
+/// **13 as of #2155, 15 before it, and 9 when this constant was first written.**
+/// The 9 -> 15 widening predates #2155: it was measured on a base that predated
+/// #1835's flip of the default partition rule to `canonical-coalesced`, under
+/// which six further corpus rows were re-partitioned from the resulting
+/// sequence into a multi-member output.
+///
+/// **15 -> 13 is #2155's own move, and it is a narrowing rather than the
+/// widening the paragraph above describes.** `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+/// (decided, scoped to the coding DNA axis) is superseded by #2155 to cover
+/// every DNA axis, so `NC_000002.12:g.166052896_166052909delinsTGTG` and
+/// `NC_000002.11:g.47639670_47639673delinsTT` — both previously split into
+/// two-or-three-member outputs by the coding-only carve-out — now re-coalesce
+/// on their `g.` axis into a single spanning `delins` member apiece. A
+/// one-member output has no adjacent pair to examine at all, so both rows leave
+/// the denominator: 15 - 2 = 13. The guard's own claim, that no emitted output
+/// puts two members on consecutive nucleotides, is still **zero** over the
+/// smaller set — the two rows that left were never violations, they merely
+/// stopped being multi-member.
+const MULTI_MEMBER_OUTPUTS_EXAMINED: usize = 13;
 
 /// No emitted output puts two members on consecutive nucleotides
 /// (`DNA/delins.md:16`).

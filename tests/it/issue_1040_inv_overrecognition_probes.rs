@@ -86,24 +86,25 @@ fn c(core: &str, input: &str) -> String {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835) — the four 10-nt rows
+// RE-PINNED BY THE PARTITION DEFAULT FLIP (#1835), THEN RE-PINNED BACK BY THE
+// ALL-DNA-AXES PAYLOAD-COINCIDENCE WIDEN (#2155) — the four 10-nt rows
 // ---------------------------------------------------------------------------
 //
 // THE DEFECT THESE ROWS EXIST FOR IS NOT BACK. #1040 is `inv` OVER-RECOGNITION:
 // ferro carving `[..delins;..inv;..delins]` out of a contiguous run because an
 // interior sub-window (259_262, `GTGA` -> `TCAC`) happens to be a reverse
-// complement. Every one of these tests is named `..._stays_delins` and under the
-// new default every one of them still does — the outputs below contain no `inv`,
-// and the interior revcomp window is still not carved. Read the assertions
-// before reading the names: what moved is the PARTITION, not the TYPING.
+// complement. Every one of these tests is named `..._stays_delins` and it still
+// does, throughout both re-pins below — the outputs below contain no `inv`, and
+// the interior revcomp window is never carved. Read the assertions before
+// reading the names: what moved is the PARTITION, not the TYPING.
 //
-// WHAT MOVED. The four 10-nt rows were pinned at the spanning
+// WHAT #1835 MOVED. The four 10-nt rows were originally pinned at the spanning
 // `g.257_266delinsTGTCACGACT` (and its `200_209` siting). Under
-// `canonical-coalesced` they reach a four-member split:
+// `canonical-coalesced` they moved to a four-member split:
 //
 //     g.[257_258delinsT;261G>C;264T>G;266delinsCT]
 //
-// WHY THAT IS THE CONFORMANT ANSWER ON THIS AXIS, in two steps.
+// WHY THAT WAS THE CONFORMANT ANSWER ON THIS AXIS AT THE TIME, in two steps.
 //
 // (1) THE MINIMAL ALIGNMENT IS GAPPED, so unchanged bases exist. Read as ten
 // substitutions the locus has no unchanged base between members and nothing to
@@ -117,27 +118,35 @@ fn c(core: &str, input: &str) -> String {
 // separation `general.md:34` keys on is read off exactly that re-derived
 // partition. Under it, 259-260, 262-263 and 265 are unchanged.
 //
-// (2) NOTHING MERGES THEM BACK, BECAUSE THIS IS A `g.` AXIS. The clause that
-// would recommend the spanning form over a payload-coincidence split is
-// `DNA/delins.md:47`, and `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-// (decided) scopes it to the coding DNA axis: on `g.`/`m.`/`o.`/`n.`/`r.`,
-// `general.md:34` governs unqualified and members separated by unchanged
-// nucleotides "should be described individually". These are `g.` rows. So the
-// split is what the governing clause asks for, and merging them would be the
-// deviation.
+// (2) AT THE TIME, NOTHING MERGED THEM BACK, BECAUSE THIS IS A `g.` AXIS. The
+// clause that would recommend the spanning form over a payload-coincidence
+// split is `DNA/delins.md:47`, and `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+// (decided) scoped it to the coding DNA axis: on `g.`/`m.`/`o.`/`n.`/`r.`,
+// `general.md:34` governed unqualified and members separated by unchanged
+// nucleotides "should be described individually". These are `g.` rows, so the
+// split was what the then-governing clause asked for.
 //
-// TWO CROSS-CHECKS THAT THIS IS THE PARTITIONER AND NOT AN ACCIDENT. Both input
-// spellings — the ten-substitution allele and the spanning `delins` — reach the
-// SAME four members, so confluence is preserved rather than traded away. And the
-// two sitings (`257` on a padded contig, `200` on the short 250 bp contig that
-// takes the near-3'-end path) produce members at identical offsets 0-1, 4, 7 and
-// 9, so the near-3'-end fallback agrees with the ordinary path.
+// WHAT #2155 MOVED THEM BACK TO. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+// is superseded by #2155 to cover every DNA axis (`c./g./m./n.`, `r.` excluded),
+// so `DNA/delins.md:47` now recommends the spanning form on these `g.` rows too
+// — the same reasoning as (2) above, with the axis restriction removed rather
+// than the alignment argument in (1) revisited. The four members re-coalesce
+// into the original spanning `delins`, and the rows read exactly as they did
+// before #1835 — not because the partitioner regressed, but because the axis
+// scope that #1835 relied on to keep them split is gone.
+//
+// TWO CROSS-CHECKS THAT THIS IS THE PARTITIONER AND NOT AN ACCIDENT, UNCHANGED
+// BY #2155. Both input spellings — the ten-substitution allele and the spanning
+// `delins` — reach the SAME output, so confluence is preserved rather than
+// traded away. And the two sitings (`257` on a padded contig, `200` on the
+// short 250 bp contig that takes the near-3'-end path) produce the identical
+// spanning form, so the near-3'-end fallback agrees with the ordinary path.
 //
 // WHAT STILL PINS THE ORIGINAL DEFECT. `issue_1034_minimal_contiguous_run_stays_delins`
-// below is unmoved: `CTG` -> `ACA` still returns one spanning `delins` from both
-// input forms, with its interior `TG` -> `CA` revcomp uncarved. So the file still
-// holds a row where a contiguous run stays whole, and the `inv`-carving guard is
-// still exercised there.
+// below is unmoved by either re-pin: `CTG` -> `ACA` still returns one spanning
+// `delins` from both input forms, with its interior `TG` -> `CA` revcomp
+// uncarved. So the file still holds a row where a contiguous run stays whole,
+// and the `inv`-carving guard is still exercised there.
 
 #[test]
 fn issue_1040_literal_ten_nt_contiguous_run_stays_delins() {
@@ -145,7 +154,10 @@ fn issue_1040_literal_ten_nt_contiguous_run_stays_delins() {
     //   revcomp(CAGTGACTAG) = CTAGTCACTG != TGTCACGACT  => NOT a whole-run inv.
     //   Interior sub-window 259_262 (GTGA -> TCAC) IS a revcomp but must not be
     //   carved out of the contiguous run — and is not, in the output below.
-    // #1835: was the spanning `g.257_266delinsTGTCACGACT`; see the section above.
+    // #1835: moved to the four-member split `g.[257_258delinsT;261G>C;264T>G;266delinsCT]`.
+    // #2155: re-pinned back to the spanning `g.257_266delinsTGTCACGACT` — the
+    // all-DNA-axes payload-coincidence widen supersedes the coding-DNA scope
+    // #1835 relied on to keep this `g.` row split; see the section above.
     assert_eq!(
         g(
             "CAGTGACTAG",
@@ -153,19 +165,19 @@ fn issue_1040_literal_ten_nt_contiguous_run_stays_delins() {
                 "{G}:g.[257C>T;258A>G;259G>T;260T>C;261G>A;262A>C;263C>G;264T>A;265A>C;266G>T]"
             ),
         ),
-        format!("{G}:g.[257_258delinsT;261G>C;264T>G;266delinsCT]"),
+        format!("{G}:g.257_266delinsTGTCACGACT"),
     );
 }
 
 #[test]
 fn issue_1040_same_run_as_delins_input_stays_delins() {
     // The identical change expressed as a delins rather than an allele of subs.
-    // It must reach the same members as the allele spelling above — that equality
+    // It must reach the same output as the allele spelling above — that equality
     // is the confluence half of the section above, so keep the two strings
     // identical when re-pinning either.
     assert_eq!(
         g("CAGTGACTAG", &format!("{G}:g.257_266delinsTGTCACGACT")),
-        format!("{G}:g.[257_258delinsT;261G>C;264T>G;266delinsCT]"),
+        format!("{G}:g.257_266delinsTGTCACGACT"),
     );
 }
 
@@ -551,32 +563,33 @@ fn issue_1040_contiguous_run_near_3prime_end_stays_delins() {
     // path that the real comparison exercises. It must still be free of a carved
     // `[..delins;..inv;..delins]`. Holds on v0.8.1 and post-#1042.
     //
-    // #1835: was the spanning `c:g.200_209delinsTGTCACGACT`. See the section
-    // above the 10-nt rows. The members land at offsets 0-1, 4, 7, 9 from the
-    // core — identical to the `257` siting — which is what says the near-3'-end
-    // fallback and the ordinary path agree on the partition.
+    // #1835: moved to the four-member split `c:g.[200_201delinsT;204G>C;207T>G;209delinsCT]`.
+    // #2155: re-pinned back to the spanning `c:g.200_209delinsTGTCACGACT` — same
+    // axis-scope supersession as the `257` siting above; the near-3'-end path
+    // still agrees with the ordinary one.
     let near = provider_len("c", 250, 200, "CAGTGACTAG");
     assert_eq!(
         norm(&near, "c:g.200_209delinsTGTCACGACT"),
-        "c:g.[200_201delinsT;204G>C;207T>G;209delinsCT]",
+        "c:g.200_209delinsTGTCACGACT",
     );
 }
 
 #[test]
 fn issue_1040_compound_allele_near_3prime_end_stays_delins() {
     // The reported input shape (a compound of adjacent substitutions), sited
-    // near the 3' end. It reaches the same members as the `delins` spelling
+    // near the 3' end. It reaches the same output as the `delins` spelling
     // above, not a carve.
     //
-    // #1835: was the spanning `c:g.200_209delinsTGTCACGACT`. Keep this string
-    // identical to the row above — their equality is what pins confluence between
-    // the two input spellings on the near-3'-end path.
+    // #1835: moved to the four-member split, matching the row above. #2155:
+    // re-pinned back to the spanning form. Keep this string identical to the
+    // row above — their equality is what pins confluence between the two input
+    // spellings on the near-3'-end path.
     let near = provider_len("c", 250, 200, "CAGTGACTAG");
     assert_eq!(
         norm(
             &near,
             "c:g.[200C>T;201A>G;202G>T;203T>C;204G>A;205A>C;206C>G;207T>A;208A>C;209G>T]",
         ),
-        "c:g.[200_201delinsT;204G>C;207T>G;209delinsCT]",
+        "c:g.200_209delinsTGTCACGACT",
     );
 }

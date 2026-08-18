@@ -111,17 +111,46 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     // about equal-length blocks having no alignment choice to make; that was a
     // property of one partitioner, not of the shape.
     //
+    // # RE-PINNED AGAIN BY #2155's ALL-DNA-AXES PAYLOAD-COINCIDENCE WIDEN
+    //
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (decided,
+    // scoped above to the coding DNA axis) is superseded by #2155 to cover
+    // every DNA axis — this is a `g.` row, so `DNA/delins.md:47` now reaches it
+    // too. The 21-member gapped split above was itself built by choosing a
+    // shifted (1 del + 19 sub + 1 ins, cost 21) alignment over the naive
+    // position-wise one (39 sub, cost 39) because it was cheaper — but every one
+    // of that shifted alignment's "unchanged" interior columns (positions
+    // 2, 4, 6, …, 18, 22, …, 38) is unchanged only as an ARTIFACT of picking
+    // that particular shift; none of them holds under the natural,
+    // non-shifted reading, where every position 1-40 except 20 differs. Only
+    // position 20 is a genuine, forced separator — it is the one base this test
+    // deliberately sets equal to the reference (`replacement[19] = core[19]`,
+    // above), so it is unchanged under every reading, shifted or not.
+    //
+    // With the carve-out now reaching `g.`, the coincidental separations
+    // collapse and only the forced one survives, which is exactly the
+    // non-shifted, position-wise partition: one run of 19 changed bases
+    // (1_19), the one genuinely unchanged base (20), then a run of 20 changed
+    // bases (21_40) — `delins.md:16`'s "two or more CONSECUTIVE nucleotides"
+    // read against the natural alignment rather than the shifted one.
+    //
+    // THE FILE'S OWN THESIS IS STILL UNCHANGED: a delins must split at its
+    // (genuinely) unchanged bases regardless of length, and this row still
+    // asserts exactly that — now at the one base the test constructs to BE
+    // genuinely unchanged, rather than at the coincidental columns a
+    // particular alignment happened to expose.
+    //
     // Pinned as a literal rather than rebuilt from `replacement`, because the
     // answer is no longer a simple function of it — deriving the expected string
     // would mean reimplementing the aligner in the test, which is how a pin stops
     // being independent evidence.
-    // The `\` continuations below elide the newline and the following
-    // indentation, so this is one unbroken description.
-    let expected = "NC_TEST.1:g.[1del;3G>A;5A>G;7G>A;9A>G;11G>A;13A>G;15G>A;17A>G;19G>A;\
-                    21A>T;23G>A;25A>G;27G>A;29A>G;31G>A;33A>G;35G>A;37A>G;39G>A;40_41insG]";
+    let expected = "NC_TEST.1:g.[1_19delinsCATGCATGCATGCATGCAT;\
+                    21_40delinsCATGCATGCATGCATGCATG]";
     assert_eq!(
         out, expected,
-        "a 40 nt delins must split at the unchanged bases of its MINIMAL alignment"
+        "a 40 nt delins must split at the GENUINELY unchanged bases of its \
+         minimal alignment, not at columns that are unchanged only by \
+         payload coincidence"
     );
 }
 

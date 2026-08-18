@@ -43,26 +43,37 @@
 //! Do not reintroduce it in any form. The length gate's ground is the decided
 //! direction scope of `delins-merge-vs-individual-gap-two-or-more`.
 //!
-//! # THE SHIPPED RULE IS SCOPED TO `c.`, SO THE ISSUE'S OWN REPRODUCTION IS NOT CLOSED
+//! # THE SHIPPED RULE WAS SCOPED TO `c.` — #2155 WIDENED IT TO EVERY DNA AXIS
 //!
-//! Read this before citing #1610 as fixed. The rule is gated on
-//! `CoincidenceCarveOut::may_disbelieve_a_separation`, so it runs on the coding
-//! DNA axis and nowhere else, per
-//! `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+//! The rule is gated on `CoincidenceCarveOut::may_disbelieve_a_separation`, per
+//! `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+//! (decided, originally scoped to the coding DNA axis). **That scope was
+//! superseded by #2155 (2026-08-17) to cover every DNA axis** — `c./g./m./n.`
+//! are all in reach now, and `r.` remains the one axis left out, because a
+//! `DNA/` clause has no jurisdiction over the RNA axis regardless of how widely
+//! the DNA scope is drawn.
 //!
-//! The reproduction above is spelled `n.`, and `n.` is outside that scope. So
-//! `NM_TEST.1:n.2_5delinsAAC` **still** returns `n.[2_3delinsAA;9del]`, and
-//! `a_lone_unequal_length_delins_is_not_split` pins that rather than the fix.
-//! What this change does close is the same block on `c.`
-//! (`the_rule_is_scoped_to_the_coding_dna_axis`).
+//! The reproduction above is spelled `n.`, and `n.` is now in reach. So
+//! `NM_TEST.1:n.2_5delinsAAC` merges to the spanning `n.2_5delinsAAC`, on both a
+//! coding and a CDS-less transcript — the axis reach does not depend on whether
+//! a reading frame exists, only on the axis prefix. #1610's own reproduction is
+//! therefore now closed, and `a_lone_unequal_length_delins_is_not_split` pins
+//! the fix rather than the defect (renamed in intent, not in name — see its own
+//! doc comment). `the_rule_is_scoped_to_the_coding_dna_axis` is retained under
+//! its old name for the same continuity reason, and now asserts the WIDER
+//! scope: `c.`, `n.` on a coding transcript, and `n.` on a CDS-less transcript
+//! all merge; only `r.` would stay split (untested here — no `r.` provider
+//! exists in this module).
 //!
-//! The scope is not a hedge. Ungated, this rule sat directly after the sibling
-//! collapse in `partition_block` — which carries the same gate — and re-admitted
-//! on the frameless axes exactly what that gate excludes, taking
-//! `spec_conformance_axis`'s `guard_violations` from **0 to 5**, all of them the
-//! **rejected** SVD-WG010 shape. That is a rank-1 conformance regression, which
-//! rule 2 outranks a rule 6 preference. Closing the `n.` and `g.` halves means
-//! answering that first, and it is not answered here.
+//! The scope is not a hedge, before or after the widen. Ungated entirely
+//! (i.e. run on `r.` too), this rule would sit directly after the sibling
+//! collapse in `partition_block` — which carries the same gate — and re-admit
+//! on the RNA axis exactly what that gate excludes, taking
+//! `spec_conformance_axis`'s `guard_violations` from **0** to a positive count,
+//! the **rejected** SVD-WG010 shape. That is a rank-1 conformance regression,
+//! which rule 2 outranks a rule 6 preference. The DNA-vs-RNA line is therefore
+//! deliberate and unmoved by #2155; only the boundary within DNA (coding-only
+//! vs. every DNA axis) moved.
 //!
 //! # Where the rule lives
 //!
@@ -135,38 +146,38 @@ fn normalized_fixed_point(provider: &MockProvider, descriptor: &str) -> String {
 /// residual deletion shift out to `n.9`.
 const CORE: &str = "ACGCGGGGGTTTTTTTTTTTTTTTTTTTT";
 
-/// The issue's reproduction, on the axis it was filed against — **still split**.
+/// The issue's reproduction, on the axis it was filed against — **now merged**.
 ///
-/// This test pins the defect, not the fix. `n.` is outside the shipped rule's
-/// `c.` scope (see the module docs), so the exact string #1610 reports is
-/// unchanged by this change. It is kept, and kept under the issue's own name, so
-/// that the open half of the issue has a committed guard rather than living only
-/// in a PR description — and so that closing it later is a visible flip here.
-///
-/// The counterpart that this change *does* close is
-/// `the_rule_is_scoped_to_the_coding_dna_axis` below, on the same block.
+/// This test used to pin the defect rather than the fix: `n.` sat outside the
+/// shipped rule's `c.`-only scope, so `NM_TEST.1:n.2_5delinsAAC` returned
+/// `n.[2_3delinsAA;9del]` unchanged. **#2155 widens the carve-out to every DNA
+/// axis** (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`,
+/// superseded), so `n.` is now in reach and this row merges to the spanning
+/// form — #1610's own reproduction is closed. Kept under the issue's own name
+/// so the flip from defect-pin to fix-pin is visible in one place.
 #[test]
 fn a_lone_unequal_length_delins_is_not_split() {
     let coding = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&coding, "NM_TEST.1:n.2_5delinsAAC"),
-        "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "the `n.` axis is outside `delins.md:47`'s carve-out, so `general.md:34` \
-         governs; #1610's own reproduction is NOT closed by this change",
+        "NM_TEST.1:n.2_5delinsAAC",
+        "#2155 widens `delins.md:47`'s carve-out to every DNA axis, so `n.` is \
+         now in reach and #1610's own reproduction merges to the spanning form",
     );
 }
 
 /// The same block on `c.`, on `n.`, and on a transcript with no CDS at all.
 ///
 /// This is the axis scope pinned end to end. All three use the same core, the
-/// same span and the same payload, so the axis is the only thing that varies —
-/// which is what makes the `c.`/`n.` disagreement below evidence about the
-/// carve-out rather than about the block.
+/// same span and the same payload, so the axis is the only thing that varies.
 ///
-/// The scope is `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`:
-/// `delins.md:47` reaches `c.` and nothing else, its stated reason (preventing
-/// "incorrect predictions for the consequences on protein level") having nothing
-/// to bite on where no protein is coded.
+/// **Kept under its pre-#2155 name, though the scope it asserts has widened.**
+/// The scope was `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`:
+/// `delins.md:47` reached `c.` and nothing else. #2155 supersedes that to every
+/// DNA axis, so all three rows below now merge — there is no longer a `c.`/`n.`
+/// disagreement to exhibit, only the `n.`-on-a-coding-transcript vs.
+/// `n.`-on-a-CDS-less-transcript pair showing that a reading frame's presence
+/// is not what the carve-out keys on, just the axis prefix.
 #[test]
 fn the_rule_is_scoped_to_the_coding_dna_axis() {
     // In reach: the coding DNA axis, where `delins.md:47` governs.
@@ -176,19 +187,20 @@ fn the_rule_is_scoped_to_the_coding_dna_axis() {
         "NM_TEST.1:c.2_5delinsAAC",
         "on `c.` the block is kept whole (`DNA/delins.md:47`)",
     );
-    // Out of reach: `n.` on the very same coding transcript, so the reading
-    // frame's presence is not what differs — only the axis the caller spelled.
+    // Also in reach as of #2155: `n.` on the very same coding transcript, so
+    // the reading frame's presence is not what differs — only the axis prefix.
     assert_eq!(
         normalized_fixed_point(&coding, "NM_TEST.1:n.2_5delinsAAC"),
-        "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "`n.` on a coding transcript is still outside the carve-out",
+        "NM_TEST.1:n.2_5delinsAAC",
+        "#2155 widens the carve-out to `n.` on a coding transcript too",
     );
-    // Out of reach: a transcript with no CDS at all.
+    // Also in reach as of #2155: a transcript with no CDS at all — the axis
+    // prefix alone decides it, not whether a CDS is present.
     let noncoding = provider("NR_TEST.1", CORE, false);
     assert_eq!(
         normalized_fixed_point(&noncoding, "NR_TEST.1:n.2_5delinsAAC"),
-        "NR_TEST.1:n.[2_3delinsAA;9del]",
-        "a CDS-less transcript is outside the carve-out",
+        "NR_TEST.1:n.2_5delinsAAC",
+        "#2155 widens the carve-out to a CDS-less `n.` transcript too",
     );
 }
 

@@ -1031,32 +1031,33 @@ fn test_no_overlap_warning_for_adjacency() {
 /// `merge::tests::coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon`,
 /// which asserts against the pass directly and at every codon phase.
 ///
-/// # RE-PINNED BY #1610 — AND THE TWO AXES NO LONGER AGREE
+/// # RE-PINNED BY #1610, THEN RE-PINNED AGAIN BY #2155 — AND THE TWO AXES NOW
+/// AGREE ONCE MORE
 ///
 /// This pair used to rest on the axes agreeing: `NM_TEST.1` has `cds_start = 1`,
-/// so `c.p` and `n.p` name the same base, and nothing distinguished them. That
-/// is no longer true, and the disagreement is now the point.
+/// so `c.p` and `n.p` name the same base, and nothing distinguished them. #1610
+/// broke that agreement — see below — and #2155 restores it, for a different
+/// reason than the original one.
 ///
 /// The block is `TGCA -> AAC`, four reference bases against three, whose only
 /// interior match is the payload's own `C`.
 /// `merge::split_is_a_placed_gap_coincidence` (#1610) keeps such a block whole
-/// (`DNA/delins.md:46`/`:47`) — but it is gated on
-/// `CoincidenceCarveOut::may_disbelieve_a_separation`, so it runs on the coding
-/// DNA axis only, per
-/// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+/// (`DNA/delins.md:46`/`:47`) — gated on
+/// `CoincidenceCarveOut::may_disbelieve_a_separation`, per
+/// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`. #1610
+/// shipped that gate scoped to the coding DNA axis only, so `c.` returned the
+/// input whole while `n.` still split. **#2155 supersedes that scope to every
+/// DNA axis** (`c./g./m./n.`, `r.` excluded), so `n.` is now in reach too and
+/// both axes return the block whole.
 ///
-/// So `c.` returns the input whole, and `n.` still splits. Read the two
-/// assertions together: the reference, the block and the coordinates are
-/// identical and **the axis is the only thing that varies**, which makes this
-/// pair an end-to-end guard for the carve-out's scope — a property it did not
-/// have before and which no unit test asserts at this level.
-///
-/// The codon conjunct itself is no longer discriminated here on the `c.` side,
-/// because there are no two derived members left to ask about. Its guard is
+/// The codon conjunct is no longer discriminated here on either axis, because
+/// there are no two derived members left to ask about on either. Its guard is
 /// `merge::tests::coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon`,
 /// which builds its two-member fixture by hand for exactly this reason, and
 /// `a_length_changing_block_the_exception_still_cannot_reach` below, which is an
-/// end-to-end case that still splits on both axes.
+/// end-to-end case that still splits on both axes (its split members carry a
+/// lone substitution, condition 4 of `split_is_a_placed_gap_coincidence`, which
+/// the axis widen does not touch).
 #[test]
 fn coding_length_changing_block_across_codons_is_described_individually() {
     assert_eq!(
@@ -1064,9 +1065,9 @@ fn coding_length_changing_block_across_codons_is_described_individually() {
             provider_with_simple_transcript(),
             "NM_TEST.1:n.2_5delinsAAC"
         ),
-        "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "the `n.` axis is outside `delins.md:47`'s carve-out, so `general.md:34` \
-         governs and the members stay individual",
+        "NM_TEST.1:n.2_5delinsAAC",
+        "#2155 widens `delins.md:47`'s carve-out to every DNA axis, so `n.` is \
+         now in reach and the block merges just as `c.` does",
     );
     assert_eq!(
         normalize_with_provider(
@@ -1077,7 +1078,7 @@ fn coding_length_changing_block_across_codons_is_described_individually() {
         "#1610: on the coding DNA axis the block is kept whole by the \
          partitioner, so no member pair reaches the codon exception. Same \
          reference, same block, same coordinates as the `n.` assertion above — \
-         the axis is the whole of the difference",
+         and, as of #2155, the same output too",
     );
 }
 
@@ -1116,16 +1117,20 @@ fn a_length_changing_block_the_exception_still_cannot_reach() {
 /// are four bases apart and no one-base rule could rejoin them even where the
 /// codon test allows it.
 ///
-/// # UNMOVED BY #1610, AND THAT IS THE MEASUREMENT
+/// # UNMOVED BY #1610, RE-PINNED BY #2155
 ///
-/// An earlier revision of this branch re-pinned this to the whole
-/// `n.2_5delinsAAC`, because `split_is_a_placed_gap_coincidence` was then
-/// axis-blind. It is now gated to the coding DNA axis, so `n.` is out of reach
-/// and this expectation is unchanged from before #1610.
+/// An earlier revision of this branch (pre-#1610) pinned this to the whole
+/// `n.2_5delinsAAC`, then #1610 shipped `split_is_a_placed_gap_coincidence`
+/// scoped to the coding DNA axis only, moving `n.` to the split pinned above
+/// for a time. **#2155 supersedes that scope to every DNA axis**
+/// (`rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`), so
+/// `n.` is back in reach and this row returns to the whole form — the same
+/// string the pre-#1610 revision carried, though for the current, wider-scope
+/// reason rather than the original axis-blind one.
 ///
-/// Note what that means and do not soften it: this is the axis **the issue was
-/// filed on**, so #1610's own reproduction is not closed by the shipped rule.
-/// See the module docs of `issue_1610_lone_unequal_length_delins`.
+/// This is the axis **#1610 was filed on**, so as of #2155 that issue's own
+/// reproduction is closed on this axis too. See the module docs of
+/// `issue_1610_lone_unequal_length_delins`.
 #[test]
 fn non_coding_length_changing_block_keeps_the_split() {
     let result = normalize_with_provider(
@@ -1133,8 +1138,9 @@ fn non_coding_length_changing_block_keeps_the_split() {
         "NM_TEST.1:n.2_5delinsAAC",
     );
     assert_eq!(
-        result, "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "an axis with no reading frame gets `general.md:34`'s plain rule",
+        result, "NM_TEST.1:n.2_5delinsAAC",
+        "#2155 widens `delins.md:47`'s carve-out to every DNA axis, so `n.` \
+         merges the block whole just as `c.` does",
     );
 }
 
