@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::error::FerroError;
 use crate::hgvs::parser::parse_hgvs;
 use crate::hgvs::variant::HgvsVariant;
+use crate::normalize::from_sequences::FromSequencesOptions;
 use crate::normalize::Normalizer;
 use crate::reference::ReferenceProvider;
 
@@ -534,6 +535,57 @@ impl<P: ReferenceProvider + Sync> BatchProcessor<P> {
         BatchResult::new(results, start.elapsed())
     }
 
+    /// Parse and *re-derive* multiple HGVS strings in parallel — the batch,
+    /// order-preserving counterpart of [`Normalizer::rederive`].
+    ///
+    /// This is the "one canonical description per variant" round trip
+    /// (`to_sequences` -> `from_sequences`, widening while a member rests on a
+    /// growable window edge), applied to a whole list across `num_threads`
+    /// workers. It is distinct from [`parse_and_normalize_parallel`] the same
+    /// way [`Normalizer::rederive`] is distinct from [`Normalizer::normalize`]:
+    /// re-derivation reads the denoted bases rather than 3'-shifting the input's
+    /// spelling, and `recommended_form` additionally applies `normalize`'s
+    /// recommended-form rules to the result.
+    ///
+    /// Options are built from this processor's own normalizer config, so the
+    /// shuffle direction matches what the serial `rederive` path would use.
+    /// `max_grid_cells` bounds the alignment grid exactly as
+    /// [`from_sequences`](crate::normalize::from_sequences) does; `None` uses the
+    /// default. `Some(0)` is a degenerate grid; rather than propagate it (and risk
+    /// a per-item failure or panic downstream) this treats it as `None` and uses
+    /// the default. This method is infallible by design, so a caller that needs 0
+    /// *rejected* must validate before calling — which the `parse_and_rederive`
+    /// Python binding does, raising `ValueError`.
+    ///
+    /// [`parse_and_normalize_parallel`]: Self::parse_and_normalize_parallel
+    pub fn parse_and_rederive_parallel<S: AsRef<str> + Sync>(
+        &self,
+        variants: &[S],
+        max_grid_cells: Option<usize>,
+        recommended_form: bool,
+        num_threads: usize,
+    ) -> BatchResult<HgvsVariant> {
+        let start = Instant::now();
+        // Built once, shared by every worker: `rederive` borrows it immutably,
+        // and `FromSequencesOptions` is `Sync`, so one instance serves the fan-out.
+        let mut options = FromSequencesOptions::default()
+            .with_direction(self.normalizer.config().shuffle_direction);
+        if let Some(cells) = max_grid_cells.filter(|&c| c != 0) {
+            options = options.with_max_grid_cells(cells);
+        }
+        let map = |input: &S| match parse_hgvs(input.as_ref())
+            .and_then(|v| self.normalizer.rederive(&v, &options, recommended_form))
+        {
+            Ok(rederived) => ItemResult::Ok(rederived),
+            Err(error) => ItemResult::Err {
+                input: Some(input.as_ref().to_string()),
+                error,
+            },
+        };
+        let results = self.map_collect(variants, num_threads, map);
+        BatchResult::new(results, start.elapsed())
+    }
+
     /// Parse a *stream* of HGVS strings, yielding results in input order (#975).
     ///
     /// The streaming counterpart to [`parse_parallel`](Self::parse_parallel), and
@@ -792,6 +844,105 @@ mod tests {
 
         let result = processor.parse_and_normalize(&variants);
         assert_eq!(result.total(), 2);
+    }
+
+    /// Render one result to a comparable key: the description for a success, a
+    /// tagged error string for a failure. Lets serial and parallel runs be
+    /// compared item-by-item without depending on `HgvsVariant`'s `PartialEq`.
+    fn rederive_key(item: &ItemResult<HgvsVariant>) -> String {
+        match item {
+            ItemResult::Ok(v) => format!("OK:{v}"),
+            ItemResult::Err { error, .. } => format!("ERR:{error}"),
+        }
+    }
+
+    /// A batch processor over a genome-capable provider carrying one contig
+    /// `NC_TEST.1` whose bases are `seq`, so `rederive` — which reads the bases a
+    /// variant denotes — can actually succeed. `MockProvider::with_test_data()`
+    /// (what `processor()` uses) registers no genomic sequences, so rederive
+    /// errors on every input there, which would leave the checks below exercising
+    /// only the error arm rather than the ordering of successful results under
+    /// parallelism.
+    fn genome_processor_over(seq: &str) -> BatchProcessor<MockProvider> {
+        use std::io::Write;
+        let doc = serde_json::json!({
+            "version": "1.0",
+            "genome_build": "GRCh38",
+            "transcripts": [],
+            "genomic_sequences": { "NC_TEST.1": seq },
+        });
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(doc.to_string().as_bytes()).unwrap();
+        BatchProcessor::new(MockProvider::from_json(file.path()).unwrap())
+    }
+
+    /// The default genome provider: 10 leading non-A bases, a 300-base A-run
+    /// (positions 11..=310), then 12 more — an interior run long enough that a
+    /// deletion inside it shifts under rederivation.
+    fn genome_processor() -> BatchProcessor<MockProvider> {
+        genome_processor_over(&format!("GCTAGCTAGC{}GCTAGCTAGCTA", "A".repeat(300)))
+    }
+
+    #[test]
+    fn test_parse_and_rederive_parallel_matches_serial() {
+        let processor = genome_processor();
+        // Genomic edits that rederive successfully (they read the contig's bases),
+        // plus an unparseable input — so both the Ok and Err arms are exercised.
+        let variants = vec![
+            "NC_TEST.1:g.100del",
+            "NC_TEST.1:g.5G>C",
+            "NC_TEST.1:g.50_52del",
+            "not a variant",
+        ];
+
+        let serial = processor.parse_and_rederive_parallel(&variants, None, false, 1);
+        let serial_keys: Vec<String> = serial.results.iter().map(rederive_key).collect();
+        assert_eq!(serial_keys.len(), variants.len());
+        // The point of a genome-capable provider: rederive actually succeeds, so
+        // the Ok arm — not only the error arm — is placed under parallelism.
+        assert!(
+            serial.success_count() > 0,
+            "expected some successful rederivations; got all errors: {serial_keys:?}"
+        );
+        assert!(matches!(serial.results[3], ItemResult::Err { .. }));
+
+        // Parallel over several worker counts must reproduce the serial result
+        // exactly, in order (rayon's ordered collect preserves input order).
+        for workers in [0usize, 2, 4] {
+            let parallel = processor.parse_and_rederive_parallel(&variants, None, false, workers);
+            let parallel_keys: Vec<String> = parallel.results.iter().map(rederive_key).collect();
+            assert_eq!(
+                parallel_keys, serial_keys,
+                "parse_and_rederive_parallel(workers={workers}) differs from serial"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_and_rederive_recommended_form_flag_is_threaded() {
+        // A lone reference `A` immediately 5' of an insertion of three `A`s
+        // derives, unnormalized, as a literal `ins`; `recommended_form = true`
+        // routes the result through `normalize`, which collapses it to repeat
+        // notation. The two settings therefore produce DIFFERENT descriptions, so
+        // this asserts the flag actually reaches `rederive` and changes the
+        // output — not merely that the call succeeds. Mirrors
+        // `tests/it/rederive.rs::recommended_form_true_routes_through_normalize`.
+        let processor = genome_processor_over("GCTAGCATCGATC"); // lone 'A' at position 7
+        let variants = vec!["NC_TEST.1:g.7_8insAAA"];
+        for workers in [0usize, 1, 2, 4] {
+            let plain = processor.parse_and_rederive_parallel(&variants, None, false, workers);
+            let recommended = processor.parse_and_rederive_parallel(&variants, None, true, workers);
+            assert_eq!(
+                rederive_key(&plain.results[0]),
+                "OK:NC_TEST.1:g.7_8insAAA",
+                "recommended_form=false (workers={workers}) must keep the literal insertion",
+            );
+            assert_eq!(
+                rederive_key(&recommended.results[0]),
+                "OK:NC_TEST.1:g.7A[4]",
+                "recommended_form=true (workers={workers}) must collapse to repeat notation",
+            );
+        }
     }
 
     #[test]
