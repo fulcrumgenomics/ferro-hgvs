@@ -761,3 +761,66 @@ fn every_publishing_job_requires_a_release() {
         publishers.len(),
     );
 }
+
+/// The GitHub release **title** must be pinned, and pinned to the same string as
+/// the tag.
+///
+/// `git_release_name` is a field distinct from `git_tag_name`, with its own
+/// workspace-shape default (`v{version}` for a single-package workspace,
+/// `{package}-v{version}` for a multi-package one — the same fork [`minted_tag`]
+/// models). Pinning only the tag left the name on that default, so once
+/// `tests-soak` made this workspace multi-package the v0.16.0 release was titled
+/// `ferro-hgvs-v0.16.0` while its tag was `v0.16.0`, and it had to be renamed by
+/// hand — as v0.15.0 was before it. Unlike the tag, nothing downstream *gates* on
+/// the release name, so this cannot be folded into the gate assertions above; it
+/// is its own guard, and its property is simply that title and tag agree.
+#[test]
+fn the_release_name_is_pinned_and_matches_the_tag() {
+    let config: toml::Value =
+        toml::from_str(&read(RELEASE_PLZ_TOML)).expect("release-plz.toml parses as TOML");
+
+    let template = config
+        .get("workspace")
+        .and_then(|w| w.get("git_release_name"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "{RELEASE_PLZ_TOML} does not pin `git_release_name`, so the GitHub release title \
+                 falls back to release-plz's workspace-shape default. With `tests-soak` in the \
+                 workspace that default is `{{{{ package }}}}-v{{{{ version }}}}`, which titles \
+                 the release `ferro-hgvs-v<version>` while the tag stays `v<version>` — the \
+                 mismatch that was hand-corrected every cycle before this pin. Pin it beside \
+                 `git_tag_name`."
+            )
+        });
+
+    // Same discipline as the tag pin: the template must interpolate the version,
+    // or every release shares one title.
+    assert!(
+        template.contains("{{ version }}") || template.contains("{{version}}"),
+        "{RELEASE_PLZ_TOML}'s git_release_name = {template:?} does not reference \
+         {{{{ version }}}}, so every release would reuse one title."
+    );
+
+    let manifest: toml::Value =
+        toml::from_str(&read("Cargo.toml")).expect("Cargo.toml parses as TOML");
+    let package = manifest
+        .get("package")
+        .expect("Cargo.toml declares a root [package]");
+    let name = package
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .expect("the root package is named");
+    let version = package
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .expect("the root package is versioned");
+
+    let release_name = render(template, name, version);
+    let (tag, _) = minted_tag();
+    assert_eq!(
+        release_name, tag,
+        "the GitHub release title ({release_name:?}) and the git tag ({tag:?}) must be identical; \
+         pin `git_release_name` and `git_tag_name` to the same template in {RELEASE_PLZ_TOML}."
+    );
+}
