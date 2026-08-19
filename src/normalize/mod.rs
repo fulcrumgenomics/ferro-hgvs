@@ -2214,6 +2214,207 @@ pub struct NaEditReference {
 #[cfg(debug_assertions)]
 const NA_EDIT_REFERENCE_CAP: usize = 4096;
 
+/// #2161 Path 1: whether the shipped `recommended_form = true` derivation surface
+/// ([`Normalizer::rederive`] / [`Normalizer::from_sequences`]) skips the second
+/// block partition ([`crate::normalize::merge::canonicalize_from_sequence`], the
+/// ~38% `AlignmentDag` rebuild inside the final normalization).
+///
+/// `true` ships the drop. It is a single switch on purpose: the derivation
+/// surface already produces the canonical partition (the convergence increments),
+/// so the second partition is a no-op on [`Normalizer::normalize_core`]'s output,
+/// and skipping it changes no output — proven byte-for-byte by the guard in
+/// `tests/it/issue_2161_from_sequences_inversion_converge.rs`. Flip to `false` to
+/// restore the pre-drop behavior without touching the plumbing.
+const REDERIVE_SKIPS_REPARTITION: bool = true;
+
+/// How the final normalization treats the second block partition
+/// (`canonicalize_from_sequence`), the #2161 Path 1 lever.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RepartitionMode {
+    /// Run it as it always has: rebuild the `AlignmentDag`, re-cut the block,
+    /// re-type. The pre-drop behavior, and what public `normalize()` and the
+    /// projector always use.
+    Full,
+    /// Skip it entirely — the raw, unconditional drop (test/`dev` only, never the
+    /// shipped path; that is `Gated` below). `normalize_core`'s output is taken as
+    /// the canonical form, on the premise the derivation surface already produced it.
+    ///
+    /// Only ever *constructed* by `normalize_skipping_repartition`, which is
+    /// `#[cfg(any(test, feature = "dev"))]` — the #2161 convergence guard's lever.
+    /// It is still matched unconditionally below, so the variant must exist in
+    /// every build; a non-test/non-dev build simply never constructs it, so allow
+    /// dead code there while keeping the lint live where a constructor exists.
+    #[cfg_attr(not(any(test, feature = "dev")), allow(dead_code))]
+    Skip,
+    /// Skip the re-partition **unless** a cheap structural check
+    /// ([`repartition_gate`]) says it might change the output — the shipped Drop.
+    /// The Drop's only divergence shapes are an inversion or `delins` member, so
+    /// an output of only sub/del/ins/dup members skips (the fast path) and
+    /// anything carrying an inv/delins runs the full re-partition (correct).
+    Gated,
+}
+
+/// #2161 Path 1 gate: could the second block partition
+/// (`canonicalize_from_sequence`) still change this `normalize_core` output?
+///
+/// The Drop skips that re-partition. Measured over both the geometry corpus
+/// (`issue_2161_from_sequences_inversion_converge`) and the designed
+/// small-separation cis corpus (`cis_confluence_axis`), the re-partition moves an
+/// output **only** when it carries an **inversion** member (which it can decompose
+/// or re-place) or a **`delins`** member (which it can split, or merge with an
+/// adjacent member into a net-deletion `delins`). An allele of only
+/// substitution/deletion/insertion/duplication members is a fixed point of the
+/// re-partition — 0 divergences over 47,392 designed spellings at separations
+/// 0..8. So the gate is the presence of an inv or delins member anywhere in the
+/// output; `true` means run the full re-partition, `false` means the skip is safe.
+///
+/// Reads only the AST — no provider, no allocation, one pass over members — so the
+/// fast path pays a structural scan rather than a DAG rebuild. Any shape it cannot
+/// read as a plain nucleotide member (protein, a nested allele) falls safe to
+/// `true`.
+fn repartition_gate(variant: &HgvsVariant) -> bool {
+    fn na_of(member: &HgvsVariant) -> Option<&NaEdit> {
+        match member {
+            HV::Genome(g) => g.loc_edit.edit.inner(),
+            HV::Mt(m) => m.loc_edit.edit.inner(),
+            HV::Cds(c) => c.loc_edit.edit.inner(),
+            HV::Tx(t) => t.loc_edit.edit.inner(),
+            HV::Rna(r) => r.loc_edit.edit.inner(),
+            // A shape the gate cannot classify (protein, nested) — treat as risky.
+            _ => None,
+        }
+    }
+    // A member type that is a fixed point of the re-partition **as a lone member**:
+    // sub/del/ins/dup are atomic, and lone delins/inv are measured fixed points
+    // (the lone-member probes). A repeat, a dupins, or an unclassifiable shape is
+    // not, so the gate runs the full re-partition for those.
+    fn is_measured_fixed_point(na: Option<&NaEdit>) -> bool {
+        matches!(
+            na,
+            Some(
+                NaEdit::Substitution { .. }
+                    | NaEdit::Deletion { .. }
+                    | NaEdit::Insertion { .. }
+                    | NaEdit::Duplication { .. }
+                    | NaEdit::Delins { .. }
+                    | NaEdit::Inversion { .. }
+            )
+        )
+    }
+
+    let members: &[HgvsVariant] = match variant {
+        HV::Allele(allele) => &allele.variants,
+        // A single non-allele variant. It reaches the partitioner only by the
+        // splittable-single-member route, and the shipped `CanonicalCoalesced` arm
+        // keeps a lone member whole. A lone member has no sibling to merge with or
+        // be re-placed against, so every lone member of a **measured-safe** type is
+        // a fixed point of the re-partition: sub/del/ins/dup are atomic, and a lone
+        // delins (1,076 probed, incl. reverse-complement / homopolymer /
+        // unchanged-interior payloads) and lone inv (2,512 probed) changed 0 times
+        // (`a_lone_delins_is_a_fixed_point_of_the_repartition`,
+        // `a_lone_inv_is_a_fixed_point_of_the_repartition`) — a reverse-complement
+        // span is typed `inv` before it is ever a lone delins. Any OTHER edit
+        // (repeat, dupins, an unclassifiable shape) is not measured safe, so it
+        // falls safe to running the re-partition.
+        single => return !is_measured_fixed_point(na_of(single)),
+    };
+
+    // (1) An inversion member — the re-partition can decompose it or re-place it
+    // against a sibling. Measured: the 15 FivePrime inv-placement divergences.
+    if members
+        .iter()
+        .any(|m| matches!(na_of(m), Some(NaEdit::Inversion { .. })))
+    {
+        return true;
+    }
+
+    // (2) Any member that is neither atomic (sub/del/ins/dup) nor a `delins` — a
+    // repeat, a dupins, or a shape the gate cannot classify. None of these is a
+    // measured fixed point and the re-partition can re-type it, so fall safe. A
+    // `delins` is handled by the net-length test below; an atomic member is a
+    // fixed point.
+    for member in members {
+        match na_of(member) {
+            Some(
+                NaEdit::Substitution { .. }
+                | NaEdit::Deletion { .. }
+                | NaEdit::Insertion { .. }
+                | NaEdit::Duplication { .. }
+                | NaEdit::Delins { .. }
+                | NaEdit::Inversion { .. },
+            ) => {}
+            // Repeat / multi-repeat / dupins / conversion / identity / padded
+            // deletion / substitution-without-reference / unclassifiable: not a
+            // measured fixed point — fall safe to the full re-partition.
+            _ => return true,
+        }
+    }
+
+    // (3) A `delins` member in a **net-deletion** allele. The merge into one
+    // spanning `delins` (`rulings[delins-merge-vs-individual-gap-two-or-more]`)
+    // reaches "the net-deletion case only — payload shorter than the span", so it
+    // fires exactly when the allele's total alternate length is shorter than its
+    // total reference length. That total is a property of the member lengths
+    // alone — no reference bases, no gap threshold — so it is exact and cheap.
+    // Measured: every divergent merge (72 in the geometry corpus, 12 in the
+    // dense-member corpus) is a `delins` beside a `del` at net < 0; every wasted
+    // delins fallback is a `delins` beside a sub/ins/dup at net >= 0.
+    //
+    // Genomic (`g.`/`m.`) base span; `None` for a member the gate cannot cheaply
+    // measure (a `c.`/`r.`/offset member, or a payload of unknown length) — those
+    // fall safe to running the re-partition.
+    fn ref_span(member: &HgvsVariant) -> Option<i64> {
+        let (start, end) = match member {
+            HV::Genome(g) => (
+                g.loc_edit.location.start.inner()?,
+                g.loc_edit.location.end.inner()?,
+            ),
+            HV::Mt(m) => (
+                m.loc_edit.location.start.inner()?,
+                m.loc_edit.location.end.inner()?,
+            ),
+            _ => return None,
+        };
+        if start.offset.unwrap_or(0) != 0 || end.offset.unwrap_or(0) != 0 {
+            return None;
+        }
+        Some(end.base as i64 - start.base as i64 + 1)
+    }
+    // Net length change (alternate length − reference length) contributed by one
+    // member; `None` if it cannot be measured.
+    fn member_net(member: &HgvsVariant) -> Option<i64> {
+        Some(match na_of(member)? {
+            NaEdit::Deletion { .. } => -ref_span(member)?,
+            NaEdit::Substitution { .. } => 0,
+            NaEdit::Insertion { sequence } => sequence.len()? as i64,
+            NaEdit::Duplication { .. } => ref_span(member)?,
+            NaEdit::Delins { sequence, .. } => sequence.len()? as i64 - ref_span(member)?,
+            NaEdit::Inversion { .. } => 0,
+            _ => return None,
+        })
+    }
+
+    // After step (2) every member is atomic or a delins. With no delins, the allele
+    // is only sub/del/ins/dup — a fixed point of the re-partition (measured: 0
+    // divergences over the designed small-separation corpus at separations 0..8,
+    // and over the dense-member corpus).
+    let has_delins = members
+        .iter()
+        .any(|m| matches!(na_of(m), Some(NaEdit::Delins { .. })));
+    if !has_delins {
+        return false;
+    }
+    // Sum the net length change; if any member is unmeasurable, fall safe.
+    let mut total = 0i64;
+    for m in members {
+        match member_net(m) {
+            Some(net) => total += net,
+            None => return true,
+        }
+    }
+    total < 0
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
     static NA_EDIT_REFERENCES: std::cell::RefCell<Vec<NaEditReference>> =
@@ -2934,7 +3135,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             accession, position, reference, alternate, options,
         )?;
         if recommended_form {
-            self.normalize(&variant)
+            self.normalize_for_recommended_form(&variant)
         } else {
             Ok(variant)
         }
@@ -3062,7 +3263,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
             if !unsettled_5prime && !unsettled_3prime {
                 return if recommended_form {
-                    self.normalize(&derived.variant)
+                    self.normalize_for_recommended_form(&derived.variant)
                 } else {
                     Ok(derived.variant)
                 };
@@ -3179,7 +3380,74 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // whether a variant is normalized directly or through the projector.
         // The opt-in idempotency self-check lives in `normalize_core_checked`
         // (below), so it covers this method AND the projector.
-        Ok(self.normalize_core_checked(variant)?.0)
+        Ok(self
+            .normalize_core_checked(variant, RepartitionMode::Full)?
+            .0)
+    }
+
+    /// The `recommended_form = true` derivation surface
+    /// ([`Self::rederive`], [`Self::from_sequences`]) routes its final
+    /// normalization through this helper rather than through [`Self::normalize`],
+    /// so the #2161 Path 1 drop — skipping the second block partition
+    /// ([`crate::normalize::merge::canonicalize_from_sequence`], the ~38% DAG
+    /// rebuild) — is a single switch, [`REDERIVE_SKIPS_REPARTITION`], applied at
+    /// one seam. With the switch `false` this is exactly [`Self::normalize`].
+    ///
+    /// The drop is sound because the derivation surface already produces the
+    /// canonical partition on its own (the inversion / decompose / … convergence
+    /// increments), so `canonicalize_from_sequence` is a no-op on
+    /// [`Self::normalize_core`]'s output. The guard
+    /// (`tests/it/issue_2161_from_sequences_inversion_converge.rs`) pins that the
+    /// dropped path is byte-identical to the full path over the geometry and
+    /// real-reporter corpora.
+    fn normalize_for_recommended_form(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<HgvsVariant, FerroError> {
+        let mode = if REDERIVE_SKIPS_REPARTITION {
+            RepartitionMode::Gated
+        } else {
+            RepartitionMode::Full
+        };
+        Ok(self.normalize_core_checked(variant, mode)?.0)
+    }
+
+    /// [`Self::normalize`] with the second block partition unconditionally
+    /// skipped — the drop path, exposed for the #2161 convergence guard so it can
+    /// hold the dropped output against the full [`Self::normalize`] output for one
+    /// derived variant, independently of how the shipped `rederive` path is wired.
+    /// Test/`dev` only; never a shipped entry point.
+    #[cfg(any(test, feature = "dev"))]
+    pub fn normalize_skipping_repartition(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<HgvsVariant, FerroError> {
+        Ok(self
+            .normalize_core_checked(variant, RepartitionMode::Skip)?
+            .0)
+    }
+
+    /// [`Self::normalize`] on the shipped Drop's gated path — skip the second
+    /// block partition unless [`repartition_gate`] says it could move the output.
+    /// This is what `rederive(recommended_form = true)` runs; exposed so the
+    /// convergence guard can pin it byte-identical against the full path. Test/`dev`
+    /// only.
+    #[cfg(any(test, feature = "dev"))]
+    pub fn normalize_gated_repartition(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<HgvsVariant, FerroError> {
+        Ok(self
+            .normalize_core_checked(variant, RepartitionMode::Gated)?
+            .0)
+    }
+
+    /// Whether the shipped Drop's gate would run the full re-partition for this
+    /// (already `normalize_core`-shaped) variant — the fallback decision, exposed
+    /// so the #2161 measurement can report the true fallback rate. Test/`dev` only.
+    #[cfg(any(test, feature = "dev"))]
+    pub fn repartition_gate_fires(&self, variant: &HgvsVariant) -> bool {
+        repartition_gate(variant)
     }
 
     /// Opt-in idempotency self-check (issue #1157 follow-up): a normalizer must
@@ -3200,7 +3468,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Compiled out entirely in release (`debug_assertions`), so production is
     /// untouched and zero-cost.
     #[cfg(debug_assertions)]
-    fn assert_idempotent(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+    fn assert_idempotent(
+        &self,
+        variant: &HgvsVariant,
+        normalized: &HgvsVariant,
+        mode: RepartitionMode,
+    ) {
         if !idempotency_self_check_enabled() || IN_IDEMPOTENCY_CHECK.with(|f| f.get()) {
             return;
         }
@@ -3221,7 +3494,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let second = {
             IN_IDEMPOTENCY_CHECK.with(|f| f.set(true));
             let _guard = ReentrancyGuard;
-            self.normalize_core_checked(normalized)
+            self.normalize_core_checked(normalized, mode)
         };
 
         match second {
@@ -3911,6 +4184,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_core_canonical(
         &self,
         variant: &HgvsVariant,
+        mode: RepartitionMode,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // The one place the per-leaf junction-exit provenance is collected. It is
         // created here rather than threaded in because this is the single seam
@@ -3919,8 +4193,41 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // nothing — essentially all of them — pays nothing for carrying it.
         let mut manufactured: Vec<ManufacturedJunctionExit> = Vec::new();
         let (normalized, warnings) = self.normalize_core(variant, &mut manufactured)?;
-        let (normalized, warnings) =
-            self.canonicalize_from_sequence(normalized, warnings, &mut manufactured)?;
+        // `canonicalize_from_sequence` is the second block partition — it rebuilds
+        // the `AlignmentDag` from the re-applied sequence and re-cuts the block,
+        // then re-runs `normalize_core` on the result. It is the ~38% of
+        // `rederive(recommended_form = true)` that #2161 Path 1 removes: once the
+        // `from_sequences` derivation surface produces the canonical partition on
+        // its own (the inversion/decompose/... convergence increments), this pass
+        // is a no-op on `normalize_core`'s output, so skipping it changes nothing
+        // and saves the rebuild. The `mode` decides:
+        //
+        // * `Full` always runs it — the pre-drop behavior, used by public
+        //   `normalize()` and the projector, untouched by the Drop.
+        // * `Skip` bypasses it entirely (exposed for the guard's raw-drop baseline).
+        // * `Gated` (the shipped `rederive` path) runs it only when
+        //   [`repartition_gate`] says `normalize_core`'s output could still move.
+        //
+        // The guard (`issue_2161_from_sequences_inversion_converge`) proves the
+        // gated and full paths are byte-identical over the geometry and
+        // dense-member corpora.
+        let (normalized, warnings) = match mode {
+            RepartitionMode::Skip => (normalized, warnings),
+            RepartitionMode::Full => {
+                self.canonicalize_from_sequence(normalized, warnings, &mut manufactured)?
+            }
+            // The shipped Drop: skip the re-partition unless the output carries a
+            // shape it could actually move (inv / net-deletion delins). The check
+            // reads only the AST, so the fast path pays one structural scan, not a
+            // DAG build.
+            RepartitionMode::Gated => {
+                if repartition_gate(&normalized) {
+                    self.canonicalize_from_sequence(normalized, warnings, &mut manufactured)?
+                } else {
+                    (normalized, warnings)
+                }
+            }
+        };
         let normalized = self.split_protein_separation(normalized);
         Ok((
             self.reparent_junction_exit(normalized, &manufactured),
@@ -4158,6 +4465,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     pub(crate) fn normalize_core_checked(
         &self,
         variant: &HgvsVariant,
+        mode: RepartitionMode,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // `standards.md:39` (#1627): a member stating an alignment-only symbol
         // cannot be normalized, so this refuses BEFORE any work — and, unlike
@@ -4280,7 +4588,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Call the canonical core directly (skipping the per-call
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.
-        let (normalized, warnings) = self.normalize_core_canonical(variant)?;
+        let (normalized, warnings) = self.normalize_core_canonical(variant, mode)?;
 
         // #1621: the far-side exon-junction clamp, applied ONCE to the finished
         // description. See [`exon_junction_anchor`] for the rule and its
@@ -4332,7 +4640,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // contributes nothing in every reachable case measured.
         let (normalized, warnings) = match self.exon_junction_far_side(&normalized) {
             Some(pulled) if pulled != *variant => {
-                let (clamped, more) = self.normalize_core_canonical(&pulled)?;
+                let (clamped, more) = self.normalize_core_canonical(&pulled, mode)?;
                 let mut merged = warnings;
                 merged.extend(more);
                 (clamped, merged)
@@ -4624,7 +4932,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        self.assert_seam_oracles(variant, &result.result, &result.warnings);
+        self.assert_seam_oracles(variant, &result.result, &result.warnings, mode);
 
         // Provenance (#1235, `DNA/delins.md:79-84`). If the input described more
         // cis members than the normalized form does, two or more separately
@@ -4689,19 +4997,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &HgvsVariant,
         normalized: &HgvsVariant,
         warnings: &[NormalizationWarning],
+        mode: RepartitionMode,
     ) {
         #[cfg(debug_assertions)]
         self.assert_in_bounds(variant, normalized);
         #[cfg(debug_assertions)]
         self.assert_reparseable(variant, normalized);
+        // `assert_idempotent` re-normalizes `normalized` to check `norm(norm(x))
+        // == norm(x)`; it must re-run the SAME path that produced `normalized`, so
+        // the shipped `rederive` drop path (`RepartitionMode::Gated`, what
+        // `normalize_for_recommended_form` selects) is checked for idempotency of
+        // the drop form, not against the full re-partition.
         #[cfg(debug_assertions)]
-        self.assert_idempotent(variant, normalized);
+        self.assert_idempotent(variant, normalized, mode);
         #[cfg(debug_assertions)]
         self.assert_denoted_sequence(variant, normalized, warnings);
         // Release builds read none of the parameters once the four calls above
         // are compiled out.
         #[cfg(not(debug_assertions))]
-        let _ = (variant, normalized, warnings);
+        let _ = (variant, normalized, warnings, mode);
     }
 
     /// Normalize a variant with detailed warnings
@@ -4735,7 +5049,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // that method's own exit. Calling them here as well would re-run all three
         // on every diagnostics normalization — including `assert_idempotent`'s full
         // re-normalization, the most expensive of them.
-        let (result, warnings) = self.normalize_core_checked(variant)?;
+        let (result, warnings) = self.normalize_core_checked(variant, RepartitionMode::Full)?;
         let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
         Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }

@@ -11,7 +11,7 @@ use crate::hgvs::variant::{
     is_frameshift, Accession, AllelePhase, AlleleVariant, CdsVariant, HgvsVariant, LocEdit,
     TxVariant,
 };
-use crate::normalize::{NormalizeConfig, Normalizer};
+use crate::normalize::{NormalizeConfig, Normalizer, RepartitionMode};
 use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
@@ -1608,7 +1608,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // transform that leaves the variant non-canonical, and even the
             // `project_normalized` caller cannot pre-normalize it in the `NC_`
             // frame because it does not know the placement (review M2).
-            let (normalized, warnings) = self.normalizer.normalize_core_checked(&deanchored)?;
+            let (normalized, warnings) = self
+                .normalizer
+                .normalize_core_checked(&deanchored, RepartitionMode::Full)?;
             let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
             let mut result = self.project_variant_inner(&normalized, &target)?;
             result.normalization_warnings = warnings;
@@ -1642,7 +1644,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // on every call. Use `normalize_core_checked` (not `normalize`) to keep
         // the warnings it emits so they can ride out on the projection (#1018 C2)
         // while still honoring the same strict-mode rejections `normalize` applies.
-        let (normalized, warnings) = self.normalizer.normalize_core_checked(variant)?;
+        let (normalized, warnings) = self
+            .normalizer
+            .normalize_core_checked(variant, RepartitionMode::Full)?;
         // 2. Reconcile the requested target against any selector resolution that
         // normalization performed (#783). A legacy LOVD gene-model selector
         // `NG_(GENE_v001):c.` keeps the genomic ref as its accession, so a
@@ -1798,7 +1802,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    caller's input, so it is attached uniformly even on the parent path
         //    (whose per-transcript re-projection re-normalizes a different, coding
         //    form) rather than being replaced by that re-normalize's warnings.
-        let (normalized, warnings) = self.normalizer.normalize_core_checked(&variant)?;
+        let (normalized, warnings) = self
+            .normalizer
+            .normalize_core_checked(&variant, RepartitionMode::Full)?;
         let results = self.project_normalized_all_inner(&normalized)?;
         // 2. The plain (non-parent) path returns the genome-frame results directly.
         let Some(parent) = parent else {

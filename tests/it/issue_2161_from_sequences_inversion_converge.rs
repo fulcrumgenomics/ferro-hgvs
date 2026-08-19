@@ -41,10 +41,35 @@
 //!   floor: a regression lowers it, a later increment only raises it.
 //!
 //! The guard is proven able to fail: on the pre-fix tree every curated row above
-//! diverges (the `NC_TEST.1:g.[14del;21_23inv]` reproducer is one of them), and
-//! the corpus carried 26,481 divergences against the shipped 9,170.
+//! diverges (the `NC_TEST.1:g.[14del;21_23inv]` reproducer is one of them); the
+//! shipped fix converges at least 60,731 of the 62,824 corpus rows (the floor
+//! `the_inversion_geometry_corpus_converges_without_regression` asserts; 60,904
+//! on the current tree).
+//!
+//! # The Drop and its gate (the #2161 Path 1 payoff)
+//!
+//! Once the derivation surface converges, the second block partition inside the
+//! final `normalize()` is redundant, so `rederive(recommended_form = true)` skips
+//! it unless a cheap AST-only gate (`repartition_gate`) says it could change the
+//! output. This file guards that the SHIPPED gated path is byte-identical to the
+//! full pre-drop path:
+//!
+//! - [`the_gated_drop_changes_no_output`] — over the inversion-geometry corpus:
+//!   the raw unconditional skip diverges on 72 shapes — the current measured
+//!   count, which the test asserts as a `>= 72` regression floor (not slack
+//!   below the measurement); the gate closes every one.
+//! - [`the_gate_is_correct_on_dense_member_alleles`] +
+//!   [`report_gate_fallback_on_dense_member_alleles`] — correctness and the gate's
+//!   fallback rate over a densely-spaced multi-member cis corpus (the distribution
+//!   the geometry corpus does not exercise), built from the public issue
+//!   reproducers' member patterns.
+//! - [`a_lone_delins_is_a_fixed_point_of_the_repartition`] +
+//!   [`a_lone_inv_is_a_fixed_point_of_the_repartition`] — the measured fixed-point
+//!   probes that justify the gate skipping every lone member.
 
-use ferro_hgvs::{parse_hgvs, FromSequencesOptions, JsonProvider, Normalizer, ShuffleDirection};
+use ferro_hgvs::{
+    parse_hgvs, FromSequencesOptions, JsonProvider, NormalizeConfig, Normalizer, ShuffleDirection,
+};
 use std::io::Write;
 
 /// A genome-capable provider over one contig named `NC_TEST.1` carrying `seq`.
@@ -197,6 +222,24 @@ struct Outcome {
     direction: ShuffleDirection,
     /// `Some((derive, recommend))` when both surfaces produced a string.
     compared: Option<(String, String)>,
+    /// The #2161 Path 1 measurement: `Some((full, skip, gated, gate_fired))` for
+    /// the derived form put through three normalization paths, plus the actual
+    /// gate decision —
+    /// - `full`: FULL normalization, second block partition included (the pre-drop
+    ///   `rederive(true)`);
+    /// - `skip`: second partition unconditionally SKIPPED
+    ///   (`normalize_skipping_repartition`) — shows where the raw Drop diverges;
+    /// - `gated`: the SHIPPED path (`normalize_gated_repartition`) — skip unless
+    ///   the cheap `repartition_gate` fires, in which case run the full
+    ///   re-partition;
+    /// - `gate_fired`: whether `repartition_gate` ran the re-partition (the true
+    ///   fallback signal, read from `repartition_gate_fires`).
+    ///
+    /// `full != skip` is a raw-Drop divergence (the residual the gate exists for);
+    /// the gate is correct iff `full == gated` for **every** outcome. `None` when
+    /// the derivation declined or its output did not re-parse — *counted*, never
+    /// silently passed.
+    drop_compared: Option<(String, String, String, bool)>,
 }
 
 /// Generate the whole corpus and run every variant through both surfaces.
@@ -210,7 +253,18 @@ fn run_corpus() -> Vec<Outcome> {
     for (_name, seq) in contigs() {
         let bytes = seq.as_bytes();
         let len = seq.len() as u64;
-        let nz = Normalizer::new(provider(seq));
+        // Two normalizers, one per shuffle direction, so the gate comparison in
+        // the direction loop below normalizes in the SAME direction the
+        // derivation used — otherwise every `nz.normalize*` call runs 3' and the
+        // 5' half of the gate is never exercised.
+        let nz_3p = Normalizer::with_config(
+            provider(seq),
+            NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+        );
+        let nz_5p = Normalizer::with_config(
+            provider(seq),
+            NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+        );
 
         // Interior inversion spans, kept ≥ 12 bases from either end.
         for a in 13..=(len - 12) {
@@ -254,11 +308,14 @@ fn run_corpus() -> Vec<Outcome> {
 
                         let mut members = Vec::new();
                         if use5 {
-                            if let Some(p) = five {
-                                match sibling(p) {
-                                    Some(m) => members.push(m),
-                                    None => continue,
-                                }
+                            // A requested 5' sibling with no valid position must
+                            // skip the WHOLE combination — building it without the
+                            // sibling silently relabels it as a different shape and
+                            // double-counts it in the landscape census.
+                            let Some(p) = five else { continue };
+                            match sibling(p) {
+                                Some(m) => members.push(m),
+                                None => continue,
                             }
                         }
                         // The inversion always participates.
@@ -268,11 +325,10 @@ fn run_corpus() -> Vec<Outcome> {
                             end: inv_member.end,
                         });
                         if use3 {
-                            if let Some(p) = three {
-                                match sibling(p) {
-                                    Some(m) => members.push(m),
-                                    None => continue,
-                                }
+                            let Some(p) = three else { continue };
+                            match sibling(p) {
+                                Some(m) => members.push(m),
+                                None => continue,
                             }
                         }
                         members.sort_by_key(|m| m.start);
@@ -285,12 +341,39 @@ fn run_corpus() -> Vec<Outcome> {
 
                         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
                         {
-                            let derive = rederive(&nz, &input, direction, false);
-                            let recommend = rederive(&nz, &input, direction, true);
+                            let nz = if matches!(direction, ShuffleDirection::ThreePrime) {
+                                &nz_3p
+                            } else {
+                                &nz_5p
+                            };
+                            let derive = rederive(nz, &input, direction, false);
+                            let recommend = rederive(nz, &input, direction, true);
+                            // The drop-relevant comparison: put the SETTLED
+                            // derivation (`derive`) through the full normalization
+                            // and through the re-partition-skipping one, and hold
+                            // the two against each other. This is the property the
+                            // drop actually needs — that the second block partition
+                            // is a no-op on `normalize_core`'s output — as opposed
+                            // to `compared`, which asks the stricter, not-required
+                            // question of whether the derivation already equals the
+                            // normalized form.
+                            let drop_compared = derive.as_ref().and_then(|d| {
+                                let variant = parse_hgvs(d).ok()?;
+                                let full = nz.normalize(&variant).ok()?.to_string();
+                                // `normalize_core`'s output — what the gate inspects.
+                                let skip_variant =
+                                    nz.normalize_skipping_repartition(&variant).ok()?;
+                                let gate_fired = nz.repartition_gate_fires(&skip_variant);
+                                // The SHIPPED path: skip unless the gate fires.
+                                let gated =
+                                    nz.normalize_gated_repartition(&variant).ok()?.to_string();
+                                Some((full, skip_variant.to_string(), gated, gate_fired))
+                            });
                             outcomes.push(Outcome {
                                 input: input.clone(),
                                 direction,
                                 compared: derive.zip(recommend),
+                                drop_compared,
                             });
                         }
                     }
@@ -300,6 +383,18 @@ fn run_corpus() -> Vec<Outcome> {
     }
 
     outcomes
+}
+
+/// The geometry corpus is hermetic and deterministic, so its size is exact —
+/// both non-vacuity guards below assert against this single source of truth.
+const GEOMETRY_CORPUS_SIZE: usize = 62_824;
+
+/// The geometry corpus, built once per test process and shared by the guards
+/// that read it. `run_corpus` is deterministic and ~45s to build, so consumers
+/// borrow this process-cached slice rather than each rebuilding it.
+fn geometry_corpus() -> &'static [Outcome] {
+    static CORPUS: std::sync::OnceLock<Vec<Outcome>> = std::sync::OnceLock::new();
+    CORPUS.get_or_init(run_corpus)
 }
 
 /// The fix, stated as pins: a flanked inversion the derivation surface used to
@@ -329,8 +424,15 @@ fn from_sequences_types_a_flanked_inversion_like_normalize() {
     ];
 
     for (seq, input, inv_span) in rows {
-        let nz = Normalizer::new(provider(seq));
         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            // Direction-matched normalizer, as in `run_corpus`: the final
+            // normalize in `rederive(true)` must shuffle the SAME direction the
+            // derivation used, or the FivePrime iteration would put a 5'-derived
+            // form through a 3' normalizer and stop testing the intended path.
+            let nz = Normalizer::with_config(
+                provider(seq),
+                NormalizeConfig::default().with_direction(direction),
+            );
             let derive =
                 rederive(&nz, input, direction, false).expect("derivation must not decline");
             let recommend =
@@ -358,6 +460,43 @@ fn from_sequences_types_a_flanked_inversion_like_normalize() {
         .unwrap(),
         "NC_TEST.1:g.[14del;21_23inv]",
     );
+}
+
+/// `derive_block_members` runs a final `shrink_pieces_to_differences` AFTER
+/// `coalesce_inversion_runs` (to re-close the separation-zero splits that pass
+/// opens on a flush-adjacent net-deletion `delins`). A concern was raised that
+/// this final shrink could instead damage a *genuine* flanked inversion;
+/// measured, it does not. This pins the property with the shape that stresses it
+/// most — an inversion sandwiched between two deletions, so the re-close runs at
+/// BOTH of its boundaries: the inversion still survives the derivation as an
+/// `inv`, and `rederive(false)` (derive) converges with `rederive(true)`
+/// (derive + `normalize`) in both shuffle directions.
+#[test]
+fn a_flanked_inversion_survives_the_final_shrink() {
+    // pos 14=C and 24=A are the flanking deletions; 18_20 = TGG inverts to CCA
+    // (all three bases change), and the inversion is separated from each deletion
+    // by unchanged bases — so it is a genuine flanked inv, not a flush-adjacent
+    // one the re-close is meant to collapse.
+    let seq = "ACGTACGTACGTACGGTTGGGACACGTACGT";
+    let input = "NC_TEST.1:g.[14del;18_20inv;24del]";
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        // Direction-matched normalizer (see `run_corpus`).
+        let nz = Normalizer::with_config(
+            provider(seq),
+            NormalizeConfig::default().with_direction(direction),
+        );
+        let derive = rederive(&nz, input, direction, false).expect("derive must not decline");
+        let recommend = rederive(&nz, input, direction, true).expect("recommend must not decline");
+        assert_eq!(
+            derive, recommend,
+            "{input} ({direction:?}): derive must converge with normalize",
+        );
+        assert!(
+            derive.contains("inv"),
+            "{input} ({direction:?}): the flanked inversion must survive the final \
+             shrink as an inv, got {derive}",
+        );
+    }
 }
 
 /// The over-merge increment, stated as pins: an equal-length `sub`+`inv` block
@@ -414,35 +553,33 @@ fn from_sequences_decomposes_a_merged_sub_flanked_inversion() {
 
 /// The geometry corpus, as a regression floor. Increments 1 (the flanked/interior
 /// inversion port) and its over-merge follow-up (the `decompose_delins` split)
-/// took the pre-port tree's divergences on this corpus from **26,481** down to
-/// **8,100** and opened **none** (measured baseline-vs-fix by `input`+`direction`:
-/// 0 rows that converged before now diverge); what remains is
-/// the shift and over-merge convergence that increments 2–3 address. So this
-/// asserts floors, not full convergence:
+/// close the flanked/interior inversion classes on the derivation surface; what
+/// remains is the shift, over-merge, and repeat-notation convergence that
+/// increments 2–3 address. So this asserts floors, not full convergence:
 ///
 /// - the corpus is fully built (a fixed, deterministic count — a drop means the
 ///   generator stopped emitting the geometry, the vacuity this file guards
 ///   against);
 /// - `normalize` actually types an inversion on a large share of the corpus (the
 ///   non-vacuity that matters: a generator that stopped producing genuine flanked
-///   inversions — every span palindromic, say — would still build 64,352 rows but
+///   inversions — every span palindromic, say — would still build 62,824 rows but
 ///   type almost no `inv`, and the convergence floor alone could not tell);
 /// - the number of variants on which `derive` converges with `normalize` does not
 ///   fall below what the ports achieved. A future regression lowers it; a later
 ///   increment that closes the remaining gaps only raises it, so the floor is
 ///   `>=`, not `==`.
 ///
-/// Measured after the over-merge increment: 64,352 comparisons, 0 skipped, 56,252
-/// convergent, 40,900 carrying an `inv` in the `normalize` output. Of the
-/// remaining 8,100 divergences, all but **252** are FivePrime — where `normalize`
-/// emits its direction-invariant 3'-canonical form and the derivation respects
-/// the caller's direction, which is direction semantics, not a convergence gap.
-/// The 252 ThreePrime residue is entirely repeat notation (`X[n]`), the next
-/// increment; on ThreePrime — the direction the second-partition drop depends on —
-/// inversion typing and over-merge are both closed.
+/// Measured on the current corpus: 62,824 comparisons, 0 skipped, 60,904
+/// convergent, 39,760 carrying an `inv` in the `normalize` output — leaving 1,920
+/// divergences, the shift/over-merge/repeat-notation residue the later increments
+/// close. Each shuffle direction is normalized in its OWN direction (see
+/// `run_corpus`: a FivePrime derivation is held against a FivePrime `normalize`,
+/// not a 3'-canonical one), so the earlier "FivePrime direction-semantics"
+/// divergences — an artifact of that mismatch — no longer arise, which is why
+/// convergence sits well above the pre-consistency figure.
 #[test]
 fn the_inversion_geometry_corpus_converges_without_regression() {
-    let outcomes = run_corpus();
+    let outcomes = geometry_corpus();
     let compared = outcomes.iter().filter(|o| o.compared.is_some()).count();
     let converged = outcomes
         .iter()
@@ -456,7 +593,7 @@ fn the_inversion_geometry_corpus_converges_without_regression() {
     // The corpus is hermetic and deterministic, so this is exact: every generated
     // variant put both surfaces through cleanly (0 skipped on the port).
     assert_eq!(
-        compared, 64_352,
+        compared, GEOMETRY_CORPUS_SIZE,
         "the geometry corpus changed size — the generator is no longer emitting \
          what this guard measures",
     );
@@ -464,13 +601,13 @@ fn the_inversion_geometry_corpus_converges_without_regression() {
     // so the convergence floor below is a claim about flanked inversions and not
     // about a corpus that degenerated to palindromes or lone indels.
     assert!(
-        recommend_has_inv >= 40_900,
+        recommend_has_inv >= 39_760,
         "the corpus stopped producing genuine inversions: only {recommend_has_inv} \
-         of {compared} carry an inv in the normalize output, floor is 40,900",
+         of {compared} carry an inv in the normalize output, floor is 39,760",
     );
     assert!(
-        converged >= 56_252,
-        "convergence regressed: {converged} of {compared} converge, floor is 56,252",
+        converged >= 60_731,
+        "convergence regressed: {converged} of {compared} converge, floor is 60,731",
     );
 }
 
@@ -513,5 +650,598 @@ fn report_inversion_convergence_landscape() {
         diverged,
         converged,
         recommend_has_inv,
+    );
+
+    // The landscape: how many outputs the raw Drop (unconditional skip) MOVES,
+    // how many the SHIPPED gated path moves (must be 0), and how often the gate
+    // fired (the fallback count — the cost the gate pays for correctness).
+    let drop_compared = outcomes
+        .iter()
+        .filter(|o| o.drop_compared.is_some())
+        .count();
+    let mut skip_diverged = 0usize;
+    let mut gated_diverged = 0usize;
+    let mut gate_fired = 0usize;
+    for o in &outcomes {
+        if let Some((full, skip, gated, fired)) = &o.drop_compared {
+            if full != skip {
+                skip_diverged += 1;
+            }
+            if full != gated {
+                gated_diverged += 1;
+                eprintln!(
+                    "GATEDDIV\t{}\t{:?}\tfull={}\tgated={}",
+                    o.input, o.direction, full, gated
+                );
+            }
+            // The ACTUAL gate decision on `normalize_core`'s output.
+            if *fired {
+                gate_fired += 1;
+            }
+        }
+    }
+    eprintln!(
+        "DROPSUMMARY drop_compared={} skip_diverged={} gated_diverged={} gate_fired={} \
+         gate_fallback_rate={:.3}%",
+        drop_compared,
+        skip_diverged,
+        gated_diverged,
+        gate_fired,
+        100.0 * gate_fired as f64 / drop_compared.max(1) as f64,
+    );
+}
+
+/// The #2161 Path 1 gate guard: the SHIPPED `rederive(recommended_form = true)`
+/// path — skip the second block partition unless `repartition_gate` fires — must
+/// be byte-identical to the pre-drop full normalization on **every** output. That
+/// equality is the Drop's whole safety condition: the gate runs the full
+/// re-partition on exactly the shapes where it would change the output (inv /
+/// delins members) and skips it everywhere else.
+///
+/// The raw unconditional skip diverges on 72 of these (all inv-placement or
+/// delins-merge shapes), matched exactly by the `skip_diverged >= 72` floor
+/// below — a regression floor, not slack; the gate exists to catch those, and
+/// this asserts it does.
+#[test]
+fn the_gated_drop_changes_no_output() {
+    let outcomes = geometry_corpus();
+    let compared = outcomes
+        .iter()
+        .filter(|o| o.drop_compared.is_some())
+        .count();
+    let gated_diverged: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|o| {
+            o.drop_compared
+                .as_ref()
+                .is_some_and(|(full, _skip, gated, _fired)| full != gated)
+        })
+        .collect();
+    let skip_diverged = outcomes
+        .iter()
+        .filter(|o| {
+            o.drop_compared
+                .as_ref()
+                .is_some_and(|(full, skip, _gated, _fired)| full != skip)
+        })
+        .count();
+
+    // Non-vacuity: the guard must actually have compared a large population, or a
+    // corpus that stopped producing derivations would pass the emptiness check
+    // silently — the "a corpus zero is a claim about the corpus" trap.
+    assert_eq!(
+        compared, GEOMETRY_CORPUS_SIZE,
+        "the gate guard compared {compared} derived variants, expected \
+         {GEOMETRY_CORPUS_SIZE} — the corpus is no longer exercising the path on \
+         every generated variant",
+    );
+    // Non-vacuity, second half: the raw skip MUST still diverge on the shapes the
+    // gate exists to catch, or the guard is proving nothing (a corpus that stopped
+    // producing inv/delins shapes would pass while testing an empty gate).
+    assert!(
+        skip_diverged >= 72,
+        "the raw unconditional skip diverged on only {skip_diverged} outputs — the \
+         corpus stopped producing the inv/delins shapes the gate is meant to catch, \
+         so this guard is vacuous",
+    );
+
+    for o in gated_diverged.iter().take(20) {
+        let (full, _skip, gated, _fired) = o.drop_compared.as_ref().unwrap();
+        eprintln!(
+            "GATED-DIVERGE\t{}\t{:?}\tfull={}\tgated={}",
+            o.input, o.direction, full, gated
+        );
+    }
+
+    assert!(
+        gated_diverged.is_empty(),
+        "the SHIPPED gated Drop moved {} of {compared} outputs (raw skip moved \
+         {skip_diverged}) — the gate let a divergence through (see GATED-DIVERGE \
+         lines). Its predicate is missing a shape the re-partition changes.",
+        gated_diverged.len(),
+    );
+}
+
+// ===========================================================================
+// #2161 dense-member cis corpus: gate CORRECTNESS + FALLBACK rate
+// ===========================================================================
+//
+// The geometry corpus above is inversion-heavy by construction. This one mirrors
+// a distribution class the geometry corpus does not: multi-member
+// cis alleles authored from short (2-4 nt) del / ins / sub / dup members at small
+// separations (0-2), 2-4 members — the shapes drawn from the public issue reproducers
+// (`[del;ins]`, `[del;dup]`, `[dup;sub]`, `[sub;sub]`, `[del;del]`, `[ins;del]`,
+// `[del;sub]`, homopolymer del runs, 3-member mixes). Crucially, NO member is
+// authored as an inv or delins — those only ARISE from normalization, exactly as
+// in the real workload. So this measures two things the geometry corpus cannot:
+//
+//   1. gate CORRECTNESS on the target distribution: `gated == full` for every
+//      generated allele (asserted).
+//   2. gate FALLBACK rate: what fraction of rederive(true) calls the gate sends to
+//      the full re-partition (printed). That is the Drop's speed cost on this
+//      distribution — the number that decides whether the gate is worth it.
+
+/// An insertion of `bases` between 1-based positions `pos` and `pos+1`.
+fn ins(pos: u64, bases: &str) -> Member {
+    Member {
+        text: format!("{pos}_{}ins{bases}", pos + 1),
+        start: pos,
+        end: pos,
+    }
+}
+
+/// A tandem duplication of the 1-based span `[a, b]`.
+fn dup(a: u64, b: u64) -> Member {
+    let text = if a == b {
+        format!("{a}dup")
+    } else {
+        format!("{a}_{b}dup")
+    };
+    Member {
+        text,
+        start: a,
+        end: b,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Ek {
+    Sub,
+    Del,
+    Ins,
+    Dup,
+}
+
+/// Build one member of kind `kind` starting at 1-based `pos`, returning it and the
+/// number of reference bases it occupies (for non-overlapping placement).
+fn build_member(kind: Ek, seq: &[u8], pos: u64) -> Option<(Member, u64)> {
+    match kind {
+        Ek::Sub => sub(seq, pos).map(|m| (m, 1)),
+        Ek::Del => Some((del(pos), 1)),
+        // An insertion consumes no reference base, but advance one slot so the
+        // next member never lands on the same interbase.
+        Ek::Ins => Some((ins(pos, "T"), 1)),
+        Ek::Dup => Some((dup(pos, pos + 1), 2)),
+    }
+}
+
+/// Contigs with real bases, including the 125 nt `TEMPLATE` the issue reproducers
+/// use, plus structured runs/palindromes so normalization can produce delins/inv.
+fn dense_contigs() -> Vec<&'static str> {
+    vec![
+        // TEMPLATE (125 nt), verbatim from the #1229-#1421 reproducers.
+        "ATGCACCAGTCACCAGTCTGATGCGGATCACGTGCAATTGCACGTGCAATTGGATCCGATCGTACGTACGATCGGCATGCATGCTAGCTAGCATCGATCGTAGCTAGCTAGCATCGATCGATCGA",
+        // General mixed + homopolymer + repeat + palindrome (from the geometry set).
+        "GCTAGCATGCATGCGTACAGTCGATCGATCAAAAAATGCAGTCAGTGGATCCGATTACGATCAGCT",
+        "GGCCAATTGGCCATATATATATATATGGCCAATTGGCCAATTGGCCAATTGGCCAATTGGCCAATT",
+        "ATATATATATGGGCGCGCCCATATATATATGGGCGCGCCCATATATATATGGGCGCGCCCATATAT",
+    ]
+}
+
+/// Every authored member pattern, drawn from the public issue reproducers.
+const DENSE_MEMBER_PATTERNS: &[&[Ek]] = &[
+    &[Ek::Del, Ek::Ins],
+    &[Ek::Del, Ek::Dup],
+    &[Ek::Dup, Ek::Sub],
+    &[Ek::Sub, Ek::Sub],
+    &[Ek::Del, Ek::Del],
+    &[Ek::Ins, Ek::Del],
+    &[Ek::Del, Ek::Sub],
+    &[Ek::Dup, Ek::Del],
+    &[Ek::Sub, Ek::Del],
+    &[Ek::Ins, Ek::Sub],
+    &[Ek::Sub, Ek::Del, Ek::Dup],
+    &[Ek::Del, Ek::Del, Ek::Del],
+    &[Ek::Sub, Ek::Ins, Ek::Dup],
+    &[Ek::Del, Ek::Sub, Ek::Ins],
+    &[Ek::Sub, Ek::Sub, Ek::Sub],
+    &[Ek::Del, Ek::Ins, Ek::Del],
+];
+
+struct GateOutcome {
+    full: String,
+    skip: String,
+    gated: String,
+    /// The ACTUAL shipped-gate decision on `normalize_core`'s output — whether it
+    /// ran the full re-partition. This is the true fallback signal.
+    gate_fired: bool,
+}
+
+/// Generate the dense-member corpus and run the three normalization paths on each.
+/// Returns the collected outcomes and the number of inputs on which a
+/// normalization **panicked** — tracked, not silently dropped, so a gate that
+/// aborts on some shape cannot hide as a skipped row.
+fn run_dense_member_corpus() -> (Vec<GateOutcome>, usize) {
+    let mut outcomes = Vec::new();
+    let mut panics = 0usize;
+    for seq in dense_contigs() {
+        let bytes = seq.as_bytes();
+        let len = seq.len() as u64;
+        let nz = Normalizer::new(provider(seq));
+        for pattern in DENSE_MEMBER_PATTERNS {
+            for sep in [0u64, 1, 2] {
+                // Walk start positions across the contig interior.
+                let mut start = 12u64;
+                while start + 8 < len {
+                    // Build the members left to right, non-overlapping.
+                    let mut pos = start;
+                    let mut members = Vec::new();
+                    let mut ok = true;
+                    for &kind in pattern.iter() {
+                        match build_member(kind, bytes, pos) {
+                            Some((m, width)) => {
+                                members.push(m);
+                                pos += width + sep;
+                            }
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    start += 3;
+                    if !ok || pos as usize >= seq.len() - 4 {
+                        continue;
+                    }
+                    let Some(input) = assemble(&members) else {
+                        continue;
+                    };
+                    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                        let Some(variant) = parse_hgvs(&input).ok() else {
+                            continue;
+                        };
+                        let options = FromSequencesOptions::default().with_direction(direction);
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let derived = nz.rederive(&variant, &options, false).ok()?;
+                                // `normalize_core`'s output — what the gate actually
+                                // inspects — is the skip path's variant.
+                                let skip_variant =
+                                    nz.normalize_skipping_repartition(&derived).ok()?;
+                                let gate_fired = nz.repartition_gate_fires(&skip_variant);
+                                let full = nz.normalize(&derived).ok()?.to_string();
+                                let gated =
+                                    nz.normalize_gated_repartition(&derived).ok()?.to_string();
+                                Some((full, skip_variant.to_string(), gated, gate_fired))
+                            }));
+                        match outcome {
+                            Ok(Some((full, skip, gated, gate_fired))) => {
+                                outcomes.push(GateOutcome {
+                                    full,
+                                    skip,
+                                    gated,
+                                    gate_fired,
+                                });
+                            }
+                            // A clean decline (parse/derive/normalize returned `None`).
+                            Ok(None) => {}
+                            // A panic — count it so a gate that aborts is not silent.
+                            Err(_) => panics += 1,
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (outcomes, panics)
+}
+
+/// Gate CORRECTNESS on the dense-member distribution class: the shipped gated Drop must be
+/// byte-identical to the full normalization on every generated allele, and the raw
+/// unconditional skip must still diverge somewhere (or the gate is untested here).
+#[test]
+fn the_gate_is_correct_on_dense_member_alleles() {
+    let (outcomes, panics) = run_dense_member_corpus();
+    let compared = outcomes.len();
+    let skip_diverged = outcomes.iter().filter(|o| o.full != o.skip).count();
+    let gated_diverged: Vec<&GateOutcome> = outcomes.iter().filter(|o| o.full != o.gated).collect();
+
+    // No input may panic on any of the three paths — a gate that aborts on a
+    // shape must fail loudly, not vanish as a dropped row.
+    assert_eq!(
+        panics, 0,
+        "{panics} dense-member inputs panicked during normalization",
+    );
+    assert!(
+        compared >= 5_000,
+        "the dense-member corpus compared only {compared} alleles — generator regressed",
+    );
+    assert!(
+        skip_diverged >= 1,
+        "the raw skip never diverged over {compared} dense-member alleles, so this \
+         guard is vacuous — the generator stopped producing the divergence shapes",
+    );
+    for o in gated_diverged.iter().take(20) {
+        eprintln!("DENSE-GATED-DIVERGE\tfull={}\tgated={}", o.full, o.gated);
+    }
+    assert!(
+        gated_diverged.is_empty(),
+        "the gated Drop moved {} of {compared} dense-member outputs (raw skip moved \
+         {skip_diverged}) — the gate let a divergence through",
+        gated_diverged.len(),
+    );
+}
+
+/// Report mode: the gate FALLBACK rate on the dense-member distribution — the speed cost.
+#[test]
+#[ignore = "permanent diagnostic (#2161): prints the gate fallback rate over the \
+            dense-member corpus; never asserts"]
+fn report_gate_fallback_on_dense_member_alleles() {
+    let (outcomes, _panics) = run_dense_member_corpus();
+    let compared = outcomes.len();
+    // The REAL gate decision: how often the shipped gate ran the full re-partition.
+    let fired = outcomes.iter().filter(|o| o.gate_fired).count();
+    // How many actually NEEDED it (raw skip would have diverged).
+    let needed = outcomes.iter().filter(|o| o.full != o.skip).count();
+    // Wasted fallbacks: gate fired but the skip would have been correct anyway.
+    let wasted = outcomes
+        .iter()
+        .filter(|o| o.gate_fired && o.full == o.skip)
+        .count();
+    // Member count of the gated input (normalize_core's output = skip).
+    let members_of = |s: &str| -> usize {
+        if s.contains('[') {
+            s.matches(';').count() + 1
+        } else {
+            1
+        }
+    };
+    let wasted_single = outcomes
+        .iter()
+        .filter(|o| o.gate_fired && o.full == o.skip && members_of(&o.skip) == 1)
+        .count();
+    let wasted_multi = outcomes
+        .iter()
+        .filter(|o| o.gate_fired && o.full == o.skip && members_of(&o.skip) >= 2)
+        .count();
+    for o in outcomes.iter().filter(|o| o.full != o.skip) {
+        eprintln!("NEEDED\tskip={}\tfull={}", o.skip, o.full);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for o in outcomes
+        .iter()
+        .filter(|o| o.gate_fired && o.full == o.skip && members_of(&o.skip) >= 2)
+    {
+        if seen.insert(o.skip.clone()) && seen.len() <= 30 {
+            eprintln!("WASTED-MULTI\tskip={}", o.skip);
+        }
+    }
+    eprintln!(
+        "WASTEDBREAKDOWN wasted_single_member={wasted_single} wasted_multi_member={wasted_multi}"
+    );
+    eprintln!(
+        "DENSEFALLBACK compared={compared} gate_fired={fired} ({:.2}%) actually_needed={needed} \
+         ({:.3}%) wasted_fallbacks={wasted} ({:.2}%)",
+        100.0 * fired as f64 / compared.max(1) as f64,
+        100.0 * needed as f64 / compared.max(1) as f64,
+        100.0 * wasted as f64 / compared.max(1) as f64,
+    );
+}
+
+/// Is a LONE (single-member) `delins` output ever changed by the second block
+/// partition? If not, the gate need not fire on it — which removes ~80% of the
+/// gate fallbacks on the dense-member distribution. The risk case is a `delins` whose
+/// payload is the reverse complement of its reference span (which the
+/// re-partition would re-type to `inv`), so this probe generates exactly those,
+/// plus unchanged-interior and arbitrary payloads, over real bases, and asserts
+/// the unconditional skip is byte-identical to the full re-partition on every one.
+#[test]
+fn a_lone_delins_is_a_fixed_point_of_the_repartition() {
+    fn revcomp(s: &[u8]) -> String {
+        s.iter()
+            .rev()
+            .map(|&b| match b {
+                b'A' => 'T',
+                b'T' => 'A',
+                b'C' => 'G',
+                b'G' => 'C',
+                _ => 'N',
+            })
+            .collect()
+    }
+    let mut compared = 0usize;
+    let mut panics = 0usize;
+    let mut diverged: Vec<(String, String, String)> = Vec::new();
+    for seq in dense_contigs() {
+        let bytes = seq.as_bytes();
+        let nz = Normalizer::new(provider(seq));
+        // Every span [a, b] with 2..=6 reference bases, interior enough not to hit
+        // the contig edge.
+        for a in 12u64..(seq.len() as u64 - 12) {
+            for width in 2u64..=6 {
+                let b = a + width - 1;
+                if b as usize + 8 >= seq.len() {
+                    continue;
+                }
+                let span = &bytes[(a - 1) as usize..b as usize];
+                // Payloads that stress each re-typing route.
+                let payloads = [
+                    revcomp(span),              // -> should become inv
+                    "A".repeat(width as usize), // homopolymer replacement
+                    {
+                        // unchanged-interior: keep first/last ref base, change middle
+                        let mut p: Vec<u8> = span.to_vec();
+                        if p.len() >= 3 {
+                            let mid = p.len() / 2;
+                            p[mid] = if p[mid] == b'A' { b'C' } else { b'A' };
+                        }
+                        String::from_utf8(p).unwrap()
+                    },
+                ];
+                for payload in payloads {
+                    let input = format!("NC_TEST.1:g.{a}_{b}delins{payload}");
+                    let Ok(variant) = parse_hgvs(&input) else {
+                        continue;
+                    };
+                    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                        let options = FromSequencesOptions::default().with_direction(direction);
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let derived = nz.rederive(&variant, &options, false).ok()?;
+                                // Only lone (single-member) outputs are in scope.
+                                if matches!(derived, ferro_hgvs::HgvsVariant::Allele(_)) {
+                                    return None;
+                                }
+                                let skip = nz
+                                    .normalize_skipping_repartition(&derived)
+                                    .ok()?
+                                    .to_string();
+                                if skip.contains('[') {
+                                    return None; // became multi-member; out of scope
+                                }
+                                // Only lone delins outputs are the question here.
+                                if !skip.contains("delins") {
+                                    return None;
+                                }
+                                let full = nz.normalize(&derived).ok()?.to_string();
+                                Some((full, skip))
+                            }));
+                        match outcome {
+                            Ok(Some((full, skip))) => {
+                                compared += 1;
+                                if full != skip {
+                                    diverged.push((input.clone(), skip, full));
+                                }
+                            }
+                            // A clean decline (out of scope: multi-member, or not a
+                            // lone delins). Legitimate, not a fixed-point failure.
+                            Ok(None) => {}
+                            // A panic — count it so a normalization that aborts is
+                            // not silently dropped from `compared`, which would make
+                            // the "0 divergences" floor read better than the truth.
+                            Err(_) => panics += 1,
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (input, skip, full) in diverged.iter().take(30) {
+        eprintln!("LONE-DELINS-DIVERGE\tin={input}\tskip={skip}\tfull={full}");
+    }
+    eprintln!(
+        "LONEDELINS compared={compared} diverged={} panics={panics}",
+        diverged.len()
+    );
+    assert_eq!(
+        panics, 0,
+        "{panics} lone-delins probe inputs panicked during normalization — a gate \
+         measured over a corpus that swallows panics is not measured",
+    );
+    assert!(
+        compared >= 200,
+        "the lone-delins probe compared only {compared} outputs — generator too narrow",
+    );
+    assert!(
+        diverged.is_empty(),
+        "{} lone delins outputs were CHANGED by the re-partition (see \
+         LONE-DELINS-DIVERGE) — the gate MUST fire on lone delins; not firing on \
+         them is unsafe",
+        diverged.len(),
+    );
+}
+
+/// Is a LONE (single-member) `inv` output ever changed by the second block
+/// partition? A lone inv has no sibling to be re-placed against and is already a
+/// whole-span reverse complement (the canonical `inv`), so it should be a fixed
+/// point. Confirming it lets the gate fire on inv only in MULTI-member alleles.
+#[test]
+fn a_lone_inv_is_a_fixed_point_of_the_repartition() {
+    let mut compared = 0usize;
+    let mut panics = 0usize;
+    let mut diverged: Vec<(String, String, String)> = Vec::new();
+    for seq in dense_contigs() {
+        let bytes = seq.as_bytes();
+        let nz = Normalizer::new(provider(seq));
+        for a in 12u64..(seq.len() as u64 - 12) {
+            for width in 2u64..=8 {
+                let b = a + width - 1;
+                if b as usize + 8 >= seq.len() {
+                    continue;
+                }
+                let Some(member) = inv(bytes, a, b) else {
+                    continue; // palindrome: not an inversion
+                };
+                let input = format!("NC_TEST.1:g.{}", member.text);
+                let Ok(variant) = parse_hgvs(&input) else {
+                    continue;
+                };
+                for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                    let options = FromSequencesOptions::default().with_direction(direction);
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let derived = nz.rederive(&variant, &options, false).ok()?;
+                        if matches!(derived, ferro_hgvs::HgvsVariant::Allele(_)) {
+                            return None;
+                        }
+                        let skip = nz
+                            .normalize_skipping_repartition(&derived)
+                            .ok()?
+                            .to_string();
+                        if skip.contains('[') || !skip.contains("inv") {
+                            return None; // became multi-member or not a lone inv
+                        }
+                        let full = nz.normalize(&derived).ok()?.to_string();
+                        Some((full, skip))
+                    }));
+                    match outcome {
+                        Ok(Some((full, skip))) => {
+                            compared += 1;
+                            if full != skip {
+                                diverged.push((input.clone(), skip, full));
+                            }
+                        }
+                        // A clean decline (out of scope: multi-member, or not a
+                        // lone inv). Legitimate, not a fixed-point failure.
+                        Ok(None) => {}
+                        // A panic — count it so a normalization that aborts is not
+                        // silently dropped from `compared`, which would make the
+                        // "0 divergences" floor read better than the truth.
+                        Err(_) => panics += 1,
+                    }
+                }
+            }
+        }
+    }
+    for (input, skip, full) in diverged.iter().take(30) {
+        eprintln!("LONE-INV-DIVERGE\tin={input}\tskip={skip}\tfull={full}");
+    }
+    eprintln!(
+        "LONEINV compared={compared} diverged={} panics={panics}",
+        diverged.len()
+    );
+    assert_eq!(
+        panics, 0,
+        "{panics} lone-inv probe inputs panicked during normalization — a gate \
+         measured over a corpus that swallows panics is not measured",
+    );
+    assert!(
+        compared >= 100,
+        "the lone-inv probe compared only {compared} outputs — generator too narrow",
+    );
+    assert!(
+        diverged.is_empty(),
+        "{} lone inv outputs were CHANGED by the re-partition (see LONE-INV-DIVERGE) \
+         — the gate must fire on lone inv",
+        diverged.len(),
     );
 }
