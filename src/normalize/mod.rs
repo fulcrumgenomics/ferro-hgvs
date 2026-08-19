@@ -14540,7 +14540,7 @@ fn build_variant_at(
 /// by a codon-frame triplet drops (an unchanged base is not an edit) and
 /// always ends any in-flight run — the gap means the
 /// surrounding changes are no longer "consecutive".
-fn build_split_variants(
+pub(crate) fn build_split_variants(
     template: &HgvsVariant,
     subedits: Vec<DelinsSubedit>,
     hgvs_start: u64,

@@ -27,15 +27,18 @@
 //! `rederive(recommended_form = true)` (derivation followed by `normalize`)
 //! should agree once the derivation produces the canonical form — that agreement
 //! is the redundancy #2161 is about, checked here without the second partition
-//! ever being removed. Increment 1 closes the flanked-inversion class of that
-//! gap, NOT all of it (sibling-shift and over-merge convergence remain for later
-//! increments), so this file pins two things, not full convergence:
+//! ever being removed. This file pins the increments that close the
+//! inversion-bearing classes of that gap, not full convergence (repeat notation
+//! remains):
 //!
-//! - [`from_sequences_types_a_flanked_inversion_like_normalize`] — exact
-//!   convergence on a curated set of clean flanked inversions (the fix itself).
+//! - [`from_sequences_types_a_flanked_inversion_like_normalize`] — the flanked
+//!   `[del;dup]`-fragmentation port (increment 1).
+//! - [`from_sequences_decomposes_a_merged_sub_flanked_inversion`] — the over-merge
+//!   follow-up: a merged equal-length `sub`+`inv` `delins` split back to its
+//!   canonical members (`split_canonical_delins`).
 //! - [`the_inversion_geometry_corpus_converges_without_regression`] — the corpus
 //!   is fully built (a fixed count) and the number of convergent variants holds a
-//!   floor: an inversion regression lowers it, a later increment only raises it.
+//!   floor: a regression lowers it, a later increment only raises it.
 //!
 //! The guard is proven able to fail: on the pre-fix tree every curated row above
 //! diverges (the `NC_TEST.1:g.[14del;21_23inv]` reproducer is one of them), and
@@ -357,10 +360,63 @@ fn from_sequences_types_a_flanked_inversion_like_normalize() {
     );
 }
 
-/// The geometry corpus, as a regression floor. Increment 1 (the flanked/interior
-/// inversion port) took the pre-port tree's divergences on this corpus from
-/// **26,481** down to **9,170** and opened **none** (measured baseline-vs-fix by
-/// `input`+`direction`: 0 rows that converged before now diverge); what remains is
+/// The over-merge increment, stated as pins: an equal-length `sub`+`inv` block
+/// the place chain merged into ONE spanning `delins` is now split back into its
+/// canonical `[sub; inv]` members by `split_canonical_delins`, the way
+/// `normalize`'s `apply_canonical_split` does. Before this, `from_sequences`
+/// emitted `g.11_15delinsCTCGC` where `normalize` emitted `g.[11A>C;13_15inv]` —
+/// the largest ThreePrime divergence class after increment 1.
+///
+/// These converge in ThreePrime, which is the direction the drop of the second
+/// partition depends on; the FivePrime placement of the surrounding subs is a
+/// separate (direction-semantics) question, so unlike the flanked-inversion pins
+/// above these assert ThreePrime convergence only.
+#[test]
+fn from_sequences_decomposes_a_merged_sub_flanked_inversion() {
+    let general = "GCTAGCATGCATGCGTACAGTCGATCGATCAAAAAATGCAGTCAGTGGATCCGATTACGATCAGCT";
+
+    // sub 5' of the inv, sub 3' of it, a longer inv, and a sub/inv/sub triple —
+    // every one a net-substitution block `decompose_delins` splits.
+    let rows = [
+        "NC_TEST.1:g.[11A>C;13_15inv]",
+        "NC_TEST.1:g.[13_15inv;17A>C]",
+        "NC_TEST.1:g.[11A>C;13_17inv]",
+        "NC_TEST.1:g.[11A>C;13_15inv;17A>C]",
+    ];
+    let nz = Normalizer::new(provider(general));
+    for input in rows {
+        let derive = rederive(&nz, input, ShuffleDirection::ThreePrime, false)
+            .expect("derivation must not decline");
+        let recommend = rederive(&nz, input, ShuffleDirection::ThreePrime, true)
+            .expect("recommend must not decline");
+        assert_eq!(
+            derive, recommend,
+            "{input}: derive must decompose the merged delins to match normalize",
+        );
+        assert!(
+            derive.contains("inv") && derive.contains('>'),
+            "{input}: the split must carry both the substitution and the inversion, got {derive}",
+        );
+    }
+
+    // Exact, on the isolated block: the mechanism, not just convergence.
+    assert_eq!(
+        rederive(
+            &nz,
+            "NC_TEST.1:g.[11A>C;13_15inv]",
+            ShuffleDirection::ThreePrime,
+            false,
+        )
+        .unwrap(),
+        "NC_TEST.1:g.[11A>C;13_15inv]",
+    );
+}
+
+/// The geometry corpus, as a regression floor. Increments 1 (the flanked/interior
+/// inversion port) and its over-merge follow-up (the `decompose_delins` split)
+/// took the pre-port tree's divergences on this corpus from **26,481** down to
+/// **8,100** and opened **none** (measured baseline-vs-fix by `input`+`direction`:
+/// 0 rows that converged before now diverge); what remains is
 /// the shift and over-merge convergence that increments 2–3 address. So this
 /// asserts floors, not full convergence:
 ///
@@ -372,16 +428,18 @@ fn from_sequences_types_a_flanked_inversion_like_normalize() {
 ///   inversions — every span palindromic, say — would still build 64,352 rows but
 ///   type almost no `inv`, and the convergence floor alone could not tell);
 /// - the number of variants on which `derive` converges with `normalize` does not
-///   fall below what the port achieved. A future inversion regression lowers it;
-///   an increment that closes the remaining shift/merge gaps only raises it, so
-///   the floor is `>=`, not `==`.
+///   fall below what the ports achieved. A future regression lowers it; a later
+///   increment that closes the remaining gaps only raises it, so the floor is
+///   `>=`, not `==`.
 ///
-/// Measured on the port: 64,352 comparisons, 0 skipped, 55,182 convergent, 40,900
-/// carrying an `inv` in the `normalize` output. The remaining 9,170 divergences
-/// are, by construction of the corpus, sibling-shift placement (the inversion
-/// itself typed identically), pre-existing equal-length over-merge that loses an
-/// inversion, and multi-inversion direction ambiguity — none of them the
-/// `[del;dup]` fragmentation this increment fixes.
+/// Measured after the over-merge increment: 64,352 comparisons, 0 skipped, 56,252
+/// convergent, 40,900 carrying an `inv` in the `normalize` output. Of the
+/// remaining 8,100 divergences, all but **252** are FivePrime — where `normalize`
+/// emits its direction-invariant 3'-canonical form and the derivation respects
+/// the caller's direction, which is direction semantics, not a convergence gap.
+/// The 252 ThreePrime residue is entirely repeat notation (`X[n]`), the next
+/// increment; on ThreePrime — the direction the second-partition drop depends on —
+/// inversion typing and over-merge are both closed.
 #[test]
 fn the_inversion_geometry_corpus_converges_without_regression() {
     let outcomes = run_corpus();
@@ -411,8 +469,8 @@ fn the_inversion_geometry_corpus_converges_without_regression() {
          of {compared} carry an inv in the normalize output, floor is 40,900",
     );
     assert!(
-        converged >= 55_182,
-        "convergence regressed: {converged} of {compared} converge, floor is 55,182",
+        converged >= 56_252,
+        "convergence regressed: {converged} of {compared} converge, floor is 56,252",
     );
 }
 
