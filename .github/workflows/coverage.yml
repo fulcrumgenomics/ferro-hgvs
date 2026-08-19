@@ -133,10 +133,20 @@ jobs:
           # Absence of a bulk fixture fails the run rather than skipping it.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
-          cargo llvm-cov --no-report nextest --features dev \
+          # Build `libferro_hgvs` at opt-level 2 (see the `coverage` profile in
+          # Cargo.toml) rather than the llvm-cov default opt-level 0. The
+          # census/corpus tests are compute-bound in the library, so that is where
+          # the wall time is; the instrumentation is still added by llvm-cov's
+          # RUSTFLAGS regardless of the profile.
+          #
+          # The flag differs by subcommand, deliberately: on `nextest`, llvm-cov
+          # forwards `--profile` to NEXTEST (its own profile), so the cargo build
+          # profile is set with nextest's `--cargo-profile`; `report` has no nextest
+          # and takes llvm-cov's own `--profile` to find the same binaries.
+          cargo llvm-cov --no-report nextest --cargo-profile coverage --features dev \
             --partition hash:${{ matrix.shard }}/4
-          cargo llvm-cov report --codecov --output-path codecov.json
-          cargo llvm-cov report --html --output-dir coverage
+          cargo llvm-cov report --profile coverage --codecov --output-path codecov.json
+          cargo llvm-cov report --profile coverage --html --output-dir coverage
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           files: codecov.json

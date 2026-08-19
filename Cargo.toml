@@ -579,3 +579,33 @@ opt-level = 2
 debug = false
 debug-assertions = true
 overflow-checks = true
+
+# The `Coverage` workflow builds with llvm-cov instrumentation, and its slowest
+# jobs are the census/corpus tests, which are compute-bound in `libferro_hgvs`.
+# Under the default `test`/`dev` profile the library is `opt-level = 0`, so those
+# tests run several times slower than they need to — the same reason `[profile.soak]`
+# optimizes the library for the `censuses`/`sweeps` jobs. This profile does the
+# same for coverage, selected by `--cargo-profile coverage` in `coverage.yml`.
+#
+# It optimizes ONLY the library and the heavy parser dependencies, leaving the
+# test crates at the dev default: their code is not the bottleneck, and optimizing
+# every test binary would add build time llvm-cov's un-cached PR builds cannot
+# amortize. `debug = true` is kept for coverage line mapping; instrumentation is
+# added by llvm-cov's RUSTFLAGS regardless of profile.
+#
+# Package overrides are NOT inherited through `inherits`, so the three dependency
+# overrides `[profile.dev.package.*]` carries below are repeated here.
+[profile.coverage]
+inherits = "dev"
+
+[profile.coverage.package.ferro-hgvs]
+opt-level = 2
+
+[profile.coverage.package.miniz_oxide]
+opt-level = 3
+
+[profile.coverage.package.serde_json]
+opt-level = 3
+
+[profile.coverage.package.flate2]
+opt-level = 3
