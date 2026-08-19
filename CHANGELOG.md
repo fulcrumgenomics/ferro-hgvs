@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.15.0...v0.16.0) - 2026-08-19
+
+### Representation changes
+
+- *(normalize)* collapse payload-coincidence delins on all DNA axes ([#2155](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2155)) ([#2165](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2165))
+  > 728 of 9,949,738 real-corpus rows move (0.0073%),
+  > measured by normalizing all four release-asset corpora (ClinVar 500k +
+  > ClinVar-unique + CMRG + Paraphase) through base vs HEAD against the
+  > prepared reference. All are on the DNA axes the carve-out newly reaches:
+  > g=692, n=36, m=0; the c. axis is unchanged by construction (the change
+  > only widens the carve-out from c. to the other DNA axes), confirmed by a
+  > 1,001-row c. control that is byte-identical on both revisions. 0 of the
+  > 728 moved rows denote different bases — every base-side string
+  > round-trips byte-for-byte to HEAD's output — so this is a pure
+  > representation change (respelling, same denoted sequence). The
+  > payload-coincidence delins-collapse is extended from the c. axis to the
+  > other DNA axes, on both the normalize and from_sequences surfaces.
+  > Mechanism-stress cross-check over the churn-enriched synthetic corpus
+  > (examples/dump_normalized_corpus.rs): 2196 of 96182 rows move, all g., 0
+  > base-differences — a denser bound on the mechanism, not the consumer
+  > impact. r. axis excluded by design (a DNA-axis document has no
+  > jurisdiction over the RNA axis).
+- *(normalize)* type a whole-span reverse complement as inv, uniformly ([#2163](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2163))
+  > Over the inversion-sweep corpus (2,075 authored
+  > inversions on the `c.`/`n.`/`r.` axes) 92 rows change representation —
+  > an exact whole-span reverse complement that previously repartitioned
+  > into its substitution/`delins` members now types as one `inv`
+  > (`CENSUS_REPARTITIONED` 92 → 0; of those 92, 75 return
+  > character-for-character to the authored inversion, `CENSUS_UNCHANGED`
+  > 1491 → 1566, and 17 shift but stay `inv`, `CENSUS_SHIFTED_STILL_INV` 466
+  > → 483). Named singleton on the coding axis:
+  > `NM_000500.9:c.[710T>A;713T>A]` → `NM_000500.9:c.710_713inv` (#1541).
+  > Whole-span reverse complements above the canonical window gate were
+  > already `inv` via the per-member pipeline and do not move.
+
+### Other
+
+- *(normalize)* skip the sequence-first pass for a lone substitution ([#2169](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2169))
+- *(api)* [**breaking**] rename sequence_normalize to rederive, normalize param to recommended_form ([#2160](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2160))
+- *(ledger)* record cross-zone c. position ordering as a house choice ([#1856](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1856)) ([#2162](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2162))
+
 ## [0.15.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.14.0...v0.15.0) - 2026-08-17
 
 ### Representation changes
