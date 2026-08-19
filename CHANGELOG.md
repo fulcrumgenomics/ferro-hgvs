@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.15.0...v0.16.0) - 2026-08-19
+
+### Representation changes
+
+- *(normalize)* collapse payload-coincidence delins on all DNA axes ([#2155](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2155)) ([#2165](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2165))
+- *(normalize)* type a whole-span reverse complement as inv, uniformly ([#2163](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2163))
+
+### Other
+
+- *(normalize)* skip the sequence-first pass for a lone substitution ([#2169](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2169))
+- *(api)* [**breaking**] rename sequence_normalize to rederive, normalize param to recommended_form ([#2160](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2160))
+- *(ledger)* record cross-zone c. position ordering as a house choice ([#1856](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1856)) ([#2162](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2162))
+
 ## [0.15.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.14.0...v0.15.0) - 2026-08-17
 
 ### Representation changes
