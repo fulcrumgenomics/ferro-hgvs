@@ -210,18 +210,21 @@
 //! [`every_reported_spelling_still_normalizes_as_the_reports_recorded`] pins the
 //! 3' answer the reports observed; [`Row::five_prime`] and
 //! [`every_reported_spelling_normalizes_as_recorded_under_five_prime`] pin the 5'
-//! answer, which nothing pinned before. Fifteen of the eighteen agree across
-//! directions; the three that do not are named in [`FIVE_PRIME_MOVERS`].
+//! answer, which nothing pinned before. Twelve of the eighteen agree across
+//! directions; the six that do not are named in [`FIVE_PRIME_MOVERS`].
 //!
-//! **Two of those three are `Gap` rows that the 3' pass returns verbatim and
-//! the 5' pass does not** — see
+//! **Two of the six — the `1419-r3` pair — are `Gap` rows that the 3' pass
+//! returns verbatim and the 5' pass does not** — see
 //! [`every_gap_row_is_returned_exactly_as_authored`] for why that distinction
-//! carries weight. The third, `1419-r3/span`, is a `Gap` row that **neither**
-//! direction returns verbatim: #1649 moved it off `[19T>G;22_33del]` onto the
-//! two-deletion form its `/cis` sibling prints, and the 5' pass then shifts
-//! that form's leading deletion one base left. Its pair is
-//! [`PairState::NeitherReaches`] in [`PAIR_STATES`], which is what carries the
-//! retention exemption that follows.
+//! carries weight. `1419-r3/span` is the sharper of the two: a `Gap` row that
+//! **neither** direction returns verbatim, because #1649 moved it off
+//! `[19T>G;22_33del]` onto the two-deletion form its `/cis` sibling prints, and
+//! the 5' pass then shifts that form's leading deletion one base left. Its pair
+//! is [`PairState::NeitherReaches`] in [`PAIR_STATES`], which is what carries
+//! the retention exemption that follows. The other four — the `1420-v2` and
+//! `1421-n3` pairs — are not `Gap` rows: each moves because a member's anchoring
+//! is direction-sensitive under a supported option, disclosed as a
+//! representation change beside [`FIVE_PRIME_MOVERS`].
 
 use crate::common::cis_apply_oracle::{normalize, normalize_in, provider};
 use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
@@ -265,8 +268,9 @@ enum PairState {
     ///
     /// This is what a **fixed** pair looks like: the canonical form has stopped
     /// being a function of how the variant was written, which is the defect
-    /// #1419/#1420/#1421 report. No pair is in this state today; it is a state
-    /// rather than a failure so that arriving in it is expressible.
+    /// #1419/#1420/#1421 report. One pair is in this state today — `1420-v4`,
+    /// which #2174 moved here (see [`the_pair_state_census_holds`]); it is a
+    /// state rather than a failure so that arriving in it is expressible.
     ///
     /// Arriving here is still not automatically progress — see [`OPEN_GAPS`] on
     /// re-derivation. The state is sayable; banking it as a fix still requires
@@ -383,7 +387,7 @@ struct Row {
     /// never transcribed.
     output: &'static str,
     /// What ferro prints for it under `ShuffleDirection::FivePrime`. Measured.
-    /// Equal to [`Row::output`] for fifteen of the eighteen rows; the three
+    /// Equal to [`Row::output`] for twelve of the eighteen rows; the six
     /// that differ are listed in [`FIVE_PRIME_MOVERS`].
     five_prime: &'static str,
     verdict: Verdict,
@@ -657,31 +661,36 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1420-v4/cis",
         input: "TEMPLATE:g.[21delinsGC;24del]",
-        output: "TEMPLATE:g.[21delinsGC;24del]",
-        five_prime: "TEMPLATE:g.[21delinsGC;24del]",
-        verdict: Verdict::Gap,
+        // REACHES `wanted` UNDER #2174. Reference 21-24 is `ATGC` against
+        // `GCTG` — an equal-length run with no zero-shift fixed point (all four
+        // columns change), so #2174's solid-run collapse re-merges the split
+        // spelling into the spanning `21_24delinsGCTG`. The cis and span
+        // spellings now converge on it, which is `BothReach`.
+        output: "TEMPLATE:g.21_24delinsGCTG",
+        five_prime: "TEMPLATE:g.21_24delinsGCTG",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.21_24delinsGCTG",
         authority: Authority::SpecExplicit,
         argument: "Wanted `21_24delinsGCTG` — the opposite direction to v2/v3. \
                    Reference 21-24 is `ATGC` against `GCTG`, so all four \
                    positions change, and delins.md:16 says changes involving \
                    two or more CONSECUTIVE nucleotides are one delins. The \
-                   split spelling asserts 22-23 are unchanged; they are not.",
+                   split spelling asserted 22-23 are unchanged; they are not, \
+                   and #2174 now types the run as the one spanning delins.",
     },
     Row {
         label: "1420-v4/span",
         input: "TEMPLATE:g.21_24delinsGCTG",
-        // MOVED BY THE PARTITION DEFAULT FLIP, and unlike `1420-v2`/`v3` this
-        // one is LICENSED rather than a preference miss. The flip finds the
-        // payload-coincidence alignment across 22-23, and
-        // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
-        // (decided) puts every `g.` row OUTSIDE `DNA/delins.md:47`, so
-        // `general.md:34` governs unqualified and the members are described
-        // individually. #1420 asks for the span; the ledger says a `g.` row
-        // splits, and the ledger is the later and narrower authority.
-        output: "TEMPLATE:g.[21delinsGC;24del]",
-        five_prime: "TEMPLATE:g.[21delinsGC;24del]",
-        verdict: Verdict::Gap,
+        // REACHES `wanted` UNDER #2174, so this pair moves OneReaches ->
+        // NeitherReaches (under the v0.14.0 minimal-alignment default flip, which
+        // split the span across the payload-coincidence alignment at 22-23) ->
+        // BothReach (now). #2174 scopes `unchanged-is-read-over-every-minimal-
+        // alignment`: an equal-length run with no interior zero-shift fixed point
+        // is one contiguous change, so the span is held, and the cis spelling
+        // re-merges onto it. Both spellings converge on #1420's `wanted`.
+        output: "TEMPLATE:g.21_24delinsGCTG",
+        five_prime: "TEMPLATE:g.21_24delinsGCTG",
+        verdict: Verdict::Canonical,
         wanted: "TEMPLATE:g.21_24delinsGCTG",
         authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v4: one delins over four \
@@ -819,13 +828,16 @@ const REPORTED_ROWS: &[Row] = &[
     },
 ];
 
-/// The three rows whose 5' answer differs from their 3' answer.
+/// The six rows whose 5' answer differs from their 3' answer.
 ///
-/// Named rather than left implicit because all three are `Gap` rows, and
-/// [`every_gap_row_is_returned_exactly_as_authored`] rests on a gap row being
-/// returned *untouched* — which is what makes it a second canonical form rather
-/// than an under-applied pass. That argument is a 3'-direction argument, and
-/// these are where it stops holding.
+/// Named rather than left implicit because two of them — the `1419-r3` pair —
+/// are `Gap` rows, and [`every_gap_row_is_returned_exactly_as_authored`] rests
+/// on a gap row being returned *untouched* — which is what makes it a second
+/// canonical form rather than an under-applied pass. That argument is a
+/// 3'-direction argument, and those two are where it stops holding. The other
+/// four — the `1420-v2` and `1421-n3` pairs — are not `Gap` rows; each moves
+/// because a member's anchoring is direction-sensitive under a supported option
+/// (see the per-row comments below).
 ///
 /// **`1419-r3/span` was added by #1649**, which moved that row off
 /// `[19T>G;22_33del]` onto the same two-deletion form its `/cis` sibling
@@ -921,7 +933,7 @@ const FIVE_PRIME_MOVERS: &[&str] = &[
 /// for together. [`the_pair_state_census_holds`] asserts the arithmetic between
 /// the two censuses — 0, 1 or 2 gap rows per pair by state, summing to this
 /// number — so neither can be moved to accommodate the other in silence.
-const OPEN_GAPS: usize = 18;
+const OPEN_GAPS: usize = 16;
 
 /// Every reported pair's [`PairState`], pinned per pair and in the table's own
 /// order.
@@ -942,9 +954,9 @@ const OPEN_GAPS: usize = 18;
 /// clause** that carried the move. A pair that converged with no clause behind
 /// it is a re-derivation and the census must not move.
 ///
-/// Today: three `NeitherReaches` (#1419's, for the reason on that variant) and
-/// six `OneReaches`. Nothing is `BothReach`; that is the state a fixed pair is
-/// in, and none is fixed.
+/// Today: eight `NeitherReaches` and one `BothReach` (`1420-v4`, fixed by
+/// #2174 — both spellings converge on the spanning `21_24delinsGCTG`).
+/// `BothReach` is the state a fixed pair is in.
 const PAIR_STATES: &[(&str, PairState)] = &[
     ("1419-r1", PairState::NeitherReaches),
     ("1419-r2", PairState::NeitherReaches),
@@ -956,10 +968,12 @@ const PAIR_STATES: &[(&str, PairState)] = &[
     // OneReaches -> NeitherReaches under the flip: the span descends onto the
     // cis form, so neither reaches `wanted`. Same mechanism as 1420-v2; #1878.
     ("1420-v3", PairState::NeitherReaches),
-    // OneReaches -> NeitherReaches: the span splits on the axis scope ruling,
-    // so neither spelling reaches #1420's wanted span form. LICENSED, not a
-    // preference miss — see the row.
-    ("1420-v4", PairState::NeitherReaches),
+    // BothReach under #2174: `ATGC -> GCTG` is an equal-length run with no
+    // zero-shift fixed point, so the solid-run collapse types it as one spanning
+    // `21_24delinsGCTG` and both spellings converge on #1420's wanted form. The
+    // clause that carried the move is `delins.md:16` via #2174's supersession of
+    // `unchanged-is-read-over-every-minimal-alignment`.
+    ("1420-v4", PairState::BothReach),
     // OneReaches -> NeitherReaches: both spellings converge on a third form
     // neither authored, licensed by `canonical-form-choice-when-both-legal`,
     // so neither reaches #1421's `wanted`.
@@ -984,7 +998,7 @@ const PAIR_STATES: &[(&str, PairState)] = &[
 /// [`the_pair_state_census_holds`] and in [`PairState::gap_rows`]: neither
 /// compiles until the new variant is given an arm, and the census arm has
 /// nowhere to put its count until this tuple grows too.
-const PAIR_STATE_CENSUS: (usize, usize, usize) = (0, 0, 9);
+const PAIR_STATE_CENSUS: (usize, usize, usize) = (1, 0, 8);
 
 /// The state [`PAIR_STATES`] pins for one pair.
 ///
