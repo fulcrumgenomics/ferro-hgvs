@@ -20,6 +20,9 @@ These use the mock provider (``BatchProcessor()`` with no manifest), so they nee
 no reference data.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 import ferro_hgvs
@@ -71,6 +74,65 @@ def test_streaming_normalize_matches_the_list_api(processor, workers):
     expected = _from_list(processor.parse_and_normalize(variants, workers=workers))
     streamed = _from_stream(processor.parse_and_normalize_streaming(variants, workers=workers))
     assert streamed == expected
+
+
+def _genome_bp(tmp_path: Path) -> "ferro_hgvs.BatchProcessor":
+    """A genome-capable BatchProcessor: ``rederive`` reads the bases a variant
+    denotes, which the default ``BatchProcessor()`` test data does not carry."""
+    seq = ["A"] * 5000
+    for i in range(1000, 4000, 7):
+        seq[i] = "G"
+    ref = {
+        "transcripts": [],
+        "proteins": {},
+        "genomic_sequences": {"NC_000001.11": "".join(seq)},
+    }
+    path = tmp_path / "genome_ref.json"
+    path.write_text(json.dumps(ref))
+    return ferro_hgvs.BatchProcessor(reference_json=str(path))
+
+
+def _genome_variants(n: int) -> list[str]:
+    """`n` in-bounds genomic deletions that rederive, with two parse errors."""
+    assert n >= 3
+    vs = [f"NC_000001.11:g.{100 + i}del" for i in range(n)]
+    vs[1] = "definitely not a variant"
+    vs[n - 1] = "also::not:valid"
+    return vs
+
+
+@pytest.mark.parametrize("workers", [0, 1, 2])
+def test_streaming_rederive_matches_the_list_api(tmp_path: Path, workers: int) -> None:
+    bp = _genome_bp(tmp_path)
+    variants = _genome_variants(50)
+    expected = _from_list(bp.parse_and_rederive(variants, workers=workers))
+    # A genome-capable provider means rederive actually succeeds, so this
+    # compares streaming vs list over real (Ok) results, not only errors.
+    assert any(ok for ok, _ in expected), "expected successful rederivations"
+    streamed = _from_stream(bp.parse_and_rederive_streaming(variants, workers=workers))
+    assert streamed == expected
+
+
+@pytest.mark.parametrize("workers", [0, 1, 2])
+def test_streaming_rederive_recommended_form_matches_the_list_api(
+    tmp_path: Path, workers: int
+) -> None:
+    bp = _genome_bp(tmp_path)
+    variants = _genome_variants(40)
+    expected = _from_list(bp.parse_and_rederive(variants, recommended_form=True, workers=workers))
+    # As in the sibling above: prove the comparison runs over real (Ok) results,
+    # not a vacuously-passing all-error corpus.
+    assert any(ok for ok, _ in expected), "expected successful rederivations"
+    streamed = _from_stream(
+        bp.parse_and_rederive_streaming(variants, recommended_form=True, workers=workers)
+    )
+    assert streamed == expected
+
+
+def test_streaming_rederive_rejects_zero_grid(processor: "ferro_hgvs.BatchProcessor") -> None:
+    # The 0-grid ValueError is raised at the call, before any item is streamed.
+    with pytest.raises(ValueError):
+        processor.parse_and_rederive_streaming(["NM_000088.3:c.1A>G"], max_grid_cells=0)
 
 
 def test_failed_items_carry_their_input(processor):
@@ -168,6 +230,7 @@ def test_accepts_any_iterable(processor):
 def test_empty_input_yields_nothing(processor):
     assert list(processor.parse_streaming([])) == []
     assert list(processor.parse_and_normalize_streaming([])) == []
+    assert list(processor.parse_and_rederive_streaming([])) == []
 
 
 def test_non_string_element_raises(processor):
