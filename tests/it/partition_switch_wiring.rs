@@ -307,19 +307,26 @@ const CANONICAL_ARMS: [&str; 2] = ["canonical", "canonical-coalesced"];
 /// compensating gap, so the pass fires on it once the axis test is bypassed.
 ///
 /// The mock `NR_000123.1` is `ACGTACGTACGT` with no CDS, so `n.` is
-/// transcript-relative and the axis is `CisKind::Tx` — `false` under both
-/// `AxisFrame::is_coding_dna` and `AxisFrame::carries_translated_frame`, which
-/// is what makes it a test of the *kind* rather than of the frame flag.
+/// transcript-relative and the axis is `CisKind::Tx` — `false` under
+/// `AxisFrame::carries_translated_frame` regardless of the axis scope below,
+/// which is what makes it a test of the *kind* rather than of the frame flag.
 ///
 /// The shape is the one #1711 was found on: an `inv` and a `del` one unchanged
 /// base apart, the same family as the spec conformance corpus rows
 /// (`s01-n3{m,p}-pair-del-inv-p4-sep1`) whose merge that corpus's own negative
 /// guard for the **rejected** SVD-WG010 proposal counts.
+///
+/// **Now a positive control, since #2155.** `CisKind::Tx` (`n.`) is a DNA axis
+/// under `AxisFrame::is_dna`, and `delins-payload-coincidence-carve-out-is-
+/// coding-dna-scoped` was superseded (2026-08-17) from `c.`-only to every DNA
+/// axis. Before that supersession this row merged only once the axis test was
+/// bypassed; now it merges on its own axis, exactly like [`CODING_COMPENSATING_GAP`].
 const NONCODING_COMPENSATING_GAP: &str = "NR_000123.1:n.[2_4inv;6del]";
 
-/// What the pass makes of [`NONCODING_COMPENSATING_GAP`] when the axis test is
-/// bypassed: one `delins` spanning the members *and the unchanged bases between
-/// them* — two variants merged across a gap `general.md:34` keeps individual.
+/// What the pass makes of [`NONCODING_COMPENSATING_GAP`]: one `delins` spanning
+/// the members *and the unchanged bases between them* — two variants merged
+/// across a gap that `general.md:34` would keep individual off a DNA axis, but
+/// `DNA/delins.md:47`'s carve-out now reaches `n.` as well as `c.` (#2155).
 ///
 /// Measured on the mutated builds rather than reasoned about, on both arms of
 /// [`CANONICAL_ARMS`].
@@ -337,6 +344,29 @@ const CODING_COMPENSATING_GAP: &str = "NM_000088.3:c.[3_7inv;9del]";
 /// The single spanning `delins` [`CODING_COMPENSATING_GAP`] must still reach on
 /// the coding axis, where `DNA/delins.md:47`'s carve-out does apply.
 const CODING_MERGED: &str = "NM_000088.3:c.3_9delinsTGGGCA";
+
+/// The **coding `r.`** control — same transcript, same positions, same shape as
+/// [`CODING_COMPENSATING_GAP`], spelled on the RNA axis instead.
+///
+/// This is the negative control as of #2155: `r.` is the one axis
+/// `AxisFrame::is_dna` still excludes, on jurisdiction — a `DNA/` clause cannot
+/// scope the RNA axis, and `RNA/delins.md` states no `:47` counterpart. `n.`
+/// moved to the positive side (see [`NONCODING_COMPENSATING_GAP`]), so this row
+/// is what keeps the test able to fail: without it, every accession this test
+/// drives would be on a DNA axis and a build that widened the carve-out to
+/// **every** `CisKind` — dropping the axis test entirely — would satisfy every
+/// remaining assertion.
+const RNA_COMPENSATING_GAP: &str = "NM_000088.3:r.[3_7inv;9del]";
+
+/// The negative half's shape check for [`RNA_COMPENSATING_GAP`]: whatever the
+/// re-derivation lands on, it must still be multiple members (contain `;`),
+/// never the single spanning `delins` [`CODING_MERGED`] would be on `c.`.
+///
+/// Deliberately not pinned to one exact string, for the reason the module doc
+/// gives for the `n.` case pre-#2155: which individual members the
+/// re-derivation lands on is a separate question from whether they stay
+/// individual at all.
+const RNA_MERGED: &str = "NM_000088.3:r.3_9delinsugggca";
 
 /// Each input's normalized output, read out of `ferro normalize`'s stdout.
 ///
@@ -370,37 +400,40 @@ fn normalized_outputs(inputs: &[&str], arm: &str) -> BTreeMap<String, String> {
 /// The compensating-gap coalesce consults the **axis** at its call site, not
 /// only in its predicate. #1711.
 ///
-/// Both directions in one test, for the reason the misspelling test above gives:
+/// All three rows in one test, for the reason the misspelling test above gives:
 /// a build that declined the pass on *every* axis would satisfy the negative
 /// half while making the pass dead, and in a log that is indistinguishable from
-/// the fix working.
+/// the fix working. Since #2155 widened `DNA/delins.md:47`'s carve-out from
+/// `c.`-only to every DNA axis, **two** of the three rows are now positive
+/// controls (`c.` and `n.`) and only the RNA row is negative — see
+/// [`RNA_COMPENSATING_GAP`]'s doc comment for why that row is what keeps this
+/// test able to fail at all.
 ///
-/// The negative half deliberately does **not** pin the split spelling. What
-/// `general.md:34` governs is that the members stay individual; which individual
-/// members the re-derivation lands on is a separate question, and pinning it
-/// here would redden this guard for changes that leave its subject untouched.
+/// The RNA row's assertion deliberately does **not** pin the split spelling.
+/// What `general.md:34` governs is that the members stay individual on `r.`;
+/// which individual members the re-derivation lands on is a separate question,
+/// and pinning it here would redden this guard for changes that leave its
+/// subject untouched.
 #[test]
-fn the_cli_declines_the_compensating_gap_coalesce_off_the_coding_dna_axis() {
+fn the_cli_declines_the_compensating_gap_coalesce_off_a_dna_axis() {
     for arm in CANONICAL_ARMS {
-        let outputs =
-            normalized_outputs(&[NONCODING_COMPENSATING_GAP, CODING_COMPENSATING_GAP], arm);
+        let outputs = normalized_outputs(
+            &[
+                NONCODING_COMPENSATING_GAP,
+                CODING_COMPENSATING_GAP,
+                RNA_COMPENSATING_GAP,
+            ],
+            arm,
+        );
 
         let noncoding = &outputs[NONCODING_COMPENSATING_GAP];
-        assert_ne!(
+        assert_eq!(
             noncoding, NONCODING_MERGED,
-            "on FERRO_PARTITION={arm} the `n.` row merged across the unchanged \
-             base between its members. That is the **rejected** SVD-WG010 \
-             proposal, and `DNA/delins.md:47` — the only clause that licenses \
-             merging across unchanged bases — reaches `c.` and nothing else \
-             (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`). The \
-             call site must pass the description's own axis to \
-             `compensating_gap_coalesce_applies`, not a constant (#1711)."
-        );
-        assert!(
-            noncoding.contains(';'),
-            "on FERRO_PARTITION={arm} the `n.` row collapsed to one member \
-             ({noncoding}); off the coding DNA axis `general.md:34` governs and \
-             the members stay individual (#1711)"
+            "on FERRO_PARTITION={arm} the `n.` row did not reach the spanning \
+             `delins`. `n.` is a DNA axis and `DNA/delins.md:47`'s carve-out \
+             reaches it as of #2155; check the call site passes the \
+             description's own axis to `compensating_gap_coalesce_applies` \
+             rather than a stale hardcoded `CisKind` (#1711)."
         );
 
         let coding = &outputs[CODING_COMPENSATING_GAP];
@@ -411,6 +444,24 @@ fn the_cli_declines_the_compensating_gap_coalesce_off_the_coding_dna_axis() {
              not running on the arm it is scoped to, and the assertion above \
              would hold in a build that had simply deleted the call. Check the \
              call site before re-blessing this string."
+        );
+
+        let rna = &outputs[RNA_COMPENSATING_GAP];
+        assert_ne!(
+            rna, RNA_MERGED,
+            "on FERRO_PARTITION={arm} the `r.` row merged across the unchanged \
+             base between its members. That is the **rejected** SVD-WG010 \
+             proposal, and `DNA/delins.md:47` — the only clause that licenses \
+             merging across unchanged bases — has no `RNA/delins.md` \
+             counterpart and does not reach the RNA axis. The call site must \
+             pass the description's own axis to \
+             `compensating_gap_coalesce_applies`, not a constant (#1711)."
+        );
+        assert!(
+            rna.contains(';'),
+            "on FERRO_PARTITION={arm} the `r.` row collapsed to one member \
+             ({rna}); off every DNA axis `general.md:34` governs and the \
+             members stay individual (#1711)"
         );
     }
 }

@@ -290,12 +290,13 @@ fn rna_cross_reference_coding_expands_cds_relative() {
     // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref), then
     // splits the result at an unchanged interior base, since changes separated by
     // unchanged nucleotides are described individually (`delins.md:17`,
-    // `general.md:34`). The span still ends at 14, which is what confirms
-    // CDS-relative expansion succeeded — transcript-relative "AAA" would reach
-    // 15.
+    // `general.md:34`) — UNLESS `delins.md:47`'s payload-coincidence carve-out
+    // reaches the axis, in which case the split re-coalesces. The span still
+    // ends at 14, which is what confirms CDS-relative expansion succeeded —
+    // transcript-relative "AAA" would reach 15.
     //
     // #1835: was `NC_000022.10:g.[10_12del;14C>T]`; the partition default flip
-    // moves it to `g.[10_11delinsA;13_14del]` — the same span, cut at a different
+    // moved it to `g.[10_11delinsA;13_14del]` — the same span, cut at a different
     // unchanged base, because the partition is now the minimal alignment
     // re-derived from the resulting sequence rather than the one
     // `partition_block` reached. Licensed by `canonical-form-choice-when-both-legal`:
@@ -303,13 +304,21 @@ fn rna_cross_reference_coding_expands_cds_relative() {
     // is satisfied either way and no clause selects between them; the derivation
     // does.
     //
+    // #2155: re-pinned again, from the split to the spanning
+    // `g.10_14delinsAT`. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    // (decided, scoped to the coding DNA axis) is superseded by #2155 to cover
+    // every DNA axis (`c./g./m./n.`, `r.` excluded) — this is a `g.` row, so
+    // `DNA/delins.md:47` now recommends the spanning form here too, and the
+    // two-member split re-coalesces into one member spanning `10_14`.
+    //
     // WHAT THIS ROW ACTUALLY PROVES IS UNCHANGED, and it is the reason to keep it
     // pinned exactly: the assertion is evidence that `r.1_3` resolved
     // CDS-relative. That rides on the SPAN ending at 14 rather than 15, which
-    // both spellings do, and on "AAA" being absent, which the assertion above
-    // checks separately. The cut point was never the evidence.
+    // every spelling above does, and on "AAA" being absent, which the assertion
+    // above checks separately. The cut point (or its absence, now that the row
+    // is a single spanning member) was never the evidence.
     assert_eq!(
-        out, "NC_000022.10:g.[10_11delinsA;13_14del]",
+        out, "NC_000022.10:g.10_14delinsAT",
         "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
     );
 }

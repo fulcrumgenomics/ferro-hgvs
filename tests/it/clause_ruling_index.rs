@@ -111,7 +111,7 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
 //! 38 records, 35 decided / 3 undecided
-//! 121 clause lines, of which 41 are named by more than one record
+//! 122 clause lines, of which 41 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -188,8 +188,11 @@
 //! docs/consultation/SVD-WG010.md:5  [MULTI]
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/consultation/SVD-WG010.md:16
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//! docs/consultation/SVD-WG010.md:27
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/consultation/open-issues.md:77  [MULTI]
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
@@ -505,6 +508,7 @@
 //! docs/consultation/SVD-WG010.md:5
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/consultation/open-issues.md:77
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)

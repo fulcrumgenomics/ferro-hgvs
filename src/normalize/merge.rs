@@ -2552,35 +2552,33 @@ const MIN_SEPARATION_NO_FRAME: u32 = 1;
 /// [`RAISED_PIECE_SEPARATION`], and [`split_buys_no_higher_priority_type`] —
 /// exist to **disbelieve** a separation that survives only because payload
 /// bases coincide with reference bases. That is `:44-47`'s construction and
-/// nothing else, and the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes it to
-/// `c.` **and nothing else**.
+/// nothing else. The operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` originally
+/// scoped this to `c.` and nothing else; it was **superseded to all DNA axes**
+/// (2026-08-17, #2155) — `c./g./m./n.` are all in reach, and `r.` remains out.
 ///
-/// Off that axis `general.md:34` / `DNA/delins.md:17` — "two variants separated
-/// by one or more nucleotides should be described individually and **not** as a
-/// 'delins'" — govern unopposed, so a split across one unchanged base may not
-/// be refused. Merging it anyway is what the *rejected* SVD-WG010 proposal
-/// would have required, which is why `spec_conformance_axis` counts it as a
-/// negative guard rather than as a representation choice.
+/// Off the DNA axes `general.md:34` / `RNA/delins.md:17` govern unopposed, so a
+/// split across one unchanged base may not be refused there. Merging it anyway
+/// is what the *rejected* SVD-WG010 proposal would have required, which is why
+/// `spec_conformance_axis` counts it as a negative guard rather than as a
+/// representation choice.
 ///
-/// **Not a reading-frame gate**, and the ruling says so in terms: a coding `r.`
-/// carries a reading frame and is still out of reach, because a `DNA/` clause
-/// has no jurisdiction over the RNA axis. [`AxisFrame::is_coding_dna`] is the
-/// predicate; `n.` is a DNA axis and is also out, on `:47`'s stated reason —
-/// preventing "incorrect predictions for the consequences on protein level" —
-/// having nothing to bite on where no protein is coded.
+/// **Not a reading-frame gate.** A coding `r.` carries a reading frame and is
+/// still out of reach, because a `DNA/` clause has no jurisdiction over the RNA
+/// axis regardless of how widely the DNA scope itself is drawn.
+/// [`AxisFrame::is_dna`] is the predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoincidenceCarveOut {
-    /// The coding DNA axis, `c.`: a coincidental separation may be disbelieved.
+    /// A DNA axis (`c./g./m./n.`): a coincidental separation may be disbelieved.
     InReach,
-    /// Every other axis: `general.md:34` governs and the split stands.
+    /// The RNA axis, `r.`: `general.md:34` governs and the split stands.
     OutOfReach,
 }
 
 impl CoincidenceCarveOut {
     /// Which side of the ruling above `kind` falls on.
     fn for_axis(kind: CisKind) -> Self {
-        if AxisFrame::is_coding_dna(kind) {
+        if AxisFrame::is_dna(kind) {
             Self::InReach
         } else {
             Self::OutOfReach
@@ -2739,11 +2737,11 @@ enum PartitionRule {
     /// after the downstream passes — see
     /// [`coalesce_payload_alignment_split`].
     ///
-    /// The re-spelling fires **only on the coding DNA axis** (`c.`), per the
+    /// The re-spelling fires on **every DNA axis** (`c./g./m./n.`), per the
     /// operator ruling
-    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. On
-    /// `g.`/`m.`/`o.`/`n.`/`r.` this arm is therefore identical to
-    /// [`Self::Canonical`]. See [`payload_coalesce_applies`].
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`, superseded
+    /// (2026-08-17, #2155) to all DNA axes. On `r.` this arm is therefore
+    /// identical to [`Self::Canonical`]. See [`payload_coalesce_applies`].
     ///
     /// **This is the default** — see [`DEFAULT_PARTITION_RULE`] for why, and
     /// [`Self::Live`] for how to get the previous one back.
@@ -2846,16 +2844,35 @@ impl PartitionRule {
 ///   surface exactly where it is, so a comparison quoting a `from_sequences`
 ///   figure is comparing a moved surface against a fixed one.
 ///
-/// **Why [`PartitionRule::Canonical`] and not
-/// [`PartitionRule::CanonicalCoalesced`].** The two differ only through
-/// [`payload_coalesce_applies`] and [`compensating_gap_coalesce_applies`], both
-/// scoped to the coding DNA axis by the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`; and
-/// `from_sequences` emits `g.` and `m.` descriptions only, refusing every other
-/// accession class (`from_sequences::reference_template`). On this surface the
-/// two arms are the same rule, so the narrower name is the honest one — and it
-/// records that the agreement is a consequence of the axis scope rather than of
-/// the arms being interchangeable.
+/// **Now [`PartitionRule::CanonicalCoalesced`] (2026-08-17, #2155 task 3c),
+/// having been [`PartitionRule::Canonical`] before.** The two differ only
+/// through [`payload_coalesce_applies`] and [`compensating_gap_coalesce_applies`],
+/// both gated by the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (superseded to
+/// all DNA axes); and `from_sequences` emits `g.` and `m.` descriptions only,
+/// refusing every other accession class (`from_sequences::reference_template`)
+/// — both squarely inside the widened scope.
+///
+/// **The paragraph this replaces recorded that equivalence as unmeasured, and
+/// it no longer is.** [`derive_block_members`] now runs both coalesce passes
+/// itself, in the same order [`canonicalize_from_sequence`] runs them, gated
+/// on this constant and [`AxisFrame::is_dna`] exactly as the normalization
+/// surface's call sites are — see [`derive_block_members`]'s own doc for the
+/// call and `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+/// for the guard: `from_sequences`'s output on a payload-coincidence block and
+/// `Normalizer::normalize`'s output on the same block, over the same
+/// reference, are now byte-identical. Picking [`PartitionRule::Canonical`]
+/// instead would leave [`payload_coalesce_applies`] permanently `false` here
+/// (it requires `rule == CanonicalCoalesced` exactly, not merely
+/// [`PartitionRule::cuts_with_canonical`]), so the sibling pass would still
+/// never fire and this surface would still fragment.
+///
+/// [`partition_block_for_derivation`] is unaffected by the flip:
+/// `PartitionRule::Canonical | PartitionRule::CanonicalCoalesced` both select
+/// [`partition_block_canonical_within`] there (see that dispatch's own
+/// comment), so this constant changes which **coalesce** passes
+/// `derive_block_members` runs and nothing about which partitioner cuts the
+/// block.
 ///
 /// **This names a rule and nothing else.** The grid budget is a second axis on
 /// which the two surfaces already differ — `from_sequences` takes the caller's
@@ -2867,7 +2884,7 @@ impl PartitionRule {
 /// **Unstable, like the switch it shares a vocabulary with.** `FERRO_PARTITION`
 /// is expected to be removed once the normalization rule is settled; what this
 /// constant states outlives it, but its spelling may not.
-const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::Canonical;
+const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoalesced;
 
 /// The pin above must name an arm that genuinely cuts with
 /// [`partition_block_canonical_within`], because
@@ -3247,8 +3264,9 @@ fn partition_block_for_rule(
     // silently moving the derivation surface as a side effect.
     //
     // `carve_out` is passed through rather than assumed: the rule is scoped to
-    // the coding DNA axis, for the reason on `CoincidenceCarveOut` and on the
-    // predicate's own `# Axis scope` section.
+    // every DNA axis (superseded to all DNA axes, 2026-08-17, #2155), for the
+    // reason on `CoincidenceCarveOut` and on the predicate's own `# Axis scope`
+    // section.
     if split_is_a_placed_gap_coincidence(&pieces, reference, result, carve_out) {
         return vec![Piece {
             ref_start: 0,
@@ -3679,7 +3697,8 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     //
     // `carve_out` is still consulted BELOW, where it decides the payload-
     // coincidence question it was built for — that half is live and axis-scoped
-    // by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+    // by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+    // (superseded to all DNA axes, 2026-08-17, #2155).
     //
     // On coverage, because this function is shared and the two are not
     // interchangeable: `canonicalize_from_sequence` is reached by BOTH public
@@ -3898,14 +3917,16 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         // mechanism: moving the call across those produced byte-identical censuses.
         // Only the bound mattered.
         //
-        // # Gated to the coding DNA axis, by operator ruling (2026-08-11)
+        // # Gated to every DNA axis, by operator ruling (2026-08-11, superseded
+        // # to all DNA axes 2026-08-17, #2155)
         //
-        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47`'s
-        // carve-out to `c.` and nothing else. On the other DNA axes —
-        // `g.`/`m.`/`o.`/`n.` — `general.md:34` governs and the members stay
-        // individual. `:47`'s own stated reason is that the merge "prevents software
-        // tools making incorrect predictions for the consequences on protein level",
-        // and off the coding axis there is no protein consequence to mispredict.
+        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` originally
+        // scoped `:47`'s carve-out to `c.` and nothing else; that scope has since
+        // been **superseded to all DNA axes** (2026-08-17, #2155) — `:47`'s
+        // carve-out now reaches `c./g./m./n.` uniformly. Only `r.` remains
+        // outside the scope: `general.md:34` governs there and the members stay
+        // individual, because a `DNA/` clause cannot scope the RNA axis and
+        // `RNA/delins.md` states no `:47` counterpart.
         //
         // The gate is the axis KIND, and deliberately **not**
         // `AxisFrame::reading_frame` — see `payload_coalesce_applies`. The RNA axis
@@ -4006,13 +4027,14 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         // partitioner produced the pieces. Shipped output is unaffected either way —
         // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
         // widening the arm it is labelled with did not cause.
-        // Scoped to the coding DNA axis as well as to the arms, per the decided
-        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (#1711): the
-        // pass can only merge *across unchanged reference bases*, which is exactly
-        // the population `general.md:34` keeps individual, and `DNA/delins.md:47` —
-        // the only clause that overrides it here — reaches `c.` and nothing else.
-        // See `compensating_gap_coalesce_applies` for the argument and for the
-        // competing reading it decides against.
+        // Scoped to every DNA axis as well as to the arms, per the decided
+        // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (#1711),
+        // superseded to all DNA axes (2026-08-17, #2155): the pass can only
+        // merge *across unchanged reference bases*, which is exactly the
+        // population `general.md:34` keeps individual, and `DNA/delins.md:47` —
+        // the only clause that overrides it here — reaches `c./g./m./n.` and
+        // not `r.`. See `compensating_gap_coalesce_applies` for the argument
+        // and for the competing reading it decides against.
         if compensating_gap_coalesce_applies(rule, kind) {
             coalesce_compensating_gap_split(pieces, &ref_bytes);
         }
@@ -4808,8 +4830,7 @@ pub(crate) struct AxisFrame {
     /// frame happens to exist. `general.md:23` makes the prefix a claim about
     /// that type, and the two questions are not the same one: a rule stated
     /// only in `DNA/` cannot reach `r.` however well-framed the transcript is.
-    /// See [`AxisFrame::carries_translated_frame`] and
-    /// [`AxisFrame::is_coding_dna`].
+    /// See [`AxisFrame::carries_translated_frame`] and [`AxisFrame::is_dna`].
     kind: CisKind,
 }
 
@@ -4840,40 +4861,20 @@ impl AxisFrame {
         axis_may_translate && self.reading_frame
     }
 
-    /// Is `kind` the **coding DNA** axis, `c.`?
+    /// Is `kind` a **DNA** axis — `c./g./m./n.` — i.e. anything but `r.`?
     ///
-    /// The gate for a rule whose authority is stated *only* under `DNA/`.
-    /// `DNA/delins.md:47`'s payload-coincidence carve-out is the standing
-    /// example, and the operator ruling
-    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
-    /// scopes it to `c.` **and nothing else**. Getting that wrong is what this
-    /// pair of predicates exists to prevent.
-    ///
-    /// The other axes are excluded for two different reasons, and collapsing
-    /// them into one is how the scope gets restated too narrowly. `r.` is out
-    /// on **jurisdiction** — a `DNA/` clause cannot scope the RNA axis, and
-    /// `RNA/delins.md` states no `:47` counterpart that could carry the
-    /// carve-out there. `g.`/`m.`/`o.`/`n.` are DNA axes, so jurisdiction is no
-    /// objection at all; they are out because `:47`'s stated reason is
-    /// preventing "incorrect predictions for the consequences on protein
-    /// level", which has nothing to bite on where no protein is coded, and
-    /// `general.md:34` governs there instead. Note `n.` in particular *is* a
-    /// DNA axis — reading "DNA-only" as "everything except `r.`" would admit
-    /// it, which the ruling forbids.
-    ///
-    /// Takes the [`CisKind`] rather than `&self`, unlike its sibling
-    /// [`Self::carries_translated_frame`], and the asymmetry is the #1241
-    /// point rather than an inconsistency: whether an axis *translates* is not
-    /// answerable from the kind alone, whereas whether it is coding DNA is.
-    /// The one gate that asks this — [`payload_coalesce_applies`] — accordingly
-    /// runs where no [`AxisFrame`] has been resolved.
-    ///
-    /// Exhaustive on [`CisKind`] with no wildcard, so a new axis is a compile
-    /// error here rather than a silent default.
-    fn is_coding_dna(kind: CisKind) -> bool {
+    /// The gate for the `DNA/delins.md:47` payload-coincidence carve-out after
+    /// the ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    /// was superseded (2026-08-17, #2155) from coding-DNA-only to all DNA
+    /// axes. `r.` is excluded on **jurisdiction**: a `DNA/` clause cannot scope
+    /// the RNA axis and `RNA/delins.md` states no `:47` counterpart. Exhaustive
+    /// match, so a new `CisKind` is a compile error to be decided rather than
+    /// defaulted. `o.` (`HgvsVariant::Circular`) has no `CisKind` and never
+    /// reaches these passes.
+    fn is_dna(kind: CisKind) -> bool {
         match kind {
-            CisKind::Cds => true,
-            CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
+            CisKind::Cds | CisKind::Genome | CisKind::Mt | CisKind::Tx => true,
+            CisKind::Rna => false,
         }
     }
 }
@@ -5663,9 +5664,10 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
     // than an artefact of where the gap landed, and a split across one is real.
     // `separations_are_meaningful` above draws the same line.
     //
-    // Scoped to the coding DNA axis for the reason on `CoincidenceCarveOut`:
-    // this rule's own doc grounds it on `delins.md:44-47`, and that passage
-    // reaches `c.` and nothing else.
+    // Scoped to every DNA axis for the reason on `CoincidenceCarveOut`: this
+    // rule's own doc grounds it on `delins.md:44-47`, and that passage reaches
+    // every DNA axis (`c./g./m./n.`) — superseded to all DNA axes, 2026-08-17,
+    // #2155 — and not `r.`.
     if reference.len() != result.len()
         && carve_out.may_disbelieve_a_separation()
         && pieces.len() > 1
@@ -5679,9 +5681,10 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
     // the gap the aligner placed rather than a variant the sequences separated.
     // See `split_is_a_placed_gap_coincidence` (#1610). Scoped to net deletions,
     // so nothing here can reach the equal-length path or a net insertion, and
-    // scoped to the coding DNA axis by the same `carve_out` the sibling collapse
-    // directly above takes — ungated it re-admitted on `g.`/`n.` exactly what
-    // that gate excludes.
+    // scoped to every DNA axis by the same `carve_out` the sibling collapse
+    // directly above takes — before the #2155 widen, ungated it re-admitted on
+    // `g.`/`n.` exactly what that (then `c.`-only) gate excluded; today ungated
+    // it would re-admit on `r.`, the one axis the gate now excludes.
     if split_is_a_placed_gap_coincidence(&pieces, reference, result, carve_out) {
         return whole();
     }
@@ -6487,13 +6490,14 @@ const MIN_MANUFACTURED_SPLIT_MEMBERS: usize = 3;
 /// one-base one: there is no per-gap notion of separation in here at all, and
 /// none of the arithmetic implements "one unchanged base".
 ///
-/// So the fix is not in the conditions. The caller now gates the pass on the
-/// **coding DNA axis** ([`compensating_gap_coalesce_applies`]), which is where
-/// `DNA/delins.md:47` — the only clause that can license merging across
-/// unchanged bases at all — was decided to reach. Read that gate's doc before
-/// changing anything here: it also records the competing reading, under which
-/// this rule is partitioner parity rather than a `:47` re-spelling and would
-/// apply on every axis.
+/// So the fix is not in the conditions. The caller now gates the pass on
+/// **every DNA axis** ([`compensating_gap_coalesce_applies`]) — superseded
+/// from the coding DNA axis alone to all DNA axes, 2026-08-17, #2155 — which
+/// is where `DNA/delins.md:47` — the only clause that can license merging
+/// across unchanged bases at all — was decided to reach. Read that gate's doc
+/// before changing anything here: it also records the competing reading,
+/// under which this rule is partitioner parity rather than a `:47`
+/// re-spelling and would apply on every axis, `r.` included.
 ///
 /// **Nothing downstream re-audits the merge.** `split_concealed_separations`
 /// runs *before* this pass and is gated on `pieces.len() >= 2`, so once one
@@ -6590,6 +6594,20 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
         ref_end: end,
         alt: denoted_by(pieces, start, end, ref_bytes),
     }];
+    // The span above is `pieces[0].ref_start .. pieces[last].ref_end` as they
+    // stood AFTER `shift_pieces`, so a pure indel this merge swallows can carry
+    // a flanking base that direction alone moved into (or out of) that range —
+    // 3' and 5' can push a boundary indel onto different, mutually-coincident
+    // reference bases, and this merge takes whichever boundary it is handed
+    // without asking whether it is minimal. Re-derive the merged piece's own
+    // hull the same way every other widening pass' output is trimmed
+    // (`shrink_pieces_to_differences`, a pure function of the reference and the
+    // payload) so the member this returns does not depend on which direction
+    // parked the boundary piece. See `direction_symmetry` in this module's
+    // tests for the case this closes (#2155's all-DNA-axis widen exposed it on
+    // `g.`; it was unreachable pre-widen because `coalesce_coding_frame_separation`
+    // already closed the relevant one-base gaps on `c.` before this pass ran).
+    shrink_pieces_to_differences(pieces, ref_bytes);
 }
 
 /// Merge a run of pieces that together span one inversion back into that single
@@ -6668,11 +6686,14 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 ///
 /// That citation carries **less** than it used to, and the next paragraph is
 /// what the pass actually stands on. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-/// (decided 2026-08-11) scopes `:47` to the coding DNA axis, and this pass is
-/// axis-blind — it widens on `g.` as readily as on `c.`. So `:46-47` is a
+/// was decided 2026-08-11 scoping `:47` to the coding DNA axis alone, and was
+/// superseded (2026-08-17, #2155) to reach every DNA axis (`c./g./m./n.`) —
+/// but this pass is wider still: it is axis-blind and is not called with a
+/// `carve_out` at all (see the call site in [`coalesce_inversion_runs`]), so it
+/// widens on `r.` as readily as on any DNA axis. So `:46-47` is a
 /// recommendation ferro follows more widely than the clause reaches, not an
-/// authority for doing so off `c.`. The second citation, below, carries no such
-/// scope and is what the widening actually stands on off the coding axis.
+/// authority for doing so on `r.`. The second citation, below, carries no such
+/// scope and is what the widening actually stands on off the DNA axes.
 ///
 /// The **type** of that spanning description is then not a preference but a
 /// definition: `delins.md:5` defines a delins as a replacement "which is not a
@@ -7816,11 +7837,12 @@ fn payload_columns_dominate_the_span(pieces: &[Piece]) -> bool {
 /// # `delins.md:44-47` is narrower than it reads here, and the citation was stale
 ///
 /// The ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-/// (decided 2026-08-11) scopes `:47`'s carve-out to the **coding DNA axis**:
-/// `c.`, and nothing else. On `g.`/`m.`/`o.`/`n.` — and on `r.`, in both
+/// (decided 2026-08-11) originally scoped `:47`'s carve-out to the coding DNA
+/// axis, `c.`, and nothing else; it was **superseded to all DNA axes**
+/// (2026-08-17, #2155), so `:47` now reaches `c./g./m./n.`. On `r.` — in both
 /// directions — `general.md:34` governs unopposed. So a caller that runs on
-/// every axis cannot rest on `:44-47`, and this doc previously read as though
-/// one could.
+/// `r.` as readily as on the DNA axes cannot rest on `:44-47`, and this doc
+/// previously read as though one could.
 ///
 /// The caller that most obviously could not was [`whole_block_inversion`], which
 /// is axis-blind and whose gate this predicate opened. That disjunct is gone —
@@ -7832,14 +7854,18 @@ fn payload_columns_dominate_the_span(pieces: &[Piece]) -> bool {
 ///
 /// The **residue is live and is not fixed here**, because fixing it would move
 /// output. The remaining caller is [`partition_block`]'s
-/// [`split_buys_no_higher_priority_type`] route, which is equally axis-blind, and
-/// that route *is* the payload-coincidence shape — its own doc derives the
-/// collapse by analogy from `:44-47` and labels it ferro policy rather than a
-/// spec rule. So the analogy's source clause is now `c.`-scoped while the site
-/// that draws on it is not. Named rather than adjudicated: whether that route
-/// takes an axis gate is a representation question for the ruling's implementers,
-/// and `AxisFrame::reading_frame` is the wrong gate for it (the ruling says so —
-/// it is true for a coding `r.` too, which is how the defect it closes arose).
+/// [`split_buys_no_higher_priority_type`] route, and that route *is* the
+/// payload-coincidence shape — its own doc derives the collapse by analogy from
+/// `:44-47` and labels it ferro policy rather than a spec rule. This paragraph
+/// was written when `:47`'s source clause (`c.`-only) was narrower than the
+/// axes this analogy could be drawn on; with `:47` superseded to all DNA axes,
+/// the source clause and `carve_out.may_disbelieve_a_separation()` — which
+/// today's call site for this route already gates on, see the comment above
+/// it — cover the same set (`c./g./m./n.`). Whether any residue is still open
+/// here is therefore worth re-deriving rather than assuming from this
+/// paragraph, which predates the widen. `AxisFrame::reading_frame` remains the
+/// wrong gate for it regardless — the ruling says so, since it is true for a
+/// coding `r.` too, which is how the defect it closes arose.
 fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
     pieces
         .windows(2)
@@ -8303,8 +8329,9 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
 /// **Two limits the ruling keeps, so do not read this predicate alone as the
 /// scope.** It sits under `delins-merge-vs-individual-gap-two-or-more`'s shape
 /// and net-deletion scopes, and under
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`'s `c.`-only axis
-/// scope — which is enforced at the call site by `payload_coalesce_applies`,
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`'s axis scope —
+/// superseded (2026-08-17, #2155) from `c.`-only to every DNA axis
+/// (`c./g./m./n.`), enforced at the call site by `payload_coalesce_applies`,
 /// not here. And the ruling engages only the protein-level one of `:47`'s two
 /// grounds; the counterweight is recorded on the record itself.
 ///
@@ -8486,10 +8513,11 @@ fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
 ///
 /// Two conditions. The pass is a [`PartitionRule::CanonicalCoalesced`] behaviour,
 /// and — per the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11) —
-/// `:47`'s carve-out reaches the **coding DNA axis only**.
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`, superseded
+/// (2026-08-17, #2155) to all DNA axes — `:47`'s carve-out reaches **every
+/// cis-reachable DNA axis** (`c./g./m./n.`) and not `r.`.
 ///
-/// # Why this keys on [`CisKind::Cds`] and not on `AxisFrame::reading_frame`
+/// # Why this keys on [`AxisFrame::is_dna`] and not on `AxisFrame::reading_frame`
 ///
 /// The two are not the same question, and the difference is a jurisdiction
 /// boundary rather than a detail. `reading_frame` is true for [`CisKind::Rna`]
@@ -8499,22 +8527,22 @@ fn split_carries_a_gap_bearing_insert(pieces: &[Piece]) -> bool {
 /// counterpart that could carry the carve-out there. RNA is outside the ruling
 /// rather than decided against, so the arm must not merge on it.
 ///
-/// The axis half is [`AxisFrame::is_coding_dna`] rather than a `match` here, so
-/// the scope is written once; its `match` is exhaustive on purpose, for the
-/// reason [`PartitionRule::cuts_with_canonical`] gives: a new axis must be
-/// decided rather than defaulted.
+/// The axis half is [`AxisFrame::is_dna`] rather than a `match` here, so the
+/// scope is written once; its `match` is exhaustive on purpose, for the reason
+/// [`PartitionRule::cuts_with_canonical`] gives: a new axis must be decided
+/// rather than defaulted.
 ///
 /// A free function rather than an inline conjunction because `partition_rule()`
 /// caches its read in a `OnceLock`, so one test binary can never exercise two
 /// arms through the call site. This half is pure and therefore pinnable — see
-/// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`.
+/// `the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`.
 fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
-    // The scope test is [`AxisFrame::is_coding_dna`], not a second copy of it.
-    // This gate and that predicate answer the same question, and while a new
+    // The scope test is [`AxisFrame::is_dna`], not a second copy of it. This
+    // gate and that predicate answer the same question, and while a new
     // `CisKind` is a compile error in either, two exhaustive matches can still
     // be given *different* arms — and would compile, so the drift would be
     // silent. One rule, written once.
-    rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_coding_dna(kind)
+    rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_dna(kind)
 }
 
 /// Whether [`coalesce_compensating_gap_split`] applies, given the arm and the
@@ -8540,24 +8568,26 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// inside the population `general.md:34` governs: "two variants separated by one
 /// or more nucleotides should be described individually and **not** as a
 /// 'delins'". The only clause that overrides it for this shape is
-/// `DNA/delins.md:47`, and the decided operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
-/// scopes `:47` to the coding DNA axis "and nothing else"; its sibling
-/// `delins-merge-vs-individual-gap-two-or-more` says the same thing from the
-/// other side — "rows on an axis with no reading frame … remain violations and
-/// are untouched by this ruling".
+/// `DNA/delins.md:47`.
 ///
-/// So the merge had no licence off `c.`, and six rows of the spec conformance
-/// corpus were counted by that corpus's own negative guard for the **rejected**
-/// SVD-WG010 proposal: two variants one unchanged base apart, on `g.` and `n.`,
-/// merged into one spanning `delins`. See #1711.
+/// At the time #1711 was filed, the decided operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
+/// scoped `:47` to the coding DNA axis "and nothing else", and six rows of the
+/// spec conformance corpus were counted by that corpus's own negative guard for
+/// the **rejected** SVD-WG010 proposal: two variants one unchanged base apart,
+/// on `g.` and `n.`, merged into one spanning `delins`. **That ruling has since
+/// been superseded to all DNA axes (2026-08-17, #2155)**, so `:47`'s carve-out
+/// now reaches `c./g./m./n.` uniformly and those six rows are no longer a
+/// violation of it — only `r.` remains outside the scope, on jurisdiction: a
+/// `DNA/` clause cannot scope the RNA axis, and `RNA/delins.md` states no `:47`
+/// counterpart.
 ///
 /// # It is the AXIS KIND, not `AxisFrame::reading_frame`
 ///
 /// The same trap [`payload_coalesce_applies`] documents, for the same reason:
 /// `reading_frame` is true for a coding `r.` too, and a `DNA/` clause has no
 /// jurisdiction over the RNA axis (`RNA/delins.md` states no `:47` counterpart).
-/// Keying on the frame flag would extend a DNA-only carve-out onto an axis the
+/// Keying on the frame flag would extend the DNA carve-out onto an axis the
 /// ruling deliberately does not reach.
 ///
 /// # What this does NOT claim
@@ -8567,9 +8597,11 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// this pass states that restriction on the derived pieces instead. That
 /// argument is about why the split exists; it is not a licence for the
 /// **output**, which is a spanning `delins` across unchanged bases and needs one.
-/// Both readings are real and they disagree off `c.` — the parity reading would
-/// apply the pass on every axis — so the cost of choosing the clause is stated
-/// where it is paid, below, rather than hidden here.
+/// Both readings are real and they disagree on `r.` — the parity reading would
+/// apply the pass there too — so the cost of choosing the clause is stated
+/// where it is paid, below, rather than hidden here. (Before the #2155 widen
+/// the two readings disagreed on every axis off `c.`; superseding the ruling to
+/// all DNA axes narrowed that disagreement to `r.` alone.)
 ///
 /// # MEASURED, and the cost is not small
 ///
@@ -8628,7 +8660,7 @@ fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
 /// the one a decided ruling names.
 fn compensating_gap_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
     // As above: one spelling of the axis scope, shared with the sibling gate.
-    rule.cuts_with_canonical() && AxisFrame::is_coding_dna(kind)
+    rule.cuts_with_canonical() && AxisFrame::is_dna(kind)
 }
 
 /// Re-spell a multi-member allele as the single `delins` the spec recommends,
@@ -8638,14 +8670,17 @@ fn compensating_gap_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool
 /// This is `DNA/delins.md:44-47` — "parts of the inserted sequence *align* with
 /// the reference sequence ... **The 'delins' format is recommended**".
 ///
-/// # It fires on the coding DNA axis only
+/// # It fires on every DNA axis, and not on `r.`
 ///
-/// The caller gates this to `c.` — [`CisKind::Cds`] — per the operator ruling
-/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. Not to "any axis
-/// with a reading frame": that would include a coding `r.`, and `DNA/delins.md`
-/// does not reach the RNA axis. See [`payload_coalesce_applies`] and the call
-/// site in [`canonicalize_from_sequence`]. Nothing in this function tests the
-/// axis, so reading it alone will overstate where it runs.
+/// The caller gates this to [`AxisFrame::is_dna`] — `c./g./m./n.` — per the
+/// operator ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped`,
+/// superseded (2026-08-17, #2155) to all DNA axes. Not to "any axis with a
+/// reading frame": that would include a coding `r.`, and `DNA/delins.md` does
+/// not reach the RNA axis — the exclusion there is jurisdictional (a `DNA/`
+/// clause cannot scope RNA), not a scope this pass tests for itself. See
+/// [`payload_coalesce_applies`] and the call site in
+/// [`canonicalize_from_sequence`]. Nothing in this function tests the axis, so
+/// reading it alone will overstate where it runs.
 ///
 /// # It runs last, and that placement is the whole design
 ///
@@ -8847,8 +8882,10 @@ pub mod dev_partitioners {
     ///
     /// `coding_dna` is the axis fact `super::CoincidenceCarveOut` carries: two
     /// of the splitter's single-piece exits are `DNA/delins.md:44-47`'s
-    /// payload-coincidence carve-out, which reaches `c.` and nothing else. A
-    /// bare-bytes caller with no axis in hand wants `false`.
+    /// payload-coincidence carve-out. The parameter name predates the #2155
+    /// widen — the carve-out reached `c.` and nothing else when it was chosen
+    /// — and now stands for `true` on every DNA axis (`c./g./m./n.`), `false`
+    /// only on `r.`. A bare-bytes caller with no axis in hand wants `false`.
     pub fn live(reference: &[u8], result: &[u8], coding_dna: bool) -> Vec<DevPiece> {
         let carve_out = if coding_dna {
             super::CoincidenceCarveOut::InReach
@@ -9033,8 +9070,9 @@ fn separations_are_meaningful(
     // The raise is a *disbelief*, not a floor: it refuses a separation
     // `general.md:34` accepts, on the ground that one matched base inside a
     // large replacement is payload coincidence rather than structure. That is
-    // `delins.md:44-47`'s construction, which reaches `c.` and nothing else —
-    // so off that axis `MIN_PIECE_SEPARATION` stands however much the block
+    // `delins.md:44-47`'s construction, which reaches every DNA axis
+    // (`c./g./m./n.` — superseded to all DNA axes, 2026-08-17, #2155) and not
+    // `r.` — so on `r.`, `MIN_PIECE_SEPARATION` stands however much the block
     // changes. See [`CoincidenceCarveOut`].
     let required = if carve_out.may_disbelieve_a_separation()
         && net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE
@@ -9173,10 +9211,14 @@ fn piece_renders_as_delins(piece: &Piece, reference: &[u8]) -> bool {
 /// # Axis scope
 ///
 /// Gated on [`CoincidenceCarveOut::may_disbelieve_a_separation`], so it runs on
-/// the **coding DNA axis only**. This rule is grounded on `DNA/delins.md:44-47`,
-/// and `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
-/// scopes that passage to `c.` and nothing else; on `g.`/`m.`/`o.`/`n.`/`r.`,
-/// `general.md:34` governs and the members stay individual.
+/// **every DNA axis** (`c./g./m./n.`), not `r.`. This rule is grounded on
+/// `DNA/delins.md:44-47`, and
+/// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]` —
+/// superseded (2026-08-17, #2155) to all DNA axes — scopes that passage to
+/// `c./g./m./n.` and nothing else; on `r.`, `general.md:34` governs and the
+/// members stay individual. The `r.` exclusion is jurisdictional: a `DNA/`
+/// clause cannot scope the RNA axis, and `RNA/delins.md` states no `:47`
+/// counterpart.
 ///
 /// The gate is not decorative. Ungated, this rule sits directly *after* the
 /// sibling collapse in [`partition_block`] — which carries the same gate — and
@@ -10462,9 +10504,24 @@ pub(crate) struct DerivedBlock {
 ///   [`changed_columns_of_edits`] over the *input's* edits and there are none.
 ///   A sequence pair has no spelling for a bound to be relative to, which is why
 ///   this entry point cannot inherit #1440;
-/// * no [`coalesce_compensating_gap_split`]. That pass judges a split's
-///   boundaries to be an alignment coincidence, and the boundaries here come
-///   from [`partition_block_canonical`], whose premise is that they are not.
+/// * ~~no [`coalesce_compensating_gap_split`]~~ **corrected 2026-08-17,
+///   #2155 task 3c.** This bullet used to read that the pass was withheld
+///   because "that pass judges a split's boundaries to be an alignment
+///   coincidence, and the boundaries here come from
+///   [`partition_block_canonical`], whose premise is that they are not." That
+///   had it backwards: [`coalesce_compensating_gap_split`]'s own doc states the
+///   defect the other way round — [`partition_block_canonical`] is exactly the
+///   partitioner *free* to manufacture a compensating gap (unlike
+///   [`partition_block`], whose single-gap search cannot), which is why the
+///   normalization surface scopes that pass to
+///   [`PartitionRule::cuts_with_canonical`] rather than withholding it there.
+///   This surface serves that family and nothing else
+///   ([`partition_block_for_derivation`]), so the defect is exactly as
+///   reachable here as it is from [`canonicalize_from_sequence`]. Both
+///   coalesce passes now run, gated the same way the normalization surface
+///   gates them ([`payload_coalesce_applies`], [`compensating_gap_coalesce_applies`]
+///   against [`DERIVED_BLOCK_PARTITION_RULE`] and the template's [`CisKind`]) —
+///   see the call site below.
 ///
 /// **Which partitioner, and why it is not the one `normalize` uses.** This
 /// surface is pinned to [`DERIVED_BLOCK_PARTITION_RULE`] and does not read
@@ -10547,6 +10604,40 @@ pub(crate) fn derive_block_members(
     shift_pieces(&mut pieces, reference, direction);
     coalesce_adjacent_pieces(&mut pieces);
     shrink_pieces_to_differences(&mut pieces, reference);
+
+    // `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task 3c),
+    // run exactly as `canonicalize_from_sequence` runs it: same two gates
+    // (`payload_coalesce_applies`, `compensating_gap_coalesce_applies`), same
+    // order, against the same rule this surface is pinned to
+    // (`DERIVED_BLOCK_PARTITION_RULE`). Without this the derivation surface
+    // never ran the coalesce at all — see this function's own doc, corrected
+    // 2026-08-17 — so it fragmented exactly the block the normalization
+    // surface collapses, and #2155's headline reproduction (`from_sequences`)
+    // still showed the defect after the earlier tasks in this series widened
+    // only `canonicalize_from_sequence`'s call sites.
+    //
+    // Gated on the template's axis, not unconditionally: `from_sequences`
+    // only ever builds a `Genome` or `Mt` template (`reference_template`
+    // refuses every other accession class), both squarely inside the widened
+    // DNA scope, so this reaches exactly `g.`/`m.`. `cis_kind_of` returning
+    // `None` (an axis this module does not serve at all) skips both passes,
+    // leaving the pre-existing pieces untouched — the same behaviour this
+    // surface always had before this change.
+    //
+    // The convergence this buys is pinned by
+    // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`:
+    // `from_sequences`'s output and `Normalizer::normalize`'s output agree,
+    // byte for byte, on this block. If a future edit moves this call out of
+    // step with `canonicalize_from_sequence`'s own order, that guard is what
+    // catches it.
+    if let Some(kind) = cis_kind_of(template) {
+        if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+            coalesce_payload_alignment_split(&mut pieces, reference);
+        }
+        if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+            coalesce_compensating_gap_split(&mut pieces, reference);
+        }
+    }
 
     // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
     // interbase 0 from the one window where the anchor genuinely does not exist.
@@ -14422,7 +14513,11 @@ mod tests {
     /// leaving it implicit is how it was lost.
     pub(super) const NO_AXIS: CoincidenceCarveOut = CoincidenceCarveOut::OutOfReach;
 
-    /// The coding DNA axis, `c.` — the one axis `DNA/delins.md:44-47` reaches.
+    /// The coding DNA axis, `c.` — one of the axes `DNA/delins.md:44-47`
+    /// reaches. The carve-out was originally scoped to `c.` alone and was
+    /// superseded (2026-08-17, #2155) to reach every DNA axis (`c./g./m./n.`);
+    /// this constant still exercises the `c.` case specifically, which remains
+    /// `InReach` under the widened scope.
     ///
     /// Used only by the tests that are *about* that passage, so a reader can
     /// tell at the call site which side of the ruling a case is pinning.
@@ -14449,16 +14544,24 @@ mod tests {
     /// citation's job, at each rule site.
     #[test]
     fn every_axis_declares_which_rule_scope_it_is_in() {
-        // (kind, reading_frame, translated, coding_dna)
+        // (kind, reading_frame, translated, is_dna)
+        //
+        // The third column used to be `coding_dna`, true on `c.` alone under a
+        // predicate that has since been removed: `delins-payload-coincidence-
+        // carve-out-is-coding-dna-scoped` was superseded to all DNA axes
+        // (2026-08-17, #2155), so every gate that used to key on it now keys
+        // on `AxisFrame::is_dna` instead, and this pin follows the gates.
         let cases = [
-            (CisKind::Genome, false, false, false),
-            (CisKind::Mt, false, false, false),
-            (CisKind::Tx, false, false, false),
+            (CisKind::Genome, false, false, true),
+            (CisKind::Mt, false, false, true),
+            (CisKind::Tx, false, false, true),
             (CisKind::Cds, true, true, true),
             // A coding transcript: RNA authority (`RNA/delins.md:18`) reaches
-            // it, DNA-only authority does not. This row is the whole point.
+            // it, DNA-only authority does not. This row is the whole point --
+            // it is the one axis where the two predicates disagree.
             (CisKind::Rna, true, true, false),
             // A non-coding transcript has no CDS, so no frame either (#1241).
+            // Still not a DNA axis, so `is_dna` is unchanged from the row above.
             (CisKind::Rna, false, false, false),
             // The three rows below are UNREACHABLE through `axis_frame`, which
             // never stamps a frame onto a genomic, mitochondrial or `n.` axis.
@@ -14474,12 +14577,12 @@ mod tests {
             // reading `projection-codon-exception-is-decided-by-the-rendered-
             // axis` states, and pinning it here decides nothing that record
             // leaves open (which is how *projection* renders `n.`, not whether
-            // `n.` has a frame).
-            (CisKind::Genome, true, false, false),
-            (CisKind::Mt, true, false, false),
-            (CisKind::Tx, true, false, false),
+            // `n.` has a frame). It is still a DNA axis, so `is_dna` stays true.
+            (CisKind::Genome, true, false, true),
+            (CisKind::Mt, true, false, true),
+            (CisKind::Tx, true, false, true),
         ];
-        for (kind, reading_frame, translated, coding_dna) in cases {
+        for (kind, reading_frame, translated, is_dna) in cases {
             let frame = AxisFrame {
                 delta: 0,
                 reading_frame,
@@ -14491,9 +14594,9 @@ mod tests {
                 "{kind:?} (reading_frame={reading_frame}): carries_translated_frame"
             );
             assert_eq!(
-                AxisFrame::is_coding_dna(kind),
-                coding_dna,
-                "{kind:?} (reading_frame={reading_frame}): is_coding_dna"
+                AxisFrame::is_dna(kind),
+                is_dna,
+                "{kind:?} (reading_frame={reading_frame}): is_dna"
             );
         }
     }
@@ -14516,8 +14619,8 @@ mod tests {
             "a coding `r.` translates, so RNA-stated rules reach it"
         );
         assert!(
-            !AxisFrame::is_coding_dna(frame.kind),
-            "a coding `r.` is not a DNA axis, so `DNA/`-only rules must not"
+            !AxisFrame::is_dna(frame.kind),
+            "a coding `r.` is still not a DNA axis"
         );
     }
 
@@ -15982,9 +16085,12 @@ mod tests {
         // c.850 is column 0, so column 44 is c.894 and its flanks are c.893/c.895.
         assert!(!same_codon(893, 895));
 
-        // `LRG_199t1:c.…` — the coding DNA axis, which is the only axis
-        // `delins.md:44-47` reaches. On a frameless axis the same block splits;
-        // `long_delins_splits_at_unchanged_bases` pins both sides.
+        // `LRG_199t1:c.…` — the coding DNA axis, one of the axes
+        // `delins.md:44-47` reaches (superseded to all DNA axes, 2026-08-17,
+        // #2155: `c./g./m./n.`, not `r.`). `long_delins_splits_at_unchanged_bases`
+        // (`tests/it/rewrite_target_corpus.rs`) pins both sides; re-check that
+        // test's own axis choice against the widened scope before trusting this
+        // comment's "frameless axis" framing, which predates it.
         let mut pieces = partition_block(reference, result, CODING_DNA);
         assert_eq!(
             pieces.len(),
@@ -16796,9 +16902,10 @@ mod tests {
             ref_end: end,
             alt: alt.to_vec(),
         };
-        // Every case below is stated on the coding DNA axis, because that is the
-        // only axis the rule runs on at all; the axis scope itself is the last
-        // case in this test.
+        // Every case below is stated on the coding DNA axis, one of the axes
+        // the rule runs on (superseded to all DNA axes, 2026-08-17, #2155:
+        // `c./g./m./n.`, not `r.`); the axis scope itself is the last case in
+        // this test.
         let coding = CoincidenceCarveOut::InReach;
 
         // The issue's own block: `TGCA` -> `AAC`, cut at the payload's `C`.
@@ -16858,8 +16965,11 @@ mod tests {
 
         // The axis scope, on the SAME block that collapses above — so this case
         // isolates the carve-out and nothing else. Ungated, this shape on a
-        // frameless axis is what took `spec_conformance_axis`'s
-        // `guard_violations` from 0 to 5 (the rejected SVD-WG010 shape).
+        // then-frameless axis (`g.`/`n.`, before the carve-out was superseded
+        // to all DNA axes, 2026-08-17, #2155) is what took
+        // `spec_conformance_axis`'s `guard_violations` from 0 to 5 (the
+        // rejected SVD-WG010 shape). `OutOfReach` below now names `r.`
+        // specifically, the one axis still outside the carve-out.
         assert!(
             !split_is_a_placed_gap_coincidence(
                 &issue,
@@ -17133,6 +17243,35 @@ mod tests {
         /// reason `the_suite_runs_on_the_default_rule` gives. The environment
         /// guard is repeated here so that failure names its cause rather than
         /// reading as a drifted pin.
+        ///
+        /// **RE-PINNED 2026-08-17 (#2155 task 3c): both now
+        /// [`PartitionRule::CanonicalCoalesced`].** Before this, the pair
+        /// differed in *name* only as far as [`partition_block_for_derivation`]
+        /// was concerned — both arms `cuts_with_canonical()`, so the dispatch
+        /// there always selected [`partition_block_canonical_within`] either
+        /// way — but [`derive_block_members`] never called
+        /// [`payload_coalesce_applies`]/[`compensating_gap_coalesce_applies`]
+        /// at all, so no value of this constant could have made the coalesce
+        /// passes fire. `derive_block_members` now calls both, gated exactly
+        /// as [`canonicalize_from_sequence`] gates them, so the value genuinely
+        /// matters now: `PartitionRule::Canonical` would leave
+        /// [`payload_coalesce_applies`] permanently `false` (it requires
+        /// `rule == CanonicalCoalesced` exactly), so `CanonicalCoalesced` is
+        /// the only value that activates both passes.
+        ///
+        /// **What re-pinning the RIGHT value to match the LEFT buys, and what
+        /// it does not.** `from_sequences` and `normalize` now agree, byte for
+        /// byte, on a payload-coincidence `g.`/`m.` block —
+        /// `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+        /// is that guard. It does **not** close #1834's wider gap: that 32/79
+        /// (3') / 36/79 (5') figure was measured over a corpus this change
+        /// does not re-measure, and `derive_block_members` still runs none of
+        /// `canonicalize_from_sequence`'s other passes —
+        /// `coalesce_coding_frame_separation`, `split_concealed_separations`,
+        /// `coalesce_inversion_runs`, `apply_coding_codon_exception` — so the
+        /// two surfaces remain genuinely different pipelines outside the
+        /// payload-coincidence shape this task targets. Re-measure #1834's gap
+        /// rather than reading this pin as having closed it.
         #[test]
         fn the_two_surfaces_cut_with_a_pinned_pair_of_rules() {
             assert!(
@@ -17141,15 +17280,23 @@ mod tests {
             );
             assert_eq!(
                 (partition_rule(), DERIVED_BLOCK_PARTITION_RULE),
-                (PartitionRule::CanonicalCoalesced, PartitionRule::Canonical),
+                (
+                    PartitionRule::CanonicalCoalesced,
+                    PartitionRule::CanonicalCoalesced
+                ),
                 "the two surfaces' partition rules moved apart without being \
                  re-pinned together -- `normalize` cuts with the first and \
                  `from_sequences` with the second, and #1834 is the record of \
-                 what that costs. LEFT MOVED Live -> CanonicalCoalesced with \
-                 #1835, which made canonical-coalesced the shipped default; the \
-                 right value is unchanged, so the two surfaces are now one step \
-                 closer and #1834's gap is correspondingly smaller. Re-measure \
-                 that gap rather than carrying its 32/79 and 36/79 figures over"
+                 what that costs. RIGHT MOVED Canonical -> CanonicalCoalesced \
+                 with #2155 task 3c, which wired `derive_block_members` to run \
+                 the same payload-coincidence coalesce passes \
+                 `canonicalize_from_sequence` runs, gated on this constant; the \
+                 left value is unchanged. The two surfaces now converge on a \
+                 payload-coincidence g./m. block \
+                 (`issue_2155_from_sequences_collapse`), but #1834's wider gap \
+                 -- every other pass `derive_block_members` still omits -- is \
+                 untouched. Re-measure that gap rather than carrying its \
+                 32/79 and 36/79 figures over"
             );
         }
 
@@ -17183,14 +17330,16 @@ mod tests {
             );
             assert_ne!(
                 derived,
-                // `NO_AXIS` because this block carries no reading frame and the
-                // carve-out is scoped to the coding DNA axis by
-                // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
-                // #1848 wrote this call before #1616 gave `partition_block` its
-                // `carve_out` argument; passing `CODING_DNA` here would ask the
-                // shipped partitioner a question about an axis this block does
-                // not have, and the sibling insertion test above uses `NO_AXIS`
-                // on the same shape.
+                // `NO_AXIS` because this bare-bytes block carries no axis at
+                // all, and the carve-out — scoped by
+                // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`,
+                // superseded to all DNA axes (2026-08-17, #2155) — needs one to
+                // answer anything. #1848 wrote this call before #1616 gave
+                // `partition_block` its `carve_out` argument; passing
+                // `CODING_DNA` here would ask the shipped partitioner a
+                // question about an axis this block does not have, and the
+                // sibling insertion test above uses `NO_AXIS` on the same
+                // shape.
                 partition_block(b"A", b"ACA", NO_AXIS),
                 "if these ever agree, pick another block -- this test is \
                  vacuous otherwise"
@@ -17368,33 +17517,37 @@ mod tests {
             }
         }
 
-        /// `delins.md:44-47`'s re-spelling needs **both** the arm and the coding
-        /// DNA axis.
+        /// `delins.md:44-47`'s re-spelling needs **both** the arm and a DNA
+        /// axis.
         ///
         /// The operator ruling
         /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
-        /// (2026-08-11) scopes `:47`'s carve-out to `c.`, because its stated
-        /// reason — preventing "incorrect predictions for the consequences on
-        /// protein level" — has nothing to bite on off the coding axis. On every
-        /// other axis the arm must behave exactly like `canonical`.
+        /// (2026-08-11) originally scoped `:47`'s carve-out to `c.` alone; it
+        /// was **superseded to all DNA axes** (2026-08-17, #2155) — `c./g./m./n.`
+        /// — because its stated reason, preventing "incorrect predictions for
+        /// the consequences on protein level", has nothing to bite on off a
+        /// reading frame either way, so there was no ground to stop at `c.`
+        /// specifically. `r.` stays out on jurisdiction: a `DNA/` clause cannot
+        /// scope the RNA axis. On every other rule the arm must behave exactly
+        /// like `canonical`.
         ///
         /// Pinning the pure predicate rather than the call site is deliberate:
         /// `partition_rule()` caches in a `OnceLock`, so one test binary cannot
         /// drive two arms through `canonicalize_from_sequence`.
         #[test]
-        fn the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis() {
-            assert!(
-                payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Cds),
-                "the carve-out must still fire on `c.` -- that is the axis \
-                 `delins.md:44-47`'s own worked example is written on"
-            );
-            for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+        fn the_payload_coalesce_needs_both_the_arm_and_a_dna_axis() {
+            for kind in [CisKind::Cds, CisKind::Genome, CisKind::Mt, CisKind::Tx] {
                 assert!(
-                    !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
-                    "{kind:?} is outside `DNA/delins.md:47`'s scope; \
-                     `general.md:34` governs and the members stay individual"
+                    payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    "{kind:?} is a DNA axis; the carve-out reaches `c./g./m./n.` \
+                     as of #2155"
                 );
             }
+            assert!(
+                !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Rna),
+                "`r.` is outside `DNA/delins.md:47`'s scope on jurisdiction; \
+                 `general.md:34` governs and the members stay individual"
+            );
             for rule in [
                 PartitionRule::Live,
                 PartitionRule::Shadow,
@@ -17429,23 +17582,29 @@ mod tests {
         /// [`PartitionRule::Canonical`], whose partitioner is the one that
         /// manufactures the split in the first place.
         ///
+        /// The axis half itself widened under #2155, from `c.`-only to every DNA
+        /// axis (`c./g./m./n.`) — see [`the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`]
+        /// for why. `g.`/`m.`/`n.` therefore now assert alongside `c.` instead of
+        /// alongside `r.`.
+        ///
         /// The pure predicate rather than the call site, for the reason the test
         /// directly above states: `partition_rule()` caches in a `OnceLock`.
         #[test]
-        fn the_compensating_gap_coalesce_needs_both_a_canonical_arm_and_the_coding_dna_axis() {
+        fn the_compensating_gap_coalesce_needs_both_a_canonical_arm_and_a_dna_axis() {
             for rule in [PartitionRule::Canonical, PartitionRule::CanonicalCoalesced] {
-                assert!(
-                    compensating_gap_coalesce_applies(rule, CisKind::Cds),
-                    "{rule:?} cuts with `partition_block_canonical`, so it is the \
-                     partitioner whose compensating gaps this pass exists to undo"
-                );
-                for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+                for kind in [CisKind::Cds, CisKind::Genome, CisKind::Mt, CisKind::Tx] {
                     assert!(
-                        !compensating_gap_coalesce_applies(rule, kind),
-                        "{kind:?} is outside `DNA/delins.md:47`'s scope; `general.md:34` \
-                         governs and the members stay individual (#1711)"
+                        compensating_gap_coalesce_applies(rule, kind),
+                        "{rule:?} cuts with `partition_block_canonical`, so it is the \
+                         partitioner whose compensating gaps this pass exists to undo, \
+                         and {kind:?} is a DNA axis reached by #2155"
                     );
                 }
+                assert!(
+                    !compensating_gap_coalesce_applies(rule, CisKind::Rna),
+                    "`r.` is outside `DNA/delins.md:47`'s scope on jurisdiction; \
+                     `general.md:34` governs and the members stay individual (#1711)"
+                );
             }
             for rule in [PartitionRule::Live, PartitionRule::Shadow] {
                 for kind in [
@@ -17504,7 +17663,7 @@ mod tests {
         /// of its own either. Unauthorised in both directions, so excluded.
         ///
         /// The regression this guards is invisible to
-        /// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`
+        /// `the_payload_coalesce_needs_both_the_arm_and_a_dna_axis`
         /// alone if that test is ever rewritten in terms of a frame flag, which
         /// is exactly how the defect arose.
         #[test]
@@ -18251,13 +18410,23 @@ mod tests {
         ///
         /// **121 rows, and the arm matters more than the number.** That count is
         /// of rows this pass moved on the unstable `FERRO_PARTITION=canonical-
-        /// coalesced` evaluation arm; the class is `g.`-axis, and
-        /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` already
-        /// gates the whole pass out on `g.` at the call site
-        /// ([`payload_coalesce_applies`]). So on the shipped arm this predicate
-        /// withdraws **zero** of the 121: they were never merged there. The two
-        /// facts read as contradictory only if "moves" is left unqualified, so it
-        /// is qualified here rather than in a PR description GitHub discards.
+        /// coalesced` evaluation arm; the class is `g.`-axis. At the time this
+        /// was measured, `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+        /// gated the whole pass out on `g.` at the call site
+        /// ([`payload_coalesce_applies`]), which was why this predicate withdrew
+        /// **zero** of the 121 on the shipped arm: they were never merged there.
+        /// **That ruling was superseded to all DNA axes (2026-08-17, #2155), so
+        /// `g.` is no longer excluded by axis.** The 121 still stay withdrawn on
+        /// the shipped arm, but not for that reason any more — the test below
+        /// proves this class independently fails
+        /// [`split_carries_a_gap_bearing_insert`] (every payload base is a
+        /// survivor; no member supplies a base), which
+        /// `coalesce_payload_alignment_split` checks with no axis parameter of
+        /// its own, so it declines this block whatever the axis gate would have
+        /// allowed through. Cite that test for why these 121 stay split now, not
+        /// the axis exclusion. The two facts read as contradictory only if
+        /// "moves" is left unqualified, so it is qualified here rather than in a
+        /// PR description GitHub discards.
         ///
         /// The block holds four `T`s, so the single payload base can align to
         /// any of them — and that is the whole point. Every base of the merged
@@ -19979,11 +20148,19 @@ mod tests {
                 "#1040"
             );
             assert_eq!(partition_block(b"GCT", b"AGC", NO_AXIS).len(), 1, "#1034");
-            // #422 is filed on `NC_000022.10:g.`, so `delins.md:44-47`'s
-            // payload-coincidence carve-out does not reach it and the tie-break
-            // leaves a two-member answer standing. On `c.` the carve-out
-            // collapses it — both sides pinned in
-            // `a_split_that_buys_no_higher_priority_type_collapses`.
+            // #422 is filed on `NC_000022.10:g.`. At the time this test was
+            // written, `delins.md:44-47`'s payload-coincidence carve-out was
+            // scoped to `c.` alone, so it did not reach `g.` and the tie-break
+            // left a two-member answer standing there. That scope was
+            // superseded to all DNA axes (2026-08-17, #2155), so `g.` is now
+            // in reach too. This call below is unaffected regardless, because
+            // it passes `NO_AXIS` — no axis at all, always `OutOfReach` by
+            // `NO_AXIS`'s own convention — rather than a `g.`-tagged
+            // `CoincidenceCarveOut`, so it does not exercise `g.`'s current
+            // (in-reach) behaviour and its assertion is not evidence about
+            // what ferro does with the real `NC_000022.10:g.` #422 input
+            // today. On `c.` the carve-out collapses it — both sides pinned
+            // in `a_split_that_buys_no_higher_priority_type_collapses`.
             assert_eq!(
                 partition_block(b"CTATAG", b"AAACCCC", NO_AXIS).len(),
                 2,
@@ -20189,13 +20366,23 @@ mod tests {
             // #1235's own comment asks for
             // exactly this: a fix that resolves #422 and keeps #999 green.
             //
-            // **The collapse is coding-DNA only.** Its licence is the analogy to
-            // `delins.md:44-47`, and the operator ruling
-            // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes
-            // that passage to `c.` and nothing else. #422 itself is filed on
-            // `NC_000022.10:g.`, so the shipped answer for the issue's own axis
-            // is now the two-member form `general.md:34` asks for — a
-            // representation change, declared, not a regression.
+            // **The collapse used to be coding-DNA only.** Its licence is the
+            // analogy to `delins.md:44-47`, and the operator ruling
+            // `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+            // originally scoped that passage to `c.` and nothing else. That
+            // scope was **superseded to all DNA axes** (2026-08-17, #2155), so
+            // `CoincidenceCarveOut::for_axis` now answers `InReach` for `g.`
+            // too — the same value `CODING_DNA` names below — which means the
+            // `partition_block(..., CODING_DNA)` call is no longer a `c.`-only
+            // probe: it now stands in for every DNA axis, `g.` included. #422
+            // itself is filed on `NC_000022.10:g.`, so on today's tree the
+            // real shipped answer for the issue's own axis is the ONE-member
+            // collapsed form (what `CODING_DNA` demonstrates below), not the
+            // two-member form the `NO_AXIS` call demonstrates — `NO_AXIS`
+            // means no axis was supplied at all, which is a different case
+            // from a `g.`-tagged carve-out and is unaffected by the widen. Do
+            // not read the two assertions below as "coding collapses, `g.`
+            // stays split" any more.
             assert_eq!(partition_block(b"CTATAG", b"AAACCCC", CODING_DNA).len(), 1);
             assert_eq!(partition_block(b"CTATAG", b"AAACCCC", NO_AXIS).len(), 2);
         }
@@ -20795,7 +20982,8 @@ mod tests {
             out
         }
 
-        /// The corpus: every 4-base core, replaced by every 5-base payload.
+        /// Every `core_len`-base core crossed with every `payload_len`-base
+        /// payload.
         ///
         /// **The shape is chosen because it is the one that reaches the
         /// partitioner**, not because it is where the defect happened to be
@@ -20805,12 +20993,12 @@ mod tests {
         /// function under test; a corpus of already-split alleles would mostly
         /// be refused before reaching it.
         ///
-        /// Cores are enumerated exhaustively rather than sampled. The rows that
-        /// exhibited the defect on the shipped default are 12 of the 256 cores,
-        /// and no stride over them could have been justified after the fact.
-        fn corpus() -> Vec<(String, String)> {
-            let payloads = words(5);
-            words(4)
+        /// Cores are enumerated exhaustively rather than sampled. `payloads` is
+        /// built once and shared across every core rather than regenerated per
+        /// core.
+        fn cores_by_payloads(core_len: usize, payload_len: usize) -> Vec<(String, String)> {
+            let payloads = words(payload_len);
+            words(core_len)
                 .into_iter()
                 .flat_map(|core| {
                     payloads
@@ -20820,40 +21008,49 @@ mod tests {
                 .collect()
         }
 
-        #[test]
-        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
+        /// Assert the re-derived member count is independent of shuffle
+        /// direction over `corpus`, on every partition arm this build
+        /// advertises. Shared by the net-insertion and net-deletion sweeps,
+        /// which differ only in their corpus, their comparison floor, and the
+        /// `what` label — the fan-out harness, the arm loop, and the two floors
+        /// are identical.
+        ///
+        /// The span is each row's core length, so the same helper serves a
+        /// net-insertion corpus (payload longer than core) and a net-deletion
+        /// one (payload shorter).
+        fn assert_direction_independent_member_count(
+            corpus: &[(String, String)],
+            min_comparisons: usize,
+            what: &str,
+        ) {
             let lo = PAD.len() + 1;
-            let hi = PAD.len() + 4;
-
-            // Parallel over the corpus: 256 cores x 1024 payloads x 4 arms is
-            // 1,048,576 re-derivations, which is ~68 s single-threaded — past
-            // nextest's 60 s SLOW threshold. Nothing is shared: each row builds
-            // its own `MockProvider`, so this is a pure fan-out and the corpus
-            // did not have to be sampled down to fit a time budget.
-            let corpus = corpus();
             let mut arms = 0usize;
             let mut compared = 0usize;
             let mut disagreements: Vec<String> = Vec::new();
 
+            // Parallel over the corpus x arms. Nothing is shared: each row builds
+            // its own `MockProvider`, so this is a pure fan-out and the corpus
+            // did not have to be sampled down to fit nextest's SLOW threshold.
+            //
+            // Each row yields `None` if it was skipped (equal payload/core, or an
+            // input that does not parse), `Some(None)` if it compared and the two
+            // directions agreed, or `Some(Some(msg))` if they disagreed.
             for name in PARTITION_RULE_NAMES {
                 let rule = partition_rule_from_env(Some(name))
                     .unwrap_or_else(|e| panic!("{name} is an arm this build has: {e}"));
                 arms += 1;
 
-                let found: Vec<(usize, Vec<String>)> = corpus
+                let rows: Vec<Option<Option<String>>> = corpus
                     .par_iter()
                     .map(|(core, payload)| {
-                        let mut compared = 0usize;
-                        let mut disagreements = Vec::new();
                         if payload == core {
-                            return (compared, disagreements);
+                            return None;
                         }
+                        let hi = lo + core.len() - 1;
                         let mut provider = MockProvider::new();
                         provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
                         let input = format!("NC_TEST.1:g.{lo}_{hi}delins{payload}");
-                        let Ok(variant) = parse_hgvs(&input) else {
-                            return (compared, disagreements);
-                        };
+                        let variant = parse_hgvs(&input).ok()?;
                         let members = [variant];
 
                         let three = canonicalize_from_sequence_with_rule(
@@ -20873,27 +21070,28 @@ mod tests {
 
                         // A row one direction re-derives and the other declines
                         // is a disagreement of the same kind, so the two `None`s
-                        // are compared rather than skipped: skipping them would
-                        // let a change that made the pass decline on one
-                        // direction read as a clean run.
-                        match (&three, &five) {
-                            (None, None) => {}
-                            (Some(three), Some(five)) if three.len() == five.len() => {}
-                            _ => disagreements.push(format!(
+                        // compare equal (agreed) rather than being skipped:
+                        // skipping them would let a change that made the pass
+                        // decline on one direction read as a clean run.
+                        let agreed = three.as_ref().map(Vec::len) == five.as_ref().map(Vec::len);
+                        Some(if agreed {
+                            None
+                        } else {
+                            Some(format!(
                                 "  FERRO_PARTITION={name} core={core} {input}\n    3': {}\n    \
                                  5': {}",
                                 describe(&three),
                                 describe(&five),
-                            )),
-                        }
-                        compared += 1;
-                        (compared, disagreements)
+                            ))
+                        })
                     })
                     .collect();
 
-                for (rows, mut found) in found {
-                    compared += rows;
-                    disagreements.append(&mut found);
+                for row in rows.into_iter().flatten() {
+                    compared += 1;
+                    if let Some(msg) = row {
+                        disagreements.push(msg);
+                    }
                 }
             }
 
@@ -20906,25 +21104,58 @@ mod tests {
                 "every arm this build advertises must be measured"
             );
             assert!(
-                compared >= 4 * 250_000,
-                "the corpus collapsed to {compared} comparisons, so a zero below says nothing"
+                compared >= min_comparisons,
+                "the {what} corpus collapsed to {compared} comparisons, so a zero below says \
+                 nothing"
             );
             assert!(
                 disagreements.is_empty(),
-                "{} row(s) re-derive a different number of members depending only on the shuffle \\
-                 direction. Direction moves a member's placement; it may not change how many \\
-                 members there are, or the partition is being read off a placement rather than \\
-                 off the sequence — which `canonical-form-choice-when-both-legal` (derive from \\
-                 the resulting sequence) and \\
-                 `separation-is-a-property-of-the-spelling-not-of-the-variant` both rule \\
-                 against. Showing the first 20:\\n{}",
+                "{} {what} row(s) re-derive a different number of members depending only on the \
+                 shuffle direction. Direction moves a member's placement; it may not change how \
+                 many members there are, or the partition is being read off a placement rather \
+                 than off the sequence — which `canonical-form-choice-when-both-legal` (derive \
+                 from the resulting sequence) and \
+                 `separation-is-a-property-of-the-spelling-not-of-the-variant` both rule against. \
+                 Showing the first 20:\n{}",
                 disagreements.len(),
                 disagreements
                     .iter()
                     .take(20)
                     .cloned()
                     .collect::<Vec<_>>()
-                    .join("\\n")
+                    .join("\n")
+            );
+        }
+
+        /// Net-insertion: a 4-base span replaced by every 5-base payload.
+        ///
+        /// 256 cores x 1024 payloads x 4 arms is 1,048,576 re-derivations
+        /// (~68 s single-threaded, past nextest's 60 s SLOW threshold), so the
+        /// harness runs it in parallel. The rows that exhibited the defect on
+        /// the shipped default are 12 of the 256 cores, and no stride over them
+        /// could have been justified after the fact.
+        #[test]
+        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
+            assert_direction_independent_member_count(
+                &cores_by_payloads(4, 5),
+                4 * 250_000,
+                "net-insertion",
+            );
+        }
+
+        /// Net-deletion: a 4-base span replaced by every 3-base payload.
+        ///
+        /// The net-insertion corpus above never reaches
+        /// [`place_direction_symmetrically`]'s `payload.len() < span.len()`
+        /// branch — the very branch #2155's direction-symmetry fix acts on.
+        /// This exercises it. A smaller payload than the sibling keeps it well
+        /// under nextest's SLOW threshold.
+        #[test]
+        fn the_member_count_does_not_depend_on_direction_for_a_net_deletion() {
+            assert_direction_independent_member_count(
+                &cores_by_payloads(4, 3),
+                4 * 16_000,
+                "net-deletion",
             );
         }
 

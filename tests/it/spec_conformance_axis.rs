@@ -79,10 +79,17 @@
 //! | `prohibited_absolute_accepted` | ~~32~~ ~~24~~ ~~8~~ **0** | ~~32~~ ~~24~~ ~~8~~ **0** | a shape the spec calls "not allowed" was accepted. Re-blessed by #1628 (genomic offsets) and then to zero by #1789 (`ins6`) |
 //! | `prohibition_violating_outputs` | ~~32~~ ~~8~~ **0** | ~~32~~ ~~8~~ **0** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627 and then to zero by #1628: see the fourth section below |
 //!
-//! `guard_violations` is **0 of 210 guarded rows**, which is a real negative
-//! result rather than a vacuous one: ferro does not merge an irreducible frameless
-//! separation of one, so it does not implement rejected SVD-WG010. The denominator
-//! is asserted non-zero, because `0 of 0` is what a rebuilt #1456 looks like.
+//! `guard_violations` was **0 of 210 guarded rows** through #1899, when the
+//! payload-coincidence carve-out was scoped to `c.` alone and every guarded row
+//! (frameless `g.`/`n.` axes) sat outside it. **#2155 supersedes that scope to
+//! all DNA axes** (`c./g./m./n.`, per `AxisFrame::is_dna`), which puts the
+//! guard's own domain inside the widened carve-out's reach for the first time —
+//! see the dedicated section below, "`guard_violations` is reframed", for the
+//! measured count and why a non-zero pin here is now a disclosed deviation
+//! rather than a fault. `r.` is unaffected and stays out, both structurally (the
+//! corpus builds no `r.` row at all) and by a targeted hermetic test. The
+//! denominator is still asserted non-zero, because `0 of 0` is what a rebuilt
+//! #1456 looks like.
 //!
 //! The 3'/5' asymmetry is itself a finding: the junction-crossing class is
 //! **371 to 0**, and 3' is the default direction. #1704 makes those 371 outputs
@@ -657,8 +664,10 @@
 //!
 //! All three scopes hold: the rows are `c.`
 //! (`delins-payload-coincidence-carve-out-is-coding-dna-scoped` — and this rule
-//! is gated on that carve-out, which is why the figure rises **only** here and
-//! `guard_violations` stays 0), the block loses length
+//! is gated on that carve-out, which at the time was `c.`-only, which is why the
+//! figure rose **only** here and `guard_violations` was 0 at the time — see
+//! "`guard_violations` is reframed" below for what #2155 later did to that
+//! carve-out's scope and to this counter's sibling), the block loses length
 //! (`delins-merge-vs-individual-gap-two-or-more`'s direction scope), and some
 //! derived member supplies bases
 //! (`delins-recommendation-reach-when-the-input-arrives-split`).
@@ -707,6 +716,115 @@
 //! zero is the pass not running, not the instrument failing to look. Since
 //! neither mutation ships, `the_coding_axis_merge_counter_can_observe_a_merge`
 //! is the positive control that keeps a blinded numerator from passing CI.
+//!
+//! # `guard_violations` is reframed: #2155 supersedes the axis scope, and this IS the merge
+//!
+//! Everything above this section, and every historical note inside
+//! [`THREE_PRIME`]/[`FIVE_PRIME`] that credits a gate with holding
+//! `guard_violations` at 0, was written against
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` as it stood
+//! through #1899: `DNA/delins.md:44-47`'s payload-coincidence carve-out reached
+//! **only** `c.`, so every guarded row here — which is drawn from the
+//! **frameless** axes, `g.` and non-coding multi-exon `n.` (`is_svd_wg010_shape`'s
+//! domain, `Genomic | NonCodingMultiExon`) — sat entirely outside the carve-out's
+//! reach. That is why `guard_violations` could be pinned at 0 as a genuine
+//! negative result: the mechanism that would have produced the rejected
+//! SVD-WG010 shape was, by construction, never in a position to run on these
+//! rows.
+//!
+//! **#2155 supersedes that ruling to all DNA axes.** `CoincidenceCarveOut::for_axis`
+//! now gates on `AxisFrame::is_dna` (`c./g./m./n.`) instead of the removed
+//! coding-DNA-only predicate (`c.` alone) — see `merge.rs`'s doc comment on
+//! `CoincidenceCarveOut` for the mechanism. The frameless axes this guard's rows
+//! live on are squarely inside `is_dna`'s domain, so the carve-out now reaches
+//! exactly the rows it used to be excluded from, and the guard fires:
+//!
+//! | direction | was (through #1899/#1610) | now (#2155) |
+//! |---|---|---|
+//! | 3' `guard_violations` | 0 | **12** |
+//! | 5' `guard_violations` | 0 | **12** |
+//!
+//! Measured over the same 210 guarded rows in both directions (the denominator
+//! is unmoved — the corpus's own shape, `guarded_rows: 210`, does not change).
+//! Every other counter in both censuses is byte-identical to its pre-#2155
+//! value, including `coding_axis_separation_two_or_more_merges` (5 / 5, unmoved
+//! — its domain is `CodingSingleExon | CodingMultiExon`, disjoint from this
+//! guard's `Genomic | NonCodingMultiExon`, so widening the carve-out to reach
+//! `g.`/`m.`/`n.` cannot move a counter whose rows are all `c.`).
+//!
+//! **This is NOT a repeat of the #1899 defect, and the pin is reframed rather
+//! than merely re-blessed.** The #1899 paragraph above describes an *accident*:
+//! a rule shipped axis-blind and re-admitted, on `g.`/`n.`, exactly the shape a
+//! sibling gate had just been scoped to exclude — a rank-1 regression, fixed by
+//! adding the missing gate. What #2155 does is different in kind: it is a
+//! **deliberate, operator-adjudicated widening** of the carve-out's own scope,
+//! decided on the same terms as the original scoping (`delins.md:47`'s
+//! simplicity ground is axis-neutral; the "incorrect protein-level predictions"
+//! ground that originally justified stopping at `c.` has nothing to bite on
+//! outside a reading frame either way). So the twelve rows per direction are not
+//! a gate someone forgot to wire — they are the intended, disclosed consequence
+//! of the ruling's own text, superseded in the same commit that widened the code.
+//!
+//! **Read as a rule-2 deviation, exactly as
+//! `coding-axis-merges-are-a-disclosed-general-34-deviation` already reads the
+//! `c.`-only case.** `general.md:33` / `DNA/delins.md:17` say a frameless
+//! separation of one nucleotide is described individually; merging it anyway is
+//! what the *rejected* SVD-WG010 proposal would have required
+//! (`consultation/SVD-WG010.md:8`). `separation-rule-force-modal-or-negation`
+//! (decided) is what makes that a deviation to **disclose and pin with a
+//! tripwire**, under README rule 6's "should" reading, rather than a rule-7 bug
+//! that blocks a release outright — the same classification the coding-axis
+//! ruling already uses. So this pin is not "0 of 210, a fault we do not have";
+//! it is "12 of 210, a disclosed house choice", and it carries the same
+//! obligation that ruling states in as many words: **a rise OR a fall from 12
+//! must name the clause or ruling that carried it**, not be waived or absorbed
+//! silently. A fall could mean the carve-out narrowed again, or that a row's
+//! irreducibility changed; a rise could mean the carve-out reached further
+//! still. Neither is assumed — re-derive it the way the `coding_axis_*` rises
+//! were re-derived above, by instrumenting and naming the rows.
+//!
+//! **`r.` stays excluded, on the same jurisdictional ground the ruling always
+//! stated** — "a `DNA/` clause has no jurisdiction over the RNA axis regardless
+//! of how widely the DNA scope itself is drawn" (`merge.rs`, `CoincidenceCarveOut`
+//! doc comment) — and `AxisFrame::is_dna` says so exhaustively:
+//! `CisKind::Rna => false`, with no wildcard arm, so a future `CisKind` variant
+//! is a compile error to decide rather than a silent default. Two things confirm
+//! it rather than merely asserting it:
+//!
+//! * **Structurally**, this corpus cannot even ask the question: `RefShape::all()`
+//!   has no RNA shape (`Genomic`, `CodingSingleExon`, `CodingMultiExon`,
+//!   `NonCodingMultiExon` — four variants, none of them `r.`), so 0 of the
+//!   58,552 spellings measured above are on the `r.` axis. That zero is
+//!   structural, exactly as `rna-axis-alignment-only-symbol-reach` records for
+//!   the same corpus's blindness to `r.` elsewhere — it is not evidence that
+//!   `r.` behaves correctly, only that this corpus cannot show it misbehaving.
+//! * **Directly**, `the_rna_axis_stays_split_under_the_widened_carve_out` below
+//!   takes a `NonCodingMultiExon` corpus row that actually merges under the
+//!   widened carve-out — a net-deletion pair separated by exactly one unchanged
+//!   base, where the payload happens to align with the reference — and
+//!   normalizes its own authored spelling re-prefixed `r.` on the SAME
+//!   provider. The `n.` spelling merges to one member; the `r.` twin, same
+//!   transcript and same positions, stays a multi-member allele. One input
+//!   pair, one provider, so the axis is the only thing that differs.
+//!
+//! # A sibling confluence gain, same cause, different population — not a guard row
+//!
+//! `guard_violations` is not the only counter this widening moves.
+//! `s00-n3m-m3-rot5-p4-sep1` and its `n3p` twin — a **three**-member
+//! non-coding design, `n.[36_39inv;41_44del;45_46insCCCA]` — diverged at 5'
+//! before #2155: four of their six equivalent spellings normalized to the
+//! fully authored split, the other two to a partially coalesced
+//! `n.[36_39inv;42_45delinsCCCA]`, because the coalescing pass that resolves
+//! that disagreement was still `c.`-only. Widening it to `n.` makes all six
+//! agree on the coalesced (still two-member) form, moving [`FIVE_PRIME`]'s
+//! `converged` 10,803 -> 10,805 and `split_two` 957 -> 955. **This is not a
+//! guard-violation row** — `is_svd_wg010_shape` requires exactly two authored
+//! members and this design has three, so it sits outside that guard's domain
+//! by construction (the same disjointness `is_coding_axis_separation_two_or_more_shape`
+//! already documents for its own counter). It is an ordinary rank-2 confluence
+//! gain in the direction the ratchet welcomes; 3' is unaffected, verified by
+//! diffing the full divergence-id list either side of the scoping change. See
+//! [`FIVE_PRIME`]'s own note on `split_two` for the measurement.
 //!
 //! # The honest-zero discipline is enforced, not described
 //!
@@ -915,6 +1033,13 @@ pub(crate) const THREE_PRIME: Census = Census {
     // returns `guard_violations` to 0 and leaves every counter in this block
     // where #1621 left it.
     //
+    // **#2155 SUPERSEDES the carve-out scope this paragraph rests on.** The
+    // ruling cited above is no longer `c.`-only — it now reaches every DNA axis,
+    // `g.`/`n.` included — so the gate this paragraph credits with returning
+    // `guard_violations` to 0 no longer excludes the frameless axes at all. See
+    // "`guard_violations` is reframed" below for the re-measured count and why
+    // this is a disclosed deviation rather than a repeat of the #1899 defect.
+    //
     // # #1650 — the 3'UTR extension of the sequence-first body, on top of #1835
     //           and #1610
     //
@@ -961,7 +1086,17 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `rulings[bare-transcript-intronic-position]`.
     prohibited_conditional_accepted: 16,
     // -- negative guards --
-    guard_violations: 0,
+    //
+    // #2155: 0 -> 12. `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+    // is superseded from `c.`-only to all DNA axes (`c./g./m./n.`), which puts
+    // this guard's own domain (the frameless `g.`/non-coding-multi-exon `n.`
+    // axes) inside the widened carve-out's reach for the first time. This is a
+    // DISCLOSED house deviation (README rule 6), not a fault: see the module
+    // docs' "`guard_violations` is reframed" section. Any further change to this
+    // figure, up or down, must name the clause or ruling that carried it —
+    // exactly the obligation `coding-axis-merges-are-a-disclosed-general-34-deviation`
+    // already states for its own counter below.
+    guard_violations: 12,
     // -- instruments --
     coding_axis_separation_two_or_more_rows: 997,
     // #1835: 0 -> 3. The three rows are named and adjudicated individually in
@@ -975,7 +1110,8 @@ pub(crate) const THREE_PRIME: Census = Census {
     // module docs' "#1610 adds 2" section. They are
     // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
     // coding DNA axis, which is why this instrument moves and `guard_violations`
-    // directly above stays 0.
+    // directly above is now 12 (#2155 moved it 0 -> 12); it was 0 when this note
+    // was first written.
     //
     // #1703: 5 -> 19. The 14 added rows are whole-span reverse complements the
     // decided `rulings[whole-span-reverse-complement-types-as-inv]` types as one
@@ -990,6 +1126,11 @@ pub(crate) const THREE_PRIME: Census = Census {
     // existing 5 are the two net-deletion families (`pair-del-sub` x2,
     // `pair-inv-del` x3), which are shorter than their span and so cannot be a
     // whole-span reverse complement — this pass does not reach them.
+    //
+    // #2155 does not move this counter: its domain
+    // (`CodingSingleExon | CodingMultiExon`) is disjoint from the widened
+    // carve-out's non-coding reach (`g.`/`m.`/`n.`), so it cannot touch a counter
+    // whose every row is `c.`. RE-MEASURE after rebase to confirm 19 holds.
     coding_axis_separation_two_or_more_merges: 19,
 };
 
@@ -1046,7 +1187,7 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // same reason stated there, and re-measured on each rebase rather than
     // composed — the move is the same 48 families it was on the pre-flip base,
     // with the same 22 + 26 + 0 breakdown.
-    converged: 10_803,
+    converged: 10_805,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -1084,7 +1225,28 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // every entry above records, and both move the same way. #1650 then moves
     // these on top of that, re-measured on the rebase: -22 and -26, with
     // `split_more` untouched.
-    split_two: 957,
+    //
+    // #2155: `converged` 10 803 -> 10 805, `split_two` 957 -> 955 — the SAME
+    // widened carve-out that produces `guard_violations`, on a DIFFERENT and
+    // disjoint population. `s00-n3m-m3-rot5-p4-sep1` and its `n3p` twin
+    // (`n.[36_39inv;41_44del;45_46insCCCA]`, a THREE-member design) diverged
+    // before this change: four of their six spellings normalized to the fully
+    // authored split, the other two to a partially coalesced
+    // `n.[36_39inv;42_45delinsCCCA]`, because the coalescing pass that resolves
+    // that difference was still `c.`-only. Widening it to `n.` makes all six
+    // spellings agree on the coalesced form. **This is not a guard-violation
+    // row**: `is_svd_wg010_shape` requires exactly two authored members and
+    // this design has three, so it is outside that guard's domain by
+    // construction — it is an ordinary rank-2 confluence gain, in the
+    // direction the ratchet welcomes, and needed no separate adjudication
+    // beyond naming the cause. Verified by diffing the full divergence-id list
+    // against the pre-#2155 scoping (the removed coding-DNA-only predicate, at
+    // all three `merge.rs` call sites `CoincidenceCarveOut::for_axis`,
+    // `payload_coalesce_applies` and `compensating_gap_coalesce_applies`
+    // gate): those two ids are the only ones removed, none added, and 3' is
+    // byte-identical on the same diff (its `THREE_PRIME` pins are untouched by
+    // this change).
+    split_two: 955,
     split_three: 98,
     split_more: 24,
     underdetermined: 0,
@@ -1096,7 +1258,11 @@ pub(crate) const FIVE_PRIME: Census = Census {
     prohibited_absolute_accepted: 0,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
     prohibited_conditional_accepted: 16,
-    guard_violations: 0,
+    // #2155: 0 -> 12, identically to 3' — see [`THREE_PRIME`]'s note on this
+    // field. The two directions moving by the same amount is the cross-check
+    // this pair of censuses exists for: the widened carve-out is not a property
+    // of one shuffle direction.
+    guard_violations: 12,
     coding_axis_separation_two_or_more_rows: 997,
     // #1835: 0 -> 3. The three rows are named and adjudicated individually in
     // the module docs' "The 3 are named and adjudicated" section; two are the
@@ -1109,7 +1275,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // module docs' "#1610 adds 2" section. They are
     // `split_is_a_placed_gap_coincidence`'s rows; that rule is gated to the
     // coding DNA axis, which is why this instrument moves and `guard_violations`
-    // directly above stays 0.
+    // directly above is now 12 (#2155 moved it 0 -> 12); it was 0 when this note
+    // was first written.
     //
     // #1703: 5 -> 19. The 14 added rows are whole-span reverse complements the
     // decided `rulings[whole-span-reverse-complement-types-as-inv]` types as one
@@ -1124,6 +1291,9 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // existing 5 are the two net-deletion families (`pair-del-sub` x2,
     // `pair-inv-del` x3), which are shorter than their span and so cannot be a
     // whole-span reverse complement — this pass does not reach them.
+    //
+    // #2155 does not move this counter — see [`THREE_PRIME`]'s identical note.
+    // RE-MEASURE after rebase to confirm 19 holds.
     coding_axis_separation_two_or_more_merges: 19,
 };
 
@@ -1204,11 +1374,11 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
             pinned.prohibited_conditional_accepted,
             "shapes a conditional clause prohibits that were accepted",
         ),
-        (
-            census.guard_violations,
-            pinned.guard_violations,
-            "outputs implementing REJECTED SVD-WG010",
-        ),
+        // `guard_violations` is deliberately NOT in this loop as of #2155 — see
+        // the dedicated assert below. Its rise is no longer automatically "a
+        // rank-1 conformance regression, not a representation choice"; folding
+        // it into this loop would keep asserting a framing that is no longer
+        // true.
     ] {
         assert!(
             measured_value <= pinned_value,
@@ -1217,6 +1387,32 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
             report(label, &measured)
         );
     }
+
+    // `guard_violations` is a DISCLOSED deviation as of #2155, not a fault: the
+    // frameless payload-coincidence carve-out this guard measures is now a
+    // named house choice under
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (superseded
+    // from `c.`-only to all DNA axes), not "ferro does not implement rejected
+    // SVD-WG010" — see the module docs' "`guard_violations` is reframed"
+    // section. So neither direction gets the generic loop's "rank-1
+    // regression" framing: a RISE is not automatically a fault, and — unlike
+    // every counter in that loop — a FALL is not automatically welcome either,
+    // since it could mean the carve-out narrowed in a way nobody decided. The
+    // obligation is symmetric: any move away from the pin, either way, must
+    // name the clause or ruling that carried it and re-pin in the same commit.
+    // `assert_eq!` both directions rather than `<=`, deliberately.
+    assert_eq!(
+        census.guard_violations,
+        pinned.guard_violations,
+        "{label}: outputs merging the rejected-SVD-WG010 shape on a frameless DNA axis moved \
+         from {} to {}. Read this WITH the module docs' \"`guard_violations` is reframed\" \
+         section before re-pinning either way: a rise or a fall must name the clause or ruling \
+         that carried it, and neither is to be waived or assumed correct from the number \
+         alone.\n{}",
+        pinned.guard_violations,
+        census.guard_violations,
+        report(label, &measured)
+    );
 
     // The instrument is checked apart from the loop above, because that loop's
     // message calls a rise a rank-1 conformance regression and this counter
@@ -1444,6 +1640,89 @@ fn every_family_denotes_one_sequence_independently_of_the_normalizer() {
         checked += 1;
     }
     assert!(checked > 0, "VACUOUS: no families were checked");
+}
+
+/// One payload-coincidence shape `guard_violations` fires on (#2155), taken
+/// directly from a corpus row rather than hand-built — `RefShape::all()` has
+/// no `r.` shape, so the corpus itself cannot ask this question, but a
+/// `RefShape::NonCodingMultiExon` row's provider is a real transcript, and the
+/// same transcript serves `r.` and `n.` identically when it carries no CDS
+/// (`cis_confluence_nr_axis.rs` establishes that equivalence over a much
+/// larger corpus: with no CDS, `r.` numbering is the plain transcript offset,
+/// same as `n.`). So the row's own authored `n.` spelling, re-prefixed `r.`,
+/// names the exact same edit on the exact same provider — the only thing that
+/// differs between the two assertions below is the axis.
+///
+/// See the module docs' "`guard_violations` is reframed" section for the wider
+/// argument; this is its direct half.
+#[test]
+fn the_rna_axis_stays_split_under_the_widened_carve_out() {
+    use ferro_hgvs::conformance::spec_corpus::RefShape;
+    use ferro_hgvs::{HgvsVariant, NormalizeConfig, Normalizer};
+
+    /// A parsed description's member count: an allele's own variants, or one.
+    /// Reads no reference, mirroring `case_harvest.rs`'s `member_count`.
+    fn member_count(description: &str) -> usize {
+        match parse_hgvs(description)
+            .unwrap_or_else(|e| panic!("{description} does not parse: {e}"))
+        {
+            HgvsVariant::Allele(allele) => allele.variants.len(),
+            _ => 1,
+        }
+    }
+
+    // Candidates only say a merge WOULD be a guard violation, not that the
+    // normalizer actually merges them — `s00-n3m-junction-1-sub-sub-p1-sep1`
+    // (two substitutions) is a candidate that stays split, because neither
+    // member is gap-bearing. So the row that actually demonstrates the guard is
+    // found by normalizing each candidate and taking the first that merges,
+    // exactly mirroring what the census's own `guard_violations` counter does.
+    let built = built();
+    let (row, n_output, normalizer) = built
+        .rows
+        .iter()
+        .filter(|row| {
+            matches!(row.shape, RefShape::NonCodingMultiExon(_)) && !row.negative_guards.is_empty()
+        })
+        .find_map(|row| {
+            let frame = row.frame();
+            let normalizer =
+                Normalizer::with_config(frame.provider().clone(), NormalizeConfig::default());
+            let n_input = parse_hgvs(row.authored_spelling()).ok()?;
+            let n_output = normalizer.normalize(&n_input).ok()?.to_string();
+            (member_count(&n_output) == 1).then_some((row, n_output, normalizer))
+        })
+        .expect(
+            "VACUOUS: no NonCodingMultiExon negative-guard candidate actually merges, so this \
+             test has no real transcript to build the r. twin from",
+        );
+
+    let (accession, n_body) = row
+        .authored_spelling()
+        .split_once(":n.")
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: authored spelling is not n. — {}",
+                row.id,
+                row.authored_spelling()
+            )
+        });
+
+    let r_description = format!("{accession}:r.{n_body}");
+    let r_input = parse_hgvs(&r_description)
+        .unwrap_or_else(|e| panic!("{r_description}: r. twin does not parse: {e}"));
+    let r_output = normalizer
+        .normalize(&r_input)
+        .expect("r. normalizes")
+        .to_string();
+    assert!(
+        member_count(&r_output) > 1,
+        "{}: its n. twin ({}) merged to {n_output}, but the r. twin of the same shape \
+         ({r_description}) must stay split — `DNA/delins.md:47` has no jurisdiction over the \
+         RNA axis regardless of how widely the DNA scope is drawn; got {r_output}",
+        row.id,
+        row.authored_spelling()
+    );
 }
 
 #[test]

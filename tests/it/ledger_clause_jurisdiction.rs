@@ -339,14 +339,44 @@ fn overreaches(records: &[Record]) -> Vec<Overreach> {
 /// row that stops being needed fails the test and must be deleted, so this
 /// cannot become a way of silencing the guard. Adding a row is a legitimate
 /// answer; doing it without a quoted sentence is not.
-const SCOPE_DISCLAIMERS: &[(&str, &str, &str)] = &[(
-    "projection-codon-exception-is-decided-by-the-rendered-axis",
-    "protein",
-    "its `SCOPE, STATED NARROWLY` paragraph reads \"The `p.` axis is the protein consequence \
-     itself.\" — the record's only `p.`, and a statement that the protein axis is out of scope \
-     rather than a ruling on it. The same paragraph disclaims `r.` and `n.` in the same breath; \
-     `r.` needs no row only because `general.md:44`'s quote names that axis",
-)];
+const SCOPE_DISCLAIMERS: &[(&str, &str, &str)] = &[
+    (
+        "projection-codon-exception-is-decided-by-the-rendered-axis",
+        "protein",
+        "its `SCOPE, STATED NARROWLY` paragraph reads \"The `p.` axis is the protein consequence \
+         itself.\" — the record's only `p.`, and a statement that the protein axis is out of scope \
+         rather than a ruling on it. The same paragraph disclaims `r.` and `n.` in the same breath; \
+         `r.` needs no row only because `general.md:44`'s quote names that axis",
+    ),
+    (
+        "delins-merge-vs-individual-gap-two-or-more",
+        "RNA",
+        "its 2026-08-17 (#2155) cross-reference paragraph reads \"That record originally scoped \
+         the axis question to `c.` alone (2026-08-11) and was WIDENED to every DNA axis — \
+         `c./g./m./n.`; `r.` still out — by operator ruling 2026-08-17 (#2155)\" — a statement \
+         that the RNA axis stays out of the (delegated) axis question, not a ruling on it",
+    ),
+    (
+        "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
+        "RNA",
+        "its widen paragraph reads \"`r.` stays OUT, on the same jurisdiction ground the \
+         2026-08-11 text already gives … a `DNA/` document has no authority over the RNA axis \
+         regardless of how widely its DNA-side scope is drawn, and `RNA/delins.md` states no \
+         `:47` counterpart of its own\" — a disclaimer, not a ruling on `r.`. The 2026-08-11 text \
+         it supersedes made the identical disclaimer (\"It rules on the coding DNA axis alone. It \
+         makes no ruling about the RNA axis…\") and its own WHAT DOES NOT MOVE paragraph repeats \
+         it a third time (\"`r.` moves nothing: `RefShape::all()` has no RNA shape\")",
+    ),
+    (
+        "unequal-length-block-a-placed-gap-is-not-a-separation",
+        "RNA",
+        "its 2026-08-17 (#2155) supersession paragraph reads \"The only axis this rule still \
+         declines is `r.`, on the same jurisdiction ground stated throughout this ledger's \
+         DNA-scoped records — a `DNA/` clause cannot scope the RNA axis regardless of how widely \
+         its DNA-side scope is drawn, and `RNA/delins.md` states no `:47` counterpart of its \
+         own\" — a disclaimer, not a ruling on `r.`",
+    ),
+];
 
 /// The disclaiming sentence for `(id, molecule)`, when the pair is listed.
 fn scope_disclaimer(id: &str, molecule: &str) -> Option<&'static str> {
