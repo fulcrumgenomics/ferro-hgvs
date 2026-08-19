@@ -4038,6 +4038,11 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         if compensating_gap_coalesce_applies(rule, kind) {
             coalesce_compensating_gap_split(pieces, &ref_bytes);
         }
+        // #2174: collapse a solid contiguous run into one spanning `delins`.
+        // Same scope as the sibling above (canonical arms, DNA axis).
+        if rule.cuts_with_canonical() && AxisFrame::is_dna(kind) {
+            coalesce_solid_run(pieces, &ref_bytes);
+        }
         // The whole-block rule generalised to every maximal run of consecutive
         // pieces, plus the flanked shape a whole-block test cannot express. Route 0
         // inside it is `coalesce_whole_block_inversion` verbatim, so this is
@@ -6716,6 +6721,71 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if let Some(whole) = whole_block_inversion(pieces, ref_bytes) {
         *pieces = vec![whole];
     }
+}
+
+/// Collapse a **solid** contiguous run into the single spanning `delins`
+/// `DNA/delins.md:16` recommends (#2174).
+///
+/// # The in-place boundary
+///
+/// `general.md:34` keeps two variants "separated by one or more nucleotides"
+/// individual, and the separator is an *unchanged* reference base. A base is a
+/// genuine separator only if it survives at its own coordinate — a **zero-shift
+/// fixed point**. The minimal-edit alignment of a balanced run (`GACT -> ACTG`)
+/// matches its interior bases only under a *compensating* del+ins shift, so those
+/// matches are an artefact of the alignment, not separators, and today the run
+/// fragments into `g.[11del;14_15insG]`. Position-wise pairing (column `i` of the
+/// reference against column `i` of the payload) is exactly the zero-shift view,
+/// and it is well defined only when the two sides are the same length — hence the
+/// equal-length gate.
+///
+/// A run whose changed columns form one contiguous block has **no** interior
+/// in-place fixed point between two changes, so it is one member. A gap in the
+/// changed columns is a real in-place separator and the run stays split.
+///
+/// It re-emits a `delins` over exactly the changed columns with the payload bases
+/// already present, so it denotes the same sequence by construction — a pure
+/// respelling.
+fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
+    if pieces.len() < 2 {
+        return;
+    }
+    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
+    if start >= end || end > reference.len() {
+        return;
+    }
+    let mut payload = Vec::new();
+    let mut cursor = start;
+    for piece in pieces.iter() {
+        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
+            return;
+        }
+        payload.extend_from_slice(&reference[cursor..piece.ref_start]);
+        payload.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    payload.extend_from_slice(&reference[cursor..end]);
+    let span = &reference[start..end];
+    // Position-wise (zero-shift) reading is defined only on an equal-length hull.
+    if payload.len() != span.len() {
+        return;
+    }
+    let changed: Vec<usize> = (0..span.len()).filter(|&i| span[i] != payload[i]).collect();
+    // Fewer than two changed columns is a lone substitution (or unchanged) — no
+    // run to collapse. A gap in the changed columns is a real in-place separator,
+    // so the members stay individual (`general.md:34`).
+    if changed.len() < 2 {
+        return;
+    }
+    let (lo, hi) = (changed[0], changed[changed.len() - 1]);
+    if hi - lo + 1 != changed.len() {
+        return;
+    }
+    *pieces = vec![Piece {
+        ref_start: start + lo,
+        ref_end: start + hi + 1,
+        alt: payload[lo..=hi].to_vec(),
+    }];
 }
 
 // ----------------------------------------------------------------------------
@@ -10636,6 +10706,10 @@ pub(crate) fn derive_block_members(
         }
         if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
             coalesce_compensating_gap_split(&mut pieces, reference);
+        }
+        // #2174: collapse a solid contiguous run into one spanning `delins`.
+        if AxisFrame::is_dna(kind) {
+            coalesce_solid_run(&mut pieces, reference);
         }
     }
 
