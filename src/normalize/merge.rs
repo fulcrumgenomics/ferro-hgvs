@@ -20952,9 +20952,21 @@ mod tests {
     /// nameable, with nothing to remember. A second hand-written list of arms is
     /// exactly the "positive arm list" failure
     /// [`PartitionRule::cuts_with_canonical`] documents.
+    ///
+    /// # The corpus is sliced, the arm list is not
+    ///
+    /// The net-insertion sweep is a million re-derivations and was one ~70s
+    /// test — over the SLOW threshold, and the wall of its shard in the
+    /// un-sharded coverage workflow. It is now an `rstest` parametrised over
+    /// [`NET_INSERTION_BLOCKS`] slices of the CORE space, so nextest runs the
+    /// blocks as separate processes that `--partition` can spread across shards.
+    /// The slicing is deliberately over cores and never over arms: every case
+    /// still sweeps every arm, so the invariant above holds unchanged, and
+    /// `the_core_blocks_tile_the_core_space` guards that the slices drop no row.
     #[cfg(test)]
     mod direction_symmetry {
         use rayon::prelude::*;
+        use rstest::rstest;
 
         use super::*;
 
@@ -20965,6 +20977,17 @@ mod tests {
         /// somewhere to roll — a core in unique flanks would pin every piece
         /// and make the corpus unable to express the defect at all.
         const PAD: &str = "ACGTACGTACGTACGTACGT";
+
+        /// How many CORE-space blocks the net-insertion sweep is sliced into.
+        ///
+        /// The sweep is 256 cores × 1024 payloads × every arm, ~70s in one
+        /// process; run whole it is past nextest's 60s SLOW threshold and, in
+        /// the un-sharded coverage workflow, the wall of the shard it lands in.
+        /// Slicing the CORE space into this many cases lets nextest run them as
+        /// separate processes and `--partition` spread them across shards.
+        /// Every case still sweeps every arm (see the module doc), so no arm is
+        /// hard-coded; only the corpus is divided.
+        const NET_INSERTION_BLOCKS: usize = 8;
 
         /// Every word of length `n` over the DNA alphabet, in a fixed order.
         fn words(n: usize) -> Vec<String> {
@@ -20982,77 +21005,42 @@ mod tests {
             out
         }
 
-        /// Every `core_len`-base core crossed with every `payload_len`-base
-        /// payload.
+        /// Run one partition arm over the `cores` × `payloads` grid, returning
+        /// the number of comparisons made and the direction disagreements found.
         ///
         /// **The shape is chosen because it is the one that reaches the
-        /// partitioner**, not because it is where the defect happened to be
-        /// found. A single spanning `delins` whose payload differs in length
-        /// from its span is handed to [`canonicalize_from_sequence`] as one
-        /// member and re-partitioned from the resulting sequence, which is the
-        /// function under test; a corpus of already-split alleles would mostly
-        /// be refused before reaching it.
+        /// partitioner**: a single spanning `delins` whose payload differs in
+        /// length from its span is handed to [`canonicalize_from_sequence`] as
+        /// one member and re-partitioned from the resulting sequence, which is
+        /// the function under test.
         ///
-        /// Cores are enumerated exhaustively rather than sampled. `payloads` is
-        /// built once and shared across every core rather than regenerated per
-        /// core.
-        fn cores_by_payloads(core_len: usize, payload_len: usize) -> Vec<(String, String)> {
-            let payloads = words(payload_len);
-            words(core_len)
-                .into_iter()
-                .flat_map(|core| {
-                    payloads
-                        .iter()
-                        .map(move |payload| (core.clone(), payload.clone()))
-                })
-                .collect()
-        }
-
-        /// Assert the re-derived member count is independent of shuffle
-        /// direction over `corpus`, on every partition arm this build
-        /// advertises. Shared by the net-insertion and net-deletion sweeps,
-        /// which differ only in their corpus, their comparison floor, and the
-        /// `what` label — the fan-out harness, the arm loop, and the two floors
-        /// are identical.
-        ///
-        /// The span is each row's core length, so the same helper serves a
-        /// net-insertion corpus (payload longer than core) and a net-deletion
-        /// one (payload shorter).
-        fn assert_direction_independent_member_count(
-            corpus: &[(String, String)],
-            min_comparisons: usize,
-            what: &str,
-        ) {
-            let lo = PAD.len() + 1;
-            let mut arms = 0usize;
-            let mut compared = 0usize;
-            let mut disagreements: Vec<String> = Vec::new();
-
-            // Parallel over the corpus x arms. Nothing is shared: each row builds
-            // its own `MockProvider`, so this is a pure fan-out and the corpus
-            // did not have to be sampled down to fit nextest's SLOW threshold.
-            //
-            // Each row yields `None` if it was skipped (equal payload/core, or an
-            // input that does not parse), `Some(None)` if it compared and the two
-            // directions agreed, or `Some(Some(msg))` if they disagreed.
-            for name in PARTITION_RULE_NAMES {
-                let rule = partition_rule_from_env(Some(name))
-                    .unwrap_or_else(|e| panic!("{name} is an arm this build has: {e}"));
-                arms += 1;
-
-                let rows: Vec<Option<Option<String>>> = corpus
-                    .par_iter()
-                    .map(|(core, payload)| {
+        /// Rayon parallelises over cores; the `MockProvider` depends only on the
+        /// core, so it is built once per core and reused across that core's
+        /// payloads (only read, never mutated, by the canonicaliser).
+        fn run_arm(
+            rule: PartitionRule,
+            arm_name: &str,
+            cores: &[String],
+            payloads: &[String],
+        ) -> (usize, Vec<String>) {
+            let base = PAD.len() + 1;
+            let per_core: Vec<(usize, Vec<String>)> = cores
+                .par_iter()
+                .map(|core| {
+                    let hi = base + core.len() - 1;
+                    let mut provider = MockProvider::new();
+                    provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
+                    let mut compared = 0usize;
+                    let mut disagreements = Vec::new();
+                    for payload in payloads {
                         if payload == core {
-                            return None;
+                            continue;
                         }
-                        let hi = lo + core.len() - 1;
-                        let mut provider = MockProvider::new();
-                        provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
-                        let input = format!("NC_TEST.1:g.{lo}_{hi}delins{payload}");
-                        let variant = parse_hgvs(&input).ok()?;
+                        let input = format!("NC_TEST.1:g.{base}_{hi}delins{payload}");
+                        let Ok(variant) = parse_hgvs(&input) else {
+                            continue;
+                        };
                         let members = [variant];
-
                         let three = canonicalize_from_sequence_with_rule(
                             &members,
                             AllelePhase::Cis,
@@ -21067,32 +21055,59 @@ mod tests {
                             ShuffleDirection::FivePrime,
                             rule,
                         );
-
+                        compared += 1;
                         // A row one direction re-derives and the other declines
                         // is a disagreement of the same kind, so the two `None`s
-                        // compare equal (agreed) rather than being skipped:
-                        // skipping them would let a change that made the pass
-                        // decline on one direction read as a clean run.
-                        let agreed = three.as_ref().map(Vec::len) == five.as_ref().map(Vec::len);
-                        Some(if agreed {
-                            None
-                        } else {
-                            Some(format!(
-                                "  FERRO_PARTITION={name} core={core} {input}\n    3': {}\n    \
+                        // compare equal (agreed): a change that made one direction
+                        // decline must not read as a clean run.
+                        if three.as_ref().map(Vec::len) != five.as_ref().map(Vec::len) {
+                            disagreements.push(format!(
+                                "  FERRO_PARTITION={arm_name} core={core} {input}\n    3': {}\n    \
                                  5': {}",
                                 describe(&three),
                                 describe(&five),
-                            ))
-                        })
-                    })
-                    .collect();
-
-                for row in rows.into_iter().flatten() {
-                    compared += 1;
-                    if let Some(msg) = row {
-                        disagreements.push(msg);
+                            ));
+                        }
                     }
-                }
+                    (compared, disagreements)
+                })
+                .collect();
+
+            let mut compared = 0usize;
+            let mut disagreements = Vec::new();
+            for (c, d) in per_core {
+                compared += c;
+                disagreements.extend(d);
+            }
+            (compared, disagreements)
+        }
+
+        /// Assert the re-derived member count is independent of shuffle
+        /// direction over `cores` × `payloads`, on **every** partition arm this
+        /// build advertises.
+        ///
+        /// The arms come from [`PARTITION_RULE_NAMES`] (see the module doc): the
+        /// callers slice the corpus, never the arm list, so a fifth arm is
+        /// measured the moment it is nameable. Shared by the net-insertion and
+        /// net-deletion sweeps, which differ only in their corpus, their
+        /// comparison floor, and the `what` label.
+        fn assert_all_arms(
+            cores: &[String],
+            payloads: &[String],
+            min_comparisons: usize,
+            what: &str,
+        ) {
+            let mut arms = 0usize;
+            let mut compared = 0usize;
+            let mut disagreements: Vec<String> = Vec::new();
+
+            for name in PARTITION_RULE_NAMES {
+                let rule = partition_rule_from_env(Some(name))
+                    .unwrap_or_else(|e| panic!("{name} is an arm this build has: {e}"));
+                arms += 1;
+                let (c, d) = run_arm(rule, name, cores, payloads);
+                compared += c;
+                disagreements.extend(d);
             }
 
             // A zero above is only a claim about what was measured. Both floors
@@ -21127,20 +21142,31 @@ mod tests {
             );
         }
 
-        /// Net-insertion: a 4-base span replaced by every 5-base payload.
+        /// Net-insertion: a 4-base span replaced by every 5-base payload, over a
+        /// [`NET_INSERTION_BLOCKS`]-way slice of the CORE space.
         ///
-        /// 256 cores x 1024 payloads x 4 arms is 1,048,576 re-derivations
-        /// (~68 s single-threaded, past nextest's 60 s SLOW threshold), so the
-        /// harness runs it in parallel. The rows that exhibited the defect on
-        /// the shipped default are 12 of the 256 cores, and no stride over them
+        /// The whole sweep is 256 cores × 1024 payloads × every arm =
+        /// 1,048,576 re-derivations (~70 s in one process, past nextest's 60 s
+        /// SLOW threshold). Slicing the CORE space — never the arm list, which
+        /// every case still sweeps in full — lets nextest run the blocks as
+        /// separate processes and `--partition` spread them across shards. No
+        /// row is dropped: [`the_core_blocks_tile_the_core_space`] asserts the
+        /// blocks tile all 256 cores, and the cores that exhibited the defect on
+        /// the shipped default are spread across blocks — no stride over them
         /// could have been justified after the fact.
-        #[test]
-        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm() {
-            assert_direction_independent_member_count(
-                &cores_by_payloads(4, 5),
-                4 * 250_000,
-                "net-insertion",
-            );
+        #[rstest]
+        fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm(
+            #[values(0, 1, 2, 3, 4, 5, 6, 7)] block: usize,
+        ) {
+            let cores = words(4);
+            let per = cores.len() / NET_INSERTION_BLOCKS;
+            let lo = block * per;
+            let slice = &cores[lo..lo + per];
+            let payloads = words(5);
+            // payload_len (5) != core_len (4), so nothing is skipped and every
+            // core × payload is a comparison; the 95% floor guards a collapse.
+            let floor = slice.len() * payloads.len() * PARTITION_RULE_NAMES.len() * 95 / 100;
+            assert_all_arms(slice, &payloads, floor, "net-insertion");
         }
 
         /// Net-deletion: a 4-base span replaced by every 3-base payload.
@@ -21148,14 +21174,31 @@ mod tests {
         /// The net-insertion corpus above never reaches
         /// [`place_direction_symmetrically`]'s `payload.len() < span.len()`
         /// branch — the very branch #2155's direction-symmetry fix acts on.
-        /// This exercises it. A smaller payload than the sibling keeps it well
-        /// under nextest's SLOW threshold.
+        /// This exercises it. At 256 cores × 64 payloads × 4 arms it is a
+        /// sixteenth the size, so it stays one case, well under the SLOW
+        /// threshold.
         #[test]
         fn the_member_count_does_not_depend_on_direction_for_a_net_deletion() {
-            assert_direction_independent_member_count(
-                &cores_by_payloads(4, 3),
-                4 * 16_000,
-                "net-deletion",
+            let cores = words(4);
+            let payloads = words(3);
+            assert_all_arms(&cores, &payloads, 4 * 16_000, "net-deletion");
+        }
+
+        /// The core blocks must tile the whole core space, or a slice silently
+        /// drops rows — the exact failure a sliced corpus invites.
+        #[test]
+        fn the_core_blocks_tile_the_core_space() {
+            let cores = words(4).len();
+            assert_eq!(
+                cores % NET_INSERTION_BLOCKS,
+                0,
+                "{NET_INSERTION_BLOCKS} blocks must tile all {cores} cores with none dropped"
+            );
+            // rstest's `#[values]` needs literals, so the block list on the
+            // sliced test is written out by hand; this pins it to the constant.
+            assert_eq!(
+                NET_INSERTION_BLOCKS, 8,
+                "update the #[values(0..)] list on the sliced test to match NET_INSERTION_BLOCKS"
             );
         }
 
