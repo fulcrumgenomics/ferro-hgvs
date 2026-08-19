@@ -11080,55 +11080,117 @@ pub(crate) fn derive_block_members(
         piece.ref_end += lo;
     }
 
-    // The 3' placement, bounded by the caller's window. NOT the
-    // reference-anchored shift `normalize` performs: `reference` is all the
-    // sequence this path has, so nothing may move outside it.
-    shift_pieces(&mut pieces, reference, direction);
-    coalesce_adjacent_pieces(&mut pieces);
-    shrink_pieces_to_differences(&mut pieces, reference);
-
-    // `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task 3c),
-    // run exactly as `canonicalize_from_sequence` runs it: same two gates
-    // (`payload_coalesce_applies`, `compensating_gap_coalesce_applies`), same
-    // order, against the same rule this surface is pinned to
-    // (`DERIVED_BLOCK_PARTITION_RULE`). Without this the derivation surface
-    // never ran the coalesce at all — see this function's own doc, corrected
-    // 2026-08-17 — so it fragmented exactly the block the normalization
-    // surface collapses, and #2155's headline reproduction (`from_sequences`)
-    // still showed the defect after the earlier tasks in this series widened
-    // only `canonicalize_from_sequence`'s call sites.
+    // The placement-and-coalesce chain, run as ONE unit in both shuffle
+    // directions and reconciled to the member-count-minimal result — exactly
+    // the shape `canonicalize_from_sequence_with_rule` runs at its own
+    // `place_direction_symmetrically` call. Each pass here matches the
+    // canonicalizer's order:
     //
-    // Gated on the template's axis, not unconditionally: `from_sequences`
-    // only ever builds a `Genome` or `Mt` template (`reference_template`
-    // refuses every other accession class), both squarely inside the widened
-    // DNA scope, so this reaches exactly `g.`/`m.`. `cis_kind_of` returning
-    // `None` (an axis this module does not serve at all) skips both passes,
-    // leaving the pre-existing pieces untouched — the same behaviour this
-    // surface always had before this change.
+    //  1. `shift_pieces` — the 3'/5' placement, bounded by the caller's window
+    //     (NOT the reference-anchored shift `normalize` performs: `reference` is
+    //     all the sequence this path has, so nothing may move outside it).
+    //  2. `coalesce_adjacent_pieces`, `shrink_pieces_to_differences`.
+    //  3. `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task
+    //     3c) — same two gates (`payload_coalesce_applies`,
+    //     `compensating_gap_coalesce_applies`), same order, against this
+    //     surface's pinned rule (`DERIVED_BLOCK_PARTITION_RULE`). Gated on the
+    //     template's axis: `from_sequences` only ever builds a `Genome`/`Mt`
+    //     template, so this reaches exactly `g.`/`m.`.
+    //  4. `coalesce_inversion_runs` (#2161 Path 1) — flanked/interior inversion
+    //     typing, ungated as in the canonicalizer, reading the ORIGINAL
+    //     trim-bounded block (`block_ref`/`block_alt`, direction-independent),
+    //     exactly as the canonicalizer passes `&ref_bytes[lo..hi_ref]` /
+    //     `&result[lo..hi_alt]`.
+    //
+    // # Why the whole chain is mirrored, not just the inversion pass
+    //
+    // A flanked inversion's `[del;dup]` fragmentation only aligns to the block
+    // under ONE of the two placements. Under the 3' shift the `dup` rolls one
+    // base past `hi_ref` into the trailing common run, and
+    // `coalesce_inversion_runs` cannot see a `revcomp` off a hull shifted off
+    // the block by even one base; under the 5' shift it stays in-block and the
+    // inversion types. `canonicalize_from_sequence` closes this by trying both
+    // directions and keeping the member-minimal (its own doc's worked example is
+    // `21_24delinsCATGC` → three members at 3', `22_24inv` at 5'); this surface
+    // shifted a SINGLE direction and so saw only the placement that hid the
+    // inversion. #1542's rule governs: the shuffle direction may move a member's
+    // placement, it may not change how many members there are.
+    //
+    // Mirroring the chain rather than adding the inversion pass ahead of the
+    // shift is load-bearing. Running the inversion typing before the payload
+    // merge types an `inv` where a small-separation sibling should have merged
+    // into a spanning `delins` first (`g.[13_17inv;19del]` → `g.13_19delins…`),
+    // which `place_direction_symmetrically` gets right for free: both directions
+    // merge identically, the member counts match, and the requested placement is
+    // kept without a spurious `inv`. Measured over the geometry corpus in
+    // `issue_2161_from_sequences_inversion_converge`, the mirror closes ~5,900
+    // flanked-inversion divergences and — unlike the before-shift call — opens
+    // none.
     //
     // The convergence this buys is pinned by
-    // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`:
-    // `from_sequences`'s output and `Normalizer::normalize`'s output agree,
-    // byte for byte, on this block. If a future edit moves this call out of
-    // step with `canonicalize_from_sequence`'s own order, that guard is what
-    // catches it.
-    if let Some(kind) = cis_kind_of(template) {
-        if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
-            coalesce_payload_alignment_split(&mut pieces, reference);
+    // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+    // (the payload half) and
+    // `issue_2161_from_sequences_inversion_converge` (the inversion half): both
+    // assert `from_sequences`'s output equals `Normalizer::normalize`'s on the
+    // affected block. If a future edit moves these passes out of step with
+    // `canonicalize_from_sequence`'s own order, those guards catch it.
+    let place_pieces = |pieces: &mut Vec<Piece>, direction: ShuffleDirection| {
+        shift_pieces(pieces, reference, direction);
+        coalesce_adjacent_pieces(pieces);
+        shrink_pieces_to_differences(pieces, reference);
+        if let Some(kind) = cis_kind_of(template) {
+            if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+                coalesce_payload_alignment_split(pieces, reference);
+            }
+            if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+                coalesce_compensating_gap_split(pieces, reference);
+            }
         }
-        if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
-            coalesce_compensating_gap_split(&mut pieces, reference);
-        }
-        // #2175 then #2174: peel a tandem dup abutting a change, then collapse
-        // the residual solid run into one `delins`. Same scope as the sibling at
+        coalesce_inversion_runs(pieces, reference, lo, block_ref, block_alt);
+        // Re-close any flush-adjacent (separation-zero) split
+        // `coalesce_inversion_runs` opened. Its flanked route reads a
+        // net-deletion delins `block_inversion` finds a reverse-complement
+        // inside — e.g. `g.13_15delinsTC` on `GAT` — and returns it as
+        // `[13_14inv;15del]`, two members abutting at separation zero. But
+        // `delins-adjacent-members-when-both-consume-reference` governs that
+        // shape: two adjacent members both consuming reference bases are one
+        // `delins`, so the split is not the canonical form —
+        // `Normalizer::normalize` re-merges it (measured:
+        // `normalize(g.[13_14inv;15del]) == g.13_15delinsTC`). The derivation
+        // surface must reach the same fixed point, so `coalesce_adjacent_pieces`
+        // (the `delins.md:16` enforcement point) runs once more here, after the
+        // inversion pass rather than only before it. A genuinely flanked
+        // inversion — one separated from its sibling by an unchanged base, like
+        // `g.[14del;21_23inv]` — is NOT flush-adjacent and is left as the `inv`.
+        // Without this re-close the geometry corpus regresses ~520
+        // separation-zero rows from `delins` to a split `inv`; with it, none.
+        coalesce_adjacent_pieces(pieces);
+        shrink_pieces_to_differences(pieces, reference);
+        // #2175 then #2174: peel a tandem dup abutting a change, then collapse the
+        // residual solid run into one `delins`. Same scope as the sibling at
         // `canonicalize_from_sequence`, minus its `rule.cuts_with_canonical()`
         // conjunct: this path has no `FERRO_PARTITION` rule to consult — it is the
         // canonical derivation itself — so the DNA-axis gate is the whole of it.
-        if AxisFrame::is_dna(kind) {
-            peel_tandem_dup_beside_change(&mut pieces, reference);
-            coalesce_solid_run(&mut pieces, reference);
+        //
+        // Ordered LAST — after the inversion re-close above — and this is where the
+        // derivation surface deliberately departs from `canonicalize_from_sequence`
+        // (which peels before the inversion pass and has no trailing
+        // `coalesce_adjacent_pieces`). Peel manufactures a `dup` from the reference
+        // tandem and leaves it flush against the abutting change, so any
+        // `coalesce_adjacent_pieces` running after it re-merges the two back into
+        // one `delins` — which `duplication-must-ranks-the-label-not-the-partition`
+        // says to keep as the `dup`. Placing peel after the inversion re-close is
+        // the only order on this surface where both survive: the flanked inversion
+        // is closed and the tandem dup is kept (#2175 /
+        // issue_2175_dup_abutting_change, plus the #2161 inversion corpus).
+        if let Some(kind) = cis_kind_of(template) {
+            if AxisFrame::is_dna(kind) {
+                peel_tandem_dup_beside_change(pieces, reference);
+                coalesce_solid_run(pieces, reference);
+            }
         }
-    }
+    };
+    place_direction_symmetrically(&mut pieces, direction, place_pieces);
 
     // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
     // interbase 0 from the one window where the anchor genuinely does not exist.
