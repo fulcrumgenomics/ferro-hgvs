@@ -6764,7 +6764,13 @@ fn block_hull_and_payload(pieces: &[Piece], reference: &[u8]) -> Option<(usize, 
 /// construction — the pure-dup payload with one base restored to what the input
 /// denotes.
 fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
-    if pieces.len() < 2 {
+    // A duplication abutting a change reaches this pass in either of two shapes:
+    // spread across several insertions (`[27_28insC;28_29insC]`), or already
+    // collapsed into one net-insertion `delins` (`g.15delinsAGA` for the
+    // `AG[2]->AG[3]` + sub case). Both re-derive to `[dup; change]`, so a single
+    // piece is admitted; `block_hull_and_payload` still rejects a pure insertion
+    // (zero-width hull) and the `k == 0` gate rejects a lone substitution.
+    if pieces.is_empty() {
         return;
     }
     let Some((hs, he, hull_payload)) = block_hull_and_payload(pieces, reference) else {
@@ -6778,6 +6784,25 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
     // pure function of the reference (never of the input's spelling or of the
     // block cut), so widening to it preserves confluence. The window flanks are
     // unchanged reference, so the widened payload denotes the same sequence.
+    //
+    // The widening adds the SAME unchanged reference flanks to both `span` and
+    // `payload`, so it cannot change the net unit length `k`. Compute `k` from
+    // the hull and reject the common non-dup block on the cheap floor BEFORE
+    // paying for the two `O(TANDEM_TRACT_SCAN_CAP²)` tract scans. A duplication
+    // only adds bases, so the payload must be longer than the hull by `k`. A
+    // net-zero or net-deletion block (`k == 0`, or the `checked_sub` underflow)
+    // is not this shape and is left for the solid-run and gap passes — which is
+    // exactly what keeps the equal-length #2174 runs out of here. Only a
+    // MULTI-BASE tandem unit is peeled, the same floor `coalesce_solid_run`
+    // uses: a single-base expansion abutting a change (`k == 1`) is the
+    // shift-anchor artifact #2174-B keeps as one `delins`, and admitting it here
+    // would re-split a lone `delins` into a spurious `[sub; 1-base dup]`.
+    let Some(k) = hull_payload.len().checked_sub(he - hs) else {
+        return;
+    };
+    if k < 2 {
+        return;
+    }
     let ws = tandem_tract_start(reference, hs);
     let we = tandem_tract_end(reference, he);
     let span = &reference[ws..we];
@@ -6785,15 +6810,9 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
     payload.extend_from_slice(&reference[ws..hs]);
     payload.extend_from_slice(&hull_payload);
     payload.extend_from_slice(&reference[he..we]);
-    // A duplication only adds bases, so the payload must be longer than the span
-    // by the unit length `k`. A net-zero or net-deletion block (`k == 0`, or the
-    // `checked_sub` underflow) is not this shape and is left for the solid-run
-    // and gap passes — which is exactly what keeps the equal-length #2174 runs
-    // out of here.
-    let Some(k) = payload.len().checked_sub(span.len()) else {
-        return;
-    };
-    if k == 0 || k > span.len() {
+    // The widened flanks are equal-length on both sides, so `payload.len() -
+    // span.len()` is still `k`; the upper gate is against the WIDENED span.
+    if k > span.len() {
         return;
     }
     // 3'-most first: the largest insertion point that yields a clean dup + one sub.
@@ -6809,13 +6828,23 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
                 span[i - k]
             }
         };
-        let mismatches: Vec<usize> = (0..payload.len())
-            .filter(|&i| payload[i] != pure_dup(i))
-            .collect();
-        if mismatches.len() != 1 {
-            continue;
+        // Exactly one mismatch is wanted, so stop at the second: the common
+        // hypothesis (a payload mismatching `pure_dup` in dozens of columns)
+        // fails early instead of scanning and allocating the whole payload.
+        let mut only: Option<usize> = None;
+        let mut too_many = false;
+        for (i, &base) in payload.iter().enumerate() {
+            if base == pure_dup(i) {
+                continue;
+            }
+            if only.replace(i).is_some() {
+                too_many = true;
+                break;
+            }
         }
-        let m = mismatches[0];
+        let Some(m) = only.filter(|_| !too_many) else {
+            continue;
+        };
         // A mismatch inside the inserted copy means the copy is not a clean
         // duplication of `unit`; reject this hypothesis.
         if m >= insert && m < insert + k {
