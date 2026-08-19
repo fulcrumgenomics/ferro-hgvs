@@ -133,8 +133,31 @@ jobs:
           # Absence of a bulk fixture fails the run rather than skipping it.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
+          # Skip the heavy census/confluence tests here. They run the whole spec
+          # corpus through the normalizer and dominate the coverage wall (~13 min
+          # -> ~5-6 min without them), but they add almost NO unique coverage: a
+          # controlled two-pass llvm-cov diff on `origin/main` measured them
+          # covering just 514 lines nothing else reaches, 502 of which are the
+          # census harness itself (`src/conformance/census.rs`), and ~15 lines of
+          # shipped normalizer/reference code (13 in `src/normalize/`, 2 in
+          # `src/reference/`). Net coverage drops ~0.34 pp (83.79% -> 83.45%)
+          # because the normalization machinery they exercise is already covered
+          # by the hundreds of targeted regression tests. Their VALUE is their
+          # aggregate confluence/conformance assertions, which gate in the
+          # required `censuses` job (~106 s, optimized, un-instrumented) — this
+          # only drops re-counting their line execution under instrumentation.
+          #
+          # This census carve set is deliberately NOT ci.yml's CENSUS_FILTER: that
+          # filter routes modules to the optimized `censuses` archive and names
+          # normalize_axis_preserving / clinvar_hgvs_tests /
+          # issue_1542_direction_symmetry; this one drops the corpus-heavy
+          # census/confluence tests from the *instrumented* run for wall time and
+          # adds cis_confluence_* (which CENSUS_FILTER omits). Nothing cross-checks
+          # the two lists — keep them in mind together.
           cargo llvm-cov --no-report nextest --features dev \
-            --partition hash:${{ matrix.shard }}/4
+            --partition hash:${{ matrix.shard }}/4 \
+            -E 'not (test(conformance_census_runs) or test(spec_conformance_axis)
+                     or test(cis_confluence_axis) or test(cis_confluence_nr_axis))'
           cargo llvm-cov report --codecov --output-path codecov.json
           cargo llvm-cov report --html --output-dir coverage
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
