@@ -723,7 +723,7 @@ fn retype_inversions(members: &mut [HgvsVariant], reference: &[u8], w_lo: i64) {
 /// **It is not one of the four seam oracles, and it is not a substitute for
 /// them.** Those run from `Normalizer::assert_seam_oracles`, at the single exit
 /// of `normalize_core_checked`, which only
-/// [`crate::Normalizer::from_sequences`] with `normalize = true` reaches — the
+/// [`crate::Normalizer::from_sequences`] with `recommended_form = true` reaches — the
 /// free functions and [`crate::SequencePair::derive`] hold no provider and so
 /// cannot reach it at all. In particular this shares
 /// [`super::merge::apply_edits_to_window`] with the derivation it is checking,
@@ -1093,7 +1093,7 @@ mod tests {
     /// The 5' mirror: under 5'-shuffle the same deletion rolls to the window's
     /// 5' edge instead, so `bounded_at_start` alone fires. This is the side a
     /// window pinned to base 1 has permanently, and the reason
-    /// `sequence_normalize` reads the two flags apart.
+    /// `rederive` reads the two flags apart.
     #[test]
     fn a_deletion_at_the_five_prime_edge_flags_only_that_side() {
         let d = from_sequences_detailed(
@@ -1166,7 +1166,7 @@ mod tests {
     /// suffix `CATATG`), so there is no following delins to absorb it, and the
     /// leading base is not itself rewritten — the span-form escape does not
     /// apply. The base-1-rewriting span form is covered in the
-    /// `sequence_normalize` integration suite, which drives this same path.
+    /// `rederive` integration suite, which drives this same path.
     #[test]
     fn a_lone_contig_start_insertion_still_refuses() {
         let err = from_sequences(

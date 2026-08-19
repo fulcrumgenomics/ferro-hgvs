@@ -398,7 +398,7 @@ def test_the_method_takes_no_direction_of_its_own():
 
 
 def test_post_normalizing_is_available_and_is_a_no_op_here(normalizer):
-    """``normalize=False`` is the ordinary posture. On measured material the flag
+    """``recommended_form=False`` is the ordinary posture. On measured material the flag
     is a no-op **on these rows** — a 6,000-shape sweep found it moves 8.6% of
     derived descriptions overall, so this is a property of the rows below and
     never of the surface. On them a derived description is a fixed point of ``normalize``
@@ -408,9 +408,30 @@ def test_post_normalizing_is_available_and_is_a_no_op_here(normalizer):
     pair = normalizer.to_sequences(normalizer.parse("TEMPLATE:n.13del"), pad=16)
     plain = normalizer.from_sequences(pair.accession, pair.position, pair.reference, pair.alternate)
     normalized = normalizer.from_sequences(
-        pair.accession, pair.position, pair.reference, pair.alternate, normalize=True
+        pair.accession, pair.position, pair.reference, pair.alternate, recommended_form=True
     )
     assert str(normalized) == str(plain)
+
+
+def test_recommended_form_true_reaches_the_normalizer(normalizer):
+    """``recommended_form`` must be threaded through, not accepted and dropped.
+
+    The no-op above proves nothing about the flag's routing — that row's
+    derivation is already a fixed point of ``normalize``, so a binding that
+    silently dropped ``recommended_form`` would pass it just as well. This
+    input is chosen so the two flag values disagree: `SEQUENCE`'s position 3
+    is a lone `A` (position 4 is `T`), so inserting three more `A`s there
+    derives, unnormalized, as a literal ``ins`` — repeat-notation collapse is
+    a `normalize` (rule 2) pass that `from_sequences`'s own derivation never
+    performs (see `from_sequences.rs`'s `retype_inversions` docs, which name
+    this exact shape as still un-typed there). If the keyword were ignored,
+    the ``recommended_form=True`` call would return the same string as the
+    plain one and this assertion would fail.
+    """
+    plain = normalizer.from_sequences("TEMPLATE", 3, "A", "AAAA")
+    normalized = normalizer.from_sequences("TEMPLATE", 3, "A", "AAAA", recommended_form=True)
+    assert str(plain) == "TEMPLATE:g.3_4insAAA"
+    assert str(normalized) == "TEMPLATE:g.3A[4]"
 
 
 def test_the_method_rejects_a_zero_grid_budget(normalizer):

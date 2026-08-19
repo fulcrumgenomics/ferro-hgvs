@@ -559,7 +559,7 @@ fn the_reference_anchored_paths_already_converge() {
         .collect();
 
     for (label, answers) in [
-        ("normalize=true", &normalized),
+        ("recommended_form=true", &normalized),
         ("to_sequences", &round_tripped),
     ] {
         assert!(

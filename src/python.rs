@@ -1832,7 +1832,7 @@ fn from_sequences_options(
 /// need the reference, **recommended form** and **confluent**. So an output may
 /// be 3'-shiftable further than a window-local function could shift it, which
 /// is not a defect. Run `Normalizer.normalize` afterwards if you want it, or
-/// `Normalizer.from_sequences(..., normalize=True)` to do both in one call.
+/// `Normalizer.from_sequences(..., recommended_form=True)` to do both in one call.
 ///
 /// Args:
 ///     accession: The sequence the window is on. A transcript or protein
@@ -2241,7 +2241,7 @@ impl PyNormalizer {
     ///
     /// **Not the tool for making heterogeneous inputs agree in general.** That
     /// is already available and better: `Normalizer.from_sequences(...,
-    /// normalize=True)`, or a round trip through `to_sequences`. Both reach the
+    /// recommended_form=True)`, or a round trip through `to_sequences`. Both reach the
     /// reference-anchored placement, which shifts as far as the sequence allows
     /// rather than as far as a chosen window allows. Anchoring to a window that
     /// cuts an ambiguous run makes every caller using that window agree with
@@ -2302,13 +2302,15 @@ impl PyNormalizer {
     ///     reference: The reference bases over the window.
     ///     alternate: The observed bases over the same window.
     ///     max_grid_cells: As the free function.
-    ///     normalize: Normalize the derived description before returning it.
-    ///         Defaults to False, but prefer True unless you have a reason not
-    ///         to: over a 6,000-shape sweep `normalize` moved 8.6% of derived
-    ///         descriptions (repeat notation, reference-anchored member
-    ///         re-derivation, and inversions spread across several members).
-    ///         All three are the recommended-form and confluence rules this
-    ///         design assigns to `normalize`, so False still yields a
+    ///     recommended_form: Route the derived description through `normalize`
+    ///         to reach ferro's recommended, reference-anchored form before
+    ///         returning it. Defaults to False, but prefer True unless you have
+    ///         a reason not to: in an internal sweep of many synthetic shapes
+    ///         `normalize` moved a meaningful share of derived descriptions
+    ///         (repeat notation, reference-anchored
+    ///         member re-derivation, and inversions spread across several
+    ///         members). All three are the recommended-form and confluence rules
+    ///         this design assigns to `normalize`, so False still yields a
     ///         conformant, deterministic description.
     ///
     /// Returns:
@@ -2321,15 +2323,15 @@ impl PyNormalizer {
     ///     NormalizationError: everything else, including the two refusals this
     ///         method adds over the free function: an unknown accession, and an
     ///         interval running past the end of the sequence. Plus any refusal
-    ///         from `normalize` when `normalize=True`.
+    ///         from `normalize` when `recommended_form=True`.
     ///
     /// Those last two were documented as `ReferenceDataError` until 2026-08-12
     /// and never raised it — see `reanchor` for why this file maps a per-call
     /// failure to the method's own class rather than dispatching on the
     /// `FerroError` variant.
-    #[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, normalize=false))]
+    #[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, recommended_form=false))]
     #[pyo3(
-        text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, normalize=False)"
+        text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, recommended_form=False)"
     )]
     // `wrong_self_convention`: the name is the point. It matches
     // `ferro_hgvs.from_sequences`, the free function it is the reference-holding
@@ -2350,7 +2352,7 @@ impl PyNormalizer {
         reference: &str,
         alternate: &str,
         max_grid_cells: Option<usize>,
-        normalize: bool,
+        recommended_form: bool,
     ) -> PyResult<PyHgvsVariant> {
         let options = from_sequences_options(max_grid_cells, self.config.shuffle_direction)?;
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
@@ -2363,7 +2365,12 @@ impl PyNormalizer {
         );
         py.detach(|| {
             normalizer.from_sequences(
-                &accession, position, &reference, &alternate, &options, normalize,
+                &accession,
+                position,
+                &reference,
+                &alternate,
+                &options,
+                recommended_form,
             )
         })
         .map(|inner| PyHgvsVariant { inner })
@@ -2373,13 +2380,20 @@ impl PyNormalizer {
     /// Re-derive a description from the bases it denotes: the "one canonical
     /// description per variant" round trip, as a single call.
     ///
+    /// Prefer this over `normalize` when the input's spelling should carry no
+    /// weight — it expresses the variant as its denoted bases and re-derives a
+    /// description from those alone, so two spellings of one variant reach one
+    /// result (confluence). `normalize` shifts and re-spells the *given*
+    /// description across every axis; `rederive` re-derives from the sequence
+    /// and so is genomic-only (`g.`, and `m.` on the two rCRS accessions).
+    ///
     /// Args:
     ///     description: The HGVS description to re-derive. Its axis must be one
     ///         `from_sequences` emits — genomic `g.` (and `m.` on the two rCRS
     ///         mitochondrial accessions); any other is refused.
     ///     max_grid_cells: As `from_sequences`.
-    ///     normalize: Route the derived description through `normalize` before
-    ///         returning it. Defaults to False, which yields the
+    ///     recommended_form: Route the re-derived description through `normalize`
+    ///         before returning it. Defaults to False, which yields the
     ///         alignment-derived form (conformant + deterministic) rather than
     ///         ferro's recommended form. Set True for the recommended,
     ///         reference-anchored form.
@@ -2395,17 +2409,17 @@ impl PyNormalizer {
     ///         `max_grid_cells`, or a placement still resting on the edge of the
     ///         widest window the loop reads (a repeat tract whose shift depends
     ///         on how much reference is read). Plus any refusal from `normalize`
-    ///         when `normalize=True`. A refusal that a wider window would answer
+    ///         when `recommended_form=True`. A refusal that a wider window would answer
     ///         — the pure insertion anchoring 5' of the window — is retried by
     ///         the loop rather than raised.
-    #[pyo3(signature = (description, *, max_grid_cells=None, normalize=false))]
-    #[pyo3(text_signature = "(description, *, max_grid_cells=None, normalize=False)")]
-    fn sequence_normalize(
+    #[pyo3(signature = (description, *, max_grid_cells=None, recommended_form=false))]
+    #[pyo3(text_signature = "(description, *, max_grid_cells=None, recommended_form=False)")]
+    fn rederive(
         &self,
         py: Python<'_>,
         description: &str,
         max_grid_cells: Option<usize>,
-        normalize: bool,
+        recommended_form: bool,
     ) -> PyResult<String> {
         // Parsed before detaching, as in `normalize`: it touches no reference,
         // so it keeps the `ParseError` mapping a plain `?` rather than threading
@@ -2414,7 +2428,7 @@ impl PyNormalizer {
             .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
         let options = from_sequences_options(max_grid_cells, self.config.shuffle_direction)?;
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
-        py.detach(|| normalizer.sequence_normalize(&variant, &options, normalize))
+        py.detach(|| normalizer.rederive(&variant, &options, recommended_form))
             .map(|inner| inner.to_string())
             .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
     }

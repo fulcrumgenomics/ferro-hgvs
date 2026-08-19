@@ -1,7 +1,7 @@
-//! `Normalizer::sequence_normalize`: the "one canonical description per variant"
+//! `Normalizer::rederive`: the "one canonical description per variant"
 //! round trip, and its per-side widening loop.
 //!
-//! `sequence_normalize` expresses a variant as a padded reference/alternate
+//! `rederive` expresses a variant as a padded reference/alternate
 //! window (`to_sequences`), derives a description from those bases alone
 //! (`from_sequences`), and — while a member still rests on a window edge that
 //! can still move — doubles the pad and retries. Two spellings of one variant
@@ -13,7 +13,7 @@
 //! against an edge that cannot move.
 //!
 //! Every test builds a genomic `JsonProvider` over one synthetic contig, since
-//! `sequence_normalize` reads the reference (unlike the free `from_sequences`).
+//! `rederive` reads the reference (unlike the free `from_sequences`).
 
 use ferro_hgvs::{parse_hgvs, FromSequencesOptions, JsonProvider, Normalizer, ShuffleDirection};
 use std::io::Write;
@@ -35,17 +35,17 @@ fn provider(seq: &str) -> JsonProvider {
     JsonProvider::from_json(f.path()).unwrap()
 }
 
-/// Run `sequence_normalize` over a parsed description, returning the string.
+/// Run `rederive` over a parsed description, returning the string.
 fn seqnorm(
     nz: &Normalizer<JsonProvider>,
     desc: &str,
     direction: ShuffleDirection,
-    normalize: bool,
+    recommended_form: bool,
 ) -> String {
     let variant = parse_hgvs(desc).unwrap_or_else(|e| panic!("parse {desc}: {e}"));
     let options = FromSequencesOptions::default().with_direction(direction);
-    nz.sequence_normalize(&variant, &options, normalize)
-        .unwrap_or_else(|e| panic!("sequence_normalize {desc}: {e}"))
+    nz.rederive(&variant, &options, recommended_form)
+        .unwrap_or_else(|e| panic!("rederive {desc}: {e}"))
         .to_string()
 }
 
@@ -177,18 +177,39 @@ fn a_multi_substitution_anchored_at_position_one_normalizes() {
     }
 }
 
-/// `normalize = true` routes the derived description through `normalize`. For a
-/// placement already at its 3'-most, reference-anchored base that is a no-op, so
-/// the result matches the `normalize = false` derivation — what this pins is
-/// that the routing runs without error and returns the same settled variant.
+/// `recommended_form = true` routes the derived description through
+/// `normalize`, and the two flag values must disagree here or this proves
+/// nothing about the routing. A lone reference `A` immediately upstream of an
+/// insertion of three more `A`s derives, unnormalized, as a literal `ins`:
+/// repeat-notation collapse is a `normalize` (rule 2) pass that
+/// `from_sequences`'s own derivation never performs (see
+/// `from_sequences.rs`'s `retype_inversions` docs, which name this exact shape
+/// as still un-typed there). So `recommended_form = false` must derive the
+/// literal insertion and `recommended_form = true` must collapse it to repeat
+/// notation — if the flag were silently dropped, the second assertion would
+/// see the first string instead and fail.
 #[test]
-fn normalize_true_routes_through_normalize() {
-    let seq = format!("GCTAGCTAGC{}GCTAGCTAGCTA", "A".repeat(300));
+fn recommended_form_true_routes_through_normalize() {
+    let seq = "GCTAGC".to_string() + "A" + "TCGATC"; // a lone 'A' at position 7, 'T' at 8
     let nz = Normalizer::new(provider(&seq));
 
     assert_eq!(
-        seqnorm(&nz, "NC_TEST.1:g.11del", ShuffleDirection::ThreePrime, true),
-        "NC_TEST.1:g.310del",
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.7_8insAAA",
+            ShuffleDirection::ThreePrime,
+            false
+        ),
+        "NC_TEST.1:g.7_8insAAA",
+    );
+    assert_eq!(
+        seqnorm(
+            &nz,
+            "NC_TEST.1:g.7_8insAAA",
+            ShuffleDirection::ThreePrime,
+            true
+        ),
+        "NC_TEST.1:g.7A[4]",
     );
 }
 
@@ -207,7 +228,7 @@ fn an_unbounded_interior_tract_is_declined() {
     let variant = parse_hgvs("NC_TEST.1:g.15del").unwrap();
     let options = FromSequencesOptions::default().with_direction(ShuffleDirection::ThreePrime);
     let err = nz
-        .sequence_normalize(&variant, &options, false)
+        .rederive(&variant, &options, false)
         .expect_err("an unbounded interior tract must be declined");
     let msg = err.to_string();
     assert!(
@@ -217,7 +238,7 @@ fn an_unbounded_interior_tract_is_declined() {
 }
 
 /// A reference-span insertion (`ins{start}_{end}`) names its inserted bases by
-/// position in the same reference rather than spelling them. `sequence_normalize`
+/// position in the same reference rather than spelling them. `rederive`
 /// reads the reference, so it must resolve those bases and re-derive the literal
 /// description — closing the gap where a range insert was refused as "not a
 /// literal sequence".
@@ -267,7 +288,7 @@ fn an_inverted_reference_span_insertion_resolves_to_the_reverse_complement() {
 
 /// An exact tandem-repeat insertion (`ins{unit}[{n}]`) names its inserted bases
 /// by a spelled unit and an exact copy count rather than writing them out.
-/// `sequence_normalize` resolves the bases, so it must expand the unit `n` times
+/// `rederive` resolves the bases, so it must expand the unit `n` times
 /// and re-derive the literal description — closing the gap where an exact repeat
 /// insert was refused as "not a literal sequence".
 #[test]

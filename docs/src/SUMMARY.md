@@ -11,6 +11,7 @@
 # Guides
 
 - [Normalize variants](guide/normalize-variants.md)
+- [Normalize or rederive?](guide/normalize-or-rederive.md)
 - [Project to another axis](guide/project-variants.md)
 - [Deriving a description from sequences](guide/deriving-from-sequences.md)
 - [Reference data](guide/reference-data.md)
