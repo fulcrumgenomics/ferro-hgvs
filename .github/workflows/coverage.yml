@@ -133,8 +133,14 @@ jobs:
           # Absence of a bulk fixture fails the run rather than skipping it.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
+          # EXPERIMENT (isolated carve-out, no profile change): skip the heavy
+          # census/confluence tests, which measure ~90% of the coverage wall and
+          # exercise normalization paths hundreds of cheaper tests also cover.
+          # The report still instruments those source files, so the codecov delta
+          # vs `main` is exactly the coverage those tests contributed uniquely.
           cargo llvm-cov --no-report nextest --features dev \
-            --partition hash:${{ matrix.shard }}/4
+            --partition hash:${{ matrix.shard }}/4 \
+            -E 'not (test(conformance_census_runs) or test(spec_conformance_axis) or test(cis_confluence))'
           cargo llvm-cov report --codecov --output-path codecov.json
           cargo llvm-cov report --html --output-dir coverage
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
