@@ -394,13 +394,13 @@ fn the_discriminator_is_the_cds_boundary_and_not_the_transcript_end() {
 /// [`the_input_that_taught_us_this_test_can_be_vacuous`] keeps the finding and pins
 /// the new value rather than loosening to fit it.
 ///
-/// **The trap it recorded has not gone away; it has moved to the side of the CDS
-/// this change deliberately does not reach.** `ExtendedBody`'s fold is one-sided —
-/// 3'UTR only, `c.-N` left to #1816 — so on the CDS-start side the shared-affix trim
-/// is still the only thing that can move a straddling member, and "untrimmable
-/// therefore declines" still holds there.
-/// [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`] is where that is
-/// now anchored, and it is the test to read before choosing an input for this one.
+/// **The trap it recorded was on the CDS-start side, until #1816 closed that too.**
+/// `ExtendedBody`'s fold was one-sided — 3'UTR only, `c.-N` left to #1816 — so on
+/// the CDS-start side the shared-affix trim was once the only thing that could move
+/// a straddling member. #1816's 5'UTR arm removed that asymmetry, so both sides now
+/// derive from the sequence;
+/// [`a_cds_start_straddle_now_derives_from_the_sequence`] pins the CDS-start side,
+/// and it is the test to read alongside this one.
 ///
 /// `c.20_*4delinsG` does reach it. `ref` is `GCTTA` and the payload `G`, so the
 /// trim eats the one CDS-side base and leaves `c.*1_*4del` — wholly in the 3'UTR,
@@ -542,12 +542,12 @@ fn the_recursion_emits_no_stale_clamp_warning() {
 ///
 /// Verified by mutation rather than asserted: with the extension forced off
 /// (`ExtendedBody::OFF` in `canonicalize_from_sequence_with_rule`) this input goes
-/// straight back to being preserved and this test fails, while
-/// [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`] stays green — which
-/// is what says the two rows are on opposite sides of the one-sided fold.
+/// straight back to being preserved and this test fails.
 ///
-/// The vacuity trap this test used to hold survives on the CDS-start side, and is
-/// re-anchored by [`a_cds_start_straddle_is_the_surviving_untrimmable_decline`].
+/// #1816 has since extended the same fold to the 5'UTR, so the CDS-start side is no
+/// longer the surviving decline this note once pointed at:
+/// [`a_cds_start_straddle_now_derives_from_the_sequence`] is its post-fold form —
+/// the mirror of this test rather than its complement.
 #[test]
 fn the_input_that_taught_us_this_test_can_be_vacuous() {
     let provider = transcript_provider(WIDE_CORE, 11, 30);
@@ -569,126 +569,115 @@ fn the_input_that_taught_us_this_test_can_be_vacuous() {
     }
 }
 
-/// The vacuity trap, re-anchored on the side of the CDS this change does not reach.
+/// The 5'UTR mirror of [`the_input_that_taught_us_this_test_can_be_vacuous`]:
+/// once #1816 extends the sequence-first fold to the 5'UTR, a `delins` straddling
+/// `cds_start` is partitioned from the bases across the boundary instead of being
+/// handed back.
 ///
-/// [`the_input_that_taught_us_this_test_can_be_vacuous`] used to hold this role and
-/// cannot any more: its input now derives a three-member split. The trap itself is
-/// unchanged — a straddling `delins` that the sequence-first derivation cannot reach
-/// and whose affix trim removes nothing comes back exactly as authored, so an
-/// `once == twice` assertion on it is satisfied by the decline rather than by the
-/// recursion — so it needs an input the derivation still cannot reach.
+/// This test used to assert the opposite — that such a straddle was the
+/// *surviving untrimmable decline*, because `merge::ExtendedBody`'s fold was
+/// 3'UTR only and across `cds_start` the #1651 shared-affix trim was the sole
+/// mechanism that could move a straddling member, so "untrimmable therefore
+/// declines" held. #1816's 5'UTR fold ([`unfold_extended_body`]'s `FivePrimeUtr`
+/// arm, `cross-zone-c-positions-order-by-transcript-coordinate`) removes that
+/// asymmetry: the derivation reaches a footprint crossing `cds_start` exactly as
+/// it reaches one crossing `cds_end`.
 ///
-/// **`merge::ExtendedBody`'s fold is deliberately one-sided**, 3'UTR only: `c.-N`
-/// would need the window origin itself to move, which changes behaviour for every
-/// CDS-start-adjacent variant, and #1650 leaves it to #1816 with its own
-/// measurement. So across `cds_start` the shared-affix trim in the #1651 carve-out
-/// is still the *only* mechanism that can move a straddling member, and the property
-/// the marker above recorded holds there exactly: preserved if and only if
-/// untrimmable.
+/// `c.-4_4delinsCC` is the mirror of the 3'UTR `c.20_*7delinsCC`: it derives to
+/// `c.[-3_-1del;2_4del]`, two deletion members on OPPOSITE sides of `cds_start`
+/// with `c.1` unchanged between them. That interior gap is the proof the
+/// sequence-first partition ran — the affix trim can only remove shared ends, it
+/// can never split one member into two around an unchanged interior base.
 ///
-/// That biconditional is what is asserted, over every straddling placement this
-/// fixture admits, rather than a count taken elsewhere and quoted here. Both classes
-/// are asserted non-empty, so a generator change that stopped producing either one
-/// cannot pass as a result.
-///
-/// **It has exactly one exception and the exception is excluded by name, not by
-/// shrinking the corpus around it.** A whole-span reverse complement is re-typed
-/// `delins` -> `inv` by the per-member single-span typing, which is region-blind and
-/// is the mechanism the module docs above spend their first section separating from
-/// #1536; on this fixture it is `c.-1_1delinsGA` over `TC`. Nothing else in the
-/// enumeration disagrees.
-///
-/// **Both named rows are asserted, in both directions, so this cannot go vacuous the
-/// way its predecessor did.** `c.-1_2delinsGG` shares neither affix with its
-/// reference `TCA` and must stand still; `c.-1_2delinsTG` shares its first base, so
-/// the trim eats it, the member stops straddling and it must move. A build in which
-/// the carve-out had stopped running altogether would satisfy the first assertion and
-/// fail the second.
-///
-/// When #1816 extends the fold to the 5'UTR this test is what will go red, and that
-/// is its point: the 3'UTR half of the same statement moved silently enough to sit in
-/// a committed pin for two review rounds.
+/// The whole class is then checked for the one property that must hold over every
+/// placement: normalization is meaning-preserving. Each non-`inv` straddle's
+/// output is applied to the reference with the independent applier
+/// (`cis_apply_oracle`, not the normalizer) and must denote exactly the bases its
+/// input does — a wrong coordinate in the fold would change the denoted sequence
+/// and be caught here. `changed > 0` keeps it from passing vacuously on a fold
+/// that declined everything, the way its decline-form predecessor could.
 #[test]
-fn a_cds_start_straddle_is_the_surviving_untrimmable_decline() {
+fn a_cds_start_straddle_now_derives_from_the_sequence() {
+    use crate::common::cis_apply_oracle::apply_with;
     let provider = transcript_provider(WIDE_CORE, 11, 30);
 
-    // `c.-1`..`c.2` is transcript 10..=12 under `CDS 11..=30`. Read off the bases
-    // rather than trusted from the constant, for the same reason
-    // `the_payload_is_the_exact_reverse_complement_of_the_block` is its own test.
-    assert_eq!(&WIDE_CORE[9..12], "TCA");
-    let declined = "NM_TEST.1:c.-1_2delinsGG";
-    let trimmed = "NM_TEST.1:c.-1_2delinsTG";
+    // The mirror of the 3'UTR `c.20_*7delinsCC -> c.[20del;*2_*4del;*6_*7del]`: a
+    // straddle across `cds_start` derives to a boundary-crossing split, `c.1`
+    // unchanged between the two members — a shape the affix trim alone cannot make.
     for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
         assert_eq!(
-            normalize(&provider, declined, direction),
-            declined,
-            "`TCA` and `GG` share neither affix, so the trim removes nothing, the \
-             member comes back on the footprint it arrived on, and the recursion never \
-             runs — which is what makes an idempotency assertion on it vacuous"
-        );
-        assert_eq!(
-            normalize(&provider, trimmed, direction),
-            "NM_TEST.1:c.1_2delinsG",
-            "`TCA` and `TG` share a prefix, so the trim eats it and the member stops \
-             straddling — without this the assertion above would be satisfied by a \
-             carve-out that had stopped running at all"
+            normalize(&provider, "NM_TEST.1:c.-4_4delinsCC", direction),
+            "NM_TEST.1:c.[-3_-1del;2_4del]",
+            "the 5'UTR fold partitions this straddling delins across `cds_start`"
         );
     }
 
-    // The property those two rows are instances of, over every placement across
-    // `cds_start` this fixture admits: preserved iff untrimmable. The contrast with
-    // `cds_end` is stated by the test above, which pins one row there that breaks it;
-    // it is not re-derived here.
-    let mut counterexamples = Vec::new();
-    let (mut untrimmable_rows, mut trimmable_rows) = (0usize, 0usize);
+    // The two rows the decline form pinned, at their post-fold values. The first
+    // is now the sequence-canonical single straddling `delins` (a clean 3->2 net
+    // deletion with no interior coincidence to split), emitted as the derived
+    // answer rather than handed back as a decline; the second still trims its
+    // shared `T` prefix and shuffles wholly into the CDS. `c.-1`..`c.2` is
+    // transcript 10..=12 under `CDS 11..=30`, read off the bases below.
+    assert_eq!(&WIDE_CORE[9..12], "TCA");
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, "NM_TEST.1:c.-1_2delinsGG", direction),
+            "NM_TEST.1:c.-1_2delinsGG",
+            "`TCA` -> `GG` has no interior unchanged base, so its canonical form is \
+             the single straddling `delins` — now the derived answer, not a decline"
+        );
+        assert_eq!(
+            normalize(&provider, "NM_TEST.1:c.-1_2delinsTG", direction),
+            "NM_TEST.1:c.1_2delinsG",
+            "`TCA` -> `TG` shares a `T` prefix; the trim eats it, the member stops \
+             straddling, and it shuffles inside the CDS"
+        );
+    }
+
+    // The property that must hold over EVERY non-`inv` straddle placement across
+    // `cds_start`: the output denotes exactly the bases the input does. A whole-
+    // span reverse complement is excluded by name — it re-types `delins` -> `inv`
+    // through the region-blind per-member typing, a separate mechanism
+    // (`c.-1_1delinsGA -> c.-1_1inv` on this fixture).
+    let mut checked = 0usize;
+    let mut changed = 0usize;
+    let mut violations = Vec::new();
     for start in 1..=10i64 {
         for end in 11..=30i64 {
             let reference = &WIDE_CORE[(start - 1) as usize..end as usize];
             let s = cds_spelling(start, 11, 30);
             let e = cds_spelling(end, 11, 30);
             for payload in one_and_two_base_payloads() {
-                // The one mechanism beside the trim that moves a straddling member,
-                // excluded by name rather than by narrowing the corpus until it
-                // vanished. A whole-span reverse complement is re-typed `delins` ->
-                // `inv` by the per-member single-span typing, which is region-blind
-                // — the module docs above disentangle exactly that from #1536, with
-                // `c.*1_*8delinsACCGTAAG -> c.*1_*8inv` as the disproof. Here it is
-                // `c.-1_1delinsGA` over `TC`, the only placement on this fixture the
-                // biconditional below does not hold for.
                 if payload == reverse_complement(reference) {
                     continue;
                 }
-                let untrimmable = reference.as_bytes()[0] != payload.as_bytes()[0]
-                    && reference.as_bytes()[reference.len() - 1]
-                        != payload.as_bytes()[payload.len() - 1];
-                if untrimmable {
-                    untrimmable_rows += 1;
-                } else {
-                    trimmable_rows += 1;
-                }
                 let input = format!("NM_TEST.1:c.{s}_{e}delins{payload}");
-                let preserved = normalize(&provider, &input, ShuffleDirection::ThreePrime) == input;
-                if preserved != untrimmable {
-                    counterexamples.push(format!(
-                        "  {input} (ref {reference}): untrimmable={untrimmable} \
-                         preserved={preserved}"
+                let output = normalize(&provider, &input, ShuffleDirection::ThreePrime);
+                checked += 1;
+                if output != input {
+                    changed += 1;
+                }
+                let denoted_in = apply_with(&provider, WIDE_CORE, &input);
+                let denoted_out = apply_with(&provider, WIDE_CORE, &output);
+                if denoted_in.is_none() || denoted_in != denoted_out {
+                    violations.push(format!(
+                        "  {input} -> {output} (in {denoted_in:?}, out {denoted_out:?})"
                     ));
                 }
             }
         }
     }
     assert!(
-        untrimmable_rows > 0 && trimmable_rows > 0,
-        "both classes must be populated, or the biconditional below is `0 of 0`: \
-         untrimmable={untrimmable_rows} trimmable={trimmable_rows}"
+        changed > 0,
+        "the 5'UTR fold must move at least some straddle, or this is a decline test \
+         wearing a convergence test's clothes: checked={checked} changed={changed}"
     );
     assert!(
-        counterexamples.is_empty(),
-        "across `cds_start` the shared-affix trim is the only mechanism that can move \
-         a straddling member, so preserved and untrimmable must agree on every \
-         placement. {} disagree:\n{}",
-        counterexamples.len(),
-        counterexamples.join("\n")
+        violations.is_empty(),
+        "every straddle output must denote exactly its input's bases; {} of {checked} \
+         do not:\n{}",
+        violations.len(),
+        violations.join("\n")
     );
 }
 
@@ -748,6 +737,45 @@ fn a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
         assert_eq!(
             from_allele, inv,
             "the multi-member spelling must reach the c.13_*4inv the ruling makes canonical"
+        );
+    }
+}
+
+/// The 5'UTR mirror of
+/// [`a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary`]:
+/// a multi-member spelling straddling `cds_start` converges with its `inv`
+/// spelling once #1816 extends the sequence-first fold to the 5'UTR.
+///
+/// `c.[-3_-1delinsCTG;1_3delinsATC]` and `c.-3_3inv` denote one variant — the
+/// whole-span reverse complement of `GATCAG` at transcript 8..=13 under
+/// `CDS 11..=26` (both apply to `...CCTGATCG...`, checked with the independent
+/// applier). The SINGLE-BLOCK spellings already converge on `c.-3_3inv` via the
+/// region-blind per-member `inv` typing, exactly as on the 3'UTR side. The
+/// MULTI-MEMBER spelling was left split for the mirror-image reason #2186's 3'UTR
+/// half addressed: [`unfold_extended_body`] produced no `FivePrimeUtr` endpoint,
+/// so `render_on_its_own_region` could not build an anchor straddling `cds_start`.
+/// #1816's 5'UTR fold makes the merged block's endpoints expressible across the
+/// boundary; the group merges and the whole-span reverse complement types as one
+/// `inv`. Its 3'UTR twin
+/// [`a_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary`]
+/// is the control on the far side of the CDS.
+#[test]
+fn a_five_prime_multi_member_spelling_converges_with_its_inv_spelling_across_a_boundary() {
+    let provider = transcript_provider(WIDE_CORE, 11, 26);
+    let allele = "NM_TEST.1:c.[-3_-1delinsCTG;1_3delinsATC]";
+    let inv = "NM_TEST.1:c.-3_3inv";
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        let from_allele = normalize(&provider, allele, direction);
+        assert_eq!(
+            from_allele,
+            normalize(&provider, inv, direction),
+            "{allele} and {inv} denote one variant and must converge"
+        );
+        // Pin the exact canonical, not only the convergence: a mutation making
+        // both spellings equal but wrong would satisfy the check above on its own.
+        assert_eq!(
+            from_allele, inv,
+            "the multi-member spelling must reach the c.-3_3inv the ruling makes canonical"
         );
     }
 }
@@ -853,6 +881,43 @@ fn the_same_pair_one_codon_earlier_still_merges() {
         "NM_TEST.1:c.16_18delinsGGA",
         "inside the CDS the same pair is `general.md:35`'s exception and merges"
     );
+}
+
+/// The 5'UTR mirror of `a_pair_whose_triplet_reaches_past_the_stop_codon_stays_two_members`,
+/// and — unlike that sibling — a **real** sabotage check, not a defensive one.
+///
+/// #1816's 5'UTR fold makes `merge::apply_coding_codon_exception` reachable at the
+/// CDS-*start* seam. A substitution pair separated by one nucleotide whose triplet
+/// straddles `cds_start` is now admitted (the group derives from the sequence
+/// rather than being refused), so the codon-eligibility check runs on it. Measured
+/// with the guard instrumented: the triplet arrives at internal `triplet_start == 0`
+/// with `within_cds` true, and `same_codon(0, 2)` returns `false` on its `< 1`
+/// guard — so the pair correctly stays two members.
+///
+/// **That `same_codon` lower-bound guard is load-bearing here, and this test proves
+/// it.** With the `< 1` guard removed, `same_codon` computes `(0 - 1) / 3 == (2 - 1)
+/// / 3` → `0 == 0` → `true`, and this exact pair wrongly merges to
+/// `c.-2_1delinsGTA` — applying `general.md:35`'s "together affecting one amino
+/// acid" exception to a codon that does not exist, since `c.-2` is 5'UTR and carries
+/// no reading frame. This is the sabotage check the 3' sibling's doc-comment says
+/// the line is owed "the moment some other change makes the line reachable"; #1816's
+/// 5' fold is that change. (`within_cds`, the 3' upper guard, remains defensive —
+/// this test does not reach or demonstrate it.)
+#[test]
+fn a_pair_whose_triplet_straddles_the_cds_start_stays_two_members() {
+    let provider = transcript_provider(WIDE_CORE, 11, 26);
+    // c.-2 = tx9, c.-1 = tx10 (the unchanged middle base), c.1 = tx11: the triplet
+    // crosses `cds_start`, so `general.md:34` governs and the members stay individual.
+    let split = "NM_TEST.1:c.[-2A>G;1C>A]";
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, split, direction),
+            split,
+            "a substitution pair whose triplet straddles `cds_start` affects no single \
+             amino acid (the 5'UTR carries no reading frame), so `general.md:34` governs \
+             and the members stay individual"
+        );
+    }
 }
 
 /// The live control for the `#[ignore]`d
