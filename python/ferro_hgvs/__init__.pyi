@@ -1879,6 +1879,37 @@ class BatchProcessor:
         """
         ...
 
+    def parse_and_rederive(
+        self,
+        variants: list[str],
+        *,
+        max_grid_cells: int | None = None,
+        recommended_form: bool = False,
+        workers: int = 0,
+    ) -> BatchResult:
+        """Parse and re-derive multiple HGVS strings in parallel (GIL released).
+
+        The batch, parallel counterpart of `Normalizer.rederive`: each variant is
+        expressed as the bases it denotes and one canonical description is derived
+        from those bases, so two spellings of one variant converge. This is a
+        different operation from `parse_and_normalize` (which 3'-shifts the input's
+        spelling), mirroring how `Normalizer.rederive` differs from
+        `Normalizer.normalize`. The returned BatchResult preserves input order
+        regardless of the worker count.
+
+        Args:
+            variants: HGVS strings to parse and re-derive.
+            max_grid_cells: Largest alignment grid, in cells (as
+                `Normalizer.rederive`). None uses the default.
+            recommended_form: When True, also apply `normalize`'s recommended-form
+                rules to each re-derived description.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+
+        Raises:
+            ValueError: for a `max_grid_cells` of 0.
+        """
+        ...
+
     def parse_streaming(self, variants: Iterable[str], workers: int = 0) -> BatchStream:
         """Parse an iterable of HGVS strings lazily, yielding results in input order.
 

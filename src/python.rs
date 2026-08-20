@@ -4974,6 +4974,61 @@ impl PyBatchProcessor {
         PyBatchResult { inner }
     }
 
+    /// Parse and *re-derive* multiple HGVS strings — the batch, parallel
+    /// counterpart of `Normalizer.rederive`.
+    ///
+    /// Re-derivation expresses each variant as the bases it denotes and derives
+    /// one canonical description from those bases, so two spellings of one
+    /// variant converge. It is a different operation from `parse_and_normalize`
+    /// (which 3'-shifts the input's spelling) exactly as `Normalizer.rederive`
+    /// differs from `Normalizer.normalize`. This is the entry point to use when
+    /// re-deriving a large corpus: it makes one Python->Rust call, releases the
+    /// GIL for the whole batch, and scales across cores. Results are returned in
+    /// input order.
+    ///
+    /// Args:
+    ///     variants: List of HGVS strings to parse and re-derive.
+    ///     max_grid_cells: Largest alignment grid, in cells, the partitioner
+    ///         will build (as `Normalizer.rederive` / `from_sequences`). None
+    ///         uses the default.
+    ///     recommended_form: When True, also apply `normalize`'s recommended-form
+    ///         rules to each re-derived description.
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
+    ///
+    /// Returns:
+    ///     BatchResult with re-derived variants and errors.
+    ///
+    /// Raises:
+    ///     ValueError: for a `max_grid_cells` of 0, matching `Normalizer.rederive`.
+    #[pyo3(signature = (variants, *, max_grid_cells=None, recommended_form=false, workers=0))]
+    fn parse_and_rederive(
+        &self,
+        py: Python<'_>,
+        variants: Vec<String>,
+        max_grid_cells: Option<usize>,
+        recommended_form: bool,
+        workers: usize,
+    ) -> PyResult<PyBatchResult> {
+        // Reject a zero grid up front, as the single `rederive` does via
+        // `from_sequences_options`, so the batch path raises the same ValueError
+        // rather than silently substituting the default inside the fan-out.
+        if max_grid_cells == Some(0) {
+            return Err(PyValueError::new_err(
+                "max_grid_cells must be positive; 0 admits no alignment grid at all",
+            ));
+        }
+        let inner = py.detach(|| {
+            self.processor.parse_and_rederive_parallel(
+                &variants,
+                max_grid_cells,
+                recommended_form,
+                workers,
+            )
+        });
+        Ok(PyBatchResult { inner })
+    }
+
     /// Parse an *iterable* of HGVS strings, yielding results lazily (#975).
     ///
     /// The streaming counterpart to `parse`. Use it when the input does not fit
