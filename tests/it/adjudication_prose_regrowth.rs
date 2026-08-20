@@ -94,11 +94,12 @@
 //!   attributed to their enclosing item, which is parsing rather than reading.
 //! * **The pointer test is "does this block name a record id", not "does it name
 //!   the *right* record".** Relevance is a judgement; membership is checkable.
-//! * **Quoting a claim in order to withdraw it still flags.** That is why
-//!   `issue_1284_transcript_axis_collision.rs` is on the exemption list rather
-//!   than being a bug in the detector — it quotes the withdrawn claim verbatim,
-//!   which is the right way to record a withdrawal and reads identically to
-//!   asserting it.
+//! * **Quoting a claim in order to withdraw it still flags.** That was why
+//!   `issue_1284_transcript_axis_collision.rs` once held the only
+//!   [`REGROWTH_EXEMPT`] row — it quoted a withdrawn claim verbatim, which reads
+//!   identically to asserting it. #2174 reinstated the spanning form that block
+//!   described, so it was rewritten to cite the ruling record directly and the
+//!   exemption list is now empty; the mechanism it illustrates still holds.
 //!
 //! # Siblings, and the gap between them
 //!
@@ -171,14 +172,14 @@ const ADJUDICATION_PHRASES: &[&str] = &[
 /// Keyed by **file**, not by line, so an unrelated edit above a site does not
 /// invalidate the row — a line-keyed list would go stale on every rebase and be
 /// deleted for being noisy rather than for being wrong.
-const REGROWTH_EXEMPT: &[(&str, &str)] = &[(
-    "tests/it/issue_1284_transcript_axis_collision.rs",
-    "quotes the withdrawn claim verbatim in order to withdraw it — the block \
-     reads \"an intermediate revision of this branch read that as …\" and then \
-     states the refutation. Recording a withdrawal by reproducing what was \
-     withdrawn is the right shape, and it is indistinguishable to a substring \
-     scan from asserting it",
-)];
+// Empty as of #2174/#2175 (2026-08-19): the sole entry,
+// `issue_1284_transcript_axis_collision.rs`, quoted the withdrawn spanning-form
+// claim in order to withdraw it. #2174's supersession of
+// `unchanged-is-read-over-every-minimal-alignment` reinstates that spanning
+// form, so the block was rewritten to cite the record directly and no longer
+// needs the exemption. The list is shrink-only; keep it empty until a genuinely
+// unrecordable adjudication-shaped block arises.
+const REGROWTH_EXEMPT: &[(&str, &str)] = &[];
 
 /// Every `.rs` file under `src/` and `tests/`, repo-relative.
 ///

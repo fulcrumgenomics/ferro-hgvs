@@ -300,6 +300,20 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     // reproduction — see
     // `issue_1430_is_measured_by_a_property_not_by_an_expected_output`.
     MstoIssue { number: 1430, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "an_all_survivor_payload_is_not_an_alignment_artifact"), ("src/normalize/merge.rs", "the_coalesce_pass_reaches_the_spec_worked_example"), ("src/normalize/seqfirst/partition.rs", "canonical_members_claim_exactly_the_blocks_edit_distance"), ("src/normalize/seqfirst/partition.rs", "canonical_members_rebuild_the_alternate_block"), ("src/normalize/seqfirst/partition.rs", "round_trips_exhaustively_over_a_small_alphabet"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged")], note: None },
+    // Filed 2026-08-16..19 — the over-fragmentation campaign. #2155 (closed) is the
+    // from_sequences/normalize payload-coincidence collapse; #2174 and #2175 are the open
+    // high-priority follow-ups (contiguous-run del+ins / del+dup fragmentation, and a tandem
+    // dup destroyed when it abuts a change). #2156-#2159 are reported_partition_verdicts
+    // adjudication/hygiene follow-ups — no test cites them by number, low priority.
+    // fragmentation_corpus is the shared #2155/#2174/#2175 reprex corpus, attributed to all
+    // three via its module doc.
+    MstoIssue { number: 2155, high: true,  state: State::Closed, tests: &[("tests/it/issue_2155_from_sequences_collapse.rs", "the_genomic_axis_collapses_to_the_single_spanning_delins"), ("tests/it/issue_2155_from_sequences_collapse.rs", "the_mitochondrial_axis_collapses_to_the_single_spanning_delins"), ("tests/it/issue_2155_from_sequences_collapse.rs", "from_sequences_converges_with_normalize_on_the_same_block"), ("tests/python/test_issue_2155_delins_collapse.py", "test_normalize_collapses_a_genomic_payload_coincidence_change"), ("tests/python/test_issue_2155_delins_collapse.py", "test_from_sequences_collapses_the_same_change"), ("tests/python/test_issue_2155_delins_collapse.py", "test_both_entry_points_agree"), ("tests/it/fragmentation_corpus.rs", "every_case_derives_its_pinned_from_sequences_form"), ("tests/it/fragmentation_corpus.rs", "every_case_normalizes_to_its_pinned_form"), ("tests/it/fragmentation_corpus.rs", "the_reached_censuses_hold"), ("tests/it/fragmentation_corpus.rs", "the_two_surfaces_agree_on_the_shapes_the_guard_touches"), ("tests/it/fragmentation_corpus.rs", "every_spelling_of_a_variant_converges")], note: None },
+    MstoIssue { number: 2156, high: false, state: State::Open,   tests: &[], note: None },
+    MstoIssue { number: 2157, high: false, state: State::Open,   tests: &[], note: None },
+    MstoIssue { number: 2158, high: false, state: State::Open,   tests: &[], note: None },
+    MstoIssue { number: 2159, high: false, state: State::Open,   tests: &[], note: None },
+    MstoIssue { number: 2174, high: true,  state: State::Open,   tests: &[("tests/it/issue_2174_contiguous_run_delins.rs", "a_contiguous_equal_length_run_collapses_to_one_delins"), ("tests/it/issue_2174_contiguous_run_delins.rs", "a_del_dup_shift_anchor_collapses_to_one_delins"), ("tests/it/fragmentation_corpus.rs", "every_case_derives_its_pinned_from_sequences_form"), ("tests/it/fragmentation_corpus.rs", "every_case_normalizes_to_its_pinned_form"), ("tests/it/fragmentation_corpus.rs", "the_reached_censuses_hold"), ("tests/it/fragmentation_corpus.rs", "the_two_surfaces_agree_on_the_shapes_the_guard_touches"), ("tests/it/fragmentation_corpus.rs", "every_spelling_of_a_variant_converges")], note: None },
+    MstoIssue { number: 2175, high: true,  state: State::Open,   tests: &[("tests/it/issue_2175_dup_abutting_change.rs", "an_isolated_tandem_expansion_is_a_dup"), ("tests/it/issue_2175_dup_abutting_change.rs", "a_tandem_expansion_abutting_a_substitution_keeps_the_dup"), ("tests/it/fragmentation_corpus.rs", "every_case_derives_its_pinned_from_sequences_form"), ("tests/it/fragmentation_corpus.rs", "every_case_normalizes_to_its_pinned_form"), ("tests/it/fragmentation_corpus.rs", "the_reached_censuses_hold"), ("tests/it/fragmentation_corpus.rs", "the_two_surfaces_agree_on_the_shapes_the_guard_touches"), ("tests/it/fragmentation_corpus.rs", "every_spelling_of_a_variant_converges")], note: None },
 ];
 
 /// #1430's slice, split by the stage of its proposal each guard measures.
@@ -377,8 +391,8 @@ const PINNED_AT_RISK_ISSUES: &[u32] = &[
 /// constant only after confirming the new count is intentional (a `gh issue
 /// list` re-enumeration, a newly-tagged test, or a rename/deletion this table
 /// should reflect), not to silence a failing assertion.
-const PINNED_ISSUE_COUNT: usize = 73;
-const PINNED_HIGH_ISSUE_COUNT: usize = 27;
+const PINNED_ISSUE_COUNT: usize = 80;
+const PINNED_HIGH_ISSUE_COUNT: usize = 30;
 /// Raised from 265 when #1419/#1420/#1421/#1430 gained their slices: the guards
 /// already existed, the catalog could not see them (see the module doc's
 /// "Table-driven guards count" and "An issue whose satisfaction is a property"
@@ -411,7 +425,7 @@ const PINNED_HIGH_ISSUE_COUNT: usize = 27;
 /// 289 and recorded `289 -> 288`; #1802 then raised the base to 290, so the same
 /// deletion lands at 289. Two branches carrying different digits for one event
 /// is exactly the shape git merges cleanly into a wrong number.
-const PINNED_UNIQUE_TEST_COUNT: usize = 289;
+const PINNED_UNIQUE_TEST_COUNT: usize = 304;
 
 /// Reads `relative_path` (relative to the crate root) and returns whether it
 /// contains a function definition named `fn_name` — i.e. a line containing
@@ -564,7 +578,7 @@ fn issue_state_matches_the_known_open_set() {
         .collect();
     assert_eq!(
         open,
-        HashSet::from([1419, 1420, 1421, 1430]),
+        HashSet::from([1419, 1420, 1421, 1430, 2156, 2157, 2158, 2159, 2174, 2175]),
         "the set of open msto issues changed \u{2014} re-check against GitHub and update \
          MSTO_ISSUES"
     );

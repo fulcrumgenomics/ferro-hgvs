@@ -431,6 +431,94 @@ pub(crate) fn has_same_gap_insertions(variants: &[HgvsVariant], phase: AllelePha
 /// pure-`dup` ones, which have no del/sub/delins to attach to), pure-deletion
 /// groups (owned by `merge_consecutive_edits`), and non-overlapping inputs are
 /// unaffected.
+/// Whether the multi-base duplication of axis positions `[s, e]` extends a
+/// **pre-existing reference tandem** — i.e. the duplicated unit already has an
+/// adjacent copy (immediately 5' or 3') in the reference.
+///
+/// This is the reference scan `peel_tandem_dup_beside_change` and
+/// `coalesce_solid_run` run on the sequence-first path, lifted to the
+/// member-merge path so the two surfaces agree on when a `dup` is genuine.
+/// #2175's dup extends a reference tandem (`AGAG`), so it is kept; spec example
+/// W43's `c.2077delinsATA` "dup" is created by the edit over a reference
+/// (`CATG`) that carries no such tandem, so it merges to the delins. A
+/// single-base unit is never a multi-base tandem here and returns `false`.
+///
+/// `s`/`e` are 1-based inclusive axis positions and `delta` maps the axis to the
+/// fetched sequence (`axis_frame(..).delta` / `region_sequence_delta`), so the
+/// bases read are the reference's own — never the edited sequence. Every failure
+/// to read (provider miss, short flank, coordinate underflow) answers `false`:
+/// unproven is not a tandem, so the group is allowed to merge as before.
+fn dup_extends_reference_tandem<P: ReferenceProvider>(
+    provider: &P,
+    accession: &str,
+    delta: i64,
+    s: i64,
+    e: i64,
+) -> bool {
+    let len = e - s + 1;
+    if len < 2 {
+        return false;
+    }
+    // 0-based sequence offset of the unit's first base, and a unit-length flank
+    // on each side so both an immediately-5' and an immediately-3' copy fit.
+    // `s`/`e` come off a parsed description, so the window arithmetic is checked
+    // — an adversarial coordinate must decline here, not panic in a debug build,
+    // matching every other coordinate conversion in this module.
+    let Some(unit0) = s.checked_add(delta).and_then(|v| v.checked_sub(1)) else {
+        return false;
+    };
+    // `unit0 >= 0` and `len >= 2`, so the 5' clamp cannot overflow; only the 3'
+    // extent can, on an adversarial `unit0` near `i64::MAX`.
+    let win_lo = (unit0 - len).max(0);
+    let Some(win_hi) = len.checked_mul(2).and_then(|d| unit0.checked_add(d)) else {
+        return false;
+    };
+    if win_hi <= win_lo {
+        return false;
+    }
+    // `fetch_canonical_window` CLAMPS the 3' end to the sequence length, so a dup
+    // near the terminus still reads its source and 5' flank (its 3'-copy check
+    // just finds a short buffer and declines). A raw `get_sequence` erroring on
+    // the overrun was the bug that left `GGGAGCATAA...`'s `AA` dup unrecognised.
+    let Some(bytes) = fetch_canonical_window(provider, accession, win_lo, win_hi) else {
+        return false;
+    };
+    let bytes = bytes.as_slice();
+    let unit_off = (unit0 - win_lo) as usize;
+    let unit_len = len as usize;
+    if unit_off + unit_len > bytes.len() {
+        return false;
+    }
+    let src = &bytes[unit_off..unit_off + unit_len];
+    // Smallest period that tiles the duplicated source. `p == unit_len` always
+    // tiles, so this is total. The two cases below are the SAME notion peel's
+    // `tandem_tract_start`/`tandem_tract_end` compute — matching them here is what
+    // keeps the two derivation surfaces from disagreeing on a periodic-unit dup.
+    let period = (1..=unit_len)
+        .find(|&p| {
+            unit_len.is_multiple_of(p)
+                && src
+                    .chunks_exact(p)
+                    .all(|c| c.eq_ignore_ascii_case(&src[..p]))
+        })
+        .unwrap_or(unit_len);
+    // Case 1 — the source is ITSELF two or more copies of a shorter period (a
+    // homopolymer `GG`, or `ATAT`): it already carries the tandem, so the dup
+    // extends it. This is the case the old full-unit-period check missed, and the
+    // one `from_sequences`'s peel keeps but the normalize surface used to merge.
+    if unit_len >= 2 * period {
+        return true;
+    }
+    // Case 2 — the source is one aperiodic unit (`AG`); it extends a tandem only
+    // if an identical copy already sits immediately 5' or 3' in the reference
+    // (`AGAG`). `period == unit_len` here, so `src` is the whole comparand.
+    let five_prime =
+        unit_off >= unit_len && bytes[unit_off - unit_len..unit_off].eq_ignore_ascii_case(src);
+    let three_prime = unit_off + 2 * unit_len <= bytes.len()
+        && bytes[unit_off + unit_len..unit_off + 2 * unit_len].eq_ignore_ascii_case(src);
+    five_prime || three_prime
+}
+
 pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
@@ -612,6 +700,56 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     else {
         return variants;
     };
+
+    // A MULTI-BASE tandem duplication that EXTENDS A REFERENCE TANDEM, standing
+    // beside a single substitution, must not be folded into the spanning `delins`
+    // this pass builds: doing so destroys the `dup` `DNA/duplication.md:18`
+    // requires (a MUST), the label `duplication-must-ranks-the-label-not-the-
+    // partition` protects. This is the member-merge mirror of `coalesce_solid_
+    // run`'s `multibase_tandem_dup` guard and `peel_tandem_dup_beside_change`'s
+    // tract scan, and it uses the SAME reference-tandem discriminator so both
+    // derivation surfaces agree: #2175's dup extends a reference tandem (`AGAG` →
+    // keep the `dup`), while spec example W43's `c.2077delinsATA` dup is created
+    // by the edit over a reference (`CATG`) with no such tandem (merge to the
+    // delins). A single-base dup is the shift-anchor artefact #2174-B keeps
+    // merged; `dup_extends_reference_tandem` returns false for it.
+    //
+    // SCOPE, deliberately narrow — measured on `dump_normalized_corpus`. The
+    // decline fires only when the group is exactly ONE reference-tandem dup plus
+    // exactly one substitution. Widening past that regresses forms the spec
+    // prefers merged:
+    //   * a dup beside a DELETION (`[dup;del]`) — the net variant is a deletion,
+    //     which `general.md:55` ranks above a duplication, so `c.7del` beats
+    //     `c.[4_6dup;7_10del]`; declining would fragment the simpler form.
+    //   * a dup beside an INSERTION (`[dup;ins]`) — the `delins-adjacent-members`
+    //     2026-08-14 operator ruling holds that form "legal but not mandated" and
+    //     blocks it on architecture (#1946); this pass does not decide it.
+    //   * two insertions sharing a junction — declining fabricates an
+    //     intron-crossing repeat the merged insertion avoids.
+    // Placed before the window fetch so a declining group never pays for the apply.
+    // EXACTLY one dup and EXACTLY one substitution, nothing else — the shape
+    // `peel_tandem_dup_beside_change` handles (it requires a single mismatch
+    // column). Matching its arity keeps the two surfaces from disagreeing on a
+    // multi-substitution group, which peel merges and this guard would otherwise
+    // keep split.
+    let dup_count = edits
+        .iter()
+        .filter(|e| matches!(e, GEdit::Dup { .. }))
+        .count();
+    let sub_count = edits
+        .iter()
+        .filter(|e| matches!(e, GEdit::Sub { .. }))
+        .count();
+    let is_single_dup_beside_one_sub = dup_count == 1 && sub_count == 1 && edits.len() == 2;
+    if is_single_dup_beside_one_sub
+        && edits.iter().any(|edit| {
+            matches!(edit, GEdit::Dup { s, e }
+                if dup_extends_reference_tandem(provider, &accession, delta, *s, *e))
+        })
+    {
+        return variants;
+    }
+
     let start0 = w_lo + delta - 1;
     let end0 = w_hi + delta;
     if start0 < 0 {
@@ -4038,6 +4176,13 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         if compensating_gap_coalesce_applies(rule, kind) {
             coalesce_compensating_gap_split(pieces, &ref_bytes);
         }
+        // #2175 then #2174: peel a tandem dup abutting a change (so the dup
+        // survives), then collapse the residual solid run into one `delins`.
+        // Same scope as the sibling above (canonical arms, DNA axis).
+        if rule.cuts_with_canonical() && AxisFrame::is_dna(kind) {
+            peel_tandem_dup_beside_change(pieces, &ref_bytes);
+            coalesce_solid_run(pieces, &ref_bytes);
+        }
         // The whole-block rule generalised to every maximal run of consecutive
         // pieces, plus the flanked shape a whole-block test cannot express. Route 0
         // inside it is `coalesce_whole_block_inversion` verbatim, so this is
@@ -6716,6 +6861,301 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if let Some(whole) = whole_block_inversion(pieces, ref_bytes) {
         *pieces = vec![whole];
     }
+}
+
+/// Reconstruct a block's reference hull `[start, end)` and the payload the
+/// `pieces` denote over it (each piece's `alt`, with the untouched reference
+/// between them spliced back in). `None` for a malformed piece list.
+fn block_hull_and_payload(pieces: &[Piece], reference: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+    let (start, end) = (pieces.first()?.ref_start, pieces.last()?.ref_end);
+    if start >= end || end > reference.len() {
+        return None;
+    }
+    let mut payload = Vec::new();
+    let mut cursor = start;
+    for piece in pieces {
+        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
+            return None;
+        }
+        payload.extend_from_slice(&reference[cursor..piece.ref_start]);
+        payload.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    payload.extend_from_slice(&reference[cursor..end]);
+    Some((start, end, payload))
+}
+
+/// Peel a tandem duplication that abuts a single adjacent substitution into the
+/// structure-preserving `[dup; sub]` the spec requires (#2175).
+///
+/// `DNA/duplication.md:18` is a MUST: a change that can be described as a
+/// duplication must be. The minimal-edit derivation of a one-unit tandem
+/// expansion sitting beside a point change spreads the duplicated copy across
+/// anonymous insertions (`g.[27_28insC;28_29insC]`), erasing the `dup`. This
+/// re-derives the block: if its payload is a pure tandem duplication of a
+/// reference unit **plus exactly one adjacent substitution**, it emits the `dup`
+/// and keeps the substitution as its own member.
+///
+/// The duplication is placed 3'-most (the highest insertion point that fits), per
+/// `general.md:40`. A mismatch falling *inside* the duplicated copy means the copy
+/// is not clean, so that hypothesis is rejected. It denotes the same sequence by
+/// construction — the pure-dup payload with one base restored to what the input
+/// denotes.
+fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
+    // A duplication abutting a change reaches this pass in either of two shapes:
+    // spread across several insertions (`[27_28insC;28_29insC]`), or already
+    // collapsed into one net-insertion `delins` (`g.15delinsAGA` for the
+    // `AG[2]->AG[3]` + sub case). Both re-derive to `[dup; change]`, so a single
+    // piece is admitted; `block_hull_and_payload` still rejects a pure insertion
+    // (zero-width hull) and the `k == 0` gate rejects a lone substitution.
+    if pieces.is_empty() {
+        return;
+    }
+    let Some((hs, he, hull_payload)) = block_hull_and_payload(pieces, reference) else {
+        return;
+    };
+    // Extend the comparison window 5' and 3' across any reference tandem tract
+    // that abuts the hull. The minimal-edit block covers only the columns that
+    // actually changed, so a duplication whose *source* copies sit in unchanged
+    // reference — the `CACA` tract 5' of `g.28A>C` in #2175 — lie outside the
+    // hull and are invisible to a hull-local search. The tract boundary is a
+    // pure function of the reference (never of the input's spelling or of the
+    // block cut), so widening to it preserves confluence. The window flanks are
+    // unchanged reference, so the widened payload denotes the same sequence.
+    //
+    // The widening adds the SAME unchanged reference flanks to both `span` and
+    // `payload`, so it cannot change the net unit length `k`. Compute `k` from
+    // the hull and reject the common non-dup block on the cheap floor BEFORE
+    // paying for the two `O(TANDEM_TRACT_SCAN_CAP²)` tract scans. A duplication
+    // only adds bases, so the payload must be longer than the hull by `k`. A
+    // net-zero or net-deletion block (`k == 0`, or the `checked_sub` underflow)
+    // is not this shape and is left for the solid-run and gap passes — which is
+    // exactly what keeps the equal-length #2174 runs out of here. Only a
+    // MULTI-BASE tandem unit is peeled, the same floor `coalesce_solid_run`
+    // uses: a single-base expansion abutting a change (`k == 1`) is the
+    // shift-anchor artifact #2174-B keeps as one `delins`, and admitting it here
+    // would re-split a lone `delins` into a spurious `[sub; 1-base dup]`.
+    let Some(k) = hull_payload.len().checked_sub(he - hs) else {
+        return;
+    };
+    if k < 2 {
+        return;
+    }
+    let ws = tandem_tract_start(reference, hs);
+    let we = tandem_tract_end(reference, he);
+    let span = &reference[ws..we];
+    let mut payload = Vec::with_capacity(we - ws);
+    payload.extend_from_slice(&reference[ws..hs]);
+    payload.extend_from_slice(&hull_payload);
+    payload.extend_from_slice(&reference[he..we]);
+    // The widened flanks are equal-length on both sides, so `payload.len() -
+    // span.len()` is still `k`; the upper gate is against the WIDENED span.
+    if k > span.len() {
+        return;
+    }
+    // 3'-most first: the largest insertion point that yields a clean dup + one sub.
+    for insert in (k..=span.len()).rev() {
+        let unit = &span[insert - k..insert];
+        // The pure-dup payload is `span` with `unit` spliced in at `insert`.
+        let pure_dup = |i: usize| -> u8 {
+            if i < insert {
+                span[i]
+            } else if i < insert + k {
+                unit[i - insert]
+            } else {
+                span[i - k]
+            }
+        };
+        // Exactly one mismatch is wanted, so stop at the second: the common
+        // hypothesis (a payload mismatching `pure_dup` in dozens of columns)
+        // fails early instead of scanning and allocating the whole payload.
+        let mut only: Option<usize> = None;
+        let mut too_many = false;
+        for (i, &base) in payload.iter().enumerate() {
+            if base == pure_dup(i) {
+                continue;
+            }
+            if only.replace(i).is_some() {
+                too_many = true;
+                break;
+            }
+        }
+        let Some(m) = only.filter(|_| !too_many) else {
+            continue;
+        };
+        // A mismatch inside the inserted copy means the copy is not a clean
+        // duplication of `unit`; reject this hypothesis.
+        if m >= insert && m < insert + k {
+            continue;
+        }
+        // Map the substituted payload column back to its reference offset.
+        let ref_offset = if m < insert { m } else { m - k };
+        let dup_piece = Piece {
+            ref_start: ws + insert,
+            ref_end: ws + insert,
+            alt: unit.to_vec(),
+        };
+        let sub_piece = Piece {
+            ref_start: ws + ref_offset,
+            ref_end: ws + ref_offset + 1,
+            alt: vec![payload[m]],
+        };
+        *pieces = if sub_piece.ref_start < dup_piece.ref_start {
+            vec![sub_piece, dup_piece]
+        } else {
+            vec![dup_piece, sub_piece]
+        };
+        return;
+    }
+}
+
+/// The start of the maximal reference tandem tract that ends exactly at `hs`, or
+/// `hs` if the reference just 5' of `hs` is not a tandem repeat of two or more
+/// copies. Uses the smallest period, so `CACA` yields the `CA` unit rather than
+/// `CACA`. The scan is bounded so a long or cyclic reference tract cannot make
+/// this walk the whole contig.
+fn tandem_tract_start(reference: &[u8], hs: usize) -> usize {
+    let floor = hs.saturating_sub(TANDEM_TRACT_SCAN_CAP);
+    for l in 1..=(hs / 2) {
+        if hs < 2 * l || hs - 2 * l < floor {
+            break;
+        }
+        if reference[hs - 2 * l..hs - l] == reference[hs - l..hs] {
+            let unit = &reference[hs - l..hs];
+            let mut ts = hs - 2 * l;
+            while ts >= l && ts - l >= floor && &reference[ts - l..ts] == unit {
+                ts -= l;
+            }
+            return ts;
+        }
+    }
+    hs
+}
+
+/// The end of the maximal reference tandem tract that starts exactly at `he`, or
+/// `he` if the reference just 3' of `he` is not a tandem repeat of two or more
+/// copies. The 3' mirror of [`tandem_tract_start`].
+fn tandem_tract_end(reference: &[u8], he: usize) -> usize {
+    let len = reference.len();
+    let ceil = (he + TANDEM_TRACT_SCAN_CAP).min(len);
+    for l in 1..=((len - he) / 2) {
+        if he + 2 * l > len || he + 2 * l > ceil {
+            break;
+        }
+        if reference[he..he + l] == reference[he + l..he + 2 * l] {
+            let unit = &reference[he..he + l];
+            let mut te = he + 2 * l;
+            while te + l <= len && te + l <= ceil && &reference[te..te + l] == unit {
+                te += l;
+            }
+            return te;
+        }
+    }
+    he
+}
+
+/// How far [`tandem_tract_start`]/[`tandem_tract_end`] may scan away from the
+/// hull. A tandem tract wider than one canonical window cannot be the source of
+/// a single duplication this pass would peel, so the cap costs nothing real and
+/// bounds the walk on a cyclic or homopolymeric reference.
+const TANDEM_TRACT_SCAN_CAP: usize = MAX_CANONICAL_WINDOW as usize;
+
+/// Collapse a **solid** contiguous run into the single spanning `delins`
+/// `DNA/delins.md:16` recommends (#2174).
+///
+/// # The in-place boundary
+///
+/// `general.md:34` keeps two variants "separated by one or more nucleotides"
+/// individual, and the separator is an *unchanged* reference base. A base is a
+/// genuine separator only if it survives at its own coordinate — a **zero-shift
+/// fixed point**. The minimal-edit alignment of a balanced run (`GACT -> ACTG`)
+/// matches its interior bases only under a *compensating* del+ins shift, so those
+/// matches are an artefact of the alignment, not separators, and today the run
+/// fragments into `g.[11del;14_15insG]`. Position-wise pairing (column `i` of the
+/// reference against column `i` of the payload) is exactly the zero-shift view,
+/// and it is well defined only when the two sides are the same length — hence the
+/// equal-length gate.
+///
+/// A run whose changed columns form one contiguous block has **no** interior
+/// in-place fixed point between two changes, so it is one member. A gap in the
+/// changed columns is a real in-place separator and the run stays split.
+///
+/// It re-emits a `delins` over exactly the changed columns with the payload bases
+/// already present, so it denotes the same sequence by construction — a pure
+/// respelling.
+fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
+    if pieces.len() < 2 {
+        return;
+    }
+    // Decline when a member of the block DUPLICATES A MULTI-BASE REFERENCE
+    // MOTIF — an insertion whose `alt` copies two or more reference bases
+    // immediately 5' (anchored, what `is_tandem_duplication` recognises) or
+    // immediately 3' (3'-shiftable, before the shuffle moves it onto the
+    // tandem). Such a block is not a solid in-place run: it carries a genuine
+    // tandem duplication, and merging it into one spanning `delins` destroys the
+    // `dup` `DNA/duplication.md:18` requires (a MUST). The minimal-edit
+    // alignment parks the duplicated copy as an insertion at the block boundary,
+    // so the reconstructed hull looks equal-length and all-columns-changed and
+    // would otherwise merge (`CGTACG -> TACGTA`, #422).
+    //
+    // WHY A MULTI-BASE MOTIF, AND WHY NOT A STRONGER TEST — this is the
+    // discriminator between #2174-B `GACTT->ACTTT` (merge to `g.11_13delinsACT`)
+    // and #422 `CGTACG->TACGTA` (keep `g.[10_11del;16_17dup]`). The two are
+    // provably identical under every frame-independent LOCAL test: in the
+    // `[del;dup]` piece frame both dups are clean (each is literally
+    // del + unchanged-reference + tandem-dup), and `unchanged-is-read`'s
+    // every-minimal-alignment reading says SPLIT for both. So the merge is a
+    // deliberate override of that decided house choice at the one point two
+    // rulings collide, and it has no local frame-independent form. What DOES
+    // separate them is motif length: a one-base "duplication" abutting a change
+    // is the shift-anchor #2174 exists to collapse (any run boundary re-reads as
+    // a one-base del+dup); a two-or-more-base tandem is too specific to be
+    // alignment happenstance and is the duplication the spec protects.
+    //
+    // The tempting STRONGER rule — also require the reference tandem to already
+    // carry >=2 copies (`count_tandem_repeats`) — is WRONG and was rejected: in
+    // #422 the `TA` tract has only ONE reference copy, the dup CREATES the
+    // tandem. So the test is "`alt` matches >=2 flank bases," never a reference
+    // copy-count floor. (Verified by an independent adversarial sweep over
+    // rotations, homopolymers, and net-zero 2-/3-base tandem del+dup contexts:
+    // the guard fires only to keep a split when a real >=2-base tandem-dup is in
+    // the derivation, and no should-merge case reaches it.)
+    let multibase_tandem_dup = |p: &Piece| -> bool {
+        if p.ref_start != p.ref_end || p.alt.len() < 2 {
+            return false;
+        }
+        let (k, at) = (p.alt.len(), p.ref_start);
+        let anchored = at >= k && reference[at - k..at] == p.alt[..];
+        let shiftable = at + k <= reference.len() && reference[at..at + k] == p.alt[..];
+        anchored || shiftable
+    };
+    if pieces.iter().any(multibase_tandem_dup) {
+        return;
+    }
+    let Some((start, end, payload)) = block_hull_and_payload(pieces, reference) else {
+        return;
+    };
+    let span = &reference[start..end];
+    // Position-wise (zero-shift) reading is defined only on an equal-length hull.
+    if payload.len() != span.len() {
+        return;
+    }
+    let changed: Vec<usize> = (0..span.len()).filter(|&i| span[i] != payload[i]).collect();
+    // Fewer than two changed columns is a lone substitution (or unchanged) — no
+    // run to collapse. A gap in the changed columns is a real in-place separator,
+    // so the members stay individual (`general.md:34`).
+    if changed.len() < 2 {
+        return;
+    }
+    let (lo, hi) = (changed[0], changed[changed.len() - 1]);
+    if hi - lo + 1 != changed.len() {
+        return;
+    }
+    *pieces = vec![Piece {
+        ref_start: start + lo,
+        ref_end: start + hi + 1,
+        alt: payload[lo..=hi].to_vec(),
+    }];
 }
 
 // ----------------------------------------------------------------------------
@@ -10636,6 +11076,15 @@ pub(crate) fn derive_block_members(
         }
         if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
             coalesce_compensating_gap_split(&mut pieces, reference);
+        }
+        // #2175 then #2174: peel a tandem dup abutting a change, then collapse
+        // the residual solid run into one `delins`. Same scope as the sibling at
+        // `canonicalize_from_sequence`, minus its `rule.cuts_with_canonical()`
+        // conjunct: this path has no `FERRO_PARTITION` rule to consult — it is the
+        // canonical derivation itself — so the DNA-axis gate is the whole of it.
+        if AxisFrame::is_dna(kind) {
+            peel_tandem_dup_beside_change(&mut pieces, reference);
+            coalesce_solid_run(&mut pieces, reference);
         }
     }
 

@@ -66,38 +66,28 @@ fn a_del_beside_a_dup_re_spells_instead_of_colliding() {
     // fixed point is the re-derivation of what remains — which is why the repair
     // runs inside the normalization loop and not after it.
     //
-    // **The two members stay individual, and the authority is the COLUMN-based
-    // reading of `general.md:34` established 2026-08-07 while building the
-    // forced-unchanged-column detector (#1539/#1540).**
-    //
-    // The question this row poses is which alignment "unchanged" is judged
-    // against, because the two candidates disagree:
+    // **The residue is one spanning `delins`, and the authority is the
+    // supersession of `unchanged-is-read-over-every-minimal-alignment` by #2174.**
+    // The two candidate readings disagree:
     //
     //     position-wise:            C->A, A->G, G->A            cost 3
     //     del C, A=A, G=G, ins A                                cost 2   <- minimal
     //
-    // `general.md:34` is column-based — "is this reference BASE unchanged in
-    // EVERY minimal alignment?" — not cell-based and not position-wise. Every
-    // cost-2 alignment here matches ref offsets 1 and 2, so `262` and `263` are
-    // genuinely unchanged and the two changes really are separated by them.
-    // `:34` therefore applies and the members are described individually.
-    //
-    // `DNA/delins.md:16` does NOT reach this: under the minimal alignment there
-    // are no two *consecutive changed* nucleotides, only one deleted base and
-    // one inserted base. Nor does `DNA/substitution.md:32`, whose own example
-    // `GC -> TT` is a case where two substitutions IS the minimal alignment.
-    //
-    // An intermediate revision of this branch pinned `g.261_263delinsAGA` and
-    // argued the reverse — that the separation was an artifact of the
-    // decomposition. That reads "unchanged" off the position-wise pairing, which
-    // is what `FERRO_PARTITION=live` produces because `best_alignment`
-    // short-circuits an equal-length block without searching. It is withdrawn:
-    // the cheaper alignment leaves those bases untouched, so they are not
-    // artifacts.
+    // `unchanged-is-read` originally judged "unchanged" against the *minimal*
+    // alignment — every cost-2 alignment matches ref offsets 1 and 2, so `262`
+    // and `263` read as unchanged and the members stayed individual. #2174
+    // scopes that: on an **equal-length run with no interior zero-shift fixed
+    // point** (no base surviving at its own coordinate — the position-wise
+    // C/A, A/G, G/A all differ), the minimal-alignment interior matches are
+    // *shift artifacts*, not separators, so the run collapses to one spanning
+    // `delins`. `general.md:34`'s separation therefore does not reach it, and the
+    // result respells to `g.261_263delinsAGA`. This is the reading an earlier
+    // revision of this branch pinned and the record then withdrew; #2174 restores
+    // it, deliberately, and the record now carries the superseding scope.
     assert_eq!(
-        normalized, "NC_TEST.1:g.[261del;263_264insA]",
-        "the colliding `262dup` is re-spelled, and the two changes stay individual \
-         because every minimal alignment leaves 262 and 263 unchanged"
+        normalized, "NC_TEST.1:g.261_263delinsAGA",
+        "the colliding `262dup` is re-spelled, and the residual equal-length run \
+         has no zero-shift fixed point, so it collapses to one spanning delins"
     );
     parse_hgvs(&normalized).unwrap_or_else(|e| {
         panic!("`{input}` normalized to `{normalized}`, which ferro cannot re-parse: {e}")

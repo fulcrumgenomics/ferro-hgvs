@@ -347,25 +347,26 @@ fn an_axis_without_a_reading_frame_is_not_re_split() {
 /// reverse complement, even though `13_15` (`ATA -> TAT`) inside it is. The fix
 /// types spans the split *creates*; it must not create one.
 ///
-/// # #1835 — RE-PINNED TO `c.[11_12insC;15del]`, AND THE CONTROL STILL HOLDS
+/// # #2174 — ONE SPANNING `delins`, AND THE CONTROL STILL HOLDS
 ///
 /// **The property this row exists to guard is intact: there is no `inv` in the
 /// output.** The interior `13_15` reverse complement is still not carved out.
 /// That is the whole #1034 / #1040 control, and it passes.
 ///
-/// What moved is the same rotation the sibling rows above take: `TATA -> CTAT` is
-/// one inserted `C` at the 5' end and one deleted `A` at the 3' — cost two —
-/// rather than four mismatched columns. The inserted `C` is not a copy of the
-/// base 5' of it, so it stays an `ins` and `DNA/duplication.md:18` does not fire
-/// (contrast the `dup` in the sibling rows, where it does). Equal-length block,
-/// so `delins.md:47`'s net-deletion scope excludes it and `general.md:34`
-/// describes the two members individually.
+/// `TATA -> CTAT` is an equal-length block (4/4) with no interior zero-shift
+/// fixed point — position-wise T/C, A/T, T/A, A/T all differ, so no base
+/// survives at its own coordinate. Under #2174's supersession of
+/// `unchanged-is-read-over-every-minimal-alignment`, the minimal-alignment
+/// interior matches (the cheaper `insC` + `del` reading) are shift artifacts,
+/// not separators, so the run is one contiguous change and types
+/// `c.12_15delinsCTAT`. It is a `delins`, never an `inv`, so the #1034 / #1040
+/// control is unaffected.
 #[test]
 fn a_reverse_complement_sub_run_of_one_contiguous_change_stays_a_delins() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:c.12_15delinsCTAT"),
-        "NM_TEST.1:c.[11_12insC;15del]",
+        "NM_TEST.1:c.12_15delinsCTAT",
     );
 }
 

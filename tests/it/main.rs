@@ -57,6 +57,8 @@ mod issue_2092_explain_normalizer_codes;
 mod issue_2155_from_sequences_collapse;
 mod issue_2155_payload_coincidence_all_dna;
 mod issue_2161_substitution_fast_path;
+mod issue_2174_contiguous_run_delins;
+mod issue_2175_dup_abutting_change;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
@@ -573,6 +575,7 @@ mod weight_bound_worked_examples;
 mod workflow_gh_repo_context;
 mod workflow_pipefail_gate;
 
+mod fragmentation_corpus;
 mod issue_1618_anchored_repeat_semantics;
 mod issue_1831_applier_member_order;
 mod issue_1832_reanchor_empty_alternate;
