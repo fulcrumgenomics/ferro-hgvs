@@ -644,6 +644,46 @@ impl<P: ReferenceProvider + Sync> BatchProcessor<P> {
         })
     }
 
+    /// Parse and *re-derive* a *stream* of HGVS strings, yielding results in input
+    /// order (#975). The streaming counterpart of
+    /// [`parse_and_rederive_parallel`](Self::parse_and_rederive_parallel); see
+    /// [`parse_streaming`](Self::parse_streaming) for why the signature is shaped
+    /// this way (bounded peak memory, order preserved).
+    ///
+    /// Options are built once from this processor's normalizer config and shared
+    /// across workers; `max_grid_cells == Some(0)` is treated as the default, as
+    /// in the `Vec`-based method.
+    pub fn parse_and_rederive_streaming<'a, I, S>(
+        &'a self,
+        variants: I,
+        max_grid_cells: Option<usize>,
+        recommended_form: bool,
+        num_threads: usize,
+    ) -> impl Iterator<Item = ItemResult<HgvsVariant>> + 'a
+    where
+        I: IntoIterator<Item = S> + 'a,
+        S: AsRef<str> + Send + Sync + 'a,
+    {
+        // Built once and moved into the per-item closure; `FromSequencesOptions`
+        // is `Send + Sync`, so one instance serves every streaming worker.
+        let mut options = FromSequencesOptions::default()
+            .with_direction(self.normalizer.config().shuffle_direction);
+        if let Some(cells) = max_grid_cells.filter(|&c| c != 0) {
+            options = options.with_max_grid_cells(cells);
+        }
+        self.map_streaming(variants, num_threads, move |input: &S| {
+            match parse_hgvs(input.as_ref())
+                .and_then(|v| self.normalizer.rederive(&v, &options, recommended_form))
+            {
+                Ok(rederived) => ItemResult::Ok(rederived),
+                Err(error) => ItemResult::Err {
+                    input: Some(input.as_ref().to_string()),
+                    error,
+                },
+            }
+        })
+    }
+
     /// Shared engine behind the streaming methods: read a bounded chunk, map it
     /// order-preservingly, drain it, repeat.
     ///
@@ -941,6 +981,37 @@ mod tests {
                 rederive_key(&recommended.results[0]),
                 "OK:NC_TEST.1:g.7A[4]",
                 "recommended_form=true (workers={workers}) must collapse to repeat notation",
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_and_rederive_streaming_matches_parallel() {
+        // The streaming Rust API must yield exactly what the Vec-based parallel
+        // method returns, in input order. (The Python BatchStream drives the Vec
+        // method per chunk; this covers the Rust `_streaming` method itself.)
+        let processor = genome_processor();
+        let variants = vec!["NC_TEST.1:g.100del", "NC_TEST.1:g.5G>C", "not a variant"];
+
+        let expected: Vec<String> = processor
+            .parse_and_rederive_parallel(&variants, None, false, 1)
+            .results
+            .iter()
+            .map(rederive_key)
+            .collect();
+        assert!(
+            expected.iter().any(|k| k.starts_with("OK:")),
+            "expected some successful rederivations; got {expected:?}"
+        );
+
+        for workers in [1usize, 2, 4] {
+            let streamed: Vec<String> = processor
+                .parse_and_rederive_streaming(variants.clone(), None, false, workers)
+                .map(|item| rederive_key(&item))
+                .collect();
+            assert_eq!(
+                streamed, expected,
+                "parse_and_rederive_streaming(workers={workers}) differs from the Vec method"
             );
         }
     }

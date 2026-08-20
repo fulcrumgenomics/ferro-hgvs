@@ -4748,6 +4748,13 @@ impl PyBatchItem {
 enum StreamOp {
     Parse,
     ParseAndNormalize,
+    /// Re-derive, carrying the same options as the `Vec`-based
+    /// `parse_and_rederive`. `Option<usize>` and `bool` are `Copy`, so the enum
+    /// stays `Copy` and can be read out of `self.op` per chunk.
+    Rederive {
+        max_grid_cells: Option<usize>,
+        recommended_form: bool,
+    },
 }
 
 /// Lazy, order-preserving batch stream over a Python iterable (#975).
@@ -4830,6 +4837,19 @@ impl PyBatchStream {
                 StreamOp::ParseAndNormalize => {
                     processor
                         .parse_and_normalize_parallel(&chunk, workers)
+                        .results
+                }
+                StreamOp::Rederive {
+                    max_grid_cells,
+                    recommended_form,
+                } => {
+                    processor
+                        .parse_and_rederive_parallel(
+                            &chunk,
+                            max_grid_cells,
+                            recommended_form,
+                            workers,
+                        )
                         .results
                 }
             });
@@ -5077,6 +5097,51 @@ impl PyBatchProcessor {
         workers: usize,
     ) -> PyResult<PyBatchStream> {
         self.streaming(variants, workers, StreamOp::ParseAndNormalize)
+    }
+
+    /// Parse and *re-derive* an *iterable* of HGVS strings, yielding results lazily
+    /// (#975). The streaming counterpart of `parse_and_rederive` — use it for a
+    /// large corpus, where materializing one result object per input is the
+    /// dominant cost. See `parse_streaming` for the rationale and memory numbers,
+    /// and `parse_and_rederive` for how re-derivation differs from normalization.
+    ///
+    /// Args:
+    ///     variants: Iterable of HGVS strings.
+    ///     max_grid_cells: Largest alignment grid, in cells (as
+    ///         `Normalizer.rederive`). None uses the default.
+    ///     recommended_form: When True, also apply `normalize`'s recommended-form
+    ///         rules to each re-derived description.
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
+    ///
+    /// Returns:
+    ///     BatchStream yielding one BatchItem per input, in input order.
+    ///
+    /// Raises:
+    ///     ValueError: for a `max_grid_cells` of 0, matching `parse_and_rederive`.
+    #[pyo3(signature = (variants, *, max_grid_cells=None, recommended_form=false, workers=0))]
+    fn parse_and_rederive_streaming(
+        &self,
+        variants: Bound<'_, pyo3::PyAny>,
+        max_grid_cells: Option<usize>,
+        recommended_form: bool,
+        workers: usize,
+    ) -> PyResult<PyBatchStream> {
+        // Reject a zero grid up front, as `parse_and_rederive` does, so the error
+        // is raised at the call rather than on the first `__next__`.
+        if max_grid_cells == Some(0) {
+            return Err(PyValueError::new_err(
+                "max_grid_cells must be positive; 0 admits no alignment grid at all",
+            ));
+        }
+        self.streaming(
+            variants,
+            workers,
+            StreamOp::Rederive {
+                max_grid_cells,
+                recommended_form,
+            },
+        )
     }
 
     /// Parse multiple HGVS strings with progress callback

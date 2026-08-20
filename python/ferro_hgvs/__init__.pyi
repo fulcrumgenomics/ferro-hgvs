@@ -1942,6 +1942,34 @@ class BatchProcessor:
         """
         ...
 
+    def parse_and_rederive_streaming(
+        self,
+        variants: Iterable[str],
+        *,
+        max_grid_cells: int | None = None,
+        recommended_form: bool = False,
+        workers: int = 0,
+    ) -> BatchStream:
+        """Parse and re-derive an iterable of HGVS strings lazily, in input order.
+
+        The streaming counterpart of `parse_and_rederive`: use it for a large
+        corpus, where materializing one result object per input is the dominant
+        cost. See `parse_streaming` for the rationale and memory numbers, and
+        `parse_and_rederive` for how re-derivation differs from normalization.
+
+        Args:
+            variants: Iterable of HGVS strings.
+            max_grid_cells: Largest alignment grid, in cells (as
+                `Normalizer.rederive`). None uses the default.
+            recommended_form: When True, also apply `normalize`'s recommended-form
+                rules to each re-derived description.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+
+        Raises:
+            ValueError: for a `max_grid_cells` of 0.
+        """
+        ...
+
     def parse_with_progress(
         self, variants: list[str], callback: Callable[[BatchProgress], None]
     ) -> BatchResult:
