@@ -179,7 +179,8 @@ deletions inserts nothing, so nothing realigned, and it stays governed by `delin
 gap needed to align an unequal-length block is an artifact of the alignment, not the "separated
 variants" `:17` describes.
 
-On `c.` this merged form is recommended. On `g.`/`m.`/`n.` it is conformant, not recommended:
+On `c.` coding positions this merged form is recommended. In the coding-transcript UTR, as on
+`g.`/`m.`/`n.`, it is conformant, not recommended:
 `:47`'s stated rationale (avoiding incorrect protein-consequence predictions) has nothing to bite
 on where there is no reading frame, so the wider reach rests on `:47`'s axis-neutral simplicity
 alone — a maintainer house choice among conformant forms, not a conformance requirement. `r.` is

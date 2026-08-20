@@ -1068,12 +1068,25 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `outputs_denoting_no_sequence` at 10 (verified against the pre-#1816 base,
     // identical), `coding_axis_separation_two_or_more_merges` holds at 19 (no new
     // `general.md:34` deviation), and every moved family is a CDS/3'UTR straddle.
-    // The 5'UTR half of #1816 is a later change and moves the 5'-direction
-    // `split_more` separately.
-    converged: 11_100,
-    split_two: 632,
-    split_three: 128,
-    split_more: 22,
+    //
+    // # #1816 — the 5'UTR straddle fold (`ExtendedBody`'s `FivePrimeUtr` arm)
+    //
+    // The mirror of the 3'UTR half above, on the CDS-start seam. `ExtendedBody`'s
+    // fold/unfold now express a `c.-N` endpoint on the extended axis (flat `0` for
+    // `c.-1`, descending below), so `canonicalize_from_sequence` reaches a group
+    // crossing `cds_start` exactly as it reaches one crossing `cds_end`, and the
+    // window low clamp is released for that shape. Families move out of `split_two`
+    // (-72), `split_three` (-24) and `split_more` (-12) and into `converged`
+    // (+108); the three decreases sum exactly to the increase. Meaning-preserving:
+    // `sequence_changed` holds at 4 and `outputs_denoting_no_sequence` at 10,
+    // `coding_axis_separation_two_or_more_merges` holds at 19 (no new
+    // `general.md:34` deviation), and every moved family is a CDS/5'UTR straddle.
+    // (Both shuffle-direction censuses move, since a 5'-seam family is measured
+    // under each — see `FIVE_PRIME` for the 5'-direction figures.)
+    converged: 11_208,
+    split_two: 560,
+    split_three: 104,
+    split_more: 10,
     underdetermined: 0,
     // -- idempotency --
     //
@@ -1210,7 +1223,14 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // `split_three` -22, `split_more` -2, summing exactly to +46, and the move is
     // meaning-preserving (`sequence_changed` holds at 0,
     // `coding_axis_separation_two_or_more_merges` at 19).
-    converged: 10_851,
+    //
+    // #1816's 5'UTR fold (`ExtendedBody`'s `FivePrimeUtr` arm — see the same
+    // `#1816` block on [`THREE_PRIME`]) moves it a further +102: the CDS/5'UTR
+    // straddle families converge in the 5'-shuffle direction. The decreases are
+    // `split_two` -64, `split_three` -26, `split_more` -12, summing exactly to
+    // +102, and the move is meaning-preserving (`sequence_changed` holds at 0,
+    // `coding_axis_separation_two_or_more_merges` at 19).
+    converged: 10_953,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -1269,12 +1289,14 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // gate): those two ids are the only ones removed, none added, and 3' is
     // byte-identical on the same diff (its `THREE_PRIME` pins are untouched by
     // this change).
-    // #1816 moves all three DOWN — `split_two` -22, `split_three` -22,
-    // `split_more` -2 — as the CDS/3'UTR straddle families converge; the three
-    // sum to `converged`'s +46 above.
-    split_two: 933,
-    split_three: 76,
-    split_more: 22,
+    // #1816 (3'UTR anchor) moves all three DOWN — `split_two` -22, `split_three`
+    // -22, `split_more` -2 — as the CDS/3'UTR straddle families converge; the
+    // three sum to `converged`'s +46 above. Its 5'UTR fold then moves all three
+    // DOWN again — `split_two` -64, `split_three` -26, `split_more` -12 — as the
+    // CDS/5'UTR straddle families converge; those three sum to `converged`'s +102.
+    split_two: 869,
+    split_three: 50,
+    split_more: 10,
     underdetermined: 0,
     // Re-blessed DOWN to zero by #1650, the same four `cds-end` families as at 3'.
     non_idempotent_outputs: 0,
