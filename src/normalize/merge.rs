@@ -9257,26 +9257,13 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if !split_carries_a_gap_bearing_insert(pieces) {
         return;
     }
-    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
-    // Defensive: a malformed piece list is a bug upstream, not something to
-    // re-spell. Declining leaves the derived answer untouched.
-    if start >= end || end > reference.len() {
+    // Hull span and denoted payload over `[start, end)`: each piece's payload with
+    // the untouched reference between the members spliced back in. Declining
+    // (`None` — a malformed or empty piece list) leaves the derived answer
+    // untouched, the same defensive stance the previously open-coded walk took.
+    let Some((start, end, payload)) = block_hull_and_payload(pieces, reference) else {
         return;
-    }
-
-    // What the pieces denote over `[start, end)`: each piece's payload, with the
-    // untouched reference between them spliced back in.
-    let mut payload = Vec::new();
-    let mut cursor = start;
-    for piece in pieces.iter() {
-        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
-            return;
-        }
-        payload.extend_from_slice(&reference[cursor..piece.ref_start]);
-        payload.extend_from_slice(&piece.alt);
-        cursor = piece.ref_end;
-    }
-    payload.extend_from_slice(&reference[cursor..end]);
+    };
 
     // Refuse to merge across a wide run of unchanged bases: that is a genuine
     // multi-member allele, not one variant split by coincidence. See
