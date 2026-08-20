@@ -29,7 +29,7 @@ use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::{Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
-use crate::hgvs::variant::{AllelePhase, HgvsVariant, LocEdit};
+use crate::hgvs::variant::{Accession, AllelePhase, HgvsVariant, LocEdit};
 use crate::normalize::footprint::WriteFootprint;
 use crate::normalize::merge::Region;
 use crate::normalize::NormalizationWarning;
@@ -283,17 +283,14 @@ pub(crate) fn detect_overlap_conflicts(
 /// an N-padded deletion over an uncertain range, …).
 fn member_footprint(
     variant: &HgvsVariant,
-) -> Option<(&'static str, SmolStr, WriteFootprint<AxisPos>)> {
+) -> Option<(&'static str, &Accession, WriteFootprint<AxisPos>)> {
     let (coord_system, start, end) = simple_span(variant)?;
-    // Rendered into a `SmolStr`, which is inline for every real accession, and
-    // identical bytes: `full_smol` drives the same writer `Display` does.
-    //
-    // This is the one place the accession is rendered for this whole module —
-    // #1749 collapsed four call sites into this one — and the *inner* loop of
-    // `detect_overlap_conflicts` calls it, so a `String` here is an allocation
-    // per **pair** of members. It is only ever compared; the owned form is built
-    // where a warning is actually emitted.
-    let accession = variant.accession()?.full_smol();
+    // Borrowed, not rendered: `Accession` derives `PartialEq`, so the pairwise
+    // loop of `detect_overlap_conflicts` — which calls this per member pair —
+    // compares two accessions structurally without rendering either. The owned
+    // form is built only where it is actually needed: `group_key`'s map key
+    // (once per member) and a warning (only on an emitted conflict).
+    let accession = variant.accession()?;
     let edit = inner_edit(variant)?;
     let footprint = match edit {
         // Rewrite the span they name, and leave bases standing there.
@@ -572,7 +569,7 @@ fn junction_overlaps(
         if let Some(gap) = footprint.junction {
             insertions.push(Insertion {
                 idx,
-                accession: accession.clone(),
+                accession: accession.full_smol(),
                 coord_system,
                 gap,
                 kind,
@@ -581,7 +578,7 @@ fn junction_overlaps(
         if let Some((start, end)) = footprint.bases {
             spans.push(Span {
                 idx,
-                accession,
+                accession: accession.full_smol(),
                 coord_system,
                 start,
                 end,
@@ -781,7 +778,9 @@ fn group_key(variant: &HgvsVariant) -> Option<GroupKey> {
     let (start, end) = footprint.bases?;
     edit_kind(variant)?;
     Some(GroupKey {
-        accession,
+        // Rendered here (once per member) for the `BTreeMap` key, which needs the
+        // ordering `SmolStr` gives; the pairwise comparison uses the borrow.
+        accession: accession.full_smol(),
         coord_system,
         start,
         end,
@@ -1014,6 +1013,59 @@ fn simple_rna(mu: &Mu<RnaPos>) -> Option<(Region, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pairwise loop of [`detect_overlap_conflicts`] compares two members'
+    /// accessions **structurally** (`Accession: PartialEq`) instead of rendering
+    /// each to a `SmolStr` first — the render is the cost this change removes. It
+    /// is sound only if structural equality agrees with the rendered equality it
+    /// replaced. This pins that agreement over accessions spanning every identity
+    /// field `full_smol` renders — prefix, version, Ensembl style,
+    /// assembly/chromosome notation, and a compound genomic-context reference — so
+    /// a future field the renderer collapses (or the struct ignores) cannot
+    /// silently split what used to be one molecule, or merge two that differ.
+    #[test]
+    fn structural_accession_equality_matches_the_rendered_form() {
+        let descs = [
+            "NC_000001.11:g.1A>G",
+            "NC_000001.11:g.2A>G",   // same accession, different variant
+            "NC_000001.10:g.1A>G",   // version differs
+            "NM_000088.3:c.1A>G",    // different prefix
+            "ENST00000123.1:c.1A>G", // Ensembl style
+            "NC_000013.11(NM_004119.3):c.1A>G", // compound genomic context
+            "NC_000013.11(NM_004120.3):c.1A>G", // same context prefix, different tx
+            "LRG_1t1:c.1A>G",        // LRG
+            "GRCh37(chr1):g.1A>G",   // assembly + chromosome notation
+            "GRCh38(chr1):g.1A>G",   // assembly field differs (GRCh37 vs GRCh38)
+            "GRCh38(chr2):g.1A>G",   // chromosome field differs (chr1 vs chr2)
+            "chr1:g.1A>G",           // chromosome, no assembly
+        ];
+        // Parse EVERY descriptor and require an accession: a descriptor that
+        // stops parsing (or loses its accession) is a coverage hole in this
+        // guard, not a row to skip — and keeping `accs[i]` aligned with
+        // `descs[i]` is what keeps the failure message naming the right pair.
+        let accs: Vec<Accession> = descs
+            .iter()
+            .map(|d| {
+                let variant = crate::parse_hgvs(d)
+                    .unwrap_or_else(|e| panic!("descriptor `{d}` must parse: {e}"));
+                variant
+                    .accession()
+                    .unwrap_or_else(|| panic!("descriptor `{d}` must carry an accession"))
+                    .clone()
+            })
+            .collect();
+        for (i, a) in accs.iter().enumerate() {
+            for (j, b) in accs.iter().enumerate() {
+                assert_eq!(
+                    a == b,
+                    a.full_smol() == b.full_smol(),
+                    "structural vs rendered accession equality disagree for {} / {}",
+                    descs[i],
+                    descs[j]
+                );
+            }
+        }
+    }
     use crate::parse_hgvs;
 
     fn parse_allele(s: &str) -> (Vec<HgvsVariant>, AllelePhase) {
