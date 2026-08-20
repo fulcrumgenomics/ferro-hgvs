@@ -45,6 +45,19 @@ features_always_increment_minor = true
 # on the new tag, which the gate accepts.
 git_tag_name = "v{{ version }}"
 
+# Pin the GitHub release *name* for the same reason, and to the same value. This
+# is a SEPARATE field from `git_tag_name` above, with its own workspace-shape
+# default: release-plz names a single-package release `v{version}` and a
+# multi-package one `{package}-v{version}`. The `git_tag_name` pin fixes only the
+# tag; with the name left to default, `tests-soak` (the `publish = false` member
+# #1977 added — see above) tips the shape to multi-package and the release title
+# renders `ferro-hgvs-v{version}`. That is cosmetic — no workflow gates on the
+# release name the way `release-wheels.yml` gates on the tag prefix — but it drifts
+# from every release before v0.16.0, which were titled bare `v{version}`, and had
+# to be hand-corrected each cycle. Pinning both fields keeps tag and title
+# identical and stops the workspace shape from renaming either.
+git_release_name = "v{{ version }}"
+
 # Prepend a representation-stability block to the release PR body (#1424).
 #
 # Representation stability is a shipped guarantee: the downstream consumer keys
