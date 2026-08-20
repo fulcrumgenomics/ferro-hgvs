@@ -57,6 +57,7 @@ mod issue_2092_explain_normalizer_codes;
 mod issue_2155_from_sequences_collapse;
 mod issue_2155_payload_coincidence_all_dna;
 mod issue_2161_from_sequences_inversion_converge;
+mod issue_2161_lone_member_fast_path;
 mod issue_2161_substitution_fast_path;
 mod issue_2174_contiguous_run_delins;
 mod issue_2175_dup_abutting_change;
