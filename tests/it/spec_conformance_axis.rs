@@ -1054,9 +1054,25 @@ pub(crate) const THREE_PRIME: Census = Census {
     // from the branches' deltas — and the move is the same 40 families it was on
     // the pre-flip base, with the same 22 + 12 + 6 breakdown, so the flip, #1610
     // and this change reach disjoint populations.
-    converged: 11_056,
-    split_two: 652,
-    split_three: 152,
+    //
+    // # #1816 — the CDS/3'UTR straddle anchor (per-endpoint `Anchor`)
+    //
+    // `merge::render_on_its_own_region` no longer refuses a member whose two
+    // endpoints fall in different zones: `Anchor` now carries a region per
+    // endpoint, so a piece running from `c.<cds_len-1>` to `c.*2` is *built* as
+    // the spanning `c.N_*M` member the `g.` axis already produces, and the two
+    // spellings of such a variant converge. Families move out of `split_two`
+    // (-20) and `split_three` (-24) and into `converged` (+44); `split_more` is
+    // unchanged and the two decreases sum exactly to the increase. The move is
+    // meaning-preserving: `sequence_changed` holds at 4 and
+    // `outputs_denoting_no_sequence` at 10 (verified against the pre-#1816 base,
+    // identical), `coding_axis_separation_two_or_more_merges` holds at 19 (no new
+    // `general.md:34` deviation), and every moved family is a CDS/3'UTR straddle.
+    // The 5'UTR half of #1816 is a later change and moves the 5'-direction
+    // `split_more` separately.
+    converged: 11_100,
+    split_two: 632,
+    split_three: 128,
     split_more: 22,
     underdetermined: 0,
     // -- idempotency --
@@ -1187,7 +1203,14 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // same reason stated there, and re-measured on each rebase rather than
     // composed — the move is the same 48 families it was on the pre-flip base,
     // with the same 22 + 26 + 0 breakdown.
-    converged: 10_805,
+    //
+    // #1816 (the CDS/3'UTR straddle anchor — see the `#1816` block on
+    // [`THREE_PRIME`]'s `converged`) moves it a further +46: the straddle families
+    // converge in the 5'-shuffle direction too. The decreases are `split_two` -22,
+    // `split_three` -22, `split_more` -2, summing exactly to +46, and the move is
+    // meaning-preserving (`sequence_changed` holds at 0,
+    // `coding_axis_separation_two_or_more_merges` at 19).
+    converged: 10_851,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -1246,9 +1269,12 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // gate): those two ids are the only ones removed, none added, and 3' is
     // byte-identical on the same diff (its `THREE_PRIME` pins are untouched by
     // this change).
-    split_two: 955,
-    split_three: 98,
-    split_more: 24,
+    // #1816 moves all three DOWN — `split_two` -22, `split_three` -22,
+    // `split_more` -2 — as the CDS/3'UTR straddle families converge; the three
+    // sum to `converged`'s +46 above.
+    split_two: 933,
+    split_three: 76,
+    split_more: 22,
     underdetermined: 0,
     // Re-blessed DOWN to zero by #1650, the same four `cds-end` families as at 3'.
     non_idempotent_outputs: 0,

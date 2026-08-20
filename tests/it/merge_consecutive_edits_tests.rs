@@ -859,19 +859,42 @@ fn test_merge_3utr_consecutive_subs_rna() {
 }
 
 #[test]
-fn test_no_merge_3utr_cds_boundary() {
-    // The c.40 (last CDS base) ↔ c.*1 (first 3'UTR base) crossing must
-    // NOT merge — there is no HGVS range syntax spanning the CDS/3'UTR
-    // boundary (`c.40_*1` does not exist), even though the positions are
-    // physically adjacent in the transcript. Companion to the existing
-    // `test_no_merge_utr_boundary` (5'UTR↔CDS).
+fn test_merge_3utr_cds_boundary_inv() {
+    // The c.40 (last CDS base) ↔ c.*1 (first 3'UTR base) crossing DOES merge
+    // (#1816). This test formerly asserted the opposite on the premise that
+    // "`c.40_*1` does not exist" as HGVS syntax — a premise `merge::join_pos`'s
+    // own doc records as false: `c.15_*1del` deletes across a stop codon and is
+    // "an ordinary and common real variant", and `consultation/SVD-WG001.md:37`
+    // writes out `c.-1_1`. A `c.` number is a flat transcript offset and the
+    // zone spelling is a rendering (`c-and-n-positions-are-flat-transcript-offsets`,
+    // `cross-zone-c-positions-order-by-transcript-coordinate`), so a member
+    // straddling the seam is built with `*` on the end endpoint alone.
+    //
+    // Here the pair is a whole-span reverse complement — ref `CA` (c.40=C,
+    // c.*1=A), alt `TG` = revcomp(`CA`) — so it types as one `inv`, converging
+    // with the g.-axis form. The 5'UTR companion `test_no_merge_utr_boundary`
+    // stays as-is: the 5'UTR fold is a later part of #1816.
     let result = normalize_with_provider(
         provider_with_utr_transcript(),
         "NM_TESTUTR.1:c.[40C>T;*1A>G]",
     );
-    assert!(result.contains("40C>T"), "got {}", result);
-    assert!(result.contains("*1A>G"), "got {}", result);
-    assert!(!result.contains("delins"), "got {}", result);
+    assert_eq!(result, "NM_TESTUTR.1:c.40_*1inv", "got {}", result);
+}
+
+#[test]
+fn test_merge_3utr_cds_boundary_deletion() {
+    // The deletion arm of the same #1816 straddle rendering: two adjacent
+    // single-base deletions on either side of the CDS/3'UTR seam merge into one
+    // spanning `del`, `*` on the end endpoint alone — the non-`inv` path
+    // `test_merge_3utr_cds_boundary_inv` does not exercise (that one re-types the
+    // delins to `inv`; a pure deletion has no payload to re-type). Ref at c.40 is
+    // `C` (pos 50) and at c.*1 is `A` (pos 51); the two are not part of a repeat,
+    // so the merged deletion does not shuffle off the seam.
+    let result = normalize_with_provider(
+        provider_with_utr_transcript(),
+        "NM_TESTUTR.1:c.[40del;*1del]",
+    );
+    assert_eq!(result, "NM_TESTUTR.1:c.40_*1del", "got {}", result);
 }
 
 // =====================================================================
