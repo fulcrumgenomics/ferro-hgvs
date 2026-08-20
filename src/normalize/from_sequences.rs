@@ -294,6 +294,11 @@ pub fn from_sequences_detailed(
 
     let mut members = block.members;
     retype_inversions(&mut members, reference, w_lo);
+    // Split any equal-length spanning `delins` the place chain merged into its
+    // canonical [sub; inv] decomposition, as `normalize` does per member. Runs
+    // after `retype_inversions` (whole-span inv) since the two are complementary
+    // — see `split_canonical_delins`.
+    let members = split_canonical_delins(members, reference, w_lo);
 
     let variant = match members.len() {
         0 => template,
@@ -710,6 +715,99 @@ fn retype_inversions(members: &mut [HgvsVariant], reference: &[u8], w_lo: i64) {
             length: None,
         });
     }
+}
+
+/// Split each equal-length `delins` member into its canonical decomposition —
+/// independent substitutions and any interior `inv` — the way
+/// `Normalizer::normalize`'s per-member `apply_canonical_split` does, but from
+/// the window reference bytes this surface already holds rather than a provider
+/// fetch.
+///
+/// The place chain in `derive_block_members` merges a substitution flanking an
+/// inversion into one spanning `delins` (e.g. `ATGCG -> CTCGC`), exactly as
+/// `canonicalize_from_sequence`'s own inner chain does — measured: both reach
+/// `g.7_11delinsCTCGC` before any member-level pass. `normalize` then re-splits
+/// it to `g.[7A>C;9_11inv]` under `general.md:56` priority (a maximal
+/// reverse-complement run is an `inv`; two mismatches separated by an unchanged
+/// base are individual substitutions), via `apply_canonical_split` in its
+/// per-member pipeline. Without this port the two surfaces disagree on every
+/// such block — the largest remaining ThreePrime divergence class (#2161).
+///
+/// `retype_inversions` above handles the *whole-span* reverse complement;
+/// `decompose_delins` deliberately declines that shape
+/// (`decompose_full_span_inv_returns_none`) and handles the *partial* one, so the
+/// two passes are complementary and run in that order.
+///
+/// Scope falls out of `decompose_delins`: it requires `alt.len() == ref.len()`
+/// and returns `None` otherwise, so a net-deletion or net-insertion `delins` —
+/// which `delins-merge-vs-individual-gap-two-or-more` keeps whole — is left
+/// untouched. `Genome`/`Mt` only (the axes this surface emits); codon-frame
+/// merging is off, there being no reading frame on a genomic axis.
+fn split_canonical_delins(
+    members: Vec<HgvsVariant>,
+    reference: &[u8],
+    w_lo: i64,
+) -> Vec<HgvsVariant> {
+    let mut out: Vec<HgvsVariant> = Vec::with_capacity(members.len());
+    for member in members {
+        match decompose_member_delins(&member, reference, w_lo) {
+            Some(split) => out.extend(split),
+            None => out.push(member),
+        }
+    }
+    out
+}
+
+/// The per-member half of [`split_canonical_delins`]: the split members when
+/// `member` is an equal-length `Genome`/`Mt` `delins` that decomposes, else
+/// `None` (the caller keeps the member unchanged).
+fn decompose_member_delins(
+    member: &HgvsVariant,
+    reference: &[u8],
+    w_lo: i64,
+) -> Option<Vec<HgvsVariant>> {
+    let loc_edit = match member {
+        HgvsVariant::Genome(v) => &v.loc_edit,
+        HgvsVariant::Mt(v) => &v.loc_edit,
+        _ => return None,
+    };
+    let Mu::Certain(NaEdit::Delins { sequence, .. }) = &loc_edit.edit else {
+        return None;
+    };
+    let InsertedSequence::Literal(payload) = sequence else {
+        return None;
+    };
+    let payload: Vec<u8> = payload.to_string().into_bytes();
+    // Only a plain, certain two-endpoint span, mirroring `retype_inversions`.
+    let (
+        UncertainBoundary::Single(Mu::Certain(start)),
+        UncertainBoundary::Single(Mu::Certain(end)),
+    ) = (&loc_edit.location.start, &loc_edit.location.end)
+    else {
+        return None;
+    };
+    if start.special.is_some() || end.special.is_some() {
+        return None;
+    }
+    // Window offsets: both endpoints are 1-based inclusive on `w_lo`'s axis.
+    let (Ok(lo), Ok(hi)) = (
+        usize::try_from(start.base as i64 - w_lo),
+        usize::try_from(end.base as i64 - w_lo),
+    ) else {
+        return None;
+    };
+    if hi < lo || hi >= reference.len() {
+        return None;
+    }
+    let span = &reference[lo..=hi];
+    // `decompose_delins` requires `payload.len() == span.len()`; a net del/ins
+    // returns `None` here, which is the scope guard.
+    let subedits = crate::normalize::rules::decompose_delins(span, 0, span.len(), &payload)?;
+    // Positions from `decompose_delins` are 0-indexed offsets into `span`, whose
+    // offset 0 is the member's own start base — so `hgvs_start` is `start.base`.
+    Some(crate::normalize::build_split_variants(
+        member, subedits, start.base, false,
+    ))
 }
 
 /// Re-apply the derived description to the supplied reference and require it to

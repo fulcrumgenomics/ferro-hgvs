@@ -115,7 +115,7 @@ use serde::Deserialize;
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
-use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
+use ferro_hgvs::{parse_hgvs, FromSequencesOptions, NormalizeConfig, Normalizer, ShuffleDirection};
 
 use crate::common::cis_apply_oracle::apply_with;
 use crate::common::fixture_gen;
@@ -1034,5 +1034,111 @@ fn the_headline_matches_the_pin() {
         numbers[4],
         THREE_PRIME.classes - THREE_PRIME.converged,
         "the headline's non-converging count is not `classes - converged`"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #2161 Path 1 Drop measurement over the DESIGNED (small-separation) corpus
+// ---------------------------------------------------------------------------
+//
+// A distribution class the geometry corpus does not exercise: designed multi-member cis alleles whose
+// members sit CLOSE (this corpus enumerates separations 0,1,2,3,5,8), the
+// opposite of the 592 observed rows in `multi_member_cis_axis` (large
+// separations). It is where the second block partition actually does work, so
+// it is the honest place to measure how often the Drop
+// (`normalize_skipping_repartition` — skip `canonicalize_from_sequence`) changes
+// the answer. The geometry corpus in `issue_2161_from_sequences_inversion_converge`
+// answers the same question but is inversion-heavy; this is the broad designed
+// corpus.
+//
+// For each spelling, in both directions: settle the derivation
+// (`rederive(recommended_form=false)`), then hold the FULL final normalization
+// against the re-partition-skipping one — exactly the two `rederive(true)` paths,
+// pre-drop vs shipped. A divergence is a real output move the Drop would cause.
+// Broken down by the class's authored member separation, because the whole thesis
+// is that divergence is a function of proximity.
+#[test]
+#[ignore = "permanent diagnostic (#2161): PRINTS a distribution (the Drop's divergence \
+            and shipped-gate fallback over the designed small-separation cis corpus) and \
+            never asserts, so it stays ignored; the CI-enforcing correctness guards live \
+            in tests/it/issue_2161_from_sequences_inversion_converge.rs"]
+fn report_repartition_drop_over_designed_cis() {
+    let corpus = corpus();
+    // Tallies keyed by separation bucket -> (compared, raw-skip diverged).
+    let mut by_sep: std::collections::BTreeMap<usize, (usize, usize)> = Default::default();
+    let mut total_compared = 0usize;
+    let mut total_skip_diverged = 0usize;
+    // The SHIPPED gated path: how often it moved output (must be 0) and how often
+    // the gate fired (the fallback rate).
+    let mut total_gated_diverged = 0usize;
+    let mut total_gate_fired = 0usize;
+    let mut examples: Vec<String> = Vec::new();
+
+    for class in &corpus.classes {
+        let (provider, _reference) = reference_for(class);
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let nz = Normalizer::with_config(
+                provider.clone(),
+                NormalizeConfig::default().with_direction(direction),
+            );
+            let options = FromSequencesOptions::default().with_direction(direction);
+            for spelling in &class.spellings {
+                let Ok(variant) = parse_hgvs(spelling) else {
+                    continue;
+                };
+                // Settle the derivation, then compare the final-normalize paths: the
+                // raw skip (upper-bound divergence) and the SHIPPED gated path.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let derived = nz.rederive(&variant, &options, false).ok()?;
+                    let full = nz.normalize(&derived).ok()?.to_string();
+                    let skip_variant = nz.normalize_skipping_repartition(&derived).ok()?;
+                    let gate_fired = nz.repartition_gate_fires(&skip_variant);
+                    let gated = nz.normalize_gated_repartition(&derived).ok()?.to_string();
+                    Some((full, skip_variant.to_string(), gated, gate_fired))
+                }));
+                let Ok(Some((full, skip, gated, gate_fired))) = outcome else {
+                    continue;
+                };
+                let entry = by_sep.entry(class.separation).or_default();
+                entry.0 += 1;
+                total_compared += 1;
+                if gate_fired {
+                    total_gate_fired += 1;
+                }
+                if full != gated {
+                    total_gated_diverged += 1;
+                }
+                if full != skip {
+                    entry.1 += 1;
+                    total_skip_diverged += 1;
+                    if examples.len() < 30 {
+                        examples.push(format!(
+                            "DROPDIV\tsep={}\tmembers={}\t{:?}\tin={}\tfull={}\tskip={}",
+                            class.separation, class.members, direction, spelling, full, skip
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    for line in &examples {
+        eprintln!("{line}");
+    }
+    eprintln!("--- raw-skip divergence by authored member separation ---");
+    for (sep, (compared, diverged)) in &by_sep {
+        let pct = if *compared > 0 {
+            100.0 * *diverged as f64 / *compared as f64
+        } else {
+            0.0
+        };
+        eprintln!("SEPROW sep={sep}\tcompared={compared}\tskip_diverged={diverged}\t{pct:.3}%");
+    }
+    let denom = total_compared.max(1) as f64;
+    eprintln!(
+        "DESIGNEDDROP total_compared={total_compared} skip_diverged={total_skip_diverged} \
+         gated_diverged={total_gated_diverged} gate_fired={total_gate_fired} \
+         fallback_rate={:.3}%",
+        100.0 * total_gate_fired as f64 / denom,
     );
 }
