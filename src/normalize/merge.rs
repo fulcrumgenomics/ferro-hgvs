@@ -114,6 +114,16 @@ enum AnchorForm {
 #[derive(Debug, Clone)]
 struct Anchor {
     region: Region,
+    /// The region naming the **end** endpoint. Equal to `region` for every
+    /// single-region member — which is all but one construction site. A member
+    /// that straddles a CDS/UTR zone seam (`c.<cds_len-1>` to `c.*2`, or `c.-1`
+    /// to `c.1`) is the exception: [`render_on_its_own_region`] sets this to the
+    /// end endpoint's own region so [`build_naedit`] can name each endpoint in
+    /// its own zone (#1816). When it differs from `region` the member is a span
+    /// (never an insertion or single-base substitution, both of which sit in one
+    /// zone), and `start`/`end` are already in flat 5'→3' order so no swap
+    /// applies.
+    end_region: Region,
     start: i64,
     end: i64,
     alt: Vec<Base>,
@@ -888,6 +898,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     }
     let anchor = Anchor {
         region: body,
+        end_region: body,
         start: a_start,
         end: a_end,
         alt: alt_bases,
@@ -1056,8 +1067,10 @@ fn cis_axis_parts_on(
 /// With no `cds_end_axis` this is the identity on `body`, which is exactly the
 /// unextended behaviour.
 ///
-/// A span that *straddles* the boundary IS a real refusal, and it belongs to the
-/// caller, which holds both endpoints — see [`render_on_its_own_region`].
+/// A span that *straddles* the boundary is built one region per endpoint by the
+/// caller, which holds both — see [`render_on_its_own_region`] (#1816). This
+/// function still answers per endpoint; it is the caller that assembles the two
+/// into a straddling member rather than refusing it.
 fn unfold_extended_body(pos: i64, body: Region, cds_end_axis: Option<i64>) -> (Region, i64) {
     match cds_end_axis {
         Some(end) if pos > end => (Region::ThreePrimeUtr, pos - end),
@@ -1402,6 +1415,7 @@ fn anchor_from_loc_edit<L>(
             alternative,
         } => Some(Anchor {
             region,
+            end_region: region,
             start,
             end,
             alt: vec![*alternative],
@@ -1410,6 +1424,7 @@ fn anchor_from_loc_edit<L>(
         }),
         NaEdit::SubstitutionNoRef { alternative } => Some(Anchor {
             region,
+            end_region: region,
             start,
             end,
             alt: vec![*alternative],
@@ -1418,6 +1433,7 @@ fn anchor_from_loc_edit<L>(
         }),
         NaEdit::Deletion { .. } => Some(Anchor {
             region,
+            end_region: region,
             start,
             end,
             alt: Vec::new(),
@@ -1428,6 +1444,7 @@ fn anchor_from_loc_edit<L>(
             let bases = sequence.bases()?.to_vec();
             Some(Anchor {
                 region,
+                end_region: region,
                 start,
                 end,
                 alt: bases,
@@ -1442,6 +1459,7 @@ fn anchor_from_loc_edit<L>(
             let bases = sequence.bases()?.to_vec();
             Some(Anchor {
                 region,
+                end_region: region,
                 start: end,
                 end: start,
                 alt: bases,
@@ -1745,6 +1763,10 @@ fn build_rna_merged(template: &RnaVariant, merged: Anchor) -> RnaVariant {
 
 fn build_mt_merged(template: &MtVariant, merged: Anchor) -> MtVariant {
     debug_assert_eq!(merged.region, Region::Genome);
+    // The mito axis takes no CDS fold, so a straddle can never reach it; assert
+    // both endpoints stay single-region so a future fold that did reach here
+    // could not silently build a two-region `m.` member.
+    debug_assert_eq!(merged.region, merged.end_region);
     let (location, edit) = build_naedit(merged, |_, b| {
         GenomePos::new(u64::try_from(b).expect("mitochondrial anchor base must be non-negative"))
     });
@@ -1824,6 +1846,15 @@ fn build_naedit<P>(
     merged: Anchor,
     mut to_pos: impl FnMut(Region, i64) -> P,
 ) -> (Interval<P>, NaEdit) {
+    // A member whose two endpoints sit in different zones (`c.13`..`c.*4`)
+    // straddles a CDS/UTR seam (#1816). Its zoned positions live on independent
+    // counters, so the `start > end` insertion probe and the `end == start`
+    // substitution probe below — both comparisons of *zoned* values — are
+    // meaningless for it and must be skipped. Such a member spans two or more
+    // nucleotides across the seam, so it is always a `delins` (or, with no
+    // payload, a `del`); it is never a one-nucleotide substitution and never a
+    // boundary insertion, both of which sit within a single zone.
+    let straddles = merged.region != merged.end_region;
     // A duplication is decided by the *builder*, from the reference, not by the
     // two span lengths below — `dup` and the `ins` of the same bases have the
     // same lengths and `duplication.md:18` says only one of them is allowed.
@@ -1836,7 +1867,7 @@ fn build_naedit<P>(
             length: None,
             uncertain_extent: None,
         }
-    } else if merged.start > merged.end {
+    } else if !straddles && merged.start > merged.end {
         debug_assert_eq!(
             merged.start,
             merged.end + 1,
@@ -1870,7 +1901,7 @@ fn build_naedit<P>(
             length: None,
         }
     } else if let (true, 1, Some(reference)) = (
-        merged.end == merged.start,
+        !straddles && merged.end == merged.start,
         merged.alt.len(),
         merged.ref_base,
     ) {
@@ -1896,15 +1927,26 @@ fn build_naedit<P>(
             substitution_reference: None,
         }
     };
-    let (lo, hi) = if merged.start > merged.end {
-        (merged.end, merged.start)
+    // A straddling member is already in flat 5'→3' order (`start` in the 5'-ward
+    // zone, `end` in the 3'-ward one), so it is emitted endpoint-for-endpoint
+    // with each in its own region — no swap, which on the zoned counters would
+    // scramble `c.13_*4` into `c.*4_13`. Every single-zone member keeps the
+    // existing min/max ordering, which also carries the insertion encoding
+    // (`start > end`).
+    let interval = if straddles {
+        Interval::new(
+            to_pos(merged.region, merged.start),
+            to_pos(merged.end_region, merged.end),
+        )
     } else {
-        (merged.start, merged.end)
+        let (lo, hi) = if merged.start > merged.end {
+            (merged.end, merged.start)
+        } else {
+            (merged.start, merged.end)
+        };
+        Interval::new(to_pos(merged.region, lo), to_pos(merged.region, hi))
     };
-    (
-        Interval::new(to_pos(merged.region, lo), to_pos(merged.region, hi)),
-        edit,
-    )
+    (interval, edit)
 }
 
 /// Coalesce runs of consecutive-residue changes in a **cis protein allele**
@@ -11270,20 +11312,27 @@ pub(crate) fn denoted_bases(
 /// A no-op whenever the anchor sits inside the CDS, which is every group the
 /// extension did not admit, so this cannot move an existing row.
 ///
-/// # A straddling anchor is refused, not truncated
+/// # A straddling anchor is built, one region per endpoint (#1816)
 ///
-/// [`Anchor`] carries **one** [`Region`] for both endpoints, so a piece running
-/// from `c.<cds_len-1>` to `c.*2` has no anchor to be. Refusing hands the group
-/// back to the per-member pipeline, which is exactly what happened to it before
-/// this extension existed — so the refusal is the status quo for that shape and
-/// not a new decline. Widening `Anchor` to a region per endpoint would let it be
-/// built and is left to #1816 with the 5'UTR half, because the two want the same
-/// change and measuring them together is cheaper than twice.
+/// A piece running from `c.<cds_len-1>` to `c.*2` (or, with the 5'UTR fold,
+/// `c.-1` to `c.1`) has endpoints in two zones. [`Anchor`] now carries a
+/// [`Region`] for each — `region` for the start, `end_region` for the end — so
+/// such a member is *built* rather than declined: each endpoint keeps the zone
+/// [`unfold_extended_body`] names for it, and [`build_naedit`] renders `c.13_*4`
+/// with a `*` on the end alone. This is the `c.` half of the convergence the
+/// `g.` axis already has (`#1816`; the spelling is a rendering of one flat
+/// transcript span, `cross-zone-c-positions-order-by-transcript-coordinate`).
+/// Only the `c.` axis has a CDS/3'UTR seam to straddle — `cds_end_axis` is
+/// `Some` for `CisKind::Cds` alone (`n.` numbering is flat, with no `*` zone).
 ///
-/// The insertion form is why the endpoints are read independently rather than
-/// through an ordering test: [`Anchor`]'s insertion shape is `start > end`
-/// (`build_naedit` reads the gap from the raw endpoints), so a `start <= end`
-/// precondition would silently exclude every derived insertion.
+/// The endpoints are read independently rather than through an ordering test for
+/// two reasons that now compound: [`Anchor`]'s insertion shape is `start > end`
+/// (`build_naedit` reads the gap from the raw endpoints), and a straddling
+/// member's two zoned positions live on independent counters (`c.13` vs `c.*4`),
+/// so neither an ordering nor an equality of the *zoned* values means anything.
+/// The **flat** order is what holds: `anchor.start <= anchor.end` on the extended
+/// body by construction, so `start` is always the 5'-ward endpoint and `end` the
+/// 3'-ward one, and `build_naedit` emits them in that order without a swap.
 fn render_on_its_own_region(
     anchor: Anchor,
     body: Region,
@@ -11291,11 +11340,9 @@ fn render_on_its_own_region(
 ) -> Option<Anchor> {
     let (start_region, start) = unfold_extended_body(anchor.start, body, cds_end_axis);
     let (end_region, end) = unfold_extended_body(anchor.end, body, cds_end_axis);
-    if start_region != end_region {
-        return None;
-    }
     Some(Anchor {
         region: start_region,
+        end_region,
         start,
         end,
         ..anchor
@@ -11368,6 +11415,7 @@ fn anchor_for_piece(
         .and_then(|byte| Base::from_char(byte as char));
     Some(Anchor {
         region: body,
+        end_region: body,
         start,
         end,
         alt,
@@ -11431,6 +11479,7 @@ fn duplication_anchor(
     }
     Some(Anchor {
         region: body,
+        end_region: body,
         start: w_lo + source_start as i64,
         end: w_lo + piece.ref_start as i64 - 1,
         // A `dup` names its source bases by span; there is nothing to insert.
@@ -11499,6 +11548,7 @@ fn boundary_delins_anchor(
     let position = w_lo + offset as i64;
     Some(Anchor {
         region: body,
+        end_region: body,
         start: position,
         end: position,
         alt: bases,
@@ -11560,6 +11610,7 @@ fn cds_end_delins_anchor(
     let bases = boundary_delins_bases(ref_bytes, alt, anchor_1b, BoundarySide::ThreePrime)?;
     Some(Anchor {
         region: body,
+        end_region: body,
         start: cds_end_axis,
         end: cds_end_axis,
         alt: bases,
@@ -15776,6 +15827,7 @@ mod tests {
         // Insertion-shaped anchor (`start == end + 1`) with an empty payload.
         let anchor = Anchor {
             region: Region::Genome,
+            end_region: Region::Genome,
             start: 1010,
             end: 1009,
             alt: Vec::new(),
@@ -15797,6 +15849,7 @@ mod tests {
     fn non_empty_insertion_anchor_still_builds_an_insertion() {
         let anchor = Anchor {
             region: Region::Genome,
+            end_region: Region::Genome,
             start: 1010,
             end: 1009,
             alt: vec![Base::A],

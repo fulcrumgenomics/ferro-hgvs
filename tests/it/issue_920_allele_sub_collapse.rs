@@ -63,21 +63,28 @@ fn tx_body_overlapping_del_ins_collapses_to_sub() {
     assert_eq!(result, "NR_TEST.1:n.8A>C");
 }
 
-/// Refusal: a group containing a 3'UTR (`c.*N`) member is outside the positive
-/// CDS body, so the whole collapse is refused (all-or-nothing) and the allele
-/// is left as its separate members rather than collapsing to a substitution.
+/// A group that straddles the CDS/3'UTR seam now derives its sequence-canonical
+/// form instead of being refused (#1816, combined with #2174's contiguous-run
+/// collapse).
 ///
 /// `core = "GGGGGGGACGCC"`, `cds_start = 1`, `cds_end = 9`: `c.1..c.9` are the
-/// CDS body and `c.*1` is the first 3'UTR base. `c.[7_8insC;*1del]` mixes a
-/// CDS-body insertion with a 3'UTR deletion — no collapse.
+/// CDS body and `c.*1` is the first 3'UTR base. `c.[7_8insC;*1del]` denotes
+/// `GGGGGGGCACCC`, whose diff against the reference is **three consecutive
+/// changed bases** at `c.8`/`c.9`/`c.*1` (`A→C`, `C→A`, `G→C`) — one spanning
+/// `delins` by `delins.md:16`, not two members separated by an unchanged base.
+///
+/// This used to be refused ("all-or-nothing, because the 3'UTR member is outside
+/// the positive CDS body"), which was the straddle-anchor limitation, not a
+/// principle: `Anchor` carried one `Region`, so a member spanning `c.9_*1` had
+/// no anchor. #1816 gives `Anchor` a region per endpoint, so the derivation
+/// renders the spanning `delins` across the seam — the same sequence-first
+/// canonical form (`canonical-form-choice-when-both-legal`) the CDS-interior
+/// twins above collapse to. Meaning-preserving: both spellings denote
+/// `GGGGGGGCACCC`. The result is a run of consecutive changes, so the
+/// separation-two-or-more census is untouched.
 #[test]
-fn utr_member_refuses_collapse() {
+fn utr_straddle_collapses_to_its_spanning_delins() {
     let p = SyntheticBuilder::cds("GGGGGGGACGCC", 1, 9, Strand::Plus).build();
     let result = normalize_to_string(p, "NM_TEST.1:c.[7_8insC;*1del]");
-    // The allele must be returned unchanged — the 3'UTR member forces the
-    // whole collapse to be refused (all-or-nothing), so both members survive
-    // verbatim rather than collapsing to a single substitution. Pin the exact
-    // string so a regression that reorders, drops, or partially collapses a
-    // member is caught (not just the presence of a `;`).
-    assert_eq!(result, "NM_TEST.1:c.[7_8insC;*1del]");
+    assert_eq!(result, "NM_TEST.1:c.8_*1delinsCAC");
 }
