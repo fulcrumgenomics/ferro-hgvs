@@ -2415,6 +2415,34 @@ fn repartition_gate(variant: &HgvsVariant) -> bool {
     total < 0
 }
 
+/// A lone (non-allele) genomic or mitochondrial member whose edit **always**
+/// changes the sequence — `Deletion`, `Insertion`, or `Duplication`. Such a
+/// member has no sibling to re-partition against and cannot denote an identity,
+/// so `rederive`'s sequence-first derivation lands on the exact canonical form
+/// [`Normalizer::normalize_core`] produces positionally. Measured byte-identical
+/// over a lone-member corpus: `rederive(true)` equals `normalize()` for every
+/// such input, so `rederive` fast-paths these straight to its final normalize
+/// step, skipping the confluence loop and `from_sequences` entirely.
+///
+/// Restricted to the `g.`/`m.` axes because those are the only ones
+/// `from_sequences` derives at all — a `c.`/`n.`/… input takes the normal
+/// (refusing) path, so the fast-path never changes which inputs `rederive`
+/// accepts. `delins` and `inversion` are **excluded**: both can denote no change
+/// (a self-`delins`, a palindromic `inv`), where the derivation emits `g.=` and
+/// `normalize_core` keeps `span=` — a real spelling difference, so those keep
+/// the derivation.
+fn is_lone_derivation_fixed_point(variant: &HgvsVariant) -> bool {
+    let edit = match variant {
+        HV::Genome(g) => g.loc_edit.edit.inner(),
+        HV::Mt(m) => m.loc_edit.edit.inner(),
+        _ => return false,
+    };
+    matches!(
+        edit,
+        Some(NaEdit::Deletion { .. } | NaEdit::Insertion { .. } | NaEdit::Duplication { .. })
+    )
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
     static NA_EDIT_REFERENCES: std::cell::RefCell<Vec<NaEditReference>> =
@@ -3189,6 +3217,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
         /// moving, before declining.
         const MAX_PAD: u64 = crate::spdi::MAX_SHIFT_TRACT;
 
+        // Lone-member fast-path. A lone g./m. del/ins/dup has no sibling to
+        // re-partition against and cannot denote an identity, so its
+        // sequence-first derivation lands on the same canonical form the final
+        // normalize produces positionally — measured byte-identical. Skip the
+        // confluence loop and `from_sequences` entirely and run the final
+        // normalize on the input directly. This is exactly what the loop does at
+        // its settled exit, minus the derivation a lone member does not need.
+        // `recommended_form = false` returns the derived form, which is a
+        // different output, so the fast-path is gated on `recommended_form`.
+        if recommended_form && is_lone_derivation_fixed_point(variant) {
+            return self.normalize_for_recommended_form(variant);
+        }
+
         let mut pad = START_PAD;
         // The previous iteration's window bounds, 1-based inclusive. Used to
         // tell a side the provider simply could not widen further from one still
@@ -3448,6 +3489,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
     #[cfg(any(test, feature = "dev"))]
     pub fn repartition_gate_fires(&self, variant: &HgvsVariant) -> bool {
         repartition_gate(variant)
+    }
+
+    /// Whether `rederive(recommended_form = true)` takes the lone-member
+    /// fast-path for this input — a lone `g.`/`m.` del/ins/dup, short-circuited
+    /// to the final normalize step because its sequence-first derivation is
+    /// redundant. Exposed so the fast-path convergence guard can assert both the
+    /// boundary (it fires on del/ins/dup, not on delins/inv/alleles) and
+    /// non-vacuity (it fires on a floor of the corpus). Test/`dev` only.
+    #[cfg(any(test, feature = "dev"))]
+    pub fn lone_member_fast_path_applies(&self, variant: &HgvsVariant) -> bool {
+        is_lone_derivation_fixed_point(variant)
     }
 
     /// Opt-in idempotency self-check (issue #1157 follow-up): a normalizer must
