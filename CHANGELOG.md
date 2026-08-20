@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.16.0...v0.17.0) - 2026-08-20
+
+### Representation changes
+
+- *(normalize)* drop the redundant second block partition in rederive(recommended_form=true) ([#2181](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2181))
+  > rederive(recommended_form=true) / from_sequences
+  > output moves on inversion- and delins-bearing shapes. The two
+  > derivation-convergence commits retype flanked inversions and decompose
+  > merged sub-flanked delins so the derivation surface matches normalize()
+  > — 60,731 of 62,824 geometry-corpus comparisons converge — and rebasing
+  > onto #2184 restores keeping a tandem dup abutting a change on this
+  > surface too (peeled last, after the inversion re-close). The public
+  > normalize() and every projector path are unchanged (they already ran the
+  > full partition), so no stored normalize() representation moves; the
+  > movement is confined to the from_sequences / rederive derivation
+  > surface, which now agrees with normalize(). The gated drop itself is
+  > byte-identical to the pre-drop full path (0 diffs across 119k+ in-tree
+  > comparisons and 165,071 real genomic rows, Full vs Gated).
+- *(normalize)* converge CDS/3'UTR straddles to the spanning form (part of #1816) ([#2186](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2186))
+  > 1338 rows move, 0 denote different bases. All are
+  > coding-axis and touch the CDS/3'UTR seam; 843 merge (straddle members →
+  > the spanning form), 376 split (a previously-masked spanning delins
+  > re-derives to its canonical partition where the sequence has an interior
+  > unchanged base — consistent with #2174), 119 retype. 742 were
+  > previously-accepted inputs (a migration for stored strings); 596 were
+  > not previously fixed points. Zero involve a 5'UTR straddle (that fold is
+  > a follow-up). Measured with `dump_normalized_corpus --verify-spdi` over
+  > the churn-enriched corpus, so the 1.4% rate is of the affected shape
+  > families, not a library-wide figure; the three surprising re-shapes (a
+  > dup/repeat beside a 3'UTR sub re-deriving to a pure-`c.*N` delins) were
+  > hand-verified to denote identical SPDI.
+- *(normalize)* stop over-fragmenting a contiguous run and a tandem dup (#2174, #2175) ([#2184](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2184))
+  > 2764 rows move on the shipped default
+  > (origin/main → HEAD), across four shape families: 1456
+  > `delins_hiding_an_inversion` (the #2174 spanning-delins coalesce), and
+  > 1238 `dup_plus_sub` + 44 `authored_repeat_beside_a_sibling` + 26
+  > `repeat_beside_a_sequence_sibling` (the #2175 kept dup). Both forms
+  > conformant; every moved row was a non-fixed-point input, so **0
+  > migrations** (no already-canonical form is disturbed) and **0
+  > denoted-sequence (meaning) changes** (SPDI-verify: the 13 pre-existing
+  > mismatches are byte-identical before and after; zero introduced).
+  > Measured over the synthetic churn corpus, so the rate is of the affected
+  > families, not a repo-wide figure.
+
+### Added
+
+- add streaming parse_and_rederive to BatchProcessor ([#2180](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2180))
+- add parallel batch parse_and_rederive to BatchProcessor ([#2178](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2178))
+
+### Fixed
+
+- *(release)* pin git_release_name so the release title matches the tag ([#2171](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2171))
+
+### Other
+
+- *(normalize)* fast-path lone-member derivation in rederive ([#2182](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2182))
+- *(test)* slice the direction-symmetry sweep so nextest can distribute it ([#2172](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2172))
+- *(normalize)* compare cis-member accessions structurally in overlap detection ([#2183](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2183))
+
 ## [0.16.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.15.0...v0.16.0) - 2026-08-19
 
 ### Representation changes
