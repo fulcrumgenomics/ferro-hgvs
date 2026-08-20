@@ -9257,26 +9257,13 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if !split_carries_a_gap_bearing_insert(pieces) {
         return;
     }
-    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
-    // Defensive: a malformed piece list is a bug upstream, not something to
-    // re-spell. Declining leaves the derived answer untouched.
-    if start >= end || end > reference.len() {
+    // Hull span and denoted payload over `[start, end)`: each piece's payload with
+    // the untouched reference between the members spliced back in. Declining
+    // (`None` — a malformed or empty piece list) leaves the derived answer
+    // untouched, the same defensive stance the previously open-coded walk took.
+    let Some((start, end, payload)) = block_hull_and_payload(pieces, reference) else {
         return;
-    }
-
-    // What the pieces denote over `[start, end)`: each piece's payload, with the
-    // untouched reference between them spliced back in.
-    let mut payload = Vec::new();
-    let mut cursor = start;
-    for piece in pieces.iter() {
-        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
-            return;
-        }
-        payload.extend_from_slice(&reference[cursor..piece.ref_start]);
-        payload.extend_from_slice(&piece.alt);
-        cursor = piece.ref_end;
-    }
-    payload.extend_from_slice(&reference[cursor..end]);
+    };
 
     // Refuse to merge across a wide run of unchanged bases: that is a genuine
     // multi-member allele, not one variant split by coincidence. See
@@ -18967,6 +18954,97 @@ mod tests {
             let mut pieces = pieces.to_vec();
             coalesce_payload_alignment_split(&mut pieces, reference);
             pieces
+        }
+
+        /// Pin [`block_hull_and_payload`]'s contract directly, since
+        /// `coalesce_payload_alignment_split` now delegates its hull-span and
+        /// denoted-payload walk to it (#2190). The positive handoff is exercised
+        /// through `coalesced()` above; this pins the reference-splice result and
+        /// every `None` early return — the "malformed or empty piece list"
+        /// decline the open-coded walk used to make with an inline `pieces[0]`
+        /// index and a `start >= end || end > reference.len()` guard.
+        #[test]
+        fn block_hull_and_payload_splices_the_reference_and_declines_a_malformed_list() {
+            let reference = b"ACGTACGT";
+
+            // Valid: two members with a gap between them. The hull is
+            // `[first.ref_start, last.ref_end)` and the payload is each member's
+            // `alt` with the untouched reference between the members spliced in:
+            // `alt("TT")` + `ref[3..5]="TA"` + `alt("")` = `TTTA` over `[1, 6)`.
+            let pieces = [
+                Piece {
+                    ref_start: 1,
+                    ref_end: 3,
+                    alt: b"TT".to_vec(),
+                },
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: Vec::new(),
+                },
+            ];
+            assert_eq!(
+                block_hull_and_payload(&pieces, reference),
+                Some((1, 6, b"TTTA".to_vec())),
+                "hull span and the reference-spliced denoted payload"
+            );
+
+            // Empty list: no first/last piece to bound the hull.
+            assert_eq!(
+                block_hull_and_payload(&[], reference),
+                None,
+                "empty piece list declines"
+            );
+
+            // Degenerate hull (`start >= end`).
+            assert_eq!(
+                block_hull_and_payload(
+                    &[Piece {
+                        ref_start: 4,
+                        ref_end: 4,
+                        alt: Vec::new()
+                    }],
+                    reference
+                ),
+                None,
+                "an empty hull span declines"
+            );
+
+            // Hull past the end of the reference (`end > reference.len()`).
+            assert_eq!(
+                block_hull_and_payload(
+                    &[Piece {
+                        ref_start: 2,
+                        ref_end: 20,
+                        alt: Vec::new()
+                    }],
+                    reference
+                ),
+                None,
+                "a hull past the reference end declines"
+            );
+
+            // Overlapping members: the second piece starts before the first ends,
+            // so `piece.ref_start < cursor`.
+            assert_eq!(
+                block_hull_and_payload(
+                    &[
+                        Piece {
+                            ref_start: 1,
+                            ref_end: 4,
+                            alt: b"X".to_vec()
+                        },
+                        Piece {
+                            ref_start: 2,
+                            ref_end: 5,
+                            alt: b"Y".to_vec()
+                        },
+                    ],
+                    reference
+                ),
+                None,
+                "overlapping members deny a well-defined payload"
+            );
         }
 
         /// The real block behind `NC_000001.10:g.240370952_240370985delinsT`
