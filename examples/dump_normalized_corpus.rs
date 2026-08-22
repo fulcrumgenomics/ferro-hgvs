@@ -157,7 +157,7 @@
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never
-//! whether an output is *right*. Seventeen of the twenty-one families cannot be asked:
+//! whether an output is *right*. Eighteen of the twenty-two families cannot be asked:
 //! they are sets of descriptions with no record of what the description was meant
 //! to denote. `separated_revcomp_runs` is built the other way round, choosing the
 //! alternate first and deriving the reference around it, so `(reference,
@@ -349,7 +349,7 @@ enum SpdiVerdict {
 /// one panicking row must not take the whole dump with it.
 ///
 /// The provider is built from [`Row::core`] and **not** from `Row::reference`
-/// (#1624). Those two are the same string for seventeen of the twenty-one families,
+/// (#1624). Those two are the same string for eighteen of the twenty-two families,
 /// which is what made reading the wrong one survive review: the two families
 /// whose `reference` column is a *label* — `long_block_inversion` and
 /// `separated_revcomp_runs` — were verified against the label itself. On the
@@ -519,7 +519,7 @@ fn report_partition_declines() {
 /// re-running the old code.
 struct Row {
     /// The dump's `reference` column, and part of the row's identity. For
-    /// seventeen of the twenty-one families this **is** the reference sequence; for
+    /// eighteen of the twenty-two families this **is** the reference sequence; for
     /// the two that bring their own designed references it is a label, because a
     /// kilobase core repeated on every row is not a column anyone can read.
     reference: String,
@@ -672,6 +672,24 @@ const FAMILIES: &[(&str, &str)] = &[
         "#1946 — an authored repeat that survives as one member of a two-member allele, \
          which is the only shape that reaches `lower_repeat_edits`",
     ),
+    // Another instance of the corpus-blindness class, and the one #2192 hit. Every
+    // family above pairs members so that no single member is a **multi-column
+    // contiguous run** that the solid-run collapse would coalesce: the multi-member
+    // ones are lone substitutions (`three_member_allele`), disjoint spans
+    // (`nested_spans`, `partial_overlap_spans`) or a span beside a point change
+    // (`del_plus_sub`, `dup_plus_sub`). So no row in this corpus has ever placed a
+    // coalescible run beside a **distant** cis member, which is exactly the geometry
+    // #2192 is about: a second member stretches the whole-variant hull across a gap,
+    // the changed-column set goes non-contiguous, and `coalesce_solid_run`'s
+    // contiguity gate declines — the #2174 collapse reaching only single-run
+    // alleles. Measuring `0 moved` off a corpus that cannot build run-count >= 2
+    // would have been a claim about the corpus.
+    (
+        "run_beside_a_distant_member",
+        "#2192 — a contiguous coalescible run (adjacent changes) beside a distant cis member \
+         the whole-hull collapse cannot reach; the run coalesces per-run once a sibling \
+         makes the hull non-contiguous",
+    ),
 ];
 
 /// The shape families drawn against the **protein** cores (#1606).
@@ -716,7 +734,7 @@ const PROTEIN_FAMILIES: &[(&str, &str)] = &[
 /// The family drawn against the **long** cores, and the one shape in this file
 /// whose point is its size rather than its geometry (#1460).
 ///
-/// Kept out of `FAMILIES` on purpose. The seventeen families there are crossed with
+/// Kept out of `FAMILIES` on purpose. The eighteen families there are crossed with
 /// every short core, and crossing a kilobase core with all of them would multiply
 /// the dump cost while adding no coverage: `MAX_SPLIT_BLOCK` gates on the *length*
 /// of the block being partitioned, not on how its members are arranged.
@@ -2410,6 +2428,65 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                     ));
                 }
             }
+            // A contiguous coalescible run beside a DISTANT cis member (#2192).
+            // The run is a four-base LEFT ROTATION spelled in its fragmented
+            // `[del; ins]` form: deleting `core[a]` and re-inserting it 3' of the
+            // window denotes `core[a..a+4]` rotated one place, an equal-length,
+            // all-columns-changed block that `coalesce_solid_run` collapses to one
+            // `delins`. A distant substitution at the far end of the core stretches
+            // the whole-variant hull across a wide gap, so baseline's whole-hull
+            // collapse sees a non-contiguous changed-column set and declines —
+            // keeping the rotation fragmented — while the per-run pass coalesces it.
+            //
+            // Built at a FIXED four-base window rather than the sliding `s..s+4`
+            // one: the left rotation changes every column only when no cyclically
+            // adjacent pair of the window is equal (`ATAT` qualifies with two
+            // distinct bases, `AATA` does not), and the distant member needs a gap
+            // wider than the five-base window can express. Emits nothing for a core
+            // with no such window — reported honestly rather than as a zero (see the
+            // family's comment in `FAMILIES`).
+            "run_beside_a_distant_member" => {
+                if s != 0 {
+                    continue;
+                }
+                // A left rotation of `core[a..a+4]` changes column `j` iff
+                // `core[a+j] != core[a+(j+1)%4]`, so every column changes exactly
+                // when no cyclically adjacent pair is equal.
+                let clean_rotation =
+                    |a: usize| (0..4).all(|j| bytes[a + j] != bytes[a + (j + 1) % 4]);
+                // Room for the four-base window and a distant member past a gap.
+                if let Some(a) = (0..bytes.len().saturating_sub(6)).find(|&a| clean_rotation(a)) {
+                    let dist = bytes.len() - 1;
+                    out.push(format!(
+                        "{prefix}[{}del;{}_{}ins{};{}{}>{}]",
+                        p(a),
+                        p(a + 3),
+                        p(a + 4),
+                        base(a),
+                        p(dist),
+                        base(dist),
+                        other(dist)
+                    ));
+                    // The already-coalesced spelling of the same variant beside the
+                    // same distant member. On `main` this ALSO fragments — the
+                    // whole-hull collapse re-derives it as `[del; dup]` — so it is a
+                    // second moving row, not a fixed point; its value is that the fix
+                    // keeps an input already written as one `delins` coalesced rather
+                    // than re-fragmenting it.
+                    let rot: String = (1..4)
+                        .map(|i| base(a + i))
+                        .chain(std::iter::once(base(a)))
+                        .collect();
+                    out.push(format!(
+                        "{prefix}[{}_{}delins{rot};{}{}>{}]",
+                        p(a),
+                        p(a + 3),
+                        p(dist),
+                        base(dist),
+                        other(dist)
+                    ));
+                }
+            }
             _ => unreachable!("unknown family {family}"),
         }
     }
@@ -2791,7 +2868,7 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// A row of one of the seventeen sequence-keyed families, where the
+    /// A row of one of the eighteen sequence-keyed families, where the
     /// `reference` column and the sequence are the same string.
     fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
         Row {
@@ -2889,7 +2966,7 @@ mod tests {
     /// Every row carries the reference **sequence** it was drawn against, which
     /// for two families is not what its `reference` column says (#1624).
     ///
-    /// The two views agree on seventeen of the twenty-one families, and that is
+    /// The two views agree on eighteen of the twenty-two families, and that is
     /// precisely what made the verify pass's confusion of them survive review —
     /// a bug that only manifests on `long_block_inversion` and
     /// `separated_revcomp_runs` is a bug in 286 rows out of 78,298. So this pins
@@ -4469,6 +4546,64 @@ mod tests {
         );
     }
 
+    /// `run_beside_a_distant_member` accounts for the cores it drops.
+    ///
+    /// The arm emits a pair of rows only for a core carrying a clean four-base left
+    /// rotation with room for a distant member — a window `core[a..a+4]` with no
+    /// cyclically adjacent pair equal, `a` in `0..len-6`. It emits **nothing** for a
+    /// core with no such window (homopolymer-heavy cores have none). Nothing else
+    /// records that drop, so without this guard a generator or seed change that
+    /// shrank the covered set would leave the family measuring a smaller population
+    /// while its `0 moved` still read as a fixed-point measurement — the exact
+    /// structural-zero trap the generator doctrine names. Both numbers are pinned so
+    /// a shift in either direction fails here rather than passing silently.
+    #[test]
+    fn the_distant_member_family_accounts_for_the_cores_it_drops() {
+        let has_clean_rotation = |core: &str| {
+            let b = core.as_bytes();
+            (0..b.len().saturating_sub(6)).any(|a| (0..4).all(|j| b[a + j] != b[a + (j + 1) % 4]))
+        };
+        let (mut emitted, mut dropped) = (0, 0);
+        for core in corpus_sequences(24) {
+            let rows = inputs_for("run_beside_a_distant_member", "g", &core);
+            if has_clean_rotation(&core) {
+                emitted += 1;
+                assert_eq!(
+                    rows.len(),
+                    2,
+                    "{core} has a clean rotation window but did not emit both rows"
+                );
+                for row in &rows {
+                    // Each row carries the distant member (`;` … `>`) beside the run,
+                    // which is the whole geometry the family exists to measure.
+                    assert!(
+                        row.contains(';') && row.contains('>'),
+                        "the distant member is what makes this family the #2192 shape: {row}"
+                    );
+                }
+            } else {
+                dropped += 1;
+                assert!(
+                    rows.is_empty(),
+                    "{core} has no clean rotation window yet emitted {rows:?}"
+                );
+            }
+        }
+        assert_eq!(
+            emitted, 43,
+            "clean-rotation coverage moved; the generator or seed count changed"
+        );
+        assert_eq!(
+            dropped, 5,
+            "the dropped-core count moved; a core gained or lost a clean rotation window"
+        );
+        assert_eq!(
+            emitted + dropped,
+            corpus_sequences(24).len(),
+            "every core is either covered or accounted as dropped"
+        );
+    }
+
     /// `delins_hiding_an_inversion` emits both spellings, with the trailing piece an
     /// exact reverse complement of its own span.
     ///
@@ -4813,7 +4948,7 @@ mod tests {
     //
     // Everything above measures *movement*: two dumps, one diff, "did this change
     // the output". Nothing above ever asks whether an output is **right**, and for
-    // seventeen of the twenty-one families it cannot — they are sets of descriptions,
+    // eighteen of the twenty-two families it cannot — they are sets of descriptions,
     // with no record of what the description was meant to denote.
     //
     // `separated_revcomp_runs` is built the other way round: the generator picks
