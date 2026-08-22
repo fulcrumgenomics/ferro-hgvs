@@ -23,8 +23,10 @@
 //! keep a dup-that-extends-a-reference-tandem out of a spanning `delins` on each
 //! path. The censuses stay per-surface so a regression on either is caught alone.
 
-use crate::common::cis_apply_oracle::{apply, normalize};
-use ferro_hgvs::{from_sequences, FromSequencesOptions};
+use crate::common::cis_apply_oracle::{apply, normalize, normalize_in, provider};
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{from_sequences, parse_hgvs, FromSequencesOptions, HgvsVariant, ShuffleDirection};
+use proptest::prelude::*;
 
 struct Case {
     issue: &'static str,
@@ -342,6 +344,522 @@ const CONVERGENCE: &[(&str, &str, &[&str])] = &[
         &["TEMPLATE:g.[11_12dup;17_18del]", "TEMPLATE:g.17_18delinsCA"],
     ),
 ];
+
+// ============================================================================
+// #2192 — the anti-narrowness cross-product corpus (generated, no fixtures)
+//
+// The #2174 corpus above pins single-member runs one shape at a time; that is
+// exactly the blindness #2192 lived in. This section GENERATES a cross-product
+// of {run shape} x {run count} x {member count} x {both shuffle directions} on
+// BOTH surfaces, and asserts each cell reaches the same recommended form its
+// runs reach in ISOLATION. A fix scoped to single-run or single-member fails
+// loudly on the multi cells (on `origin/main` every multi-run cell fragments);
+// this is the signal the #2174 corpus lacked.
+// ============================================================================
+
+/// A run template: a local `ref_seg -> alt_seg` edit, plus the member count its
+/// recommended (non-fragmented) single-run form has. The counts are the #2174 /
+/// #2175 results (a balanced equal-length run is one spanning `delins`; a
+/// reference-tandem expansion abutting a substitution is a `dup` plus that
+/// `sub`) and are asserted independently below, so a run that fragments in
+/// isolation fails here rather than passing this corpus vacuously.
+struct RunTemplate {
+    name: &'static str,
+    ref_seg: &'static str,
+    alt_seg: &'static str,
+    members: usize,
+}
+
+/// Net-length-preserving run templates: a balanced equal-length rotation is one
+/// spanning `delins` (#2174), a point substitution is one `sub`. Each is one
+/// member, and each returns the running length delta to zero, so the per-run
+/// grouping isolates any number of them in any order (`coalesce_by_run`'s
+/// zero-shift boundary). These fill the cross-product's run slots.
+const BASE_TEMPLATES: &[RunTemplate] = &[
+    RunTemplate {
+        name: "balanced4",
+        ref_seg: "GACT",
+        alt_seg: "ACTG",
+        members: 1,
+    },
+    RunTemplate {
+        name: "balanced3",
+        ref_seg: "ATA",
+        alt_seg: "TAC",
+        members: 1,
+    },
+    RunTemplate {
+        name: "sub",
+        ref_seg: "C",
+        alt_seg: "A",
+        members: 1,
+    },
+];
+
+/// A reference tandem (`AGAG`) expanded by one unit beside a substitution ->
+/// `[dup; sub]`, TWO members (#2175). This is the member-count (arity) axis: one
+/// run that is two members. A `dup` is net-imbalanced and content-defined, so the
+/// zero-shift grouping isolates it only when nothing follows it (see
+/// `coalesce_by_run`'s deferral note); the cross-product therefore places it only
+/// as the FINAL run. `dup`-before-another-run is deferred to a segment-first
+/// partition and is asserted UNCHANGED (still fragmenting) by
+/// `a_dup_before_another_run_is_left_for_category_one` below, so the boundary is
+/// pinned rather than silent.
+const TRAILING_DUP: RunTemplate = RunTemplate {
+    name: "dupsub",
+    ref_seg: "AGAGC",
+    alt_seg: "AGAGAGA",
+    members: 2,
+};
+
+/// Flanks and separators. The pads give the shuffle room to move at both ends;
+/// the spacer is long enough (>= 2 unchanged bases, `general.md:33`) that the
+/// runs it separates never interact, so a cell's runs are genuinely independent.
+const PAD: &str = "CACGTACGTC";
+const SPACER: &str = "TCGGATCAG";
+
+/// One generated cell: the template filling each run slot, left to right.
+struct Cell {
+    templates: Vec<&'static RunTemplate>,
+}
+
+impl Cell {
+    /// The reference, and the 0-based offset at which each run's `ref_seg` sits.
+    fn reference(&self) -> (String, Vec<usize>) {
+        let mut reference = String::from(PAD);
+        let mut offsets = Vec::new();
+        for (i, template) in self.templates.iter().enumerate() {
+            if i > 0 {
+                reference.push_str(SPACER);
+            }
+            offsets.push(reference.len());
+            reference.push_str(template.ref_seg);
+        }
+        reference.push_str(PAD);
+        (reference, offsets)
+    }
+
+    /// The reference with `which` run slots applied (all of them for the multi
+    /// case, exactly one for an isolated per-run derivation). Built left to
+    /// right so the offsets stay valid whatever the length changes.
+    fn applied(&self, reference: &str, offsets: &[usize], which: impl Fn(usize) -> bool) -> String {
+        let bytes = reference.as_bytes();
+        let mut out = String::with_capacity(bytes.len());
+        let mut cursor = 0usize;
+        for (i, template) in self.templates.iter().enumerate() {
+            let start = offsets[i];
+            out.push_str(&reference[cursor..start]);
+            if which(i) {
+                out.push_str(template.alt_seg);
+            } else {
+                out.push_str(template.ref_seg);
+            }
+            cursor = start + template.ref_seg.len();
+        }
+        out.push_str(&reference[cursor..]);
+        out
+    }
+}
+
+/// `from_sequences` for the `TEMPLATE` accession in one shuffle direction.
+fn from_seq_dir(reference: &str, resulting: &str, direction: ShuffleDirection) -> HgvsVariant {
+    from_sequences(
+        "TEMPLATE",
+        1,
+        reference,
+        resulting,
+        &FromSequencesOptions::default().with_direction(direction),
+    )
+    .unwrap_or_else(|e| panic!("from_sequences({reference}, {resulting}): {e}"))
+}
+
+/// The members of a rendered description, each as `(interbase_start, body)`
+/// where `body` is the spelling without the `TEMPLATE:g.` prefix, sorted into
+/// the ascending interbase order both surfaces render in (#1098). Comparing
+/// these makes a single-member `TEMPLATE:g.X` and a one-member allele equal, and
+/// is independent of how the members happened to be grouped.
+fn member_bodies(reference: &str, desc: &str) -> Vec<String> {
+    let template = provider(reference);
+    let parsed = parse_hgvs(desc).unwrap_or_else(|e| panic!("parse {desc}: {e:?}"));
+    let members: Vec<HgvsVariant> = match parsed {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    let mut keyed: Vec<(u64, String)> = members
+        .iter()
+        .map(|member| {
+            let start = hgvs_to_spdi(member, &template)
+                .unwrap_or_else(|e| panic!("{desc}: member {member} has no SPDI: {e}"))
+                .position;
+            let rendered = member.to_string();
+            let body = rendered
+                .strip_prefix("TEMPLATE:g.")
+                .unwrap_or(&rendered)
+                .to_string();
+            (start, body)
+        })
+        .collect();
+    keyed.sort_by_key(|(start, _)| *start);
+    keyed.into_iter().map(|(_, body)| body).collect()
+}
+
+/// Every tuple of `len` base templates, in base-`n` counting order (so every
+/// shape mix, with repetition, appears).
+fn base_tuples(len: u32) -> Vec<Vec<&'static RunTemplate>> {
+    let n = BASE_TEMPLATES.len();
+    let count = n.pow(len);
+    (0..count)
+        .map(|mut code| {
+            (0..len)
+                .map(|_| {
+                    let idx = code % n;
+                    code /= n;
+                    &BASE_TEMPLATES[idx]
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The largest run count the exhaustive cross-product enumerates. Five net-zero
+/// runs (and a sixth when a trailing `dup` is appended) exercises the four- and
+/// five-member alleles #2192 is about at full arity, in every ordering — the whole
+/// point being that the per-run coalesce must not depend on how many members
+/// precede or follow a run.
+const MAX_RUNS: u32 = 5;
+
+/// Enumerate every cell of the cross-product:
+///
+/// - all base-template tuples of length `1..=MAX_RUNS` (run count and member count
+///   both `1..=5`, every shape mix and ordering), and
+/// - all base-template tuples of length `0..MAX_RUNS` with a `TRAILING_DUP`
+///   appended (the member-count axis: the two-member `dup` run raises member count
+///   as high as six while run count stays `1..=5`, `dup` always last so the
+///   zero-shift grouping isolates it).
+fn cells() -> Vec<Cell> {
+    let mut cells = Vec::new();
+    for len in 1..=MAX_RUNS {
+        for templates in base_tuples(len) {
+            cells.push(Cell { templates });
+        }
+    }
+    for len in 0..MAX_RUNS {
+        for mut templates in base_tuples(len) {
+            templates.push(&TRAILING_DUP);
+            cells.push(Cell { templates });
+        }
+    }
+    cells
+}
+
+/// Sort member bodies into the ascending interbase order both surfaces render
+/// in, so a per-run combination can be compared to a whole-allele output.
+fn sort_bodies(reference: &str, mut bodies: Vec<String>) -> Vec<String> {
+    // Build the provider once, and cache each member's key so it is parsed and
+    // resolved once per body rather than once per comparison (`sort_by_key` may
+    // call its closure `O(n log n)` times).
+    let provider = provider(reference);
+    bodies.sort_by_cached_key(|body| {
+        hgvs_to_spdi(
+            &parse_hgvs(&format!("TEMPLATE:g.{body}")).expect("parse member"),
+            &provider,
+        )
+        .expect("member spdi")
+        .position
+    });
+    bodies
+}
+
+/// Wrap member bodies back into a `TEMPLATE:g.` description (an allele when there
+/// is more than one member).
+fn wrap_members(bodies: &[String]) -> String {
+    if bodies.len() == 1 {
+        format!("TEMPLATE:g.{}", bodies[0])
+    } else {
+        format!("TEMPLATE:g.[{}]", bodies.join(";"))
+    }
+}
+
+/// The cross-product's core assertion, run per shuffle direction and judged
+/// PER SURFACE: each surface's multi-run output must equal that same surface's
+/// per-run ISOLATED outputs combined. That is #2192's property — every run
+/// derived independently of its neighbours — stated without coupling the two
+/// surfaces to each other, since `from_sequences` and `normalize` may
+/// legitimately place a `dup` at different shuffle anchors (an orthogonal
+/// question, visible only on the 5' surface). A fix scoped to single-run or
+/// single-member fails here: the multi output fragments while the isolated
+/// per-run outputs do not, so the two stop being equal.
+fn assert_cross_product(direction: ShuffleDirection) {
+    for cell in cells() {
+        assert_cell(&cell, direction);
+    }
+}
+
+/// One cell's per-surface, per-run assertion — factored out of
+/// [`assert_cross_product`] so the exhaustive enumeration and the proptest fuzzer
+/// (`fuzz_the_cross_product`) check the identical property on their respective
+/// corpora.
+fn assert_cell(cell: &Cell, direction: ShuffleDirection) {
+    let (reference, offsets) = cell.reference();
+    let label: Vec<&str> = cell.templates.iter().map(|t| t.name).collect();
+    let context = format!("cell {label:?} {direction:?}");
+    let resulting = cell.applied(&reference, &offsets, |_| true);
+
+    // Per-run isolated forms, on each surface. `from_sequences` derives from
+    // the single-run sequence; `normalize` re-derives that run's own
+    // recommended form. The per-template member-count floor is an independent
+    // anti-fragmentation check: a run that fragments in isolation fails here
+    // rather than letting the equality below pass vacuously.
+    let mut expected_from_seq: Vec<String> = Vec::new();
+    let mut expected_normalize: Vec<String> = Vec::new();
+    for (i, template) in cell.templates.iter().enumerate() {
+        let single = cell.applied(&reference, &offsets, |j| j == i);
+        let fs = member_bodies(
+            &reference,
+            &from_seq_dir(&reference, &single, direction).to_string(),
+        );
+        assert_eq!(
+            fs.len(),
+            template.members,
+            "{context}: run {i} ({}) fragmented in ISOLATION into {fs:?} — the per-template \
+                 floor is wrong or #2174/#2175 regressed",
+            template.name
+        );
+        let run = member_bodies(
+            &reference,
+            &normalize_in(&reference, &wrap_members(&fs), direction),
+        );
+        expected_from_seq.extend(fs);
+        expected_normalize.extend(run);
+    }
+    let expected_from_seq = sort_bodies(&reference, expected_from_seq);
+    let expected_normalize = sort_bodies(&reference, expected_normalize);
+
+    // from_sequences surface: the multi-run derivation equals the per-run one.
+    let multi = from_seq_dir(&reference, &resulting, direction).to_string();
+    assert_eq!(
+            member_bodies(&reference, &multi),
+            expected_from_seq,
+            "{context}: from_sequences fragmented the multi-run allele\n  got:      {multi}\n  expected: {expected_from_seq:?}"
+        );
+
+    // normalize surface: normalizing the whole recommended allele equals
+    // normalizing each run's recommended form on its own.
+    let recommended = wrap_members(&expected_from_seq);
+    let normalized = normalize_in(&reference, &recommended, direction);
+    assert_eq!(
+            member_bodies(&reference, &normalized),
+            expected_normalize,
+            "{context}: normalize fragmented the multi-run allele\n  input:    {recommended}\n  expected: {expected_normalize:?}"
+        );
+
+    // meaning preservation on ALL THREE surfaces — the member-body equality above
+    // only proves the spellings match, not that they denote the resulting sequence.
+    // A per-run coalesce that drops or duplicates a base the SAME way in the
+    // multi-run allele and in each isolated run passes the equality yet corrupts
+    // the sequence, so normalize's own output must reach the apply oracle too.
+    assert_eq!(
+        apply(&reference, &recommended).as_deref(),
+        Some(resulting.as_str()),
+        "{context}: recommended form does not denote the resulting sequence\n  form: {recommended}"
+    );
+    assert_eq!(
+        apply(&reference, &multi).as_deref(),
+        Some(resulting.as_str()),
+        "{context}: from_sequences output does not denote the resulting sequence\n  out: {multi}"
+    );
+    assert_eq!(
+        apply(&reference, &normalized).as_deref(),
+        Some(resulting.as_str()),
+        "{context}: normalize output does not denote the resulting sequence\n  out: {normalized}"
+    );
+}
+
+/// The cross-product reaches its recommended form on the 3' surface.
+#[test]
+fn the_cross_product_reaches_the_recommended_form_three_prime() {
+    assert_cross_product(ShuffleDirection::ThreePrime);
+}
+
+/// The cross-product reaches its recommended form on the 5' surface.
+#[test]
+fn the_cross_product_reaches_the_recommended_form_five_prime() {
+    assert_cross_product(ShuffleDirection::FivePrime);
+}
+
+/// The three reproductions from issue #2192, verbatim — accession `CONTIG1`,
+/// sequences and coordinates exactly as the issue states them — pinned on BOTH
+/// surfaces the issue names. Each is a contiguous run beside a non-contiguous
+/// member that fragmented before this fix: Ex1 a `del+ins` rotation, Ex2 a
+/// `del+dup` (the dup smeared 3' to `g.15`), Ex3 a run with its sibling on the 5'
+/// side. This is the guard a reviewer looks for — the exact strings from the
+/// report, not a paraphrase of their geometry.
+#[test]
+fn the_issue_2192_reprexes_reach_the_recommended_form() {
+    struct Reprex {
+        name: &'static str,
+        reference: &'static str,
+        resulting: &'static str,
+        recommended: &'static str,
+        // The fragmented 3'-shuffled output the issue records for `main`, fed back
+        // through the normalize surface to prove it coalesces (not merely that the
+        // recommended form is a fixed point).
+        fragmented: &'static str,
+    }
+    let reprexes = [
+        Reprex {
+            name: "Ex1 del+ins",
+            reference: "ACGTTCAGGTGACTTTAGCTAGCTAGCTAGCTAG",
+            resulting: "ACGTTCAGGTACTGTTAGCTAGCTAGATAGCTAG",
+            recommended: "g.[11_14delinsACTG;27C>A]",
+            fragmented: "g.[11del;14_15insG;27C>A]",
+        },
+        Reprex {
+            name: "Ex2 del+dup",
+            reference: "ACGTTCAGGTGACTTAGCTAGCTAGCTAGCTAG",
+            resulting: "ACGTTCAGGTACTTTAGCTAGCTAGCGAGCTAG",
+            recommended: "g.[11_13delinsACT;27T>G]",
+            fragmented: "g.[11del;15dup;27T>G]",
+        },
+        Reprex {
+            name: "Ex3 5'-side change",
+            reference: "ACGTTCAGGTATATTAGCTAGCTAGCTAGCTAG",
+            resulting: "ACGTGCAGGTTACTTAGCTAGCTAGCTAGCTAG",
+            recommended: "g.[5T>G;11_13delinsTAC]",
+            fragmented: "g.[5T>G;11del;13_14insC]",
+        },
+    ];
+    for r in reprexes {
+        // Surface 1 — from_sequences, the issue's own reproducer, under CONTIG1 and
+        // in BOTH shuffle directions. The recommended form is direction-independent
+        // here (no run 3'-shifts across its sibling), so both must reach it.
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let got = from_sequences(
+                "CONTIG1",
+                1,
+                r.reference,
+                r.resulting,
+                &FromSequencesOptions::default().with_direction(direction),
+            )
+            .unwrap_or_else(|e| panic!("{}: from_sequences: {e}", r.name))
+            .to_string();
+            assert_eq!(
+                got,
+                format!("CONTIG1:{}", r.recommended),
+                "{}: from_sequences {direction:?} fragmented",
+                r.name
+            );
+        }
+        // Surface 2 — normalize/rederive (the issue's `rederive(recommended_form=…)`
+        // path). Driven through the TEMPLATE-keyed helper on the identical bytes, so
+        // the coordinates match. The fragmented `main` output must coalesce, and the
+        // recommended form must be a fixed point.
+        let templated = |body: &str| format!("TEMPLATE:{body}");
+        assert_eq!(
+            normalize(r.reference, &templated(r.fragmented)),
+            templated(r.recommended),
+            "{}: normalize did not de-fragment the main output",
+            r.name
+        );
+        assert_eq!(
+            normalize(r.reference, &templated(r.recommended)),
+            templated(r.recommended),
+            "{}: recommended form is not a normalize fixed point",
+            r.name
+        );
+        // Every spelling denotes the same bases as the resulting sequence.
+        for body in [r.recommended, r.fragmented] {
+            assert_eq!(
+                apply(r.reference, &templated(body)).as_deref(),
+                Some(r.resulting),
+                "{}: {body} does not denote the resulting sequence",
+                r.name
+            );
+        }
+    }
+}
+
+proptest! {
+    // Randomised extension of the exhaustive cross-product: a cell of 1..=6 net-zero
+    // runs in any order, with an optional trailing `dup`, in either shuffle
+    // direction. It samples the same shape `cells()` enumerates but out to higher
+    // arity and beyond what an exhaustive `MAX_RUNS` can reach, so a fragmentation
+    // that only appears at some member count or ordering the fixed set happens to
+    // miss still fails. `assert_cell` is the identical property the two exhaustive
+    // tests check. The strategy draws only from known-good templates, so every cell
+    // is well-formed — a failure is a real fragmentation, never a malformed input.
+    #![proptest_config(ProptestConfig::with_cases(512))]
+    #[test]
+    fn fuzz_the_cross_product(
+        base_idx in proptest::collection::vec(0usize..BASE_TEMPLATES.len(), 1..=6),
+        trailing_dup in any::<bool>(),
+        five_prime in any::<bool>(),
+    ) {
+        let mut templates: Vec<&'static RunTemplate> =
+            base_idx.iter().map(|&i| &BASE_TEMPLATES[i]).collect();
+        if trailing_dup {
+            templates.push(&TRAILING_DUP);
+        }
+        let direction = if five_prime {
+            ShuffleDirection::FivePrime
+        } else {
+            ShuffleDirection::ThreePrime
+        };
+        assert_cell(&Cell { templates }, direction);
+    }
+}
+
+/// The one shape the per-run grouping deliberately does NOT reach: a
+/// net-imbalanced `dup` sitting 5' of another run. The `dup`'s length change is
+/// banked but content-defined, so the zero-shift grouping cannot isolate it from
+/// what follows (see `coalesce_by_run`'s deferral note), and both the `dup` and
+/// the trailing run fragment. This is the Track-2 / segment-first-partition work
+/// tracked by #2194. This pins that boundary — asserting the DEFECT, in the manner
+/// of `issue_1610`'s `a_lone_unequal_length_delins_is_not_split` — so a future
+/// segment-first partition that closes it flips this test loudly rather than
+/// moving the row in silence. The output still denotes the right sequence.
+#[test]
+fn a_dup_before_another_run_is_left_for_category_one() {
+    // A `dup` run (`AGAGC -> AGAGAGA`, positions 11-15) 5' of a balanced4 run
+    // (`GACT -> ACTG`, positions 25-28).
+    let reference = "CACGTACGTCAGAGCTCGGATCAGGACTCACGTACGTC";
+    let resulting = "CACGTACGTCAGAGAGATCGGATCAGACTGCACGTACGTC";
+    let recommended = "TEMPLATE:g.[13_14dup;15C>A;25_28delinsACTG]";
+    // Meaning-preserving sanity: the recommended form denotes what the runs make.
+    assert_eq!(
+        apply(reference, recommended).as_deref(),
+        Some(resulting),
+        "recommended form must denote the resulting sequence"
+    );
+    for (direction, deferred) in [
+        (
+            ShuffleDirection::ThreePrime,
+            "TEMPLATE:g.[15delinsAGA;25del;28_29insG]",
+        ),
+        (
+            ShuffleDirection::FivePrime,
+            "TEMPLATE:g.[15delinsAGA;24del;28_29insG]",
+        ),
+    ] {
+        let got = from_seq_dir(reference, resulting, direction).to_string();
+        assert_ne!(
+            got, recommended,
+            "{direction:?}: dup-before-run unexpectedly reached the recommended form — \
+             if a segment-first partition now closes this, move the cell into the \
+             cross-product above"
+        );
+        assert_eq!(
+            got, deferred,
+            "{direction:?}: deferred fragmentation form moved"
+        );
+        // Whatever it emits, it still denotes the resulting sequence.
+        assert_eq!(
+            apply(reference, &got).as_deref(),
+            Some(resulting),
+            "{direction:?}: the deferred output changed the sequence"
+        );
+    }
+}
 
 /// Every spelling of each variant converges on the one pinned form.
 ///

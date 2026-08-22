@@ -3848,9 +3848,10 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     }
 
     // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
-    // that ships — takes the `Live` arm, so this is `partition_block` and nothing
-    // else. The other arms fall back to it when their splitter declines, rather
-    // than abandoning the canonicalization, so a bake-off run measures the
+    // that ships — takes the `CanonicalCoalesced` arm ([`DEFAULT_PARTITION_RULE`]),
+    // so this is `partition_block_canonical`, falling back to `partition_block`
+    // when its splitter declines. Every non-`Live` arm falls back the same way
+    // rather than abandoning the canonicalization, so a bake-off run measures the
     // partitioners and not their decline rates — and every such fallback is
     // counted, so the run can tell "the candidate agreed" from "the candidate
     // was not asked" (see `PartitionDeclineCounts`).
@@ -4222,8 +4223,10 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         // survives), then collapse the residual solid run into one `delins`.
         // Same scope as the sibling above (canonical arms, DNA axis).
         if rule.cuts_with_canonical() && AxisFrame::is_dna(kind) {
-            peel_tandem_dup_beside_change(pieces, &ref_bytes);
-            coalesce_solid_run(pieces, &ref_bytes);
+            coalesce_by_run(pieces, &ref_bytes, |run, reference| {
+                peel_tandem_dup_beside_change(run, reference);
+                coalesce_solid_run(run, reference);
+            });
         }
         // The whole-block rule generalised to every maximal run of consecutive
         // pieces, plus the flanked shape a whole-block test cannot express. Route 0
@@ -7198,6 +7201,152 @@ fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
         ref_end: start + hi + 1,
         alt: payload[lo..=hi].to_vec(),
     }];
+}
+
+/// Partition `pieces` into maximal runs of consecutive pieces and run `pass` on
+/// each run's sub-slice independently, reassembling the results in order.
+///
+/// # Why the coalesce passes must reason per-run, not per-hull (#2192)
+///
+/// [`peel_tandem_dup_beside_change`] and [`coalesce_solid_run`] both start from
+/// [`block_hull_and_payload`], which spans `pieces.first().ref_start ..
+/// pieces.last().ref_end` — the **whole-variant** hull. For a single contiguous
+/// run that hull *is* the run, and the collapse fires. But a second cis member
+/// (or a second run of change in one member) stretches the hull across the gap:
+/// the changed-column set becomes non-contiguous and [`coalesce_solid_run`]'s
+/// contiguity gate declines, so the run stays fragmented — the #2174 fix reaching
+/// only single-run alleles. This generalises it across BOTH run-count and arity
+/// (a member is just a run) by handing each pass one run at a time, which is the
+/// same shape [`coalesce_inversion_runs`] already applies to inversion typing
+/// ("the whole-block rule generalised to every maximal run of consecutive
+/// pieces").
+///
+/// # What a run boundary is
+///
+/// `general.md:34` keeps two variants individual when an *unchanged* reference
+/// base lies between them, and a base is a genuine separator only if it survives
+/// at its own coordinate — a **zero-shift fixed point**, the very notion
+/// [`coalesce_solid_run`] reads *within* a hull. A reference base in the gap
+/// between piece `i` and piece `i+1` is a zero-shift fixed point iff the running
+/// net length change of pieces `0..=i` is **zero** there. A non-zero running
+/// delta means a compensating indel has shifted the gap bases, so they match
+/// only under that shift and are not separators: `GACT -> ACTG` fragments to
+/// `[11del;14_15insG]`, whose interior `ACT` sits under a running delta of `-1`
+/// and so is correctly not a boundary, while the distant `27C>A` sits past a gap
+/// where the delta is back to `0` and so is. A block with no boundary is one
+/// run, so `pass` sees the whole piece list and behaviour is byte-identical to
+/// calling it directly — additive by construction, like Route 0 of
+/// [`coalesce_inversion_runs`].
+///
+/// # The one exception: a trailing tandem-dup insertion is not a boundary start
+///
+/// The zero-shift test is purely a *length* test, and it has one blind spot that
+/// a naive split gets wrong. A tandem duplication abutting a change reaches these
+/// passes 3'-most, as a net-positive insertion whose SOURCE TRACT sits in the
+/// unchanged reference immediately 5' of it — so `c.[10_11dup;13A>C]` arrives as
+/// `[13A>C-substitution; dup-insertion]`, with the two duplicated bases reading as
+/// a zero-shift gap between them. Split there, the dup-insertion lands in a
+/// singleton run where [`peel_tandem_dup_beside_change`] can no longer fold it, and
+/// it renders as a raw `ins` — a `dup` destroyed, the exact inverse of #2192.
+///
+/// So before cutting in front of a net-positive incoming piece, the grouping asks
+/// peel itself: if folding `current + [piece]` yields a `dup`, the gap is a
+/// duplication source and not a separator, and the cut is suppressed. This
+/// delegates the decision to peel's own one-mismatch discriminator rather than
+/// re-deriving it: a genuinely separate run (a distant member's `dup` sitting past
+/// a spanning change) mismatches peel's clean-dup hypothesis in many columns and is
+/// refused, so two real runs are never merged. The probe — and its clone — are paid
+/// only at a net-positive boundary candidate, which is rare.
+///
+/// # What this still does NOT generalise (deferred to a segment-first partition)
+///
+/// The probe rescues a dup that abuts its OWN change. It does not bank a `dup`
+/// sitting 5' of a *separate* downstream run: such a `dup` keeps the running delta
+/// non-zero across the gap, so no boundary is drawn and the following run is swept
+/// into one group where the collapse passes leave it whole (matching today's
+/// behaviour, not fragmenting it). Isolating each `dup` from an unrelated neighbour
+/// needs the content-aware segment-first partition (the report's Category 1, tracked
+/// by #2194), not a piece-length grouping; the single-run `dup` peel (#2175) is
+/// unchanged.
+fn coalesce_by_run(
+    pieces: &mut Vec<Piece>,
+    reference: &[u8],
+    pass: impl Fn(&mut Vec<Piece>, &[u8]),
+) {
+    // Fewer than two pieces cannot span a separator, so there is one run; run the
+    // pass directly and skip the grouping allocation.
+    if pieces.len() < 2 {
+        pass(pieces, reference);
+        return;
+    }
+    let mut groups: Vec<Vec<Piece>> = Vec::new();
+    let mut current: Vec<Piece> = Vec::new();
+    // Running net length change of the pieces placed so far. A split is taken
+    // only where this is zero, so each run resumes from zero and the test stays a
+    // zero-shift test whether or not it is reset.
+    let mut delta: i64 = 0;
+    for piece in pieces.iter() {
+        if let Some(prev) = current.last() {
+            // A gap of >=1 unchanged reference base is a boundary only at a
+            // zero-shift fixed point (`delta == 0`); a non-zero delta means the
+            // gap bases are a compensating-shift artefact, not a separator, so the
+            // run continues. See the doc comment.
+            let mut boundary = piece.ref_start > prev.ref_end && delta == 0;
+            // …with one exception. A tandem-dup insertion parks its SOURCE TRACT
+            // in the unchanged bases 5' of it: those bases read as a zero-shift gap
+            // at the piece level while being the duplication's origin, so
+            // `peel_tandem_dup_beside_change` must see the insertion together with
+            // the change it abuts (`c.[10_11dup;13A>C]` arrives as
+            // `[13A>C-sub; dup-insertion]` and must fold, not split — #2192). Ask
+            // peel itself: if folding `current + [piece]` yields a `dup`, the gap is
+            // a dup source and not a separator. Only a net-positive incoming piece
+            // can be a dup, so the probe — and its clone — are paid only there, and
+            // peel's own one-mismatch gate refuses a genuinely separate run (a
+            // distant member's dup abutting a spanning change mismatches in many
+            // columns), so this cannot merge two real runs.
+            if boundary && piece.alt.len() as i64 - (piece.ref_end - piece.ref_start) as i64 > 0 {
+                let mut probe = current.clone();
+                probe.push(piece.clone());
+                let unfolded = probe.clone();
+                peel_tandem_dup_beside_change(&mut probe, reference);
+                if probe != unfolded {
+                    boundary = false;
+                }
+            }
+            if boundary {
+                groups.push(std::mem::take(&mut current));
+            }
+        }
+        delta += piece.alt.len() as i64 - (piece.ref_end - piece.ref_start) as i64;
+        current.push(piece.clone());
+    }
+    groups.push(current);
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    for mut run in groups {
+        pass(&mut run, reference);
+        out.append(&mut run);
+    }
+    // Reassembly must preserve ascending, non-overlapping offset order — every
+    // downstream consumer relies on it: `rebuild_members`'s dup-disjointness walk
+    // debug-asserts `ref_start >= previous_ref_end`, and `shift_pieces` reads
+    // `pieces[i-1].ref_end` as the 5' bound of piece `i`. The only pass that can
+    // disturb it is `peel_tandem_dup_beside_change`, which widens its search 5'
+    // across a reference tandem tract (`tandem_tract_start`, #2175) that may reach
+    // before the run's own hull — and so, in principle, before an EARLIER run.
+    // It does not: the duplication is placed 3'-most over a *perfect* reference
+    // tract, so its emitted `[dup; sub]` sit at or 3' of the run's changed columns,
+    // which are themselves 3' of every earlier run's pieces. Clamping the widened
+    // window to the run's `[hs, he]` (the review's literal suggestion) would defeat
+    // #2175 instead — the source copies of a tandem dup legitimately live in
+    // unchanged reference 5' of the hull. So the invariant is asserted at the root
+    // rather than assumed, which turns any escape the 512-case `fuzz_the_cross_product`
+    // (or the whole debug suite) can reach into a failure here, next to its cause,
+    // instead of a silent reorder a distant consumer trips over.
+    debug_assert!(
+        out.windows(2).all(|w| w[0].ref_end <= w[1].ref_start),
+        "coalesce_by_run reassembled pieces out of ascending offset order: {out:?}"
+    );
+    *pieces = out;
 }
 
 // ----------------------------------------------------------------------------
@@ -11185,8 +11334,10 @@ pub(crate) fn derive_block_members(
         // issue_2175_dup_abutting_change, plus the #2161 inversion corpus).
         if let Some(kind) = cis_kind_of(template) {
             if AxisFrame::is_dna(kind) {
-                peel_tandem_dup_beside_change(pieces, reference);
-                coalesce_solid_run(pieces, reference);
+                coalesce_by_run(pieces, reference, |run, reference| {
+                    peel_tandem_dup_beside_change(run, reference);
+                    coalesce_solid_run(run, reference);
+                });
             }
         }
     };
