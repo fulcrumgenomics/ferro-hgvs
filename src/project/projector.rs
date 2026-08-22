@@ -1570,6 +1570,34 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_variant(&variant, transcript_id)
     }
 
+    /// Parse, normalize, and project an HGVS string into a Mutalyzer-style
+    /// [`MutalyzerResult`](super::MutalyzerResult): the normalized description
+    /// plus the equivalent `g.`/`c.`/`n.`/`r.`/`p.` axes and any warnings, in one
+    /// object.
+    ///
+    /// Interface-compatible with Mutalyzer's `/normalize`, **not**
+    /// output-compatible: the values are ferro's own conformant normalization and
+    /// projection, so they can differ from what Mutalyzer would emit — Mutalyzer
+    /// is not a spec oracle for ferro. `normalized` is the input normalized on its
+    /// own coordinate axis.
+    pub fn mutalyzer(
+        &self,
+        hgvs_string: &str,
+        transcript_id: &str,
+    ) -> Result<super::MutalyzerResult, FerroError> {
+        let variant = crate::parse_hgvs(hgvs_string)?;
+        let projection = self.project_variant(&variant, transcript_id)?;
+        let normalized = self
+            .normalizer
+            .normalize(&variant)
+            .ok()
+            .map(|normalized| normalized.to_string());
+        Ok(
+            super::MutalyzerResult::from_projection(hgvs_string, &projection)
+                .with_normalized(normalized),
+        )
+    }
+
     /// #879: project a bare `NG_`/`LRG_` genomic input onto a single requested
     /// transcript by de-anchoring it into the `NC_` chromosome frame — so the
     /// overlap guard and cdot see matching coordinates — then re-framing the
@@ -11584,6 +11612,34 @@ mod tests {
             let v = crate::parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
             let proj = vp.project_variant(&v, "NM_TEST.1").unwrap();
             assert!(proj.genomic.is_none());
+        }
+
+        #[test]
+        fn mutalyzer_bundles_the_normalized_form_and_axes() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let result = vp
+                .mutalyzer("NM_TEST.1:c.4C>A", "NM_TEST.1")
+                .expect("mutalyzer should succeed on a valid coding input");
+            assert_eq!(result.input, "NM_TEST.1:c.4C>A");
+            // Interface shape: the input's own-axis normalized form and the coding
+            // axis are populated; genomic is None for this bare NM_ input (no LRG
+            // parent). The values are ferro's own.
+            assert!(result.normalized.is_some(), "normalized form should be set");
+            assert!(result.coding.is_some(), "coding axis should be populated");
+            assert!(
+                result.genomic.is_none(),
+                "a bare NM_ input has no genomic axis"
+            );
+            // The Display block is the Mutalyzer-familiar layout, and it renders
+            // the actual coding value (not just the label).
+            let rendered = result.to_string();
+            assert!(rendered.contains("Input:       NM_TEST.1:c.4C>A"));
+            let coding = result.coding.as_deref().expect("coding axis populated");
+            assert!(
+                rendered.contains(&format!("Coding:      {coding}")),
+                "Display should render the coding value, got:\n{rendered}"
+            );
         }
 
         // -- 9: protein input → unsupported ------------------------------------
