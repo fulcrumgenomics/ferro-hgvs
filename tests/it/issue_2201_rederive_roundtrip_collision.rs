@@ -17,9 +17,10 @@
 //! reference's `after[343]` slot, so `apply_edits_to_window`'s coincident-slot
 //! guard refuses the combination and the round-trip check fails.
 //!
-//! Written test-first, before any fix. Layout:
+//! Authored test-first (RED), then made green by the `merge_coincident_insertions`
+//! fix in this same PR; they now stand as regression guards. Layout:
 //!
-//! * **Part A** — the exact reported geometry (must round-trip; RED today).
+//! * **Part A** — the exact reported geometry (must round-trip).
 //! * **Part B** — 1-D sweeps mapping the RED/GREEN boundary around it.
 //! * **Tier 1** — the trigger reverse-engineered (`T1a`/`T1c`), a 2-D grid,
 //!   both shuffle directions, idempotency.
@@ -58,7 +59,8 @@ const TRIGGER_TAIL: &str = "TCACGTCTCTCGGAGG";
 /// member rests on a window edge.
 const HOTSPOT_WINDOW: (u64, u64) = (275, 404);
 
-/// The eleven synthetic variants from the issue thread — all currently collide.
+/// The eleven synthetic variants from the issue thread — each collided before
+/// the fix and must now round-trip.
 const REPORTED_VARIANTS: [&str; 11] = [
     "NC_TEST.1:g.[301A>C;335delT;336delT;337delT;338delC;339delC;340delT;341delT;342delC;343_344insCCCGAACAAAGAAATCACGTCTCTCGGAGG]",
     "NC_TEST.1:g.[335del;336del;337del;338del;339del;340del;341del;342del;343_344insCCAGAACAAAGAAAAAACGTCTCTCGGAGG;1030A>C;1046C>A;1085C>A]",
@@ -154,6 +156,12 @@ fn filler(n: usize) -> String {
 /// Apply `dels` (1-based positions) and one insertion after `ins_after`
 /// (1-based) to `reference`, returning the alternate string.
 fn splice(reference: &str, dels: &[u64], ins_after: u64, payload: &str) -> String {
+    debug_assert!(
+        !dels.contains(&ins_after),
+        "ins_after {ins_after} is a deleted position; `splice` skips deleted positions \
+         before the anchor check, so the payload would be silently dropped and the case \
+         would degenerate to a plain deletion"
+    );
     let mut alt = String::new();
     for (i, b) in reference.bytes().enumerate() {
         let pos = i as u64 + 1;
@@ -268,7 +276,7 @@ impl Rng {
 }
 
 // ===========================================================================
-// Part A — the exact reported geometry (expected Ok after the fix; RED today)
+// Part A — the exact reported geometry (must round-trip)
 // ===========================================================================
 
 /// The tightest reported case (#6): eight adjacent deletions `335..=342`
@@ -279,7 +287,19 @@ fn tightest_del_run_then_big_insertion_rederives() {
     let nz = Normalizer::new(provider(TEMPLATE));
     let desc = "NC_TEST.1:g.[335delT;336delT;337delT;338delC;339delC;340delT;341delT;342delC;343_344insCCCGAACAAAGAAATCACGTCTCTCGGAGG]";
     let got = rederive(&nz, desc, false);
-    assert!(got.is_ok(), "{}: {}", got.tag(), got.detail());
+    // Pin the exact derived members, not merely that they re-apply.
+    // `merge_coincident_insertions` concatenates coincident payloads in list
+    // order, and that order is trusted rather than verified (see the module doc),
+    // with `verify_round_trip` the only backstop — so a wrong concatenation that
+    // still re-applied would pass an `is_ok()` check. Captured from the current
+    // run; if a deliberate derivation change moves it, update the string.
+    let Outcome::Ok(derived) = got else {
+        panic!("{}: {}", got.tag(), got.detail());
+    };
+    assert_eq!(
+        derived, "NC_TEST.1:g.[336delinsCCCGAACAAAGAAA;338_339insA;340T>G;343_344insCTCGGAGG]",
+        "the #2201 derivation for the tightest reported case is pinned"
+    );
 }
 
 /// The same geometry with base-less `del`s (the other spelling half the reported
@@ -560,8 +580,8 @@ fn t1b_run_length_by_payload_length_grid() {
 
 /// Repeat context, two findings that must be kept apart.
 ///
-/// **(a) The collision SURVIVES a tandem-repeat prefix (reproduces, RED).** Since
-/// the prefix is arbitrary (see `t1a`), a `CAG×n` or `AC×n` repeat prefix
+/// **(a) The trigger SURVIVES a tandem-repeat prefix (would collide without the
+/// fix).** Since the prefix is arbitrary (see `t1a`), a `CAG×n` or `AC×n` repeat prefix
 /// followed by `TRIGGER_TAIL` collides at the hotspot exactly as a homopolymer
 /// prefix does — so an indel whose inserted sequence begins with a short tandem
 /// expansion and ends in the trigger tail is in the failing family.
@@ -573,7 +593,8 @@ fn t1b_run_length_by_payload_length_grid() {
 /// context a uniform tract does not provide. Kept as the evidence that clean STR
 /// contexts are safe, so the (a)/(b) distinction is not re-litigated.
 ///
-/// Only the (a) cases are asserted to rederive, so the test is RED today.
+/// Only the (a) cases are asserted to rederive — they are the ones the fix
+/// rescues; without it they collide.
 #[test]
 fn t1c_repeat_context() {
     eprintln!("\n=== T1c(a): repeat-unit prefix + TRIGGER_TAIL at hotspot (reproduces) ===");
@@ -782,26 +803,36 @@ fn t2c_window_perturbation_stability() {
 fn t2d_structured_window_corpus() {
     eprintln!("\n=== T2d: structured window corpus (from_sequences) ===");
     let (win_lo, win_hi) = HOTSPOT_WINDOW;
-    let (mut collisions, mut exercised) = (0, 0);
+    let (mut collisions, mut others, mut exercised) = (0, 0, 0);
     for k in 1..=12u64 {
         let dels: Vec<u64> = (335..335 + k).collect();
         for plen in [4usize, 8, 12, 16, 20, 24, 28, 30] {
             for gap in 0..=2u64 {
-                let ins_after = 335 + k - 1 + gap; // last deleted base + gap retained bases
+                // first base past the deletion run (+ gap retained bases), matching
+                // `del_run_then_insertion`'s `start + k + gap` anchor
+                let ins_after = 335 + k + gap;
                 let (reference, alternate) =
                     window_ref_alt(win_lo, win_hi, &dels, ins_after, &PAYLOAD30[..plen]);
                 exercised += 1;
-                collisions += usize::from(
-                    window_outcome(win_lo, &reference, &alternate, ShuffleDirection::ThreePrime)
-                        .is_collision(),
-                );
+                // The contract is that every structured cell DERIVES: the
+                // collision is one way to fail it, a refusal / WouldNotRender /
+                // coordinate error (`Outcome::Other`) is another, and counting
+                // only collisions would let the latter pass silently.
+                let outcome =
+                    window_outcome(win_lo, &reference, &alternate, ShuffleDirection::ThreePrime);
+                if outcome.is_collision() {
+                    collisions += 1;
+                } else if !outcome.is_ok() {
+                    others += 1;
+                }
             }
         }
     }
-    eprintln!("  exercised {exercised} cells, {collisions} collisions");
+    eprintln!("  exercised {exercised} cells, {collisions} collisions, {others} other errors");
     assert_eq!(
-        collisions, 0,
-        "{collisions}/{exercised} structured-corpus cells hit the collision"
+        (collisions, others),
+        (0, 0),
+        "of {exercised} structured-corpus cells, {collisions} collided and {others} otherwise failed to derive"
     );
 }
 
@@ -817,10 +848,10 @@ fn t2d_structured_window_corpus() {
 /// guard must be *shown able to fail*, so this fuzzer explores the NEIGHBOURHOOD
 /// of the reported reproducer: it starts from the hotspot with `PAYLOAD30` (known
 /// to collide) and applies small random perturbations — payload point-mutations,
-/// ±1 length, run length 7–9, gap 0–1. The base case collides today, so the test
-/// is RED now and must go GREEN after the fix, and the perturbations map how wide
-/// the colliding region is. The pure-random search is re-run and its (expected
-/// zero) rate reported, so the blindness is recorded, not hidden.
+/// ±1 length, run length 7–9, gap 0–1. The base case collides without the fix, so
+/// this test fails without it and passes with it, and the perturbations map how
+/// wide the colliding region was. The pure-random search is re-run and its
+/// (expected zero) rate reported, so the blindness is recorded, not hidden.
 #[test]
 fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
     const CASES: usize = 4000;
@@ -838,7 +869,7 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
         let payload_len = 4 + rng.below(28);
         let payload = rng.dna(payload_len);
         let dels: Vec<u64> = (start..start + k).collect();
-        let alt = splice(&reference, &dels, start + k - 1 + gap, &payload);
+        let alt = splice(&reference, &dels, start + k + gap, &payload);
         random_collisions += usize::from(
             window_outcome(1, &reference, &alt, ShuffleDirection::ThreePrime).is_collision(),
         );
@@ -847,6 +878,7 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
     // --- neighbourhood search around the known reproducer. ---
     let mut rng = Rng(0xdead_2201);
     let mut collisions = 0;
+    let mut others = 0;
     let mut smallest: Option<String> = None;
     for case in 0..CASES {
         // case 0 is the exact reported reproducer; the rest perturb it.
@@ -871,21 +903,24 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
         }
         let payload = String::from_utf8(payload).unwrap();
         let dels: Vec<u64> = (335..335 + k).collect();
-        let (reference, alternate) =
-            window_ref_alt(win_lo, win_hi, &dels, 335 + k - 1 + gap, &payload);
-        if window_outcome(win_lo, &reference, &alternate, ShuffleDirection::ThreePrime)
-            .is_collision()
-        {
+        let (reference, alternate) = window_ref_alt(win_lo, win_hi, &dels, 335 + k + gap, &payload);
+        let outcome = window_outcome(win_lo, &reference, &alternate, ShuffleDirection::ThreePrime);
+        if outcome.is_collision() {
             collisions += 1;
             if smallest.as_ref().is_none_or(|s| payload.len() < s.len()) {
                 smallest = Some(payload);
             }
+        } else if !outcome.is_ok() {
+            // A neighbourhood cell that fails to derive for any other reason is
+            // still a failure of the "the whole neighbourhood round-trips"
+            // contract, not just a collision.
+            others += 1;
         }
     }
 
     eprintln!("\n=== T3a: neighbourhood fuzzer ===");
     eprintln!("  pure-random control: {random_collisions}/{CASES} collisions (blind — expected 0)");
-    eprintln!("  neighbourhood: {collisions}/{CASES} collisions");
+    eprintln!("  neighbourhood: {collisions}/{CASES} collisions, {others} other errors");
     if let Some(payload) = &smallest {
         eprintln!(
             "  smallest colliding payload (len={}): {payload}",
@@ -893,10 +928,12 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
         );
     }
     // Seeded with a known collider, so a green run means the whole neighbourhood
-    // round-trips — the post-fix state.
+    // round-trips — the post-fix state. A cell that fails any other way
+    // (`Outcome::Other`) breaks that contract too, so both counts must be zero.
     assert_eq!(
-        collisions, 0,
-        "neighbourhood fuzzer found {collisions}/{CASES} colliding derivations"
+        (collisions, others),
+        (0, 0),
+        "neighbourhood fuzzer found {collisions}/{CASES} colliding and {others}/{CASES} otherwise-failing derivations"
     );
 }
 
