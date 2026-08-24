@@ -111,7 +111,7 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
 //! 38 records, 35 decided / 3 undecided
-//! 122 clause lines, of which 41 are named by more than one record
+//! 124 clause lines, of which 41 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -248,6 +248,7 @@
 //! docs/recommendations/DNA/delins.md:16  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -265,9 +266,14 @@
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/DNA/delins.md:42
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
+//! docs/recommendations/DNA/delins.md:44
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//! docs/recommendations/DNA/delins.md:45
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //! docs/recommendations/DNA/delins.md:46  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
@@ -275,6 +281,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:79
@@ -444,6 +451,7 @@
 //! docs/recommendations/general.md:57  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:87
@@ -526,6 +534,7 @@
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -544,6 +553,7 @@
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
@@ -551,6 +561,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:81
@@ -647,6 +658,7 @@
 //! docs/recommendations/general.md:57
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/style.md:9
