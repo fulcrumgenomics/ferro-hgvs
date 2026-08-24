@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.0...v0.17.1) - 2026-08-24
+
+### Representation changes
+
+- *(normalize)* equal-length all-differing run is a spanning delins, not an outside-anchored dup ([#2193](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2193)) ([#2200](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2200))
+- *(normalize)* coalesce a run beside a net-imbalanced cis member ([#2194](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2194)) ([#2199](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2199))
+- *(normalize)* coalesce a contiguous run beside a distant cis member ([#2195](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2195))
+
 ## [0.17.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.16.0...v0.17.0) - 2026-08-20
 
 ### Representation changes
