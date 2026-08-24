@@ -398,14 +398,12 @@ const BASE_TEMPLATES: &[RunTemplate] = &[
 
 /// A reference tandem (`AGAG`) expanded by one unit beside a substitution ->
 /// `[dup; sub]`, TWO members (#2175). This is the member-count (arity) axis: one
-/// run that is two members. A `dup` is net-imbalanced and content-defined, so the
-/// zero-shift grouping isolates it only when nothing follows it (see
-/// `coalesce_by_run`'s deferral note); the cross-product therefore places it only
-/// as the FINAL run. `dup`-before-another-run is deferred to a segment-first
-/// partition and is asserted UNCHANGED (still fragmenting) by
-/// `a_dup_before_another_run_is_left_for_category_one` below, so the boundary is
-/// pinned rather than silent.
-const TRAILING_DUP: RunTemplate = RunTemplate {
+/// run that is two members. A `dup` is net-imbalanced and content-defined; since
+/// #2194 the suffix-closure grouping in `coalesce_by_run` isolates it wherever it
+/// sits — its permanent length shift earns a closure/content wall regardless of
+/// what follows — so the cross-product places it at EVERY position, the
+/// `dup`-before-a-run shape included (`a_dup_before_another_run_reaches_the_recommended_form`).
+const DUPSUB: RunTemplate = RunTemplate {
     name: "dupsub",
     ref_seg: "AGAGC",
     alt_seg: "AGAGAGA",
@@ -522,7 +520,7 @@ fn base_tuples(len: u32) -> Vec<Vec<&'static RunTemplate>> {
 }
 
 /// The largest run count the exhaustive cross-product enumerates. Five net-zero
-/// runs (and a sixth when a trailing `dup` is appended) exercises the four- and
+/// runs (and a sixth when a `dup` is inserted) exercises the four- and
 /// five-member alleles #2192 is about at full arity, in every ordering — the whole
 /// point being that the per-run coalesce must not depend on how many members
 /// precede or follow a run.
@@ -532,10 +530,11 @@ const MAX_RUNS: u32 = 5;
 ///
 /// - all base-template tuples of length `1..=MAX_RUNS` (run count and member count
 ///   both `1..=5`, every shape mix and ordering), and
-/// - all base-template tuples of length `0..MAX_RUNS` with a `TRAILING_DUP`
-///   appended (the member-count axis: the two-member `dup` run raises member count
-///   as high as six while run count stays `1..=5`, `dup` always last so the
-///   zero-shift grouping isolates it).
+/// - all base-template tuples of length `0..MAX_RUNS` with a `DUPSUB` inserted at
+///   EVERY position (the member-count axis: the two-member `dup` run raises member
+///   count as high as six while run count stays `1..=5`; since #2194 the grouping
+///   isolates the `dup` at any index, so it is enumerated at each — the
+///   `dup`-before-a-run shape that used to be deferred is now covered here).
 fn cells() -> Vec<Cell> {
     let mut cells = Vec::new();
     for len in 1..=MAX_RUNS {
@@ -544,9 +543,14 @@ fn cells() -> Vec<Cell> {
         }
     }
     for len in 0..MAX_RUNS {
-        for mut templates in base_tuples(len) {
-            templates.push(&TRAILING_DUP);
-            cells.push(Cell { templates });
+        for templates in base_tuples(len) {
+            for pos in 0..=templates.len() {
+                let mut with_dup = templates.clone();
+                with_dup.insert(pos, &DUPSUB);
+                cells.push(Cell {
+                    templates: with_dup,
+                });
+            }
         }
     }
     cells
@@ -781,24 +785,25 @@ fn the_issue_2192_reprexes_reach_the_recommended_form() {
 
 proptest! {
     // Randomised extension of the exhaustive cross-product: a cell of 1..=6 net-zero
-    // runs in any order, with an optional trailing `dup`, in either shuffle
-    // direction. It samples the same shape `cells()` enumerates but out to higher
-    // arity and beyond what an exhaustive `MAX_RUNS` can reach, so a fragmentation
-    // that only appears at some member count or ordering the fixed set happens to
-    // miss still fails. `assert_cell` is the identical property the two exhaustive
-    // tests check. The strategy draws only from known-good templates, so every cell
-    // is well-formed — a failure is a real fragmentation, never a malformed input.
+    // runs in any order, with an optional `dup` inserted at ANY position, in either
+    // shuffle direction. It samples the same shape `cells()` enumerates but out to
+    // higher arity and beyond what an exhaustive `MAX_RUNS` can reach, so a
+    // fragmentation that only appears at some member count or ordering the fixed set
+    // happens to miss still fails. `assert_cell` is the identical property the two
+    // exhaustive tests check. The strategy draws only from known-good templates, so
+    // every cell is well-formed — a failure is a real fragmentation, never a
+    // malformed input.
     #![proptest_config(ProptestConfig::with_cases(512))]
     #[test]
     fn fuzz_the_cross_product(
         base_idx in proptest::collection::vec(0usize..BASE_TEMPLATES.len(), 1..=6),
-        trailing_dup in any::<bool>(),
+        dup_pos in proptest::option::of(0usize..=6),
         five_prime in any::<bool>(),
     ) {
         let mut templates: Vec<&'static RunTemplate> =
             base_idx.iter().map(|&i| &BASE_TEMPLATES[i]).collect();
-        if trailing_dup {
-            templates.push(&TRAILING_DUP);
+        if let Some(pos) = dup_pos {
+            templates.insert(pos.min(templates.len()), &DUPSUB);
         }
         let direction = if five_prime {
             ShuffleDirection::FivePrime
@@ -809,17 +814,17 @@ proptest! {
     }
 }
 
-/// The one shape the per-run grouping deliberately does NOT reach: a
-/// net-imbalanced `dup` sitting 5' of another run. The `dup`'s length change is
-/// banked but content-defined, so the zero-shift grouping cannot isolate it from
-/// what follows (see `coalesce_by_run`'s deferral note), and both the `dup` and
-/// the trailing run fragment. This is the Track-2 / segment-first-partition work
-/// tracked by #2194. This pins that boundary — asserting the DEFECT, in the manner
-/// of `issue_1610`'s `a_lone_unequal_length_delins_is_not_split` — so a future
-/// segment-first partition that closes it flips this test loudly rather than
-/// moving the row in silence. The output still denotes the right sequence.
+/// The exact #2194 reprex, now CLOSED: a net-imbalanced `dup` sitting 5' of another
+/// run. Before the suffix-closure grouping the `dup`'s banked length shift starved
+/// the downstream run of its zero-shift wall, so both fragmented; now the closure
+/// license (a permanent shift never returns to baseline) and the content license (a
+/// group that peels to a `dup` cannot collapse anyway) isolate the `dup`, so BOTH it
+/// and the run reach their recommended forms. Kept as a named guard for the exact
+/// strings from the report, alongside the generalised cross-product that now
+/// enumerates a `dup` in every position. Direction-independent: the `dup` places
+/// 3'-most and the run is a full-span `delins`, so both surfaces reach one form.
 #[test]
-fn a_dup_before_another_run_is_left_for_category_one() {
+fn a_dup_before_another_run_reaches_the_recommended_form() {
     // A `dup` run (`AGAGC -> AGAGAGA`, positions 11-15) 5' of a balanced4 run
     // (`GACT -> ACTG`, positions 25-28).
     let reference = "CACGTACGTCAGAGCTCGGATCAGGACTCACGTACGTC";
@@ -831,32 +836,50 @@ fn a_dup_before_another_run_is_left_for_category_one() {
         Some(resulting),
         "recommended form must denote the resulting sequence"
     );
-    for (direction, deferred) in [
-        (
-            ShuffleDirection::ThreePrime,
-            "TEMPLATE:g.[15delinsAGA;25del;28_29insG]",
-        ),
-        (
-            ShuffleDirection::FivePrime,
-            "TEMPLATE:g.[15delinsAGA;24del;28_29insG]",
-        ),
-    ] {
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
         let got = from_seq_dir(reference, resulting, direction).to_string();
-        assert_ne!(
-            got, recommended,
-            "{direction:?}: dup-before-run unexpectedly reached the recommended form — \
-             if a segment-first partition now closes this, move the cell into the \
-             cross-product above"
-        );
         assert_eq!(
-            got, deferred,
-            "{direction:?}: deferred fragmentation form moved"
+            got, recommended,
+            "{direction:?}: dup-before-run did not reach the recommended form"
         );
-        // Whatever it emits, it still denotes the resulting sequence.
+        // The output still denotes the resulting sequence.
         assert_eq!(
             apply(reference, &got).as_deref(),
             Some(resulting),
-            "{direction:?}: the deferred output changed the sequence"
+            "{direction:?}: the output changed the sequence"
+        );
+    }
+}
+
+/// The del-analogue of #2194: a plain deletion (net -1) 5' of a separate run
+/// starved the downstream run of its zero-shift wall in the same way — the residual
+/// class is "any net-imbalanced 5' member", not only a `dup` (per the #2195
+/// gauntlet). The closure license (a permanent shift that never returns to
+/// baseline) isolates the del so the run collapses. Named guard for the del case,
+/// which no `BASE_TEMPLATE` carries and the cross-product therefore cannot reach.
+#[test]
+fn a_del_before_another_run_reaches_the_recommended_form() {
+    // A single-base del (`A` at position 11) 5' of a balanced4 run (`GACT -> ACTG`,
+    // positions 21-24). The `A` is unique in its neighbourhood, so the del is
+    // unambiguous and direction-independent.
+    let reference = "CACGTACGTCATCGGATCAGGACTCACGTACGTC";
+    let resulting = "CACGTACGTCTCGGATCAGACTGCACGTACGTC";
+    let recommended = "TEMPLATE:g.[11del;21_24delinsACTG]";
+    assert_eq!(
+        apply(reference, recommended).as_deref(),
+        Some(resulting),
+        "recommended form must denote the resulting sequence"
+    );
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        let got = from_seq_dir(reference, resulting, direction).to_string();
+        assert_eq!(
+            got, recommended,
+            "{direction:?}: del-before-run did not reach the recommended form"
+        );
+        assert_eq!(
+            apply(reference, &got).as_deref(),
+            Some(resulting),
+            "{direction:?}: the output changed the sequence"
         );
     }
 }
