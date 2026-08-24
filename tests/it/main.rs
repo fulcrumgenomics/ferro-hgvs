@@ -93,6 +93,7 @@ mod cds_utr3_crossing_shift_idempotency;
 mod census_filter_invariant;
 mod cis_adjudication_enumeration;
 mod cis_allele_confluence_proptest;
+mod cis_confluence_2192;
 mod cis_confluence_adjudication;
 mod cis_confluence_axis;
 mod cis_confluence_nr_axis;
