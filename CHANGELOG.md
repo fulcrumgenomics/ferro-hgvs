@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.0...v0.17.1) - 2026-08-24
+
+### Representation changes
+
+- *(normalize)* equal-length all-differing run is a spanning delins, not an outside-anchored dup ([#2193](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2193)) ([#2200](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2200))
+  > An equal-length contiguous run where every base
+  > differs and a sub-piece coincidentally matches a flanking reference
+  > tandem moves from a `[dup;del]`/`[del;dup]` (dup anchored outside the
+  > changed span) to the spanning delins (#2193, #422). The direction is
+  > away from the already-shipped form — a genuine output change for these
+  > inputs, not a re-normalization to the form a second normalize already
+  > produced. `dump_normalized_corpus` measures 0 of 96698 rows moved, but
+  > that is a STRUCTURAL ZERO (#1517: the synthetic corpus cannot construct
+  > this coincidental-tandem-inside-an-equal-length-run geometry), not a
+  > bound. Movement is confirmed on the #422 fixture
+  > (`NC_000022.10:g.[10_11del;16_17dup]` → `g.10_15delinsTACGTA`); exactly
+  > one pinned regression test moved suite-wide. Previously-accepted inputs,
+  > so a migration for any consumer that stored the `[dup;del]` spelling;
+  > the shape is rare in real corpora.
+- *(normalize)* coalesce a run beside a net-imbalanced cis member ([#2194](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2194)) ([#2199](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2199))
+  > moves 181 of 44,020 derived outputs on a
+  > 22,010-pair aggregate corpus (net-imbalanced-5′-member + run geometry,
+  > fragmented → coalesced), all meaning-preserving and idempotent — ~90
+  > coalesce a run to one delins, ~82 expose a duplication.md:18-mandated
+  > dup a delins/ins was hiding (#2175), 0 alter an inversion. The repo's
+  > confluence (separations 0–8) and spec-conformance censuses are unchanged
+  > (0 rows move there); this geometry is not in those corpora.
+- *(normalize)* coalesce a contiguous run beside a distant cis member ([#2195](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2195))
+  > 152 of 228 rows move on the
+  > run_beside_a_distant_member disclosure family; 0 on every other shape
+  > family. coalesce_by_run coalesces previously-fragmented multi-run cis
+  > alleles per contiguous run, so a run beside a distant member renders as
+  > one delins instead of [del;dup/ins;...] — on the default
+  > CanonicalCoalesced path and via from_sequences. Meaning-preserving
+  > (SPDI-identical). Rate is of the affected family. Previously-accepted
+  > inputs, so a real migration for consumers of multi-member cis-allele
+  > normalization.
+  >
+  > Refs #2192
+
 ## [0.17.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.16.0...v0.17.0) - 2026-08-20
 
 ### Representation changes
