@@ -7226,48 +7226,54 @@ fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
 /// `general.md:34` keeps two variants individual when an *unchanged* reference
 /// base lies between them, and a base is a genuine separator only if it survives
 /// at its own coordinate — a **zero-shift fixed point**, the very notion
-/// [`coalesce_solid_run`] reads *within* a hull. A reference base in the gap
-/// between piece `i` and piece `i+1` is a zero-shift fixed point iff the running
-/// net length change of pieces `0..=i` is **zero** there. A non-zero running
-/// delta means a compensating indel has shifted the gap bases, so they match
-/// only under that shift and are not separators: `GACT -> ACTG` fragments to
-/// `[11del;14_15insG]`, whose interior `ACT` sits under a running delta of `-1`
-/// and so is correctly not a boundary, while the distant `27C>A` sits past a gap
-/// where the delta is back to `0` and so is. A block with no boundary is one
-/// run, so `pass` sees the whole piece list and behaviour is byte-identical to
-/// calling it directly — additive by construction, like Route 0 of
-/// [`coalesce_inversion_runs`].
+/// [`coalesce_solid_run`] reads *within* a hull. That collapse is position-wise
+/// and so valid only inside a NET-ZERO (equal-length) frame, which means a gap's
+/// running delta must be read against the run's own baseline, not against zero. A
+/// net-imbalanced member shifts the frame: `GACT -> ACTG`'s interior `ACT` sits
+/// under a *temporary* `-1` the run rebalances (not a boundary), while the
+/// `TCGGATCAG` tract 5' of a downstream run sits under a *permanent* `+2` a
+/// preceding `dup` established (a boundary). A bare `delta == 0` test cannot tell
+/// these apart.
+///
+/// A gap is a separator under either of two **licenses**, tracked against a STACK
+/// of frame baselines seeded with `0`:
+///
+/// 1. **Pop** — the delta returns to a stacked baseline. `0` is pinned at the
+///    stack bottom and never removed, so the license set subsumes the old
+///    `delta == 0` test: every wall the zero-shift rule drew is still licensed,
+///    and the licenses only ADD walls. A licensed wall can still be withdrawn by
+///    the tandem-dup suppression below, which applies to a `d == 0` pop wall too,
+///    so the pass is not byte-identical on those gaps.
+/// 2. **Closure** — no stacked baseline recurs at this gap or any later one (the
+///    downstream cumulative-delta set includes the variant end), so this excursion
+///    provably cannot close and is a permanent frame shift. This isolates the run
+///    sitting 3' of a `dup`/`del` whose shift never returns — the #2194 residual.
 ///
 /// # The one exception: a trailing tandem-dup insertion is not a boundary start
 ///
-/// The zero-shift test is purely a *length* test, and it has one blind spot that
-/// a naive split gets wrong. A tandem duplication abutting a change reaches these
-/// passes 3'-most, as a net-positive insertion whose SOURCE TRACT sits in the
-/// unchanged reference immediately 5' of it — so `c.[10_11dup;13A>C]` arrives as
-/// `[13A>C-substitution; dup-insertion]`, with the two duplicated bases reading as
-/// a zero-shift gap between them. Split there, the dup-insertion lands in a
-/// singleton run where [`peel_tandem_dup_beside_change`] can no longer fold it, and
-/// it renders as a raw `ins` — a `dup` destroyed, the exact inverse of #2192.
+/// A tandem duplication abutting a change reaches these passes 3'-most, as a
+/// net-positive insertion whose SOURCE TRACT sits in the unchanged reference
+/// immediately 5' of it — so `c.[10_11dup;13A>C]` arrives as `[13A>C-substitution;
+/// dup-insertion]`, with the two duplicated bases reading as a gap between them.
+/// Split there, the dup-insertion lands in a singleton run where
+/// [`peel_tandem_dup_beside_change`] can no longer fold it and it renders as a raw
+/// `ins` — a `dup` destroyed, the exact inverse of #2192. So before cutting in
+/// front of a net-positive incoming piece — under EITHER license — the grouping
+/// asks peel itself: if folding `current + [piece]` yields a `dup`, the gap is a
+/// duplication source and not a separator, and the cut is suppressed. Peel's own
+/// one-mismatch gate refuses a genuinely separate run (a distant member's `dup`
+/// mismatches in many columns), so two real runs are never merged, and the probe
+/// is paid only at a net-positive candidate.
 ///
-/// So before cutting in front of a net-positive incoming piece, the grouping asks
-/// peel itself: if folding `current + [piece]` yields a `dup`, the gap is a
-/// duplication source and not a separator, and the cut is suppressed. This
-/// delegates the decision to peel's own one-mismatch discriminator rather than
-/// re-deriving it: a genuinely separate run (a distant member's `dup` sitting past
-/// a spanning change) mismatches peel's clean-dup hypothesis in many columns and is
-/// refused, so two real runs are never merged. The probe — and its clone — are paid
-/// only at a net-positive boundary candidate, which is rare.
+/// # The residual this does NOT reach (accepted)
 ///
-/// # What this still does NOT generalise (deferred to a segment-first partition)
-///
-/// The probe rescues a dup that abuts its OWN change. It does not bank a `dup`
-/// sitting 5' of a *separate* downstream run: such a `dup` keeps the running delta
-/// non-zero across the gap, so no boundary is drawn and the following run is swept
-/// into one group where the collapse passes leave it whole (matching today's
-/// behaviour, not fragmenting it). Isolating each `dup` from an unrelated neighbour
-/// needs the content-aware segment-first partition (the report's Category 1, tracked
-/// by #2194), not a piece-length grouping; the single-run `dup` peel (#2175) is
-/// unchanged.
+/// An imbalanced member compensated by a *distant* opposite imbalance closes its
+/// own excursion (a stacked baseline recurs downstream), so the closure license
+/// does not fire and the run is swept in: the group declines and the output is
+/// exactly today's baseline — never wrong, just unfixed. The delta profile alone
+/// cannot rescue it (it is identical to a scrambled equal-length block that
+/// *should* stay whole, e.g. `(+2,-1,+1,-2)`); isolating it needs the byte content
+/// the profile cannot see, which is deferred rather than guessed here.
 fn coalesce_by_run(
     pieces: &mut Vec<Piece>,
     reference: &[u8],
@@ -7279,69 +7285,154 @@ fn coalesce_by_run(
         pass(pieces, reference);
         return;
     }
+    // Net length change of one piece, and the cumulative profile: `cum[i]` is the
+    // delta of `pieces[0..=i]`, i.e. the delta at the gap that may follow piece `i`.
+    let net = |p: &Piece| -> i64 { p.alt.len() as i64 - (p.ref_end - p.ref_start) as i64 };
+    let cum: Vec<i64> = pieces
+        .iter()
+        .scan(0i64, |acc, p| {
+            *acc += net(p);
+            Some(*acc)
+        })
+        .collect();
+    // Greatest index at which each cumulative value occurs. The closure test in
+    // the loop asks whether any stacked baseline recurs in the tail `cum[i..]`,
+    // i.e. whether its last occurrence is at index `>= i`. Precomputing that index
+    // (rather than a suffix `contains` scan, which is O(n) per baseline and O(n^3)
+    // over the loop on a strictly increasing profile) lets each `Frame` below carry
+    // a running max, so the whole grouping pass is O(n).
+    let last_cum_index: std::collections::HashMap<i64, usize> = {
+        let mut m = std::collections::HashMap::with_capacity(cum.len());
+        for (j, &d) in cum.iter().enumerate() {
+            m.insert(d, j); // a later `j` overwrites, leaving the greatest index
+        }
+        m
+    };
+    // The last index at which baseline `v` recurs in `cum`, or `-1` if it never does
+    // (`0` is a baseline but need not appear in `cum` at all). `i` starts at 1, so a
+    // `-1` sentinel is always `< i` and reads as "never recurs".
+    let recur_of = |v: i64| -> i64 { last_cum_index.get(&v).map_or(-1, |&j| j as i64) };
     let mut groups: Vec<Vec<Piece>> = Vec::new();
     let mut current: Vec<Piece> = Vec::new();
-    // Running net length change of the pieces placed so far. A split is taken
-    // only where this is zero, so each run resumes from zero and the test stays a
-    // zero-shift test whether or not it is reset.
-    let mut delta: i64 = 0;
-    for piece in pieces.iter() {
-        if let Some(prev) = current.last() {
-            // A gap of >=1 unchanged reference base is a boundary only at a
-            // zero-shift fixed point (`delta == 0`); a non-zero delta means the
-            // gap bases are a compensating-shift artefact, not a separator, so the
-            // run continues. See the doc comment.
-            let mut boundary = piece.ref_start > prev.ref_end && delta == 0;
-            // …with one exception. A tandem-dup insertion parks its SOURCE TRACT
-            // in the unchanged bases 5' of it: those bases read as a zero-shift gap
-            // at the piece level while being the duplication's origin, so
-            // `peel_tandem_dup_beside_change` must see the insertion together with
-            // the change it abuts (`c.[10_11dup;13A>C]` arrives as
-            // `[13A>C-sub; dup-insertion]` and must fold, not split — #2192). Ask
-            // peel itself: if folding `current + [piece]` yields a `dup`, the gap is
-            // a dup source and not a separator. Only a net-positive incoming piece
-            // can be a dup, so the probe — and its clone — are paid only there, and
-            // peel's own one-mismatch gate refuses a genuinely separate run (a
-            // distant member's dup abutting a spanning change mismatches in many
-            // columns), so this cannot merge two real runs.
-            if boundary && piece.alt.len() as i64 - (piece.ref_end - piece.ref_start) as i64 > 0 {
+    // Frame baselines, as a max-stack. `0` stays at the bottom forever, which is what
+    // keeps every old `delta == 0` wall firing (the pop clause) and the change
+    // monotone. Each frame also carries `max_recur`, the greatest `recur_of` over the
+    // baselines at or below it — a prefix max, so the top frame's is the max over the
+    // whole stack. That turns the closure test into an O(1) read of the top instead of
+    // a scan, and it is maintainable in O(1) because pushes only append.
+    struct Frame {
+        baseline: i64,
+        max_recur: i64,
+    }
+    let mut stack: Vec<Frame> = vec![Frame {
+        baseline: 0,
+        max_recur: recur_of(0),
+    }];
+    // Membership mirror of `stack`, so the pop test is O(1). A baseline is pushed only
+    // when absent, so its values stay distinct and this is a faithful set.
+    let mut in_stack: std::collections::HashSet<i64> = std::collections::HashSet::from([0]);
+    for (i, piece) in pieces.iter().enumerate() {
+        let gap = current
+            .last()
+            .is_some_and(|prev| piece.ref_start > prev.ref_end);
+        if gap {
+            // Delta at this gap, i.e. after the previous piece (`i - 1`; a gap
+            // implies `current` is non-empty, so `i >= 1`).
+            let d = cum[i - 1];
+            // Pop: the delta returned to a stacked baseline (subsumes `delta == 0`).
+            let pop = in_stack.contains(&d);
+            // Closure: no stacked baseline recurs at this gap or any later one (the
+            // tail `cum[i..]` includes the variant end), so this excursion is a
+            // permanent frame shift and the run 3' of it is separate. A baseline
+            // recurs in `cum[i..]` iff its last occurrence is at or after `i`, so no
+            // baseline recurs iff the top frame's running max is `< i`. The stack
+            // always holds the bottom `0`, so `last()` is never `None`.
+            let closure = !pop && stack.last().is_some_and(|f| f.max_recur < i as i64);
+            let mut wall = pop || closure;
+            // Suppression (#2175): a net-positive incoming piece folding into a dup
+            // WITH `current` is a dup abutting its own change — keep them together so
+            // peel can fold, whatever the licenses said. Only a net-positive piece
+            // can be a dup, so the probe is paid only there, and peel's one-mismatch
+            // gate refuses a genuinely separate run, so two real runs never merge.
+            if wall && net(piece) > 0 {
                 let mut probe = current.clone();
                 probe.push(piece.clone());
                 let unfolded = probe.clone();
                 peel_tandem_dup_beside_change(&mut probe, reference);
                 if probe != unfolded {
-                    boundary = false;
+                    wall = false;
                 }
             }
-            if boundary {
+            if wall {
+                if pop {
+                    // Resume from the run's baseline; `0` (the bottom) is never
+                    // removed, so a later `delta == 0` gap still walls. Each frame is
+                    // popped at most once over the run, so this is amortized O(1).
+                    while stack.last().is_some_and(|f| f.baseline != d) {
+                        if let Some(f) = stack.pop() {
+                            in_stack.remove(&f.baseline);
+                        }
+                    }
+                } else {
+                    // Push the new baseline, carrying the running max of `recur_of`.
+                    let max_recur = stack.last().map_or(-1, |f| f.max_recur).max(recur_of(d));
+                    in_stack.insert(d);
+                    stack.push(Frame {
+                        baseline: d,
+                        max_recur,
+                    });
+                }
                 groups.push(std::mem::take(&mut current));
             }
         }
-        delta += piece.alt.len() as i64 - (piece.ref_end - piece.ref_start) as i64;
         current.push(piece.clone());
     }
     groups.push(current);
-    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
-    for mut run in groups {
-        pass(&mut run, reference);
-        out.append(&mut run);
-    }
-    // Reassembly must preserve ascending, non-overlapping offset order — every
+    // Run the pass per group, then merge any adjacent groups whose OUTPUTS overlap.
+    //
+    // The reassembly must preserve ascending, non-overlapping offset order — every
     // downstream consumer relies on it: `rebuild_members`'s dup-disjointness walk
     // debug-asserts `ref_start >= previous_ref_end`, and `shift_pieces` reads
-    // `pieces[i-1].ref_end` as the 5' bound of piece `i`. The only pass that can
-    // disturb it is `peel_tandem_dup_beside_change`, which widens its search 5'
-    // across a reference tandem tract (`tandem_tract_start`, #2175) that may reach
-    // before the run's own hull — and so, in principle, before an EARLIER run.
-    // It does not: the duplication is placed 3'-most over a *perfect* reference
-    // tract, so its emitted `[dup; sub]` sit at or 3' of the run's changed columns,
-    // which are themselves 3' of every earlier run's pieces. Clamping the widened
-    // window to the run's `[hs, he]` (the review's literal suggestion) would defeat
-    // #2175 instead — the source copies of a tandem dup legitimately live in
-    // unchanged reference 5' of the hull. So the invariant is asserted at the root
-    // rather than assumed, which turns any escape the 512-case `fuzz_the_cross_product`
-    // (or the whole debug suite) can reach into a failure here, next to its cause,
-    // instead of a silent reorder a distant consumer trips over.
+    // `pieces[i-1].ref_end` as the 5' bound of piece `i`. The pass that can disturb
+    // it is `peel_tandem_dup_beside_change`, which widens its search across a
+    // reference tandem tract (`tandem_tract_start`/`tandem_tract_end`, #2175) that
+    // reaches OUTSIDE the group's own hull — so when a wall (a closure/content wall
+    // especially) falls inside such a tract, one group's `[dup; sub]` output can
+    // land at or past a neighbouring group's pieces. Those two groups are one run
+    // for peel's purposes, so the wall between them was spurious: merge their
+    // ORIGINAL pieces and re-derive. This converges (each merge strictly reduces the
+    // group count) and preserves a genuine isolation — a real run separated by
+    // unchanged reference has no tract bridging the gap, so its pass output stays
+    // within its hull and never overlaps its neighbour.
+    let mut outs: Vec<Vec<Piece>> = groups
+        .iter()
+        .map(|group| {
+            let mut g = group.clone();
+            pass(&mut g, reference);
+            g
+        })
+        .collect();
+    let mut k = 0;
+    while k + 1 < outs.len() {
+        let overlaps = match (outs[k].last(), outs[k + 1].first()) {
+            (Some(a), Some(b)) => a.ref_end > b.ref_start,
+            _ => false,
+        };
+        if overlaps {
+            let mut merged = std::mem::take(&mut groups[k]);
+            merged.append(&mut groups[k + 1]);
+            groups.remove(k + 1);
+            groups[k] = merged.clone();
+            pass(&mut merged, reference);
+            outs[k] = merged;
+            outs.remove(k + 1);
+            // A merge can create a new overlap with the group before it.
+            k = k.saturating_sub(1);
+        } else {
+            k += 1;
+        }
+    }
+    let out: Vec<Piece> = outs.into_iter().flatten().collect();
     debug_assert!(
         out.windows(2).all(|w| w[0].ref_end <= w[1].ref_start),
         "coalesce_by_run reassembled pieces out of ascending offset order: {out:?}"
