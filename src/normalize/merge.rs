@@ -445,9 +445,9 @@ pub(crate) fn has_same_gap_insertions(variants: &[HgvsVariant], phase: AllelePha
 /// **pre-existing reference tandem** — i.e. the duplicated unit already has an
 /// adjacent copy (immediately 5' or 3') in the reference.
 ///
-/// This is the reference scan `peel_tandem_dup_beside_change` and
-/// `coalesce_solid_run` run on the sequence-first path, lifted to the
-/// member-merge path so the two surfaces agree on when a `dup` is genuine.
+/// This is the reference scan `peel_tandem_dup_beside_change` runs on the
+/// sequence-first path, lifted to the member-merge path so the two surfaces
+/// agree on when a `dup` is genuine.
 /// #2175's dup extends a reference tandem (`AGAG`), so it is kept; spec example
 /// W43's `c.2077delinsATA` "dup" is created by the edit over a reference
 /// (`CATG`) that carries no such tandem, so it merges to the delins. A
@@ -715,9 +715,9 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // beside a single substitution, must not be folded into the spanning `delins`
     // this pass builds: doing so destroys the `dup` `DNA/duplication.md:18`
     // requires (a MUST), the label `duplication-must-ranks-the-label-not-the-
-    // partition` protects. This is the member-merge mirror of `coalesce_solid_
-    // run`'s `multibase_tandem_dup` guard and `peel_tandem_dup_beside_change`'s
-    // tract scan, and it uses the SAME reference-tandem discriminator so both
+    // partition` protects. This is the member-merge mirror of
+    // `peel_tandem_dup_beside_change`'s tract scan, and it uses the SAME
+    // reference-tandem discriminator so both
     // derivation surfaces agree: #2175's dup extends a reference tandem (`AGAG` →
     // keep the `dup`), while spec example W43's `c.2077delinsATA` dup is created
     // by the edit over a reference (`CATG`) with no such tandem (merge to the
@@ -6976,8 +6976,8 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
     // net-zero or net-deletion block (`k == 0`, or the `checked_sub` underflow)
     // is not this shape and is left for the solid-run and gap passes — which is
     // exactly what keeps the equal-length #2174 runs out of here. Only a
-    // MULTI-BASE tandem unit is peeled, the same floor `coalesce_solid_run`
-    // uses: a single-base expansion abutting a change (`k == 1`) is the
+    // MULTI-BASE tandem unit is peeled: a single-base expansion abutting a
+    // change (`k == 1`) is the
     // shift-anchor artifact #2174-B keeps as one `delins`, and admitting it here
     // would re-split a lone `delins` into a spurious `[sub; 1-base dup]`.
     let Some(k) = hull_payload.len().checked_sub(he - hs) else {
@@ -7128,53 +7128,27 @@ const TANDEM_TRACT_SCAN_CAP: usize = MAX_CANONICAL_WINDOW as usize;
 /// It re-emits a `delins` over exactly the changed columns with the payload bases
 /// already present, so it denotes the same sequence by construction — a pure
 /// respelling.
+///
+/// # Coincidental tandems do not block the collapse (#2193)
+///
+/// A sub-piece of an equal-length all-changed run can coincide with a 5'/3'
+/// reference tandem, letting the minimal-edit alignment park a copy as an
+/// insertion at the block boundary and spell the run as a `[dup;del]` whose `dup`
+/// is anchored *outside* the changed span (`CGTACG -> TACGTA` as
+/// `g.[10_11del;16_17dup]`, #422; `ATGCGAG -> GGTATGC` as `g.[8_10dup;15_17del]`,
+/// #2193). That partition is not kept. Per
+/// `duplication-must-ranks-the-label-not-the-partition` (narrowed for #2193),
+/// `DNA/duplication.md:18`'s MUST ranks the *label* of a change already
+/// identified, never a manufactured partition, and `DNA/delins.md:16`/`:44-47`
+/// recommend the spanning `delins` for a contiguous run (`general.md:57` forbids
+/// the `[del;dup]` shape by name). A `dup` is kept only when the sequence
+/// actually grew — a genuine, net-longer duplication (#2175) — which is a
+/// net-longer block the equal-length gate below declines and
+/// `peel_tandem_dup_beside_change` handles. The net-shorter direction was probed
+/// (#2193) and already renders as a spanning `delins`, so no coincidental-tandem
+/// guard is needed on any length.
 fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if pieces.len() < 2 {
-        return;
-    }
-    // Decline when a member of the block DUPLICATES A MULTI-BASE REFERENCE
-    // MOTIF — an insertion whose `alt` copies two or more reference bases
-    // immediately 5' (anchored, what `is_tandem_duplication` recognises) or
-    // immediately 3' (3'-shiftable, before the shuffle moves it onto the
-    // tandem). Such a block is not a solid in-place run: it carries a genuine
-    // tandem duplication, and merging it into one spanning `delins` destroys the
-    // `dup` `DNA/duplication.md:18` requires (a MUST). The minimal-edit
-    // alignment parks the duplicated copy as an insertion at the block boundary,
-    // so the reconstructed hull looks equal-length and all-columns-changed and
-    // would otherwise merge (`CGTACG -> TACGTA`, #422).
-    //
-    // WHY A MULTI-BASE MOTIF, AND WHY NOT A STRONGER TEST — this is the
-    // discriminator between #2174-B `GACTT->ACTTT` (merge to `g.11_13delinsACT`)
-    // and #422 `CGTACG->TACGTA` (keep `g.[10_11del;16_17dup]`). The two are
-    // provably identical under every frame-independent LOCAL test: in the
-    // `[del;dup]` piece frame both dups are clean (each is literally
-    // del + unchanged-reference + tandem-dup), and `unchanged-is-read`'s
-    // every-minimal-alignment reading says SPLIT for both. So the merge is a
-    // deliberate override of that decided house choice at the one point two
-    // rulings collide, and it has no local frame-independent form. What DOES
-    // separate them is motif length: a one-base "duplication" abutting a change
-    // is the shift-anchor #2174 exists to collapse (any run boundary re-reads as
-    // a one-base del+dup); a two-or-more-base tandem is too specific to be
-    // alignment happenstance and is the duplication the spec protects.
-    //
-    // The tempting STRONGER rule — also require the reference tandem to already
-    // carry >=2 copies (`count_tandem_repeats`) — is WRONG and was rejected: in
-    // #422 the `TA` tract has only ONE reference copy, the dup CREATES the
-    // tandem. So the test is "`alt` matches >=2 flank bases," never a reference
-    // copy-count floor. (Verified by an independent adversarial sweep over
-    // rotations, homopolymers, and net-zero 2-/3-base tandem del+dup contexts:
-    // the guard fires only to keep a split when a real >=2-base tandem-dup is in
-    // the derivation, and no should-merge case reaches it.)
-    let multibase_tandem_dup = |p: &Piece| -> bool {
-        if p.ref_start != p.ref_end || p.alt.len() < 2 {
-            return false;
-        }
-        let (k, at) = (p.alt.len(), p.ref_start);
-        let anchored = at >= k && reference[at - k..at] == p.alt[..];
-        let shiftable = at + k <= reference.len() && reference[at..at + k] == p.alt[..];
-        anchored || shiftable
-    };
-    if pieces.iter().any(multibase_tandem_dup) {
         return;
     }
     let Some((start, end, payload)) = block_hull_and_payload(pieces, reference) else {
