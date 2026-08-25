@@ -533,6 +533,69 @@ const FIVE_PRIME: Census = Census {
     sequence_changed: 0,
 };
 
+/// Number of slices the armed confluence census is partitioned into, so nextest's
+/// name-hash `--partition` can spread its ~60s build across `test-oracle` shards
+/// instead of pinning it into one. Each direction becomes `SLICE_N` slice-tests
+/// plus a cheap (no-build) tiling meta-test that folds the per-slice pins back to
+/// the whole-corpus pin — so the strict per-direction guarantee is preserved as a
+/// superset. Re-measure the arrays below with the ignored `report_census_slice_pins`.
+const SLICE_N: usize = 8;
+
+/// Compact positional `Census` constructor for the per-slice pin arrays. The nine
+/// arguments are the nine `Census` fields in declaration order — a struct literal
+/// per slice would make the arrays unreadably tall, and the field order is fixed
+/// and documented on `Census`.
+#[allow(clippy::too_many_arguments)]
+const fn census(
+    classes: usize,
+    spellings: usize,
+    declined: usize,
+    converged: usize,
+    split_two: usize,
+    split_three: usize,
+    split_more: usize,
+    underdetermined: usize,
+    sequence_changed: usize,
+) -> Census {
+    Census {
+        classes,
+        spellings,
+        declined,
+        converged,
+        split_two,
+        split_three,
+        split_more,
+        underdetermined,
+        sequence_changed,
+    }
+}
+
+/// Per-slice 3'/5' censuses. Each array `.absorb`-folds to [`THREE_PRIME`] /
+/// [`FIVE_PRIME`] exactly — asserted by the tiling meta-tests, which is what keeps
+/// the strict whole-corpus pin intact. These are MEASURED pins, not placeholders;
+/// regenerate them with the ignored `report_census_slice_pins` diagnostic if the
+/// geometry moves — do not zero them out.
+const THREE_PRIME_SLICES: [Census; SLICE_N] = [
+    census(1410, 6070, 0, 1410, 0, 0, 0, 0, 0),
+    census(1410, 6070, 0, 1410, 0, 0, 0, 0, 0),
+    census(1409, 5519, 0, 1409, 0, 0, 0, 0, 0),
+    census(1409, 5519, 0, 1409, 0, 0, 0, 0, 0),
+    census(1408, 6392, 0, 1408, 0, 0, 0, 0, 0),
+    census(1408, 6392, 0, 1407, 1, 0, 0, 0, 0),
+    census(1409, 5715, 0, 1409, 0, 0, 0, 0, 0),
+    census(1409, 5715, 0, 1408, 1, 0, 0, 0, 0),
+];
+const FIVE_PRIME_SLICES: [Census; SLICE_N] = [
+    census(1410, 6070, 0, 1410, 0, 0, 0, 0, 0),
+    census(1410, 6070, 0, 1410, 0, 0, 0, 0, 0),
+    census(1409, 5519, 0, 1409, 0, 0, 0, 0, 0),
+    census(1409, 5519, 0, 1409, 0, 0, 0, 0, 0),
+    census(1408, 6392, 0, 1408, 0, 0, 0, 0, 0),
+    census(1408, 6392, 0, 1408, 0, 0, 0, 0, 0),
+    census(1409, 5715, 0, 1409, 0, 0, 0, 0, 0),
+    census(1409, 5715, 0, 1408, 1, 0, 0, 0, 0),
+];
+
 // ---------------------------------------------------------------------------
 // Corpus
 // ---------------------------------------------------------------------------
@@ -640,7 +703,7 @@ fn expected_sequence(class: &Class) -> String {
 
 /// What one direction's run found. Every field is pinned; see the module docs
 /// for which way each is allowed to move.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 struct Census {
     /// Classes measured.
     classes: usize,
@@ -679,7 +742,7 @@ struct Divergence {
 impl Census {
     /// Fold another census in. Every field is a count over a partition of the
     /// classes, so summing is exact rather than approximate — which is what
-    /// makes [`measure`]'s per-group split safe.
+    /// makes [`measure_slice`]'s per-group split safe.
     fn absorb(&mut self, other: &Census) {
         self.classes += other.classes;
         self.spellings += other.spellings;
@@ -695,7 +758,7 @@ impl Census {
 
 /// How many divergent classes the failure message names. Applied per group and
 /// again to the concatenation, which is what keeps the parallel result
-/// byte-identical to a serial one — see [`measure`].
+/// byte-identical to a serial one — see [`measure_slice`].
 const WORST_LIMIT: usize = 10;
 
 /// The contiguous runs of `classes` that share one reference.
@@ -703,7 +766,7 @@ const WORST_LIMIT: usize = 10;
 /// Classes are sorted by an id that starts with the core index and the axis, so
 /// every class sharing a reference is contiguous. Building one provider and one
 /// normalizer per group instead of per class is the difference between this
-/// running in seconds and in minutes; [`measure`] additionally runs the groups
+/// running in seconds and in minutes; [`measure_slice`] additionally runs the groups
 /// concurrently, which it can do only because each one owns its provider.
 fn reference_groups(classes: &[Class]) -> Vec<&[Class]> {
     let mut groups = Vec::new();
@@ -801,12 +864,30 @@ fn measure_group(group: &[Class], direction: ShuffleDirection) -> (Census, Vec<D
 /// `Normalizer` (it already did — that is the per-group loop's whole point), and
 /// the only borrow that crosses is the immutable corpus slice. The normalization
 /// oracles' recursion guard is a thread-local, so it is per-task too.
-fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
+/// Census one direction over the reference groups whose index falls in slice `k`
+/// of `n` — or all groups when `slice` is `None` (the whole-corpus census).
+///
+/// Slicing by whole reference GROUPS (never by class) keeps every slice a valid
+/// sub-census: each `Census` field is still a count over a partition of the
+/// classes, so [`Census::absorb`] over the slices is exact and
+/// `SLICES.iter().fold(absorb) == <the whole-corpus pin>` — which the
+/// `*_confluence_census_slices_tile_the_pin` meta-tests assert, so the strict
+/// per-direction pin is preserved as a superset (each slice additionally catches
+/// a regression concentrated in it). The point is CI shard balance: this census
+/// ran ~60s armed in one process and one shard, so `--partition hash` could not
+/// spread it; as `SLICE_N` separate tests nextest runs them as separate
+/// processes and distributes them, exactly as #01 did for the geometry corpus.
+fn measure_slice(
+    direction: ShuffleDirection,
+    slice: Option<(usize, usize)>,
+) -> (Census, Vec<Divergence>) {
     let groups = reference_groups(&corpus().classes);
 
     let per_group: Vec<(Census, Vec<Divergence>)> = groups
         .par_iter()
-        .map(|group| measure_group(group, direction))
+        .enumerate()
+        .filter(|(i, _)| slice.is_none_or(|(k, n)| i % n == k))
+        .map(|(_, group)| measure_group(group, direction))
         .collect();
 
     let mut census = Census::default();
@@ -844,25 +925,41 @@ fn report(direction: &str, census: &Census, worst: &[Divergence]) -> String {
     out
 }
 
-/// Assert one direction's census against its pin, printing the measured numbers
-/// either way so a moved pin can be re-blessed from the test output.
-fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
-    let (measured, worst) = measure(direction);
-    println!("{}", report(label, &measured, &worst));
+/// Assert slice `k` of [`SLICE_N`] against its per-slice pin. Strict `==` on the
+/// sub-census of the reference groups in this slice;
+/// the tiling meta-test proves the slices fold back to the whole-corpus pin.
+fn assert_census_slice(
+    direction: ShuffleDirection,
+    label: &str,
+    k: usize,
+    pinned: &[Census; SLICE_N],
+) {
+    let (measured, worst) = measure_slice(direction, Some((k, SLICE_N)));
+    let tag = format!("{label} slice {k}/{SLICE_N}");
+    println!("{}", report(&tag, &measured, &worst));
     assert_eq!(
         measured.sequence_changed, 0,
-        "{label}: {} normalized outputs no longer denote their class's sequence — a class that \
+        "{tag}: {} normalized outputs no longer denote their class's sequence — a class that \
          converges on the wrong sequence is worse than one that diverges",
         measured.sequence_changed
     );
     assert_eq!(
         &measured,
-        pinned,
-        "{label}: the confluence census moved. Every divergence figure must only ever go DOWN \
-         and `converged` only ever UP; if this change lowers one, re-bless the pin in the same \
+        &pinned[k],
+        "{tag}: the confluence census moved. Every divergence figure must only ever go DOWN and \
+         `converged` only ever UP; if this change lowers one, re-bless the slice pin in the same \
          commit and say so in the PR. Measured:\n{}",
-        report(label, &measured, &worst)
+        report(&tag, &measured, &worst)
     );
+}
+
+/// Fold a per-slice pin array back to one whole-corpus census.
+fn fold_slices(slices: &[Census; SLICE_N]) -> Census {
+    let mut whole = Census::default();
+    for slice in slices {
+        whole.absorb(slice);
+    }
+    whole
 }
 
 // ---------------------------------------------------------------------------
@@ -913,14 +1010,153 @@ fn the_corpus_is_a_dense_set_of_real_confluence_classes() {
     }
 }
 
+/// Generate `SLICE_N` slice-tests per direction. The whole-corpus census used to
+/// be one ~60s armed test per direction that `--partition hash` could not spread;
+/// as named slices nextest runs them as separate processes across shards. Every
+/// row is still measured armed; coverage is a superset (per-slice regression
+/// detection) guarded by the tiling meta-tests below.
+macro_rules! confluence_census_slices {
+    ($dir:expr, $label:literal, $pins:ident, $indices:ident, $($name:ident => $k:expr),+ $(,)?) => {
+        // The slice indices these arms actually run, captured from the SAME `$k`
+        // tokens the test bodies pass to `assert_census_slice`. `the_census_slice_
+        // arms_tile_zero_to_slice_n` asserts this covers `0..SLICE_N` exactly once,
+        // so a duplicated, omitted, or out-of-range arm fails instead of silently
+        // dropping a slice from CI — the coverage the old `SLICE_N == 8` count
+        // could not observe.
+        const $indices: &[usize] = &[$($k),+];
+        $(
+            #[test]
+            fn $name() {
+                assert_census_slice($dir, $label, $k, &$pins);
+            }
+        )+
+    };
+}
+
+confluence_census_slices! {
+    ShuffleDirection::ThreePrime, "3prime", THREE_PRIME_SLICES, THREE_PRIME_INDICES,
+    three_prime_confluence_census_slice_00 => 0,
+    three_prime_confluence_census_slice_01 => 1,
+    three_prime_confluence_census_slice_02 => 2,
+    three_prime_confluence_census_slice_03 => 3,
+    three_prime_confluence_census_slice_04 => 4,
+    three_prime_confluence_census_slice_05 => 5,
+    three_prime_confluence_census_slice_06 => 6,
+    three_prime_confluence_census_slice_07 => 7,
+}
+
+confluence_census_slices! {
+    ShuffleDirection::FivePrime, "5prime", FIVE_PRIME_SLICES, FIVE_PRIME_INDICES,
+    five_prime_confluence_census_slice_00 => 0,
+    five_prime_confluence_census_slice_01 => 1,
+    five_prime_confluence_census_slice_02 => 2,
+    five_prime_confluence_census_slice_03 => 3,
+    five_prime_confluence_census_slice_04 => 4,
+    five_prime_confluence_census_slice_05 => 5,
+    five_prime_confluence_census_slice_06 => 6,
+    five_prime_confluence_census_slice_07 => 7,
+}
+
+/// Cheap (no corpus build) meta-guards: the per-slice pins fold EXACTLY to the
+/// whole-corpus pins, so slicing preserves the strict census guarantee rather
+/// than weakening it. If a slice pin is re-blessed, this fails unless the whole
+/// still matches — the whole-corpus figure remains the thing under contract.
 #[test]
-fn three_prime_confluence_census() {
-    assert_census(ShuffleDirection::ThreePrime, "3prime", &THREE_PRIME);
+fn three_prime_confluence_census_slices_tile_the_pin() {
+    assert_eq!(
+        fold_slices(&THREE_PRIME_SLICES),
+        THREE_PRIME,
+        "the 3prime per-slice pins no longer fold to THREE_PRIME"
+    );
+}
+
+/// The slice-test arms tile `0..SLICE_N` exactly once per direction.
+///
+/// The arms are hand-written macro invocations, so a duplicated, omitted, or
+/// out-of-range arm would keep the fold meta-tests green (their array pins are
+/// separate) while a slice stops running in CI. Deriving the executed indices
+/// from the same `$k` tokens the arms expand to, and asserting they cover
+/// `0..SLICE_N` exactly once, catches that — the property the former
+/// `SLICE_N == 8` pin only stood in for. If SLICE_N changes, update both
+/// `confluence_census_slices!` invocations and the `*_SLICES` arrays to match.
+#[test]
+fn the_census_slice_arms_tile_zero_to_slice_n() {
+    assert_indices_tile("THREE_PRIME_INDICES", THREE_PRIME_INDICES);
+    assert_indices_tile("FIVE_PRIME_INDICES", FIVE_PRIME_INDICES);
+}
+
+/// Assert `indices` is a permutation of `0..SLICE_N` — every slice covered, none
+/// twice, none out of range.
+fn assert_indices_tile(label: &str, indices: &[usize]) {
+    let mut seen = [false; SLICE_N];
+    for &k in indices {
+        assert!(
+            k < SLICE_N,
+            "{label}: slice index {k} is out of range for SLICE_N ({SLICE_N})"
+        );
+        assert!(
+            !seen[k],
+            "{label}: slice index {k} is covered by more than one arm"
+        );
+        seen[k] = true;
+    }
+    let missing: Vec<usize> = (0..SLICE_N).filter(|&k| !seen[k]).collect();
+    assert!(
+        missing.is_empty(),
+        "{label}: slice indices {missing:?} are covered by no arm"
+    );
 }
 
 #[test]
-fn five_prime_confluence_census() {
-    assert_census(ShuffleDirection::FivePrime, "5prime", &FIVE_PRIME);
+fn five_prime_confluence_census_slices_tile_the_pin() {
+    assert_eq!(
+        fold_slices(&FIVE_PRIME_SLICES),
+        FIVE_PRIME,
+        "the 5prime per-slice pins no longer fold to FIVE_PRIME"
+    );
+}
+
+/// Diagnostic (ignored): print the per-slice pin arrays for both directions so
+/// they can be re-blessed mechanically after an intended census change. Run with
+/// `--run-ignored all --no-capture`, read the `census(...)` lines, paste them
+/// into `THREE_PRIME_SLICES` / `FIVE_PRIME_SLICES`. Also proves the slices tile:
+/// the folded per-slice measurement equals the whole-corpus measurement.
+#[test]
+#[ignore = "permanent diagnostic (#2161): prints per-slice census pin arrays and verifies \
+            tiling; a re-bless helper, not a CI gate, so it stays ignored"]
+fn report_census_slice_pins() {
+    for (dir, label, whole_pin) in [
+        (
+            ShuffleDirection::ThreePrime,
+            "THREE_PRIME_SLICES",
+            THREE_PRIME,
+        ),
+        (ShuffleDirection::FivePrime, "FIVE_PRIME_SLICES", FIVE_PRIME),
+    ] {
+        let mut folded = Census::default();
+        println!("const {label}: [Census; SLICE_N] = [");
+        for k in 0..SLICE_N {
+            let (c, _) = measure_slice(dir, Some((k, SLICE_N)));
+            folded.absorb(&c);
+            println!(
+                "    census({}, {}, {}, {}, {}, {}, {}, {}, {}),",
+                c.classes,
+                c.spellings,
+                c.declined,
+                c.converged,
+                c.split_two,
+                c.split_three,
+                c.split_more,
+                c.underdetermined,
+                c.sequence_changed,
+            );
+        }
+        println!("];");
+        assert_eq!(
+            folded, whole_pin,
+            "{label}: slices do not tile the whole-corpus pin"
+        );
+    }
 }
 
 /// [`THREE_PRIME`]'s headline restates three figures that live in the `const`

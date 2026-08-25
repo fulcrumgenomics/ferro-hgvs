@@ -36,15 +36,20 @@
 //! - [`from_sequences_decomposes_a_merged_sub_flanked_inversion`] — the over-merge
 //!   follow-up: a merged equal-length `sub`+`inv` `delins` split back to its
 //!   canonical members (`split_canonical_delins`).
-//! - [`the_inversion_geometry_corpus_converges_without_regression`] — the corpus
-//!   is fully built (a fixed count) and the number of convergent variants holds a
-//!   floor: a regression lowers it, a later increment only raises it.
+//! - `the_geometry_corpus_slice_{00..23}_converges_and_the_gate_holds` — the
+//!   corpus is built in `SLICE_N` parallel slices, because a whole-corpus build
+//!   is a single armed test nextest's `--partition hash:` cannot split across
+//!   shards, and it was the slowest test in `test-oracle`. Each slice checks, on
+//!   its 1/N, that the corpus is fully built (exact per-slice count), that
+//!   convergence and inversion-typing hold their floors, and that the gate moved
+//!   nothing. `slice_floors_preserve_the_global_guarantees` asserts the per-slice
+//!   pins still sum to the former whole-corpus floors, so slicing did not weaken
+//!   coverage.
 //!
 //! The guard is proven able to fail: on the pre-fix tree every curated row above
 //! diverges (the `NC_TEST.1:g.[14del;21_23inv]` reproducer is one of them); the
-//! shipped fix converges at least 60,731 of the 62,824 corpus rows (the floor
-//! `the_inversion_geometry_corpus_converges_without_regression` asserts; 60,904
-//! on the current tree).
+//! shipped fix converges at least 60,731 of the 62,824 corpus rows (the sum of the
+//! per-slice `CONVERGED_FLOOR` pins; 60,974 on the current tree).
 //!
 //! # The Drop and its gate (the #2161 Path 1 payoff)
 //!
@@ -54,10 +59,10 @@
 //! output. This file guards that the SHIPPED gated path is byte-identical to the
 //! full pre-drop path:
 //!
-//! - [`the_gated_drop_changes_no_output`] — over the inversion-geometry corpus:
-//!   the raw unconditional skip diverges on 72 shapes — the current measured
-//!   count, which the test asserts as a `>= 72` regression floor (not slack
-//!   below the measurement); the gate closes every one.
+//! - The `the_geometry_corpus_slice_*` tests each check this over their share of
+//!   the corpus: the raw unconditional skip diverges on 742 shapes corpus-wide
+//!   (`SKIP_FLOOR` sums to a `>= 72` non-vacuity floor), and the SHIPPED gated
+//!   path closes every one (`gated_diverged` empty, strictly per row).
 //! - [`the_gate_is_correct_on_dense_member_alleles`] +
 //!   [`report_gate_fallback_on_dense_member_alleles`] — correctness and the gate's
 //!   fallback rate over a densely-spaced multi-member cis corpus (the distribution
@@ -242,13 +247,32 @@ struct Outcome {
     drop_compared: Option<(String, String, String, bool)>,
 }
 
-/// Generate the whole corpus and run every variant through both surfaces.
+/// Generate the corpus and run every variant through both surfaces — the whole
+/// corpus, or one modulo-slice of it.
 ///
 /// Every generated variant is a flanked inversion — a genuine `inv` span beside
 /// at least one `del`/`sub` sibling — so the count of outcomes is the geometry
 /// this file guards, floored below.
-fn run_corpus() -> Vec<Outcome> {
+///
+/// `slice = Some((k, n))` does the expensive `normalize` work only for the
+/// outcomes whose global generation index `i` satisfies `i % n == k`, and skips
+/// it for the rest — so `n` slices partition the corpus's cost evenly and their
+/// row-sets tile it exactly, once each. `slice = None` builds the whole corpus
+/// (the diagnostic and the pin meta-check use this). The generation index is
+/// assigned in the deterministic iteration order, **independently of `slice`**,
+/// so a row's slice membership is stable no matter which slice is asked for.
+///
+/// Splitting the build this way is what lets nextest's `--partition hash:` (by
+/// test name) distribute the armed pass across shards: a single test can never be
+/// split, but N named slice-tests can. Coverage is unchanged — every row is still
+/// built armed in whichever slice owns it, and both properties are still checked
+/// on every row.
+fn run_corpus_slice(slice: Option<(usize, usize)>) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
+    // Global generation index, incremented once per (input, direction) that
+    // reaches the normalize step, in deterministic order and independent of
+    // `slice`. This is the number the modulo partition is taken over.
+    let mut idx = 0usize;
 
     for (_name, seq) in contigs() {
         let bytes = seq.as_bytes();
@@ -341,6 +365,17 @@ fn run_corpus() -> Vec<Outcome> {
 
                         for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
                         {
+                            // Assign this outcome's stable global index, then skip
+                            // the expensive work unless it belongs to the asked-for
+                            // slice. The index advances regardless, so the same row
+                            // always lands in the same slice.
+                            let this_idx = idx;
+                            idx += 1;
+                            if let Some((k, n)) = slice {
+                                if this_idx % n != k {
+                                    continue;
+                                }
+                            }
                             let nz = if matches!(direction, ShuffleDirection::ThreePrime) {
                                 &nz_3p
                             } else {
@@ -385,16 +420,300 @@ fn run_corpus() -> Vec<Outcome> {
     outcomes
 }
 
-/// The geometry corpus is hermetic and deterministic, so its size is exact —
-/// both non-vacuity guards below assert against this single source of truth.
+/// The whole corpus. Kept for the ignored diagnostic and any full-corpus reader;
+/// the process-cached [`geometry_corpus`] wraps it.
+fn run_corpus() -> Vec<Outcome> {
+    run_corpus_slice(None)
+}
+
+/// The geometry corpus is hermetic and deterministic, so its size is exact — the
+/// per-slice `EXPECTED_COMPARED` pins tile it, and the slice guards assert against
+/// this single source of truth.
+///
+/// (There is no longer a process-cached `geometry_corpus()` wrapper: under
+/// nextest's process-per-test isolation an `OnceLock` cache never crossed tests,
+/// so each consumer rebuilt the whole corpus — the EXPENSIVE armed
+/// normalize/rederive work included. The slices split that expensive work 1/N
+/// via [`run_corpus_slice`] instead — one full pass of the costly work total,
+/// distributed and parallel. The cheap enumerating loop itself still runs in
+/// every slice process; only the per-row normalization it guards is slice-gated.)
 const GEOMETRY_CORPUS_SIZE: usize = 62_824;
 
-/// The geometry corpus, built once per test process and shared by the guards
-/// that read it. `run_corpus` is deterministic and ~45s to build, so consumers
-/// borrow this process-cached slice rather than each rebuilding it.
-fn geometry_corpus() -> &'static [Outcome] {
-    static CORPUS: std::sync::OnceLock<Vec<Outcome>> = std::sync::OnceLock::new();
-    CORPUS.get_or_init(run_corpus)
+// ===========================================================================
+// Sliced geometry-corpus guards
+// ===========================================================================
+//
+// The corpus's expensive armed build (`run_corpus_slice`) is split into
+// `SLICE_N` named slice-tests so nextest's `--partition hash:` (by test name)
+// distributes it across shards — a single test can never be split. Each slice
+// builds its 1/N armed and checks, on its own rows, exactly what the two former
+// whole-corpus tests checked on all of them:
+//
+//   - `gated_diverged` empty              — the SHIPPED gate's safety property,
+//                                            strictly per-row, the real guard;
+//   - `drop_compared == EXPECTED_COMPARED[k]` — non-vacuity for that guard: every
+//                                            row produced a drop comparison;
+//   - `compared == EXPECTED_COMPARED[k]`  — the corpus size/geometry, exact;
+//   - `converged  >= CONVERGED_FLOOR[k]`  — convergence regression floor;
+//   - `recommend_has_inv >= INV_FLOOR[k]` — non-vacuity: real inversions exist;
+//   - `skip_diverged     >= SKIP_FLOOR[k]`— non-vacuity: the gate is exercised.
+//
+// The four non-per-row floors were whole-corpus in the former tests; here they
+// are per-slice, and `slice_floors_preserve_the_global_guarantees` (a cheap
+// test, no corpus build) asserts the pins still sum to at least the former
+// global floors — so coverage is a superset: per-slice floors additionally
+// catch a regression concentrated in one slice. Re-tune with the ignored
+// `report_slice_pins` diagnostic, and heed the census-pin cautions in CLAUDE.md
+// ("Assert the property. Measure the count. Never let a count BE the property").
+
+/// Number of slices the geometry corpus's build is partitioned into.
+const SLICE_N: usize = 24;
+
+/// Exact per-slice outcome count; sums to [`GEOMETRY_CORPUS_SIZE`]. Guards that
+/// the generator still emits this slice's geometry unchanged.
+const EXPECTED_COMPARED: [usize; SLICE_N] = [
+    2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618, 2618,
+    2617, 2617, 2617, 2617, 2617, 2617, 2617, 2617,
+];
+
+/// Per-slice convergence floor (measured minus a ~20-row margin). Sum ≥ 60_731,
+/// the former whole-corpus floor.
+const CONVERGED_FLOOR: [usize; SLICE_N] = [
+    2571, 2495, 2595, 2533, 2491, 2446, 2596, 2519, 2502, 2477, 2607, 2548, 2570, 2494, 2593, 2531,
+    2495, 2452, 2599, 2524, 2507, 2478, 2607, 2552,
+];
+
+/// Per-slice "the normalize output carries an inv" floor (measured minus ~30).
+/// Sum ≥ 39_760, the former whole-corpus floor.
+const INV_FLOOR: [usize; SLICE_N] = [
+    1642, 1642, 1764, 1764, 1411, 1411, 1729, 1729, 1520, 1520, 1874, 1874, 1656, 1656, 1768, 1768,
+    1431, 1431, 1737, 1737, 1516, 1516, 1869, 1869,
+];
+
+/// Per-slice raw-skip divergence floor — a loose non-vacuity floor (the gate is
+/// exercised), zero where a slice's geometries produce no skip divergence at
+/// all. Sum ≥ 72, the former whole-corpus floor.
+const SKIP_FLOOR: [usize; SLICE_N] = [
+    20, 36, 0, 0, 86, 71, 7, 0, 94, 58, 0, 0, 23, 38, 0, 0, 89, 74, 2, 0, 87, 57, 0, 0,
+];
+
+/// Build slice `k` of [`SLICE_N`] and assert its share of the corpus properties.
+fn assert_geometry_slice(k: usize) {
+    let outcomes = run_corpus_slice(Some((k, SLICE_N)));
+
+    let compared = outcomes.iter().filter(|o| o.compared.is_some()).count();
+    let converged = outcomes
+        .iter()
+        .filter(|o| o.compared.as_ref().is_some_and(|(d, r)| d == r))
+        .count();
+    let recommend_has_inv = outcomes
+        .iter()
+        .filter(|o| o.compared.as_ref().is_some_and(|(_, r)| r.contains("inv")))
+        .count();
+    let gated_diverged: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|o| {
+            o.drop_compared
+                .as_ref()
+                .is_some_and(|(full, _skip, gated, _fired)| full != gated)
+        })
+        .collect();
+    let skip_diverged = outcomes
+        .iter()
+        .filter(|o| {
+            o.drop_compared
+                .as_ref()
+                .is_some_and(|(full, skip, _gated, _fired)| full != skip)
+        })
+        .count();
+    let drop_compared = outcomes
+        .iter()
+        .filter(|o| o.drop_compared.is_some())
+        .count();
+
+    // Exact: the generator still emits this slice's geometry unchanged.
+    assert_eq!(
+        compared, EXPECTED_COMPARED[k],
+        "slice {k}/{SLICE_N}: compared {compared}, pinned {} — the corpus geometry moved",
+        EXPECTED_COMPARED[k],
+    );
+    // Non-vacuity: the geometry really produces inversions `normalize` types.
+    assert!(
+        recommend_has_inv >= INV_FLOOR[k],
+        "slice {k}/{SLICE_N}: only {recommend_has_inv} carry an inv, floor {}",
+        INV_FLOOR[k],
+    );
+    // Regression floor: convergence.
+    assert!(
+        converged >= CONVERGED_FLOOR[k],
+        "slice {k}/{SLICE_N}: convergence regressed, {converged} converge, floor {}",
+        CONVERGED_FLOOR[k],
+    );
+    // Non-vacuity: the raw unconditional skip still diverges on the shapes the
+    // gate exists to catch, so `gated_diverged.is_empty()` below is not vacuous.
+    assert!(
+        skip_diverged >= SKIP_FLOOR[k],
+        "slice {k}/{SLICE_N}: raw skip diverged on only {skip_diverged}, floor {} — \
+         this slice's gate coverage went vacuous",
+        SKIP_FLOOR[k],
+    );
+    // Non-vacuity for the gate below: every row must have produced a drop
+    // comparison at all, or `gated_diverged.is_empty()` passes on an empty
+    // population. This is the guarantee the deleted whole-corpus
+    // `the_gated_drop_changes_no_output` carried (it pinned this count at
+    // `GEOMETRY_CORPUS_SIZE`), restored per slice — `SKIP_FLOOR` is 0 on 10 of
+    // the 24 slices, so the skip floor alone cannot stand in for it.
+    assert_eq!(
+        drop_compared, EXPECTED_COMPARED[k],
+        "slice {k}/{SLICE_N}: only {drop_compared} rows produced a drop comparison, \
+         pinned {} — gated_diverged.is_empty() would be vacuous",
+        EXPECTED_COMPARED[k],
+    );
+    // The SHIPPED gate's safety property, strictly per row: it moved nothing.
+    for o in gated_diverged.iter().take(20) {
+        let (full, _skip, gated, _fired) = o.drop_compared.as_ref().unwrap();
+        eprintln!(
+            "GATED-DIVERGE\t{}\t{:?}\tfull={}\tgated={}",
+            o.input, o.direction, full, gated
+        );
+    }
+    assert!(
+        gated_diverged.is_empty(),
+        "slice {k}/{SLICE_N}: the SHIPPED gated Drop moved {} outputs (see GATED-DIVERGE \
+         lines) — the gate let a divergence through",
+        gated_diverged.len(),
+    );
+}
+
+macro_rules! geometry_slice_tests {
+    ($($name:ident => $k:expr),+ $(,)?) => {$(
+        #[test]
+        fn $name() {
+            assert_geometry_slice($k);
+        }
+    )+};
+}
+
+geometry_slice_tests! {
+    the_geometry_corpus_slice_00_converges_and_the_gate_holds => 0,
+    the_geometry_corpus_slice_01_converges_and_the_gate_holds => 1,
+    the_geometry_corpus_slice_02_converges_and_the_gate_holds => 2,
+    the_geometry_corpus_slice_03_converges_and_the_gate_holds => 3,
+    the_geometry_corpus_slice_04_converges_and_the_gate_holds => 4,
+    the_geometry_corpus_slice_05_converges_and_the_gate_holds => 5,
+    the_geometry_corpus_slice_06_converges_and_the_gate_holds => 6,
+    the_geometry_corpus_slice_07_converges_and_the_gate_holds => 7,
+    the_geometry_corpus_slice_08_converges_and_the_gate_holds => 8,
+    the_geometry_corpus_slice_09_converges_and_the_gate_holds => 9,
+    the_geometry_corpus_slice_10_converges_and_the_gate_holds => 10,
+    the_geometry_corpus_slice_11_converges_and_the_gate_holds => 11,
+    the_geometry_corpus_slice_12_converges_and_the_gate_holds => 12,
+    the_geometry_corpus_slice_13_converges_and_the_gate_holds => 13,
+    the_geometry_corpus_slice_14_converges_and_the_gate_holds => 14,
+    the_geometry_corpus_slice_15_converges_and_the_gate_holds => 15,
+    the_geometry_corpus_slice_16_converges_and_the_gate_holds => 16,
+    the_geometry_corpus_slice_17_converges_and_the_gate_holds => 17,
+    the_geometry_corpus_slice_18_converges_and_the_gate_holds => 18,
+    the_geometry_corpus_slice_19_converges_and_the_gate_holds => 19,
+    the_geometry_corpus_slice_20_converges_and_the_gate_holds => 20,
+    the_geometry_corpus_slice_21_converges_and_the_gate_holds => 21,
+    the_geometry_corpus_slice_22_converges_and_the_gate_holds => 22,
+    the_geometry_corpus_slice_23_converges_and_the_gate_holds => 23,
+}
+
+/// Cheap meta-guard (no corpus build): the per-slice pins still encode the former
+/// whole-corpus guarantees, so slicing did not silently weaken coverage. If a
+/// slice floor is lowered, this fails unless the global guarantee still holds.
+#[test]
+fn slice_floors_preserve_the_global_guarantees() {
+    let sum = |v: &[usize]| v.iter().sum::<usize>();
+    assert_eq!(
+        sum(&EXPECTED_COMPARED),
+        GEOMETRY_CORPUS_SIZE,
+        "the per-slice compared pins must tile the whole corpus exactly",
+    );
+    // The three former whole-corpus floors, restated as pin sums.
+    assert!(
+        sum(&CONVERGED_FLOOR) >= 60_731,
+        "converged floors sum to {}, below the former whole-corpus floor 60_731",
+        sum(&CONVERGED_FLOOR),
+    );
+    assert!(
+        sum(&INV_FLOOR) >= 39_760,
+        "inv floors sum to {}, below the former whole-corpus floor 39_760",
+        sum(&INV_FLOOR),
+    );
+    assert!(
+        sum(&SKIP_FLOOR) >= 72,
+        "skip floors sum to {}, below the former whole-corpus floor 72",
+        sum(&SKIP_FLOOR),
+    );
+}
+
+/// Diagnostic (ignored): print the per-slice pin arrays for [`SLICE_N`], so the
+/// slice guards can be re-tuned mechanically after an intended corpus change.
+/// Run with `--run-ignored all --no-capture`, read the arrays, paste them above.
+/// It also cross-checks that the slices tile the whole corpus: the summed slice
+/// metrics must equal the whole-corpus (`None`) build's.
+#[test]
+#[ignore = "permanent diagnostic (#2161): prints per-slice pin arrays and verifies the slices \
+            tile the corpus; a re-bless helper, not a CI gate, so it stays ignored"]
+fn report_slice_pins() {
+    let count = |os: &[Outcome], f: &dyn Fn(&Outcome) -> bool| os.iter().filter(|o| f(o)).count();
+    let is_compared = |o: &Outcome| o.compared.is_some();
+    let is_converged = |o: &Outcome| o.compared.as_ref().is_some_and(|(d, r)| d == r);
+    let has_inv = |o: &Outcome| o.compared.as_ref().is_some_and(|(_, r)| r.contains("inv"));
+    let skip_div = |o: &Outcome| o.drop_compared.as_ref().is_some_and(|(f, s, ..)| f != s);
+    let gated_div = |o: &Outcome| o.drop_compared.as_ref().is_some_and(|(f, _, g, _)| f != g);
+
+    let mut compared = vec![0usize; SLICE_N];
+    let mut converged = vec![0usize; SLICE_N];
+    let mut inv = vec![0usize; SLICE_N];
+    let mut skip_d = vec![0usize; SLICE_N];
+    let mut gated_d = vec![0usize; SLICE_N];
+    for k in 0..SLICE_N {
+        let os = run_corpus_slice(Some((k, SLICE_N)));
+        compared[k] = count(&os, &is_compared);
+        converged[k] = count(&os, &is_converged);
+        inv[k] = count(&os, &has_inv);
+        skip_d[k] = count(&os, &skip_div);
+        gated_d[k] = count(&os, &gated_div);
+    }
+    let sum = |v: &[usize]| v.iter().sum::<usize>();
+
+    // Tiling proof: the summed slices must equal the whole-corpus build.
+    let full = run_corpus_slice(None);
+    assert_eq!(
+        sum(&compared),
+        count(&full, &is_compared),
+        "compared does not tile"
+    );
+    assert_eq!(
+        sum(&converged),
+        count(&full, &is_converged),
+        "converged does not tile"
+    );
+    assert_eq!(sum(&inv), count(&full, &has_inv), "inv does not tile");
+    assert_eq!(
+        sum(&skip_d),
+        count(&full, &skip_div),
+        "skip_diverged does not tile"
+    );
+    assert_eq!(
+        sum(&gated_d),
+        count(&full, &gated_div),
+        "gated_diverged does not tile"
+    );
+
+    eprintln!("SLICE_N={SLICE_N}");
+    eprintln!("EXPECTED_COMPARED = {compared:?}  sum={}", sum(&compared));
+    eprintln!("converged(raw)    = {converged:?}  sum={}", sum(&converged));
+    eprintln!("inv(raw)          = {inv:?}  sum={}", sum(&inv));
+    eprintln!("skip_diverged(raw)= {skip_d:?}  sum={}", sum(&skip_d));
+    eprintln!(
+        "gated_diverged    = {gated_d:?}  sum={} (MUST be 0)",
+        sum(&gated_d)
+    );
 }
 
 /// The fix, stated as pins: a flanked inversion the derivation surface used to
@@ -551,73 +870,13 @@ fn from_sequences_decomposes_a_merged_sub_flanked_inversion() {
     );
 }
 
-/// The geometry corpus, as a regression floor. Increments 1 (the flanked/interior
-/// inversion port) and its over-merge follow-up (the `decompose_delins` split)
-/// close the flanked/interior inversion classes on the derivation surface; what
-/// remains is the shift, over-merge, and repeat-notation convergence that
-/// increments 2–3 address. So this asserts floors, not full convergence:
-///
-/// - the corpus is fully built (a fixed, deterministic count — a drop means the
-///   generator stopped emitting the geometry, the vacuity this file guards
-///   against);
-/// - `normalize` actually types an inversion on a large share of the corpus (the
-///   non-vacuity that matters: a generator that stopped producing genuine flanked
-///   inversions — every span palindromic, say — would still build 62,824 rows but
-///   type almost no `inv`, and the convergence floor alone could not tell);
-/// - the number of variants on which `derive` converges with `normalize` does not
-///   fall below what the ports achieved. A future regression lowers it; a later
-///   increment that closes the remaining gaps only raises it, so the floor is
-///   `>=`, not `==`.
-///
-/// Measured on the current corpus: 62,824 comparisons, 0 skipped, 60,904
-/// convergent, 39,760 carrying an `inv` in the `normalize` output — leaving 1,920
-/// divergences, the shift/over-merge/repeat-notation residue the later increments
-/// close. Each shuffle direction is normalized in its OWN direction (see
-/// `run_corpus`: a FivePrime derivation is held against a FivePrime `normalize`,
-/// not a 3'-canonical one), so the earlier "FivePrime direction-semantics"
-/// divergences — an artifact of that mismatch — no longer arise, which is why
-/// convergence sits well above the pre-consistency figure.
-#[test]
-fn the_inversion_geometry_corpus_converges_without_regression() {
-    let outcomes = geometry_corpus();
-    let compared = outcomes.iter().filter(|o| o.compared.is_some()).count();
-    let converged = outcomes
-        .iter()
-        .filter(|o| o.compared.as_ref().is_some_and(|(d, r)| d == r))
-        .count();
-    let recommend_has_inv = outcomes
-        .iter()
-        .filter(|o| o.compared.as_ref().is_some_and(|(_, r)| r.contains("inv")))
-        .count();
-
-    // The corpus is hermetic and deterministic, so this is exact: every generated
-    // variant put both surfaces through cleanly (0 skipped on the port).
-    assert_eq!(
-        compared, GEOMETRY_CORPUS_SIZE,
-        "the geometry corpus changed size — the generator is no longer emitting \
-         what this guard measures",
-    );
-    // Non-vacuity: the geometry really does produce inversions `normalize` types,
-    // so the convergence floor below is a claim about flanked inversions and not
-    // about a corpus that degenerated to palindromes or lone indels.
-    assert!(
-        recommend_has_inv >= 39_760,
-        "the corpus stopped producing genuine inversions: only {recommend_has_inv} \
-         of {compared} carry an inv in the normalize output, floor is 39,760",
-    );
-    assert!(
-        converged >= 60_731,
-        "convergence regressed: {converged} of {compared} converge, floor is 60,731",
-    );
-}
-
 /// Report mode: print the divergence landscape. Not an assertion — run with
 /// `--no-capture` while developing the corpus or a later increment, then read the
 /// floors off it.
 #[test]
 #[ignore = "permanent diagnostic (#2161): prints the divergence landscape used to set \
-            the floor in the_inversion_geometry_corpus_converges_without_regression; it \
-            never asserts, so it stays ignored"]
+            the floors in the geometry_corpus_slice tests; it never asserts, so it \
+            stays ignored"]
 fn report_inversion_convergence_landscape() {
     let outcomes = run_corpus();
     let compared = outcomes.iter().filter(|o| o.compared.is_some()).count();
@@ -688,77 +947,6 @@ fn report_inversion_convergence_landscape() {
         gated_diverged,
         gate_fired,
         100.0 * gate_fired as f64 / drop_compared.max(1) as f64,
-    );
-}
-
-/// The #2161 Path 1 gate guard: the SHIPPED `rederive(recommended_form = true)`
-/// path — skip the second block partition unless `repartition_gate` fires — must
-/// be byte-identical to the pre-drop full normalization on **every** output. That
-/// equality is the Drop's whole safety condition: the gate runs the full
-/// re-partition on exactly the shapes where it would change the output (inv /
-/// delins members) and skips it everywhere else.
-///
-/// The raw unconditional skip diverges on 72 of these (all inv-placement or
-/// delins-merge shapes), matched exactly by the `skip_diverged >= 72` floor
-/// below — a regression floor, not slack; the gate exists to catch those, and
-/// this asserts it does.
-#[test]
-fn the_gated_drop_changes_no_output() {
-    let outcomes = geometry_corpus();
-    let compared = outcomes
-        .iter()
-        .filter(|o| o.drop_compared.is_some())
-        .count();
-    let gated_diverged: Vec<&Outcome> = outcomes
-        .iter()
-        .filter(|o| {
-            o.drop_compared
-                .as_ref()
-                .is_some_and(|(full, _skip, gated, _fired)| full != gated)
-        })
-        .collect();
-    let skip_diverged = outcomes
-        .iter()
-        .filter(|o| {
-            o.drop_compared
-                .as_ref()
-                .is_some_and(|(full, skip, _gated, _fired)| full != skip)
-        })
-        .count();
-
-    // Non-vacuity: the guard must actually have compared a large population, or a
-    // corpus that stopped producing derivations would pass the emptiness check
-    // silently — the "a corpus zero is a claim about the corpus" trap.
-    assert_eq!(
-        compared, GEOMETRY_CORPUS_SIZE,
-        "the gate guard compared {compared} derived variants, expected \
-         {GEOMETRY_CORPUS_SIZE} — the corpus is no longer exercising the path on \
-         every generated variant",
-    );
-    // Non-vacuity, second half: the raw skip MUST still diverge on the shapes the
-    // gate exists to catch, or the guard is proving nothing (a corpus that stopped
-    // producing inv/delins shapes would pass while testing an empty gate).
-    assert!(
-        skip_diverged >= 72,
-        "the raw unconditional skip diverged on only {skip_diverged} outputs — the \
-         corpus stopped producing the inv/delins shapes the gate is meant to catch, \
-         so this guard is vacuous",
-    );
-
-    for o in gated_diverged.iter().take(20) {
-        let (full, _skip, gated, _fired) = o.drop_compared.as_ref().unwrap();
-        eprintln!(
-            "GATED-DIVERGE\t{}\t{:?}\tfull={}\tgated={}",
-            o.input, o.direction, full, gated
-        );
-    }
-
-    assert!(
-        gated_diverged.is_empty(),
-        "the SHIPPED gated Drop moved {} of {compared} outputs (raw skip moved \
-         {skip_diverged}) — the gate let a divergence through (see GATED-DIVERGE \
-         lines). Its predicate is missing a shape the re-partition changes.",
-        gated_diverged.len(),
     );
 }
 

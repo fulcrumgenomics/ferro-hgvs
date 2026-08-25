@@ -857,7 +857,10 @@ jobs:
       #   `test-build` (`CARGO_PROFILE_TEST_DEBUG=0`) serving each other useless
       #   trees. `rust-cache` keys per job by default; `key` below only adds a
       #   legible name, so `gh api .../actions/caches` stays diagnosable — which
-      #   is how #1218 was diagnosed in the first place.
+      #   is how #1218 was diagnosed in the first place. The one deliberate
+      #   exception is the `build-lint` / `build-release-check` pair below, which
+      #   DO share one entry via `shared-key: build-release` — safe there, and only
+      #   there, because one job's deps are a strict superset of the other's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
@@ -1469,7 +1472,7 @@ jobs:
   # stable as tests are added. Verified even on this suite: 8646 tests split
   # 2148 / 2181 / 2162 / 2155 across four shards.
   test:
-    name: Test (${{ matrix.shard }}/6)
+    name: Test (${{ matrix.shard }}/8)
     needs: [test-build, spec-fixtures, fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1478,7 +1481,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1547,7 +1550,7 @@ jobs:
         if: matrix.shard == 1
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip, and nextest reports that skip path as PASS rather than SKIP. No gating job runs those axes, so a denoted-sequence violation on them still cannot redden a required check (#1815). The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest, non-gating."
-      - name: Run Rust tests (shard ${{ matrix.shard }} of 6)
+      - name: Run Rust tests (shard ${{ matrix.shard }} of 8)
         env:
           # Absence of a bulk fixture must FAIL here, never skip. The bulk and
           # exhaustive suites `return` early on a missing file, so without this
@@ -1560,14 +1563,14 @@ jobs:
         # archive from `test-build-soak` is reserved for `soak` and `sweeps`.
         #
         # Proptests are excluded here and owned entirely by the `soak` job,
-        # which runs them at 125k cases per shard instead of 12k. Leaving them
+        # which runs them at 100k cases per shard instead of 12k. Leaving them
         # in would run the same properties twice at strictly lower depth AND
         # wreck shard balance: measured locally, the shard holding them took
         # 66.6s against 8.8-13.5s for its siblings.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/6 \
+            --partition hash:${{ matrix.shard }}/8 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER) and not ($ORACLE_ONLY_FILTER)"
 
   # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
@@ -1607,11 +1610,34 @@ jobs:
   # that was the right price: a negation is stable under a re-roll and a shard
   # count is not.
   #
-  # N stays at 4. Nothing now depends on which shard a particular test lands in,
-  # so the number is once again merely conventional; it is left alone because
-  # changing it re-rolls every assignment for no measured gain.
+  # N is 10. The "no measured gain" that kept it at 4 held only while this job was
+  # NOT the whole workflow's critical path. Once the sharded test binaries stopped
+  # having a single multi-minute dominator, this job's max shard became the pole
+  # that sets the run's wall time, and lowering that pole IS a measured gain.
+  #
+  # `--partition hash` balances test COUNTS and is blind to cost, and cost is what
+  # sets the wall. A shard runs its tests ~4-up on the 4-vCPU runner, so its wall
+  # is (sum of its tests' seconds) / ~3.8 — a LOAD figure, not a slowest-test one.
+  # After #01 sliced the former heaviest censuses into per-slice tests, no single
+  # test is a hard floor, so the pole is pure load imbalance across the bins.
+  #
+  # Measured at N=4 the shards ran ~2825 tests each (balanced to 0.5%) carrying a
+  # 3.1x test-seconds spread set only by which heavy tests co-hashed. N=6 bought
+  # ~12s of whole-run wall; N=8 topped out near 107s on its heaviest shard; N=10
+  # spreads the heavy load-chunks across more bins, dropping the pure-partition
+  # max toward ~90s/shard. Past ~10 the fixed per-shard prefix (archive download
+  # ~24s) and rising cross-shard download contention stop the marginal shard from
+  # helping. One shard additionally carries the un-partitioned
+  # SEQUENCE_ORACLE_EXCLUDE step (5 tests, ~27s); it is deliberately placed on a
+  # light partition shard (see that step) so it does not become the pole — the
+  # pole is the heaviest pure-partition shard, set by hash clustering.
+  #
+  # So the number is chosen against wall time now, not left conventional. If a
+  # future test's own seconds ever approach a per-shard budget, the stable fix is
+  # to SLICE it (as #01 sliced the geometry corpus) or carve it into its own job
+  # (as CENSUS_FILTER did) — never a shard-count bump chased against one snapshot.
   test-oracle:
-    name: Test oracle (${{ matrix.shard }}/4)
+    name: Test oracle (${{ matrix.shard }}/10)
     needs: [test-build, spec-fixtures, fixtures]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1620,7 +1646,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1849,7 +1875,7 @@ jobs:
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/4 \
+            --partition hash:${{ matrix.shard }}/10 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER) and not ($SEQUENCE_ORACLE_EXCLUDE)"
       # The other half of the trade, and the reason arming the flag above costs no
       # coverage: the rows `SEQUENCE_ORACLE_EXCLUDE` withholds from the armed step
@@ -1858,23 +1884,30 @@ jobs:
       # four — three oracles surrendered to gain one.
       #
       # Runs on ONE shard and UN-partitioned, deliberately. It selects 5 tests, so
-      # `--partition hash:K/4` would leave some shards selecting none, and neither
+      # `--partition hash:K/10` would leave some shards selecting none, and neither
       # answer to that is acceptable: `--no-tests=fail` would redden a shard for
       # doing its job, and `--no-tests=pass` would be a step that goes green having
       # run nothing — the vacuous pass this repository keeps meeting. Un-partitioned
-      # on shard 1 with `--no-tests=fail` instead, so a rename that empties the
+      # on ONE shard with `--no-tests=fail` instead, so a rename that empties the
       # filter is loud rather than silent. These rows ran exactly once per CI run
       # before this change too, spread across the shards, so nothing runs twice and
       # nothing runs less.
       #
-      # It carries no `if: always()`, so a red armed step on shard 1 skips it. That
+      # It rides shard 3, not shard 1: this ~27s step stacks onto whichever shard
+      # runs it, so it belongs on a light one rather than adding to a heavy one and
+      # becoming the oracle's straggler. Shard 3 is a historically light partition;
+      # the choice is not load-bearing (the whole-run wall is bounded by the release
+      # build, and the pole among the pure-partition shards sits above this step
+      # either way), only a smaller-is-better placement.
+      #
+      # It carries no `if: always()`, so a red armed step on shard 3 skips it. That
       # is the intended reading: the job is already failing and the useful signal is
       # the armed step's own failure, not a further confirmation that five withheld
       # rows still pass. Nothing here can turn a red job green — the concern the
       # `.github/workflows/**` review rule raises about a skipped step is coverage
       # lost on a PASSING run, and on a passing run this step always executes.
       - name: Run the sequence-oracle exclusions under the other three oracles
-        if: matrix.shard == 1
+        if: matrix.shard == 3
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
@@ -1885,7 +1918,7 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "$SEQUENCE_ORACLE_EXCLUDE"
 
-  # 1,000,000-case idempotency soak on every PR, split 8 ways.
+  # 1,000,000-case idempotency soak on every PR, split 10 ways.
   #
   # Why this job exists: PR CI's ordinary 12k-case run has never caught one of
   # this campaign's idempotency defects. #1210 first reproduced at ~150,000
@@ -1903,14 +1936,14 @@ jobs:
   # Why sharding the SEED and not the test list: `--partition` splits at test
   # granularity, and the cost here sits inside a handful of property functions
   # that each run their cases serially. Partitioning bottoms out at the slowest
-  # single property. Eight shards of 125k cases under eight distinct seeds cover
+  # single property. Ten shards of 100k cases under ten distinct seeds cover
   # the same 1M cases in a fraction of the wall time, and decorrelated streams
   # are if anything better coverage than one stream of 1M.
   #
   # The nightly counterpart (nightly-soak.yml) runs the same depth UNSEEDED, so
   # new territory still gets explored — it just reports instead of blocking.
   soak:
-    name: Idempotency soak (${{ matrix.shard }}/8)
+    name: Idempotency soak (${{ matrix.shard }}/10)
     # Only the optimized archive, NOT `test-build`. Every test the selection
     # below reaches lives in `tests/it/{cis_allele_confluence,
     # from_sequences, minimal_alignment_enumeration,
@@ -1934,9 +1967,10 @@ jobs:
     # re-checked rather than assumed: its eight properties are pure functions of
     # a generated `(reference, alternate)` byte pair, reading no provider and no
     # fixture. Its cost was measured too, because the enumerator it exercises is
-    # exponential in block length — `PROPTEST_CASES=125000` over the module
-    # costs 56.7 s wall in the *test* profile, i.e. before this job's ~5.4x
-    # optimization. That is bounded by its own `MAX_BLOCK_LEN` of 6; raising it
+    # exponential in block length — at the former `PROPTEST_CASES=125000` the
+    # module cost 56.7 s wall in the *test* profile (before this job's ~5.4x
+    # optimization); the 100k setting here scales to ~45 s. Bounded by its own
+    # `MAX_BLOCK_LEN` of 6; raising it
     # is a soak-cost decision, not only a coverage one.
     needs: test-build-soak
     runs-on: ubuntu-latest
@@ -1946,7 +1980,7 @@ jobs:
       matrix:
         # Distinct arbitrary seeds; the values matter only in that they differ
         # and are fixed. Changing one changes which cases that shard explores.
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         include:
           - { shard: 1, seed: 1000001 }
           - { shard: 2, seed: 2000003 }
@@ -1956,6 +1990,8 @@ jobs:
           - { shard: 6, seed: 6000023 }
           - { shard: 7, seed: 7000003 }
           - { shard: 8, seed: 8000009 }
+          - { shard: 9, seed: 9000011 }
+          - { shard: 10, seed: 10000019 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1972,10 +2008,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: nextest-archive-soak
-      - name: Soak 125k cases (seed ${{ matrix.seed }})
+      - name: Soak 100k cases (seed ${{ matrix.seed }})
         env:
-          # 8 shards x 125k = 1,000,000 cases per property.
-          PROPTEST_CASES: "125000"
+          # 10 shards x 100k = 1,000,000 cases per property.
+          PROPTEST_CASES: "100000"
           PROPTEST_RNG_SEED: ${{ matrix.seed }}
           # `core_strategy`'s body-length filter rejects a steady ~6.7% of
           # draws, so proptest's absolute 65_536 local-reject cap aborts a long
@@ -2110,31 +2146,36 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "$SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)"
 
-  # `CENSUS_FILTER`'s modules, moved off the `test` / `test-oracle` partitions
-  # and onto the optimized archive. See that filter's own comment for why they
-  # moved; this one is about how the job preserves what they were doing.
+  # The ARMED half of `CENSUS_FILTER`'s modules, moved off the `test` /
+  # `test-oracle` partitions and onto the optimized archive. See that filter's
+  # own comment for why they moved; this one is about how the job preserves what
+  # they were doing.
   #
-  # TWO STEPS, because the modules do not agree about the oracles and the
-  # difference is not a detail:
+  # This job runs ONLY the armed census. The un-armed half —
+  # `spec_conformance_axis`, which must NOT be armed — runs in the separate
+  # `censuses-plain` job below, split out so the two halves run in PARALLEL
+  # rather than as two serial steps of one job (see that job's header for the
+  # wall-time measurement). They are split because the modules do not agree
+  # about the oracles:
   #
-  #   * ARMED runs what `test-oracle` ran, with the same three flags and no
-  #     fourth. An armed run strictly subsumes the un-armed one — the oracles
+  #   * ARMED (here) runs what `test-oracle` ran, with the same three flags and
+  #     no fourth. An armed run strictly subsumes the un-armed one — the oracles
   #     add assertions at `normalize_core_checked`'s exit and change no
   #     behaviour — which is the same argument `sweeps` makes, so dropping the
-  #     plain-`test` copy of these two modules loses nothing.
-  #   * UN-ARMED runs `spec_conformance_axis`, which is in `ORACLE_EXCLUDE` and
-  #     must stay that way: it COUNTS the non-idempotent outputs
-  #     `FERRO_ASSERT_IDEMPOTENT` panics on, and a panicking row is filed
+  #     plain-`test` copy of these modules loses nothing.
+  #   * UN-ARMED (`censuses-plain`) runs `spec_conformance_axis`, which is in
+  #     `ORACLE_EXCLUDE` and must stay that way: it COUNTS the non-idempotent
+  #     outputs `FERRO_ASSERT_IDEMPOTENT` panics on, and a panicking row is filed
   #     `declined` and never reaches the family's output set — which does not
   #     redden the census, it FLATTERS it. That module ran only in the plain
-  #     `test` job before, so this step reproduces it exactly.
+  #     `test` job before, so `censuses-plain` reproduces it exactly.
   #
-  # `FERRO_ASSERT_SEQUENCE` is set by NEITHER step, which is what makes this a
+  # `FERRO_ASSERT_SEQUENCE` is set by NEITHER job, which is what makes this a
   # move rather than a change of instrument. `sweeps` does set it, so these
   # modules could not simply be appended there.
   #
-  # #1815 armed that flag in `test-oracle`, so this job's armed step no longer
-  # mirrors that job's flag set — it is now a strict SUBSET of it, deliberately.
+  # #1815 armed that flag in `test-oracle`, so this job's armed flag set no
+  # longer mirrors that job's — it is now a strict SUBSET of it, deliberately.
   # Arming a fourth oracle here would be exactly the change of instrument the
   # paragraph above refuses, and it has NOT been measured over
   # `ORACLE_ONLY_FILTER`'s modules. Do not "restore parity" by copying the flag
@@ -2201,12 +2242,39 @@ jobs:
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving) + test(clinvar_hgvs_tests)"
+
+  # The un-armed half of the censuses, split into its OWN job so it runs in
+  # PARALLEL with the armed half above rather than after it. On the optimized
+  # soak archive the two halves measured 43s (armed) and 50s (un-armed), so a
+  # single job spent ~93s of nextest serially and completed ~+4:05 from run
+  # start — over the 4-minute target. As two jobs the wall is the slower half,
+  # ~+3:30. This job carries NO bulk fixtures (its modules build their corpus in
+  # code, `conformance::spec_corpus`, and read nothing from disk), so it also
+  # skips that 156 MB download. Both jobs gate the merge through `test-required`.
+  censuses-plain:
+    name: Slow censuses plain (optimized)
+    # Only the optimized archive. NOT spec-fixtures: the two modules below build
+    # their corpus in code (`conformance::spec_corpus`) and read no fixture, and
+    # neither is named in the `pregenerate-spec-fixtures` nextest setup-script
+    # filter (`.config/nextest.toml`), so the script never fires here either.
+    # Depending on spec-fixtures would only serialize this job behind that build.
+    needs: test-build-soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive-soak
       - name: Run the censuses that may not be measured with an oracle armed
         # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: these
         # modules build their corpus in code (`conformance::spec_corpus`) and
         # read nothing from disk. `conformance_census_runs` (#2094) joins
         # `spec_conformance_axis` here because `run_census` refuses outright
-        # with a seam oracle armed, which would fail the armed step below.
+        # with a seam oracle armed, which would fail an armed run.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
@@ -2314,7 +2382,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [test, test-oracle, soak, sweeps, censuses, hgvs-rs-tests]
+    needs: [test, test-oracle, soak, sweeps, censuses, censuses-plain, hgvs-rs-tests]
     # `always()` so a failed or cancelled dependency still reports a conclusion
     # rather than leaving the required context pending forever.
     if: always()
@@ -2326,12 +2394,14 @@ jobs:
           echo "soak            = ${{ needs.soak.result }}"
           echo "sweeps          = ${{ needs.sweeps.result }}"
           echo "censuses        = ${{ needs.censuses.result }}"
+          echo "censuses-plain  = ${{ needs.censuses-plain.result }}"
           echo "hgvs-rs-tests   = ${{ needs.hgvs-rs-tests.result }}"
           if [ "${{ needs.test.result }}" != "success" ] \
             || [ "${{ needs.test-oracle.result }}" != "success" ] \
             || [ "${{ needs.soak.result }}" != "success" ] \
             || [ "${{ needs.sweeps.result }}" != "success" ] \
             || [ "${{ needs.censuses.result }}" != "success" ] \
+            || [ "${{ needs.censuses-plain.result }}" != "success" ] \
             || [ "${{ needs.hgvs-rs-tests.result }}" != "success" ]; then
             echo "::error::one or more test jobs did not succeed"
             exit 1
@@ -2451,8 +2521,18 @@ jobs:
           --rootdir=/tmp
           "$GITHUB_WORKSPACE/tests/python/" -v
 
-  build:
-    name: Build
+  # The Build gate is two parallel jobs behind a `Build` rollup. It used to be one
+  # job running ~47s of release-clippy + default-feature guard IN SERIES ahead of
+  # the release build. Split, `build-release-check` (release build + size) runs
+  # alongside `build-lint` (clippy --release + featureless guard) rather than
+  # behind it, and the rollup reports the required `Build` context (the
+  # `test-required` pattern). NO new rust-cache key is added: both jobs
+  # `shared-key: build-release` (see each block) so they share ONE entry — which
+  # matters near the 10 GiB cap (#1218), and is why the sharing had to be
+  # `shared-key`, not `key` (`key` appends the job id, giving two cold per-job
+  # entries).
+  build-lint:
+    name: Build lint
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -2463,36 +2543,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-          # For the release-profile lint below. The two `clippy` jobs request the
-          # component the same way; without it `cargo clippy` is not installed.
+          # For the release-profile lint below; without it `cargo clippy` is not
+          # installed.
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # Save only from `main` — see the note on the first
-          # `rust-cache` block in this file.
+          # This job OWNS one shared cache entry that `build-release-check`
+          # restores read-only. `shared-key` (NOT `key`) is load-bearing:
+          # `key` appends `GITHUB_JOB`, so two jobs passing the same `key` get
+          # SEPARATE entries and never share — `shared-key` omits the job id, so
+          # both land on one `build-release` entry. Sharing is sound HERE (unlike
+          # the per-job caches above — see the note on the first rust-cache block)
+          # precisely because this job's deps are the SUPERSET: clippy `--release`
+          # builds the release deps and the featureless guard below builds the
+          # debug/test deps, while `build-release-check` needs only the release
+          # half, which the shared entry always carries. `save-if: main` plus a
+          # single saver (this job) means no race over the entry, and no new key
+          # near the 10 GiB cap (#1218).
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          key: build-release
-      # The release-profile lint (#1383). It lives in THIS job on purpose: the two
-      # `clippy` jobs both lint the debug profile, so nothing checked the release
-      # profile, and the normalization oracles are required by convention to
-      # compile out of release entirely (`#[cfg(debug_assertions)]` on
-      # `assert_in_bounds`, `assert_reparseable`, `assert_idempotent` and their
-      # `*_self_check_enabled` flags). An oracle helper left ungated becomes dead
-      # code in release, and `dead_code` is warn-by-default, so nothing went red:
-      # #1366's pre-review head failed this command with three such errors while
-      # all three CI clippy jobs were green on the same commit.
+          shared-key: build-release
+      # The release-profile lint (#1383). The two `clippy` jobs both lint the debug
+      # profile, so nothing else checks the release profile, and the normalization
+      # oracles are required by convention to compile out of release entirely
+      # (`#[cfg(debug_assertions)]` on `assert_in_bounds`, `assert_reparseable`,
+      # `assert_idempotent` and their `*_self_check_enabled` flags). An oracle
+      # helper left ungated becomes dead code in release, and `dead_code` is
+      # warn-by-default, so nothing went red: #1366's pre-review head failed this
+      # command with three such errors while all three CI clippy jobs were green on
+      # the same commit.
       #
-      # Here rather than in a job of its own because the repository sits near the
-      # 10 GiB Actions cache cap and #1218 records two cache generations reaching
-      # 13.61 GiB, evicting by LRU and destroying the nightly's 3.25 GiB
-      # `ferro-manifest-v3` as collateral damage. This job already builds the
-      # release profile and already owns a `rust-cache` entry (`build-release`),
-      # so the lint adds no new cache KEY — only clippy's own fingerprints to an
-      # entry that already exists. (The +30 MB / +1.6% this was measured at
-      # originally was against the hand-rolled whole-`target/` entries that #1370
-      # retired; `rust-cache` stores dependency artifacts only, so the marginal
-      # cost is smaller still.) `Build` is also already a required check, so a
-      # failure blocks a merge rather than only turning a non-required job red.
+      # It stays a `cargo clippy` step (not folded into the release build via
+      # `RUSTFLAGS=-D warnings`) because RUSTFLAGS is part of cargo's build
+      # fingerprint, so setting it busts the whole dependency cache — ~400 crates
+      # rebuild cold, the same trap the `CARGO_INCREMENTAL` note in `CLAUDE.md`
+      # records. `clippy -- -D warnings` passes the flag as a clippy ARG instead,
+      # leaving dependencies `--cap-lints=allow` and their fingerprints untouched.
       #
       # Deliberately NOT `--all-targets`: the dead code lands in the `lib` target,
       # which the plain invocation covers. Measured by removing the four
@@ -2519,14 +2604,34 @@ jobs:
       # feature set BUILDS, not that these tests run a second time. `--lib
       # --bins` covers every `#[cfg(test)]` module under `src/`; the integration
       # tree is already compiled featureless by `test-build-soak`.
-      #
-      # In THIS job rather than one of its own, for the reason the release-profile
-      # lint above gives at length: the repository sits near the 10 GiB Actions
-      # cache cap and #1218 records eviction cascades caused by adding cache keys.
-      # `build` already owns `build-release` and is already a required check, so
-      # the guard blocks a merge instead of only reddening an optional job.
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
+
+  # The release build + binary-size guard. On its own runner so its ~154s release
+  # compile of `ferro` runs in parallel with the lint job above rather than after
+  # it.
+  build-release-check:
+    name: Build release + size
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          # RESTORE-ONLY the shared `build-release` entry `build-lint` saves.
+          # `shared-key` (not `key`) so the job id is NOT appended and this
+          # genuinely restores `build-lint`'s entry — with `key` the two jobs get
+          # separate per-job entries, and since this one is `save-if: false` it
+          # would then restore nothing and recompile every release dependency cold
+          # on every run. `save-if: false` keeps `build-lint` the single saver.
+          save-if: false
+          shared-key: build-release
       - run: cargo build --release
       - name: Check binary size
         run: |
@@ -2535,5 +2640,27 @@ jobs:
           echo "Binary size: $size bytes"
           if [ "$size" -gt 10485760 ]; then
             echo "Error: Binary size exceeds 10MB limit"
+            exit 1
+          fi
+
+  # Reports the required `Build` context on behalf of the two jobs above, the same
+  # way `test-required` reports `Test`. Renaming or re-splitting the build work
+  # cannot break the required context as long as this rollup names its `needs`.
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-lint, build-release-check]
+    # `always()` so a failed dependency still reports a conclusion rather than
+    # leaving the required context pending forever.
+    if: always()
+    steps:
+      - name: Verify the build jobs succeeded
+        run: |
+          echo "build-lint          = ${{ needs.build-lint.result }}"
+          echo "build-release-check = ${{ needs.build-release-check.result }}"
+          if [ "${{ needs.build-lint.result }}" != "success" ] \
+            || [ "${{ needs.build-release-check.result }}" != "success" ]; then
+            echo "::error::one or more build jobs did not succeed"
             exit 1
           fi
