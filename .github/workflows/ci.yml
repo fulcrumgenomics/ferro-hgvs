@@ -2521,16 +2521,16 @@ jobs:
           --rootdir=/tmp
           "$GITHUB_WORKSPACE/tests/python/" -v
 
-  # The Build gate is two parallel jobs behind a `Build` rollup. It used to be one
-  # job running ~47s of release-clippy + default-feature guard IN SERIES ahead of
-  # the release build. Split, `build-release-check` (release build + size) runs
-  # alongside `build-lint` (clippy --release + featureless guard) rather than
-  # behind it, and the rollup reports the required `Build` context (the
-  # `test-required` pattern). NO new rust-cache key is added: both jobs
-  # `shared-key: build-release` (see each block) so they share ONE entry — which
-  # matters near the 10 GiB cap (#1218), and is why the sharing had to be
-  # `shared-key`, not `key` (`key` appends the job id, giving two cold per-job
-  # entries).
+  # The Build gate is two jobs behind a `Build` rollup. `build-lint` (clippy
+  # --release + featureless guard) runs on every event; `build-release-check`
+  # (release build + size) is kept off the per-PR critical path and runs only in
+  # the merge queue and post-merge — see that job's header for the full gating
+  # contract. The rollup reports the required `Build` context (the `test-required`
+  # pattern): on a pull_request it gates on `build-lint` alone, otherwise on both.
+  # NO new rust-cache key is added: both jobs `shared-key: build-release` (see each
+  # block) so they share ONE entry — which matters near the 10 GiB cap (#1218), and
+  # is why the sharing had to be `shared-key`, not `key` (`key` appends the job id,
+  # giving two cold per-job entries).
   build-lint:
     name: Build lint
     runs-on: ubuntu-latest
@@ -2607,13 +2607,37 @@ jobs:
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
 
-  # The release build + binary-size guard. On its own runner so its ~154s release
-  # compile of `ferro` runs in parallel with the lint job above rather than after
-  # it.
+  # The release build + binary-size guard. This is the ONE place the merge-queue
+  # gating contract is stated; other comments (the Build-gate header above, the
+  # rollup below) point here rather than restate it. It runs in the merge queue
+  # and on the post-merge push to `main`, but NOT on `pull_request`: its ~212s
+  # `cargo build --release` (lto + codegen-units=1, mandated by the size cap
+  # below — a faster profile would breach it) is the workflow's slowest job and
+  # the only one over the 4-minute PR target, and it carries no per-PR coverage a
+  # reviewer iterates against (the release-profile lint that catches most release
+  # issues is `build-lint`'s `cargo clippy --release`, which does run on every push).
+  #
+  # `merge_group` is where it GATES: the `Build` rollup requires it (see the
+  # rollup's `needs`), so no pull request merges without the release build and
+  # size check passing against the projected merge.
+  #
+  # `push` (to `main`) is the SAFETY NET. The merge queue is a ruleset rule that
+  # can be rolled back (campaigns/ruleset-19738231-before.json); if it is,
+  # `merge_group` stops firing, so gating there ALONE would let this check vanish
+  # silently — main would then take merges with a green `Build` (build-lint only)
+  # and no release build or size check at all. Running it on the post-merge push
+  # too means an oversized or unbuildable binary reddens `main`'s CI loudly
+  # instead, whatever the merge path. (Redundant with the queue's own run while
+  # the queue is enabled, but post-merge, so it never races the PR target.)
+  #
+  # On a `pull_request` run the job is skipped, and the rollup gates on `build-lint`
+  # alone — a job skipped by a job-level `if` reports success to the required
+  # context, so `Build` still reports and the PR is not left waiting.
   build-release-check:
     name: Build release + size
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    if: github.event_name == 'merge_group' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -2638,8 +2662,13 @@ jobs:
           ls -lh target/release/ferro
           size=$(stat -c%s target/release/ferro 2>/dev/null || stat -f%z target/release/ferro)
           echo "Binary size: $size bytes"
-          if [ "$size" -gt 10485760 ]; then
-            echo "Error: Binary size exceeds 10MB limit"
+          # 20 MiB (20 * 1048576). A bloat tripwire for the distributed CLI, not a
+          # hard product limit: the binary is currently ~9.9 MiB, so this leaves
+          # headroom rather than sitting one accidental dependency away from red.
+          # Raised from 10 MiB (an undocumented value carried since the initial
+          # commit), which the binary had grown to within ~120 KiB of.
+          if [ "$size" -gt 20971520 ]; then
+            echo "Error: Binary size exceeds 20 MiB limit"
             exit 1
           fi
 
@@ -2659,8 +2688,17 @@ jobs:
         run: |
           echo "build-lint          = ${{ needs.build-lint.result }}"
           echo "build-release-check = ${{ needs.build-release-check.result }}"
-          if [ "${{ needs.build-lint.result }}" != "success" ] \
-            || [ "${{ needs.build-release-check.result }}" != "success" ]; then
-            echo "::error::one or more build jobs did not succeed"
+          # `build-lint` runs on every event and must succeed.
+          if [ "${{ needs.build-lint.result }}" != "success" ]; then
+            echo "::error::build-lint did not succeed"
+            exit 1
+          fi
+          # `build-release-check` is SKIPPED on a `pull_request` run (it runs on
+          # merge_group + push — see that job's header for why); accept `skipped`
+          # here. When it did run (queue or post-merge push) it must have
+          # succeeded, which is what gates the merge / reddens main.
+          if [ "${{ needs.build-release-check.result }}" != "success" ] \
+            && [ "${{ needs.build-release-check.result }}" != "skipped" ]; then
+            echo "::error::build-release-check did not succeed"
             exit 1
           fi
