@@ -28,6 +28,10 @@
 //!   a structured window corpus.
 //! * **Tier 3** — a neighbourhood fuzzer proven able to fail, and an opt-in
 //!   corpus replay.
+//! * **Tier 4** — shape coverage (#2206) across the regression's sibling
+//!   geometries the del-run+ins tests do not reach: near-miss anchors, a `dup`
+//!   5' member, a del-run-then-`dup`, and the `m.` axis. These pin the derived
+//!   SPELLING, which `verify_round_trip` (guaranteeing only the bases) cannot.
 //!
 //! Each exploratory test prints a per-cell RED/GREEN map before asserting, so a
 //! single run shows exactly where the boundary sits.
@@ -964,5 +968,131 @@ fn t3b_optin_corpus_replay() {
     assert_eq!(
         collisions, 0,
         "{collisions}/{checked} replayed descriptions collided"
+    );
+}
+
+// ===========================================================================
+// Tier 4 — #2206 shape coverage
+//
+// `verify_round_trip` (src/normalize/from_sequences.rs) runs on EVERY derivation
+// and guarantees the derived BASES equal the alternate — so an `Ok` is
+// denoted-correct and `merge_coincident_insertions`' concatenation order is
+// proven every run. What it cannot see is SPELLING/SHAPE: two spellings that
+// denote the same bases are indistinguishable to it. These pin the SHAPE of the
+// merge across the regression's sibling geometries, which the del-run+ins tests
+// above never exercise. Strings captured from the current run; a deliberate
+// derivation change moves them.
+// ===========================================================================
+
+/// Adjacent-but-not-coincident insertion anchors are NOT over-merged (#2206).
+///
+/// `merge_coincident_insertions` folds two pure insertions sharing ONE interbase.
+/// The near-miss it must leave alone is two insertions one base apart:
+/// `del_run_then_insertion(335, 8, gap)` with `gap >= 1` anchors the insertion
+/// past the run, and the derivation places insertions at adjacent but DISTINCT
+/// interbases (e.g. `339_340ins…;340_341ins…`). They must stay separate — a fold
+/// keyed on adjacency rather than coincidence would wrongly merge them.
+#[test]
+fn t4a_near_miss_adjacent_anchors_are_not_over_merged() {
+    let nz = Normalizer::new(provider(TEMPLATE));
+    // gap == 1: the insertion sits one base 3' of the deletion run.
+    let got = rederive(&nz, &del_run_then_insertion(335, 8, 1, PAYLOAD30), false);
+    let Outcome::Ok(derived) = got else {
+        panic!(
+            "gap=1 near-miss must derive: {}: {}",
+            got.tag(),
+            got.detail()
+        );
+    };
+    assert_eq!(
+        derived,
+        "NC_TEST.1:g.[337T>C;339_340insGAACAAAGAAA;340_341insCACG;343_344insC;345_346insGGAGGC]",
+        "adjacent-but-not-coincident anchors must stay separate, not merge"
+    );
+    // gap == 2: one base further; still distinct anchors, still not merged.
+    let got = rederive(&nz, &del_run_then_insertion(335, 8, 2, PAYLOAD30), false);
+    let Outcome::Ok(derived) = got else {
+        panic!(
+            "gap=2 near-miss must derive: {}: {}",
+            got.tag(),
+            got.detail()
+        );
+    };
+    assert_eq!(
+        derived,
+        "NC_TEST.1:g.[337T>C;339_340insCGAACAAAGAAA;340_341insCACG;343_344insC;345_346insGGAGG]",
+        "adjacent-but-not-coincident anchors must stay separate, not merge"
+    );
+}
+
+/// A `dup` as the 5' member (not a deletion run) rederives (#2206).
+///
+/// The regression touched a `dup` OR `del` 5' member; the tests above cover only
+/// del runs. Here the 5' member is a duplication, carried through the same
+/// coalesce/merge path, and it survives the merge as a `dup`.
+#[test]
+fn t4b_dup_as_five_prime_member_rederives() {
+    let nz = Normalizer::new(provider(TEMPLATE));
+    let desc = "NC_TEST.1:g.[335_336dup;337del;338del;339del;340del;341del;342del;343_344insCCCGAACAAAGAAATCACGTCTCTCGGAGG]";
+    let got = rederive(&nz, desc, false);
+    let Outcome::Ok(derived) = got else {
+        panic!("dup-5' member must derive: {}: {}", got.tag(), got.detail());
+    };
+    assert_eq!(
+        derived,
+        "NC_TEST.1:g.[336_337dup;339_340insCGAACAAAGAAA;340_341insCACG;343_344insCTCGGAGG]",
+        "a dup 5' member survives the merge as a dup"
+    );
+}
+
+/// A deletion run followed by a `dup` (not an insertion) rederives (#2206).
+///
+/// The other sibling: a `dup` on the 3' side of the run. Both a single-base and a
+/// two-base 3' dup collapse to one net deletion. A dup that OVERLAPS the run
+/// (`342_343dup`) is a self-cancelling allele the parser rejects, so it cannot be
+/// an input — noted so the absence is deliberate, not an oversight.
+#[test]
+fn t4c_del_run_then_dup_rederives() {
+    let nz = Normalizer::new(provider(TEMPLATE));
+    let run = "335del;336del;337del;338del;339del;340del;341del;342del";
+    for (dup, expected) in [
+        ("343dup", "NC_TEST.1:g.339_345del"),
+        ("343_344dup", "NC_TEST.1:g.338_343del"),
+    ] {
+        let desc = format!("NC_TEST.1:g.[{run};{dup}]");
+        let got = rederive(&nz, &desc, false);
+        let Outcome::Ok(derived) = got else {
+            panic!("{dup}: must derive: {}: {}", got.tag(), got.detail());
+        };
+        assert_eq!(derived, expected, "del-run then {dup}");
+    }
+}
+
+/// The mitochondrial (`m.`) axis derives through the same merge path (#2206).
+///
+/// `merge_coincident_insertions` is axis-agnostic, and `from_sequences` emits
+/// `m.` when the accession is mitochondrial (`NC_012920`). The tightest reported
+/// geometry, on `NC_012920.1`, derives to the `m.`-prefixed counterpart of the
+/// `g.` case #6 — same members, `m.` axis.
+#[test]
+fn t4d_mitochondrial_axis_rederives() {
+    let doc = serde_json::json!({
+        "version": "1.0",
+        "genome_build": "GRCh38",
+        "transcripts": [],
+        "genomic_sequences": { "NC_012920.1": TEMPLATE },
+    });
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    f.write_all(doc.to_string().as_bytes()).unwrap();
+    let nz = Normalizer::new(JsonProvider::from_json(f.path()).unwrap());
+    let desc = "NC_012920.1:m.[335del;336del;337del;338del;339del;340del;341del;342del;343_344insCCCGAACAAAGAAATCACGTCTCTCGGAGG]";
+    let variant = parse_hgvs(desc).expect("parse m. description");
+    let derived = nz
+        .rederive(&variant, &FromSequencesOptions::default(), false)
+        .expect("m. axis must derive")
+        .to_string();
+    assert_eq!(
+        derived, "NC_012920.1:m.[336delinsCCCGAACAAAGAAA;338_339insA;340T>G;343_344insCTCGGAGG]",
+        "the m. axis derives the m.-prefixed counterpart of the tightest g. case"
     );
 }
