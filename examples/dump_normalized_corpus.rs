@@ -20,6 +20,14 @@
 //!     --compare /tmp/before.tsv --against /tmp/after.tsv
 //! ```
 //!
+//! For a change on the `from_sequences`/`rederive` **derivation surface** (which
+//! moves no `normalize` row and so reads as `0 moved` above), add
+//! `--surface derivation` to **both** dumps — it recomputes every `g.` row through
+//! `rederive` instead, and `--compare` then measures that surface (#2204).
+//! `compare` refuses to cross surfaces, so a dump taken with `--surface derivation`
+//! and one taken without are rejected rather than diffed into a fabricated
+//! movement count.
+//!
 //! ## Comparing across a revision that changed the corpus
 //!
 //! `compare` refuses two dumps that do not cover the same rows, so a revision that
@@ -183,12 +191,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection, MAX_CANONICAL_BLOCK};
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
-use ferro_hgvs::{parse_hgvs, Normalizer};
+use ferro_hgvs::{parse_hgvs, FromSequencesOptions, Normalizer};
 
 /// 256 bases of period-4 `ACGT`, so the base immediately 5' of a core is `T` and
 /// the one immediately 3' of it is `A`. A core starting with something other than
@@ -316,6 +324,31 @@ struct Cli {
     /// so a verified run stays byte-comparable with every existing baseline.
     #[arg(long, conflicts_with_all = ["compare", "against"])]
     verify_spdi: bool,
+    /// Which normalization surface to dump (#2204).
+    ///
+    /// `normalize` (the default) dumps `Normalizer::normalize`, the shipped
+    /// surface every existing baseline is on — the dump stays byte-identical.
+    /// `derivation` dumps the `from_sequences`/`rederive` surface instead, which
+    /// the normalize corpus is otherwise blind to: a change confined to
+    /// `derive_block_members` moves no `normalize` row, so measuring it needs a
+    /// dump taken on this surface. A `derivation` dump carries a `#surface=`
+    /// marker so `compare` refuses to diff it against a `normalize` dump. Dump
+    /// mode only.
+    ///
+    /// With `--verify-spdi`, a `derivation` dump reports every non-`g.` row (and
+    /// any declined/panicked `g.` row) as Unverifiable — their `output` is a
+    /// sentinel, not parseable HGVS. That is expected, not a defect.
+    #[arg(long, value_enum, default_value_t = Surface::Normalize, conflicts_with_all = ["compare", "against"])]
+    surface: Surface,
+}
+
+/// The normalization surface `--surface` selects (#2204).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Surface {
+    /// `Normalizer::normalize` — the shipped surface, and every committed baseline.
+    Normalize,
+    /// `Normalizer::rederive` — the `from_sequences` derivation surface.
+    Derivation,
 }
 
 /// What [`verify_row`] concluded about one row.
@@ -365,10 +398,7 @@ fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
             declined("unparseable"),
         );
     };
-    let direction = match row.direction {
-        "5prime" => ShuffleDirection::FivePrime,
-        _ => ShuffleDirection::ThreePrime,
-    };
+    let direction = direction_of(row.direction);
     let normalizer = Normalizer::with_config(
         provider_for(row.axis, &row.core),
         NormalizeConfig::default().with_direction(direction),
@@ -416,9 +446,18 @@ fn main() -> ExitCode {
         };
     }
 
-    let rows = dump(cli.seeds);
+    let mut rows = dump(cli.seeds);
     report_partition_declines();
+    if cli.surface == Surface::Derivation {
+        apply_derivation_surface(&mut rows);
+    }
     let mut out = String::new();
+    if cli.surface == Surface::Derivation {
+        // Mark the surface so `compare` refuses to diff this against a `normalize`
+        // dump (#2204). Only the non-default surface is marked, so a `normalize`
+        // dump stays byte-identical with every committed baseline.
+        out.push_str("#surface=derivation\n");
+    }
     out.push_str(HEADER);
     for row in &rows {
         let _ = writeln!(
@@ -2543,6 +2582,77 @@ fn normalize_through(normalizer: &Normalizer<MockProvider>, input: &str) -> Stri
     }
 }
 
+/// The `direction` column as a [`ShuffleDirection`]. One reading, shared by
+/// [`verify_row`] and the derivation lane (#2204), so the two cannot drift.
+fn direction_of(direction: &str) -> ShuffleDirection {
+    match direction {
+        "5prime" => ShuffleDirection::FivePrime,
+        _ => ShuffleDirection::ThreePrime,
+    }
+}
+
+/// The derivation-surface counterpart of [`normalize_through`] (#2204): run one
+/// row's input through [`Normalizer::rederive`] (recommended-form-false, the raw
+/// derived partition) instead of `normalize`, so `--surface derivation` measures
+/// the `from_sequences` surface the normalize corpus is blind to.
+///
+/// `rederive` derives through `from_sequences`, which serves genomic-coordinate
+/// axes and refuses a transcript or protein accession, so a non-genomic input (or
+/// any settling refusal) returns a consistent `<declined>` sentinel. A decline on
+/// both revisions is then a matched non-move, while a decline->value or a
+/// value->value is a real movement `--compare`/`--against` counts, exactly as it
+/// does for `normalize`.
+fn rederive_through(
+    normalizer: &Normalizer<MockProvider>,
+    input: &str,
+    direction: ShuffleDirection,
+) -> String {
+    let Ok(variant) = parse_hgvs(input) else {
+        return "<parse-error>".to_string();
+    };
+    let options = FromSequencesOptions::default().with_direction(direction);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        normalizer.rederive(&variant, &options, false)
+    })) {
+        Ok(Ok(v)) => v.to_string(),
+        Ok(Err(_)) => "<declined>".to_string(),
+        Err(_) => "<panic>".to_string(),
+    }
+}
+
+/// Re-express each row's `output` through the `from_sequences`/`rederive`
+/// derivation surface, in place (#2204).
+///
+/// `dump` and `normalize_through` are left untouched — so every baseline and
+/// every guard that calls `dump` stays on the `normalize` surface — and the `g.`
+/// rows are recomputed here, before the same emit and the same `--verify-spdi`
+/// pass run over them. Every other axis keeps a stable `<unsupported-axis>`
+/// sentinel rather than its `normalize` output, so a `normalize` string never
+/// leaks into a derivation dump to be read as a matched row against one.
+///
+/// Only `g.` is recomputed: the corpus builds `g`/`c`/`cx`/`p` rows, and of those
+/// `from_sequences` serves the genomic axis. (`from_sequences` also accepts the
+/// `m.` mitochondrial axis, but the corpus emits no `m.` row today; adding one
+/// means teaching `dump` to build it and routing `m` to a genomic provider both
+/// here and in `provider_for`. It is deliberately not wired for an axis nothing
+/// produces.)
+///
+/// This is the one place the surface transform lives — `main`'s `--surface
+/// derivation` and its guard test both call it, so the two cannot drift.
+fn apply_derivation_surface(rows: &mut [Row]) {
+    for row in rows.iter_mut() {
+        row.output = match row.axis {
+            "g" => {
+                let direction = direction_of(row.direction);
+                let normalizer = normalizer_for(row.axis, &row.core, direction);
+                rederive_through(&normalizer, &row.input, direction)
+            }
+            _ => "<unsupported-axis>".to_string(),
+        };
+        row.was_fixed_point = row.output == row.input;
+    }
+}
+
 /// [`normalize_through`], building the normalizer for one row.
 ///
 /// `#[cfg(test)]` because that is now the whole of its use: the callers that
@@ -2682,22 +2792,39 @@ fn coding_provider(core: &str) -> MockProvider {
 /// A row's identity. Deliberately a tuple: see trap 1 in the module docs.
 type Key = (String, String, String, String);
 
-fn read_dump(path: &PathBuf) -> Result<BTreeMap<Key, (String, bool, String)>, String> {
+/// The rows of a parsed dump, keyed by [`Key`]; each value is
+/// `(output, was_fixed_point, family)`.
+type DumpRows = BTreeMap<Key, (String, bool, String)>;
+
+fn read_dump(path: &PathBuf) -> Result<(String, DumpRows), String> {
     let text = fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut surface = "normalize".to_string();
     let mut rows = BTreeMap::new();
+    let mut seen_header = false;
     for (n, line) in text.lines().enumerate() {
-        if n == 0 {
-            // Exact match, not a prefix. A dump whose columns were reordered or
-            // renamed would otherwise be read positionally under the old meanings —
-            // silently swapping, say, `output` and `was_fixed_point` and inverting
-            // every migration verdict in the report.
+        if !seen_header {
+            // An optional leading `#surface=<name>` marker precedes the header on a
+            // `derivation` dump. A `normalize` dump has none, so every committed
+            // baseline reads as `normalize`; `compare` uses the recorded surface to
+            // refuse a cross-surface diff (#2204).
+            if let Some(value) = line.strip_prefix("#surface=") {
+                surface = value.to_string();
+                continue;
+            }
+            // The first non-marker line must be the header. Exact match, not a
+            // prefix. A dump whose columns were reordered or renamed would otherwise
+            // be read positionally under the old meanings — silently swapping, say,
+            // `output` and `was_fixed_point` and inverting every migration verdict
+            // in the report.
             if line != HEADER.trim_end() {
                 return Err(format!(
-                    "{}:1: unexpected header\n  found:    {line}\n  expected: {}",
+                    "{}:{}: unexpected header\n  found:    {line}\n  expected: {}",
                     path.display(),
+                    n + 1,
                     HEADER.trim_end()
                 ));
             }
+            seen_header = true;
             continue;
         }
         if line.is_empty() {
@@ -2747,12 +2874,24 @@ fn read_dump(path: &PathBuf) -> Result<BTreeMap<Key, (String, bool, String)>, St
             ));
         }
     }
-    Ok(rows)
+    Ok((surface, rows))
 }
 
 fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
-    let a = read_dump(before)?;
-    let b = read_dump(after)?;
+    let (surface_a, a) = read_dump(before)?;
+    let (surface_b, b) = read_dump(after)?;
+    // A `normalize` dump and a `derivation` dump have identical key sets and
+    // schema, so without this check `compare` would diff them column-to-column and
+    // report every row where the two surfaces disagree as `moved` — a fabricated
+    // representation change from a run with no code difference at all (#2204).
+    if surface_a != surface_b {
+        return Err(format!(
+            "the two dumps were taken on different normalization surfaces (baseline \
+             `{surface_a}`, candidate `{surface_b}`). A cross-surface diff would count \
+             every row where the surfaces disagree as `moved`, which is not a \
+             representation change; re-dump both with the same --surface."
+        ));
+    }
 
     let only_before = a.keys().filter(|k| !b.contains_key(*k)).count();
     let only_after = b.keys().filter(|k| !a.contains_key(*k)).count();
@@ -2881,6 +3020,59 @@ mod tests {
             output: output.to_string(),
             was_fixed_point: false,
         }
+    }
+
+    /// The derivation lane sees a surface the normalize corpus is blind to (#2204).
+    ///
+    /// `--surface derivation` recomputes each `g.` row through `rederive`. This
+    /// asserts the lane (1) covers a non-empty set of `g.` rows — a zero here
+    /// would be the corpus-blindness class one level up, a lane that measures
+    /// nothing — and (2) diverges from `normalize` on at least one of them, which
+    /// is the whole point: a `normalize`-only dump reports 0 rows moved for a
+    /// change confined to the derivation surface, so a lane that never disagreed
+    /// with `normalize` would be no better than the corpus it supplements. If the
+    /// two surfaces ever fully converged this would go red — the correct signal to
+    /// retire the lane, not a defect to paper over.
+    #[test]
+    fn the_derivation_lane_measures_a_surface_the_normalize_lane_cannot() {
+        let mut rows = dump(2);
+        // Snapshot the `normalize` outputs before the in-place transform, so the
+        // comparison below is a genuine cross-surface one. This drives the real
+        // `apply_derivation_surface` — the same code `--surface derivation` runs —
+        // rather than a copy of it, so the two cannot drift.
+        let normalize_outputs: Vec<String> = rows.iter().map(|row| row.output.clone()).collect();
+        apply_derivation_surface(&mut rows);
+        let (mut covered, mut diverged) = (0usize, 0usize);
+        for (row, normalize_output) in rows.iter().zip(&normalize_outputs) {
+            // A settling refusal or an axis `rederive` does not serve
+            // (`<unsupported-axis>`) is not a measured row.
+            if row.output.starts_with('<') {
+                continue;
+            }
+            covered += 1;
+            // Pin that the recomputed output is the `rederive` result specifically,
+            // not merely *some* string that differs from `normalize`: an
+            // implementation that echoed the row's input would also satisfy
+            // `diverged > 0` (input != normalize on any shuffled row). Re-derive
+            // independently and require an exact match.
+            let direction = direction_of(row.direction);
+            let normalizer = normalizer_for(row.axis, &row.core, direction);
+            let expected = rederive_through(&normalizer, &row.input, direction);
+            assert_eq!(
+                row.output, expected,
+                "apply_derivation_surface did not produce the rederive result for {}",
+                row.input
+            );
+            if row.output != *normalize_output {
+                diverged += 1;
+            }
+        }
+        assert!(covered > 0, "the derivation lane covered no rows");
+        assert!(
+            diverged > 0,
+            "derivation and normalize agreed on every one of {covered} covered rows — \
+             the lane would measure nothing the normalize corpus does not"
+        );
     }
 
     /// All three verdicts, on real rows drawn from the corpus's own cores.
@@ -6002,6 +6194,53 @@ mod tests {
             report.contains("**moved** | **0 (0.0%)**"),
             "a dump compared with itself must report zero movement:\n{report}"
         );
+    }
+
+    /// A `normalize` dump and a `derivation` dump are schema-identical and share a
+    /// key set, so `compare` must refuse to diff them rather than count every
+    /// surface disagreement as a fabricated `moved` (#2204). Without the
+    /// `#surface=` marker this passes every existing guard and reports spurious
+    /// movement from a run with no code difference at all.
+    #[test]
+    fn comparing_across_surfaces_is_refused() {
+        let dir = std::env::temp_dir().join("ferro-dump-corpus-test");
+        let _ = fs::create_dir_all(&dir);
+        let rows = dump(2);
+        let write = |name: &str, marker: Option<&str>| {
+            let path = dir.join(name);
+            let mut out = String::new();
+            if let Some(marker) = marker {
+                out.push_str(marker);
+            }
+            out.push_str(HEADER);
+            for row in &rows {
+                let _ = writeln!(
+                    out,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    row.reference,
+                    row.axis,
+                    row.direction,
+                    row.family,
+                    row.input,
+                    row.output,
+                    row.was_fixed_point
+                );
+            }
+            fs::write(&path, &out).expect("write dump");
+            path
+        };
+        let normalize = write("cross-normalize.tsv", None);
+        let derivation = write("cross-derivation.tsv", Some("#surface=derivation\n"));
+        let err = compare(&normalize, &derivation)
+            .expect_err("a cross-surface comparison must be refused");
+        assert!(
+            err.contains("different normalization surfaces"),
+            "cross-surface refusal must name the cause, got: {err}"
+        );
+        // The marked dump reads back with its surface; an unmarked one defaults to
+        // `normalize`, which is what keeps every committed baseline comparable.
+        assert_eq!(read_dump(&normalize).expect("read").0, "normalize");
+        assert_eq!(read_dump(&derivation).expect("read").0, "derivation");
     }
 
     /// English for the family counts this file quotes.

@@ -1214,6 +1214,7 @@ list carries no total either. **Add a row; do not increment a number.**
 | a repeat placed beside a sibling it could collide with | #1749 | the `repeat_beside_a_sibling` family comment |
 | that family shipping able to build only *growing* repeats | #1752 | header, the #1947 correction |
 | direction — every lone `delins` was equal-length or a net insertion, so a net-deletion rule was structurally unreachable | #1610 | the `lone_net_deletion_delins` family comment |
+| the wrong measurement **surface** — the corpus drives `Normalizer::normalize` only, so a change confined to the `from_sequences`/`rederive` derivation surface (`derive_block_members`) reads as `0 moved`, and the "shape not built" guardrail does not fire because the shapes *are* built | #2204 | the `--surface derivation` lane, which recomputes each `g.` row through `rederive` |
 
 Each time, a `0` was available to quote as safety. So before quoting one, **name the property your
 change keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
