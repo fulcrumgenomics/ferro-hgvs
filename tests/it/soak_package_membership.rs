@@ -56,8 +56,10 @@ const CI_YML: &str = ".github/workflows/ci.yml";
 const SOAK_DRIVER: &str = "tests-soak/tests/soak/main.rs";
 
 /// The jobs that run off the archive `test-build-soak` produces. Every module
-/// any of them selects has to be compiled into it.
-const ARCHIVE_CONSUMERS: &[&str] = &["soak", "sweeps", "censuses"];
+/// any of them selects has to be compiled into it. `censuses-plain` is the
+/// un-armed half of the census job, split out so it runs in parallel with the
+/// armed half; both consume the soak archive.
+const ARCHIVE_CONSUMERS: &[&str] = &["soak", "sweeps", "censuses", "censuses-plain"];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -2,10 +2,11 @@
 //!
 //! `ci.yml`'s `CENSUS_FILTER` names the slow census modules that moved off the
 //! `test` / `test-oracle` partitions and onto the optimized archive. `test` and
-//! `test-oracle` **negate** it; the `censuses` job **selects** on it, in two
-//! steps — one with the seam oracles armed, one without, because
+//! `test-oracle` **negate** it; the `censuses` and `censuses-plain` jobs
+//! **select** on it — one with the seam oracles armed, one without, because
 //! `spec_conformance_axis` may not be measured with `FERRO_ASSERT_IDEMPOTENT`
-//! set (it counts the very rows that oracle panics on).
+//! set (it counts the very rows that oracle panics on). The two are separate
+//! jobs (not two steps of one) so their ~43s and ~50s halves run in parallel.
 //!
 //! **The failure mode is the silent, flattering kind, and there are two of it.**
 //!
@@ -141,6 +142,18 @@ fn selections_in(job: &str) -> Vec<String> {
         .collect()
 }
 
+/// The jobs that between them SELECT `CENSUS_FILTER`, armed and un-armed. The
+/// armed half (`normalize_axis_preserving` &c.) and the un-armed half
+/// (`spec_conformance_axis`, which may not be measured with
+/// `FERRO_ASSERT_IDEMPOTENT` set) run as two SEPARATE jobs so they parallelize;
+/// together their steps must cover the whole filter and nothing more.
+const CENSUS_JOBS: [&str; 2] = ["censuses", "censuses-plain"];
+
+/// Every `-E` selection across both census jobs, in job order.
+fn census_selections() -> Vec<String> {
+    CENSUS_JOBS.iter().flat_map(|j| selections_in(j)).collect()
+}
+
 /// Module names a nextest filter expression names via `test(...)`.
 fn modules_named_in(filter: &str) -> Vec<String> {
     filter
@@ -166,11 +179,11 @@ fn every_module_named_in_the_census_filter_is_run_by_the_censuses_job() {
          assertion in this file would be vacuous"
     );
 
-    let selections = selections_in("censuses");
+    let selections = census_selections();
     assert!(
         !selections.is_empty(),
-        "the `censuses` job passes no -E selection to nextest; its shape changed \
-         and this guard cannot see what it runs"
+        "the census jobs pass no -E selection to nextest; their shape changed \
+         and this guard cannot see what they run"
     );
     let selected: Vec<String> = selections
         .iter()
@@ -180,8 +193,8 @@ fn every_module_named_in_the_census_filter_is_run_by_the_censuses_job() {
     let unrun: Vec<&String> = named.iter().filter(|m| !selected.contains(m)).collect();
     assert!(
         unrun.is_empty(),
-        "ci.yml's CENSUS_FILTER reserves these modules for the `censuses` job, but \
-         none of that job's steps selects them: {unrun:?}\n\
+        "ci.yml's CENSUS_FILTER reserves these modules for the census jobs, but \
+         none of their steps selects them: {unrun:?}\n\
          `test` and `test-oracle` negate CENSUS_FILTER, so a module here runs in NO \
          job — CI stays green and gets faster, which is the coverage loss this \
          guard exists to make loud.\n\
@@ -199,19 +212,19 @@ fn every_module_named_in_the_census_filter_is_run_by_the_censuses_job() {
 #[test]
 fn the_censuses_job_runs_nothing_the_census_filter_does_not_reserve() {
     let named = modules_named_in(&ci_filter("CENSUS_FILTER"));
-    let selected: Vec<String> = selections_in("censuses")
+    let selected: Vec<String> = census_selections()
         .iter()
         .flat_map(|s| modules_named_in(s))
         .collect();
     assert!(
         !selected.is_empty(),
-        "the `censuses` job selects no modules; its shape changed"
+        "the census jobs select no modules; their shape changed"
     );
 
     let unreserved: Vec<&String> = selected.iter().filter(|m| !named.contains(m)).collect();
     assert!(
         unreserved.is_empty(),
-        "the `censuses` job selects these modules, but CENSUS_FILTER does not \
+        "the census jobs select these modules, but CENSUS_FILTER does not \
          name them: {unreserved:?}\n\
          `test` and `test-oracle` negate CENSUS_FILTER, so anything missing from it \
          still runs in whichever shard hashes it — these modules are being run \
@@ -219,30 +232,46 @@ fn the_censuses_job_runs_nothing_the_census_filter_does_not_reserve() {
     );
 }
 
-/// No module may be selected by both of the job's steps.
+/// No module may be selected by both census jobs.
 ///
-/// The two steps differ only in whether the seam oracles are armed, so a module
-/// in both runs its whole corpus twice inside one job — which is exactly the
-/// duplication the move was made to remove, relocated rather than removed.
+/// The two jobs differ only in whether the seam oracles are armed, so a module in
+/// both runs its whole corpus twice per CI run — the duplication the split was
+/// made to avoid, relocated rather than removed. Each job runs a single armed or
+/// un-armed step, so each carries exactly one `-E` selection.
 #[test]
-fn no_module_is_selected_by_both_of_the_jobs_steps() {
-    let selections = selections_in("censuses");
+fn no_module_is_selected_by_both_census_jobs() {
+    let armed_sel = selections_in("censuses");
+    let plain_sel = selections_in("censuses-plain");
     assert_eq!(
-        selections.len(),
-        2,
-        "the `censuses` job is documented as two steps — one with the seam oracles \
-         armed and one without, because spec_conformance_axis may not be measured \
-         with FERRO_ASSERT_IDEMPOTENT set. It now has {} selection(s); if that is \
-         deliberate, this guard needs updating along with the job's comment.",
-        selections.len()
+        (armed_sel.len(), plain_sel.len()),
+        (1, 1),
+        "each census job is documented as one step (armed / un-armed); found \
+         {} armed and {} plain selection(s). If that is deliberate, this guard \
+         needs updating along with the jobs' comments.",
+        armed_sel.len(),
+        plain_sel.len()
     );
 
-    let armed = modules_named_in(&selections[0]);
-    let unarmed = modules_named_in(&selections[1]);
-    let both: Vec<&String> = armed.iter().filter(|m| unarmed.contains(m)).collect();
+    let armed = modules_named_in(&armed_sel[0]);
+    let plain = modules_named_in(&plain_sel[0]);
+    // `test(P)` selects any test whose name CONTAINS `P`, so two terms select
+    // overlapping tests when either one contains the other — exact equality
+    // misses a subsuming term (armed `test(spec_conformance)` against plain
+    // `test(spec_conformance_axis)` picks the same module in both jobs). Compare
+    // both directions, as `oracle_only_filter_invariant.rs::
+    // assert_terms_do_not_overlap` already does.
+    let both: Vec<(&String, &String)> = armed
+        .iter()
+        .flat_map(|a| {
+            plain
+                .iter()
+                .filter(move |p| a.contains(p.as_str()) || p.contains(a.as_str()))
+                .map(move |p| (a, p))
+        })
+        .collect();
     assert!(
         both.is_empty(),
-        "these modules are selected by BOTH of the `censuses` job's steps, so their \
-         corpora run twice in one job: {both:?}"
+        "these modules are selected by BOTH census jobs, so their corpora run \
+         twice per CI run: {both:?}"
     );
 }
