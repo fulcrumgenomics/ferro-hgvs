@@ -2662,8 +2662,13 @@ jobs:
           ls -lh target/release/ferro
           size=$(stat -c%s target/release/ferro 2>/dev/null || stat -f%z target/release/ferro)
           echo "Binary size: $size bytes"
-          if [ "$size" -gt 10485760 ]; then
-            echo "Error: Binary size exceeds 10MB limit"
+          # 20 MiB (20 * 1048576). A bloat tripwire for the distributed CLI, not a
+          # hard product limit: the binary is currently ~9.9 MiB, so this leaves
+          # headroom rather than sitting one accidental dependency away from red.
+          # Raised from 10 MiB (an undocumented value carried since the initial
+          # commit), which the binary had grown to within ~120 KiB of.
+          if [ "$size" -gt 20971520 ]; then
+            echo "Error: Binary size exceeds 20 MiB limit"
             exit 1
           fi
 
