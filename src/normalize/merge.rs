@@ -21848,7 +21848,14 @@ mod tests {
         /// separate processes and `--partition` spread them across shards.
         /// Every case still sweeps every arm (see the module doc), so no arm is
         /// hard-coded; only the corpus is divided.
-        const NET_INSERTION_BLOCKS: usize = 8;
+        ///
+        /// Raised 8 -> 32 for CI shard balance: ARMED (in `test-oracle`, all four
+        /// oracle flags firing on every re-derivation) each block ran ~36s at 8
+        /// blocks, so four co-hashing into one shard was a ~140s load spike. At 32
+        /// each block is ~9s, small enough that `--partition hash` spreads the
+        /// family evenly instead of clustering it. 256 cores / 32 = 8 cores/block,
+        /// still an exact tiling (guarded below).
+        const NET_INSERTION_BLOCKS: usize = 32;
 
         /// Every word of length `n` over the DNA alphabet, in a fixed order.
         fn words(n: usize) -> Vec<String> {
@@ -22017,12 +22024,28 @@ mod tests {
         /// could have been justified after the fact.
         #[rstest]
         fn the_member_count_does_not_depend_on_the_shuffle_direction_on_any_arm(
-            #[values(0, 1, 2, 3, 4, 5, 6, 7)] block: usize,
+            #[values(
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31
+            )]
+            block: usize,
         ) {
             let cores = words(4);
             let per = cores.len() / NET_INSERTION_BLOCKS;
+            // Catch a `#[values]` entry that outran the constant (e.g. the list
+            // was left at 0..31 after NET_INSERTION_BLOCKS shrank): an
+            // out-of-range block would slice past the core space or overlap.
+            assert!(
+                block < NET_INSERTION_BLOCKS,
+                "block {block} is >= NET_INSERTION_BLOCKS {NET_INSERTION_BLOCKS}; \
+                 the #[values] list and the constant disagree"
+            );
             let lo = block * per;
             let slice = &cores[lo..lo + per];
+            assert!(
+                !slice.is_empty(),
+                "block {block} is empty — the slice covers no cores"
+            );
             let payloads = words(5);
             // payload_len (5) != core_len (4), so nothing is skipped and every
             // core × payload is a comparison; the 95% floor guards a collapse.
@@ -22057,8 +22080,15 @@ mod tests {
             );
             // rstest's `#[values]` needs literals, so the block list on the
             // sliced test is written out by hand; this pins it to the constant.
+            // Residual, stated because it cannot be closed here: rstest expands
+            // each value into its own test process, so no runtime check can count
+            // the list. A list left SHORTER than NET_INSERTION_BLOCKS silently
+            // drops its high blocks. Two guards narrow it — this literal pin forces
+            // any constant change to touch the list, and the sliced test asserts
+            // `block < NET_INSERTION_BLOCKS` — but on a count change a reviewer must
+            // still confirm the list runs 0..NET_INSERTION_BLOCKS-1 with no gaps.
             assert_eq!(
-                NET_INSERTION_BLOCKS, 8,
+                NET_INSERTION_BLOCKS, 32,
                 "update the #[values(0..)] list on the sliced test to match NET_INSERTION_BLOCKS"
             );
         }
