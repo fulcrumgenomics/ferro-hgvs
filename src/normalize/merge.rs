@@ -10929,6 +10929,81 @@ fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
     }
 }
 
+/// Fold pure insertions that come to rest at the **same interbase** into one.
+///
+/// Two members writing one junction — a `dup` copy beside a plain `ins`, or two
+/// `ins` — is order-dependent, so `apply_edits_to_window` refuses it as the #486
+/// overlap conflict and `verify_round_trip` reports the derived description could
+/// not be re-applied to its window (#2201). It arises on this derivation surface
+/// specifically: the final [`coalesce_by_run`] peels a tandem `dup` (#2175) into
+/// its own group while the insertion tail 3' of it stays in the next group, and
+/// the chain deliberately does **not** re-run [`coalesce_adjacent_pieces`]
+/// afterwards — that pass would re-fold the peeled `dup` back into its abutting
+/// substitution, undoing #2175 (see the call-site comment there).
+///
+/// This merge is the narrow slice that repair needs and no more. It joins only
+/// two **pure insertions** (`ref_start == ref_end`, non-empty payload) at one
+/// interbase, never a pure insertion with a reference-consuming piece, so a
+/// peeled `[dup; sub]` — whose `sub` claims a reference base — is left intact.
+/// (The non-empty guard is belt-and-suspenders: `shrink_pieces_to_differences`
+/// leaves a fully-trimmed piece whole rather than emptying it, so a zero-width
+/// empty-`alt` piece never reaches here; if one ever did the guard skips it,
+/// which is the safe direction — an empty insertion denotes nothing.)
+///
+/// # Why the pairwise scan and the list-order concatenation are sound
+///
+/// **Adjacency.** Two pure insertions sharing an interbase `p` are always
+/// adjacent, so comparing `pieces[i - 1]` with `pieces[i]` misses none. Suppose a
+/// piece `X` sat between them: the ascending invariant `rebuild_members` relies on
+/// (`pieces[i - 1].ref_end <= pieces[i].ref_start`) gives `p <= X.ref_start` and
+/// `X.ref_end <= p`, and with `X.ref_start <= X.ref_end` that forces
+/// `X.ref_start == X.ref_end == p` — `X` is itself a pure insertion at `p`, i.e.
+/// part of the same coincident run, not an interloper. Three or more collapse one
+/// at a time: `i` is not advanced on a merge, so the grown `pieces[i - 1]` is
+/// re-compared against the next survivor.
+///
+/// **Order.** Two insertions at one interbase carry no coordinate that could
+/// order them, so list order is the only ordering available — and it is the right
+/// one: the block derivation builds pieces 5'→3' and [`coalesce_by_run`]
+/// reassembles groups in ascending offset order, so a coincident pair reaches
+/// here in resulting-sequence order. That order is *trusted, not verified here* —
+/// the backstop is `verify_round_trip`, which re-applies the emitted members: were
+/// a future placement change ever to hand this pass a coincident pair in the
+/// wrong order, the concatenation would denote different bases and the round trip
+/// would fail loudly (a spurious refusal), not corrupt the output silently.
+fn merge_coincident_insertions(pieces: &mut Vec<Piece>) {
+    let mut i = 1;
+    while i < pieces.len() {
+        let prev = &pieces[i - 1];
+        let cur = &pieces[i];
+        let coincident_insertions = prev.ref_start == prev.ref_end
+            && cur.ref_start == cur.ref_end
+            && prev.ref_start == cur.ref_start
+            && !prev.alt.is_empty()
+            && !cur.alt.is_empty();
+        if coincident_insertions {
+            let next = pieces.remove(i);
+            pieces[i - 1].alt.extend(next.alt);
+        } else {
+            i += 1;
+        }
+    }
+    // Postcondition: the pass leaves no two non-empty pure insertions on one
+    // interbase — the exact shape `apply_edits_to_window` refuses (#2201). Pinned
+    // here rather than assumed, so a future edit that lets one slip through fails
+    // next to its cause instead of as a round-trip refusal three layers away.
+    debug_assert!(
+        pieces.windows(2).all(|w| {
+            !(w[0].ref_start == w[0].ref_end
+                && w[1].ref_start == w[1].ref_end
+                && w[0].ref_start == w[1].ref_start
+                && !w[0].alt.is_empty()
+                && !w[1].alt.is_empty())
+        }),
+        "merge_coincident_insertions left two coincident pure insertions: {pieces:?}",
+    );
+}
+
 /// Run the placement chain in `direction` — and in the **other** direction too,
 /// adopting the mirror's partition where it emits strictly fewer members
 /// (#1542).
@@ -11405,6 +11480,12 @@ pub(crate) fn derive_block_members(
                 });
             }
         }
+        // Last: fold any two insertions the peel/coalesce chain left on one
+        // interbase into a single insertion (#2201). Runs inside the closure, so
+        // `place_direction_symmetrically` compares member counts on the repaired
+        // partition and does not favour a direction only because the other left a
+        // coincident-insertion pair unfolded.
+        merge_coincident_insertions(pieces);
     };
     place_direction_symmetrically(&mut pieces, direction, place_pieces);
 
