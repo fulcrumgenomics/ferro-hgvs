@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.1...v0.17.2) - 2026-08-25
+
+### Representation changes
+
+- *(normalize)* fold coincident insertions the derivation leaves on one junction ([#2203](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2203))
+  > none on the shipped `normalize` output — a
+  > synthetic-corpus before/after diff moves 0 of 96,698 rows across all 27
+  > shape families, including `dup_plus_ins`, `adjacent_junction_ins`, and
+  > `run_beside_a_distant_member` (the shapes closest to this bug). That
+  > corpus exercises `Normalizer::normalize` only, which this change does
+  > not touch. The change is confined to the `from_sequences`/`rederive`
+  > derivation surface, where it moves the eleven reported families and
+  > their geometry neighbourhood from an unapplyable "could not be
+  > re-applied to its window" error to a valid single insertion —
+  > meaning-preserving and idempotent.
+
+### Other
+
+- *(normalize)* harden #2201 merge shape coverage ([#2206](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2206)) ([#2208](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2208))
+
 ## [0.17.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.0...v0.17.1) - 2026-08-24
 
 ### Representation changes
