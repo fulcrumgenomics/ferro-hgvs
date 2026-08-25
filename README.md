@@ -14,12 +14,6 @@
 
 A high-performance HGVS variant nomenclature parser and normalizer written in Rust.
 
-**WARNING: ALPHA SOFTWARE - USE AT YOUR OWN RISK**
-
-This software is currently in **ALPHA**. While we have extensively tested it
-across a wide variety of HGVS patterns, **no guarantees are made** regarding
-correctness or stability.
-
 <p>
 <a href="https://fulcrumgenomics.com">
   <picture>
@@ -258,7 +252,7 @@ Licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Disclaimer
 
-This software is under active development.
+This software is actively maintained.
 While we make a best effort to test this software and to fix issues as they are reported, this software is provided as-is without any warranty (see the [license](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/LICENSE) for details).
 Please submit an [issue](https://github.com/fulcrumgenomics/ferro-hgvs/issues), and better yet a [pull request](https://github.com/fulcrumgenomics/ferro-hgvs/pulls) as well, if you discover a bug or identify a missing feature.
 Please contact [Fulcrum Genomics](https://www.fulcrumgenomics.com) if you are considering using this software or are interested in sponsoring its development.

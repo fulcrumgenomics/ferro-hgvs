@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.2...v1.0.0) - 2026-08-25
+
+### Added
+
+- add a from_sequences/rederive lane to dump_normalized_corpus ([#2205](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2205))
+
+### Other
+
+- *(ci)* reduce CI wall-time via test slicing, job splits, and shard rebalance ([#2202](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2202))
+
 ## [0.17.2](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.1...v0.17.2) - 2026-08-25
 
 ### Representation changes
