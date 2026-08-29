@@ -35,6 +35,12 @@ fn provider() -> JsonProvider {
             "NC_TEST.2": "AACCGGTTAATCGATCGATTGCACGTACGTGCAATCGATCGATTAACCGGTTAACCGGTTAACCGG",
             "NC_TEST.3": "GGCCAATTGGCCATATATATATATATGGCCAATTGGCCAATTGGCCAATTGGCCAATTGGCCAATT",
             "NC_TEST.4": "ATATATATATGGGCGCGCCCATATATATATGGGCGCGCCCATATATATATGGGCGCGCCCATATAT",
+            // A synthetic mitochondrial reference under the rCRS accession so the
+            // fast-path's `m.` arm can be exercised (issue #2189). Structured like
+            // NC_TEST.1 (a `TTTTTT` run for shifting), synthetic length — the same
+            // approach `issue_1044_mito_window_clamp` uses. Interior positions only,
+            // so the circular wraparound never enters.
+            "NC_012920.1": "GCTAGCATGCATGCGTACAGTCGATCGATCTTTTTTTGCAGTCAGTGGATCCGATTACGATCAGCT",
         },
     });
     let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -161,6 +167,79 @@ fn the_identity_boundary_is_load_bearing() {
             shipped, positional,
             "{desc}: derivation and positional normalize must differ here, or the \
              fast-path exclusion would be unnecessary"
+        );
+    }
+}
+
+/// The `m.` arm of the fast-path (issue #2189). `is_lone_derivation_fixed_point`
+/// handles `HV::Mt` identically to `HV::Genome`, but the corpus above drives only
+/// the genome arm. This pins that a lone mitochondrial del/ins/dup takes the
+/// fast-path and stays byte-identical to the full derivation, and that the boundary
+/// (delins/inv excluded) holds on the `m.` axis too — so the mitochondrial path is
+/// covered rather than inferred from the structurally-identical genome arm.
+#[test]
+fn the_mitochondrial_arm_takes_the_fast_path() {
+    let nz = Normalizer::new(provider());
+
+    // Interior positions on the synthetic NC_012920.1, away from both ends so the
+    // circular wraparound never enters. Pos 31 sits in the `TTTTTTT` run, so a lone
+    // del/dup there actually shifts — a non-trivial canonical form to land on.
+    let fast: [&str; 5] = [
+        "NC_012920.1:m.31del",
+        "NC_012920.1:m.31_33del",
+        "NC_012920.1:m.31dup",
+        "NC_012920.1:m.31_34dup",
+        "NC_012920.1:m.20_21insAT",
+    ];
+    for desc in fast {
+        let v = parse_hgvs(desc).unwrap();
+        assert!(
+            nz.lone_member_fast_path_applies(&v),
+            "{desc} (a lone m. del/ins/dup) must take the fast-path"
+        );
+        let shipped = rederive_shipped(&nz, desc).expect("rederive");
+        let full = rederive_full(&nz, desc).expect("full");
+        assert_eq!(
+            shipped, full,
+            "{desc}: the m. fast-path must equal the full derivation"
+        );
+    }
+
+    // The exclusion boundary holds on the m. axis: a lone delins/inv is not
+    // fast-pathed (the same rule the genome-axis identity boundary pins).
+    for desc in ["NC_012920.1:m.20_23delinsGC", "NC_012920.1:m.20_23inv"] {
+        let v = parse_hgvs(desc).unwrap();
+        assert!(
+            !nz.lone_member_fast_path_applies(&v),
+            "{desc} must be excluded from the m. fast-path"
+        );
+    }
+}
+
+/// The lone-`delins` exclusion covers any net length (issue #2189). The identity
+/// boundary above exercises only *equal-length* lone delins, but the single-member
+/// arm skips a lone `delins` of any net length. This pins that a net-deletion and a
+/// net-insertion lone `delins` are both excluded from the fast-path and that the two
+/// paths agree on them — so the exclusion is sound regardless of net length, not
+/// just for the equal-length shapes the identity boundary happens to use. Safe by
+/// the `unequal-length-block-a-placed-gap-is-not-a-separation` ruling.
+#[test]
+fn the_lone_delins_exclusion_covers_any_net_length() {
+    let nz = Normalizer::new(provider());
+
+    // A net-deletion delins (6 ref -> 2 alt) and a net-insertion delins
+    // (2 ref -> 4 alt), both lone.
+    for desc in ["NC_TEST.1:g.10_15delinsAT", "NC_TEST.1:g.10_11delinsATCG"] {
+        let v = parse_hgvs(desc).unwrap();
+        assert!(
+            !nz.lone_member_fast_path_applies(&v),
+            "{desc}: a lone delins of any net length must be excluded from the fast-path"
+        );
+        let shipped = rederive_shipped(&nz, desc).expect("rederive");
+        let full = rederive_full(&nz, desc).expect("full");
+        assert_eq!(
+            shipped, full,
+            "{desc}: the excluded delins must take the full derivation on both paths"
         );
     }
 }
