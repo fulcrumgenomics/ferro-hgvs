@@ -162,6 +162,18 @@ print(str(result.result))                      # the same normalized string
 print([(w.code, w.message) for w in result.warnings])
 ```
 
+## Normalization ruleset
+
+ferro's normalizer follows seven numbered rules — four about its output, three about procedure. This list is the canonical citation target used throughout the codebase and the ruling ledger (`README.md` rule N); the full text, scope, and rationale live in [`docs/src/reference/normalization-rules.md`](docs/src/reference/normalization-rules.md).
+
+1. **Conformant** — output follows the HGVS recommendations. *Absolute — never traded.*
+2. **Recommended form** — where the spec prefers among conformant forms, ferro produces it. *Best effort.*
+3. **Confluent** — inputs denoting one variant produce one output, evaluated over the resulting sequence. *Best effort.*
+4. **Deterministic** — same input, same output. *Absolute.*
+5. **Where the spec is silent, ambiguous, or self-contradictory** — file upstream first and cite it, then ship a provisional choice (silent → decide under rule 6 and violate nothing; self-contradictory → a defect).
+6. **Among multiple conformant forms, the maintainers choose** — there are no user options for normalization form.
+7. **Disclosure** — any change to these rules, or any different choice made under 5 or 6, is disclosed (in the changelog before v1, by a major version bump after).
+
 ## Documentation
 
 Full guides live in **[the documentation site](https://ferro-hgvs.readthedocs.io/)** (source under [`docs/src/`](docs/src/)):
