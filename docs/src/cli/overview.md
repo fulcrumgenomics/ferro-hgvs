@@ -10,6 +10,7 @@ authoritative options of any one — this page is a map, not a substitute.
 | `parse` | Parse and validate an HGVS description (no reference needed). |
 | `normalize` | Rewrite descriptions into canonical form (needs a reference). See [Normalize variants](../guide/normalize-variants.md). |
 | `project` | Re-express a variant on a chosen output axis (`g` / `c` / `n` / `p` / `r`). |
+| `mutalyzer` | Show a Mutalyzer-style view: the normalized form and every axis at once. See [A Mutalyzer-style multi-axis view](../guide/mutalyzer-view.md). |
 | `explain` | Explain an error or warning code (e.g. `ferro explain W3003`). |
 
 ## Reference data
