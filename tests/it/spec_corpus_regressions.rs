@@ -758,34 +758,51 @@ fn the_cds_end_flush_pair_is_its_two_members_normalized_separately() {
     );
 }
 
-/// **Question.** The mirror shape at the 5'UTR/CDS boundary preserves its
-/// sequence. Is that boundary handled correctly?
+/// **Question.** The mirror shape at the 5'UTR/CDS boundary was once masked — the
+/// lone deletion did not shift, so the pair survived by accident rather than by
+/// handling. #1816 extends the sequence-first fold to the 5'UTR
+/// (`ExtendedBody`'s `FivePrimeUtr` arm). Is the boundary now handled?
 ///
-/// **No — it is masked.** With an identical `CCC` run straddling
-/// `c.-1`/`c.1`/`c.2` and the identical flush shape, the lone deletion does not
-/// shift **at all**: `c.-1del` normalizes to `c.-1del`, not to `c.2del`. With
-/// nothing to shift there is nothing to transpose, so the pair survives by
-/// accident rather than by handling.
+/// **Yes — and correctly, where the 3' sibling still pins a defect.** With the
+/// identical `CCC` run straddling `c.-1`/`c.1`/`c.2`, the group
+/// `c.[-1del;-1_1insG]` now crosses the 5' seam into
+/// `canonicalize_from_sequence` and re-derives to `c.-1C>G`, the substitution it
+/// denotes. The independent applier (`denotation_of`, not the normalizer)
+/// confirms both spellings denote the same bases, so this is meaning-preserving —
+/// where the 3' `the_cds_end_flush_pair_is_its_two_members_normalized_separately`
+/// re-derives the same shape but keeps a residual partition defect, the 5'
+/// boundary comes out clean.
 ///
-/// **Why this matters for the fix.** It would be natural to read the failing
-/// class as "the CDS end is special" and key a fix on that boundary. This test
-/// is the counter-evidence: the two boundaries differ in whether the *shift*
-/// happens, not in whether the members interfere. A fix keyed on the CDS end
-/// would be keyed on the mask.
+/// **The lone `c.-1del` is unchanged** — a single 5'UTR member is not a
+/// boundary-crossing group (`c_hi >= 1` is false), so the fold does not admit it
+/// and it still declines. That was once the whole story here; it is now half of
+/// it, and the half that moved is the one that matters.
 #[test]
-fn the_five_prime_boundary_masks_the_same_per_member_defect() {
+fn the_five_prime_boundary_pair_now_collapses_to_its_substitution() {
     let frame = boundary_run_frame(11);
     assert_eq!(
         normalize_3prime(&frame, "NM_TEST.1:c.-1del"),
         "NM_TEST.1:c.-1del",
-        "PINNED — the lone deletion does not shift 3' across the 5'UTR/CDS \
-         boundary, which is what masks the pair below"
+        "the lone 5'UTR deletion is not a boundary-crossing group, so the fold \
+         does not admit it and it still declines"
     );
+    let pair = normalize_3prime(&frame, "NM_TEST.1:c.[-1del;-1_1insG]");
     assert_eq!(
-        normalize_3prime(&frame, "NM_TEST.1:c.[-1del;-1_1insG]"),
-        "NM_TEST.1:c.[-1del;-1_1insG]",
-        "the pair is left alone — sequence-preserving, but by the mask above \
-         rather than by collapsing to the substitution it denotes"
+        pair, "NM_TEST.1:c.-1C>G",
+        "#1816 — the 5'UTR fold re-derives the boundary-crossing pair to the \
+         substitution it denotes, instead of leaving it masked"
+    );
+    // Meaning-preserving, verified with the independent applier rather than the
+    // normalizer: the collapsed substitution must denote exactly the bases the
+    // input pair does (this is the sequence-preservation class).
+    assert_eq!(
+        denotation_of(frame.provider(), frame.served(), &pair),
+        denotation_of(
+            frame.provider(),
+            frame.served(),
+            "NM_TEST.1:c.[-1del;-1_1insG]"
+        ),
+        "the collapse must denote the same bases as the input pair"
     );
 }
 
