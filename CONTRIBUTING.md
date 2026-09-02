@@ -256,7 +256,7 @@ This is the house form because it has already been got wrong the other way:
 which reads to a consumer as "this lands next cycle" rather than "this is the
 release you are reading", and could not be fixed in the trailer once merged.
 
-Two related habits, from `CLAUDE.md`:
+Two related habits (see [Adjudications](#adjudications) below):
 
 - **"Fixes non-confluence" is not a sufficient description.** Confluence (two
   spellings of one variant agree) and stability (a variant normalizes to what it
@@ -332,6 +332,62 @@ silently.
 [#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
 [#1886]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1886
+
+### Adjudications
+
+**Policy.** When you decide what the *correct* normalization behaviour is — not how to
+implement it — that decision lands in a committed test or ruling record **in the same PR**, with
+a comment stating the question, the ruling, and the authority. An adjudication that lives only in
+a PR description, an issue comment, or a working document is lost: the next person re-derives it
+from scratch, and often re-derives it differently.
+
+This is cheap because the machinery already exists (the five committed guards are tabulated
+directly above). The policy is about using it consistently, not about building anything.
+
+**What counts as an adjudication:** a ruling that one clause governs another where they conflict;
+a determination that ferro's output is right or wrong against a cited clause; a decision to follow
+or deviate from Mutalyzer; a choice between two competing representations of one variant; or a
+question deliberately left open. Implementation choices, refactors and performance work are not
+adjudications and do not need records.
+
+**Where it goes:**
+
+| the adjudication is about | record it in |
+|---|---|
+| two spec clauses in tension | a `rulings` record in `hgvs_spec_normalization_overrides.json` |
+| two spellings that must converge on one output | an `equivalence_classes` entry + `EQUIVALENCE_CLASS_VERDICTS` |
+| a deliberate, known deviation from the spec's stated form | `KNOWN_DIVERGENT_INPUTS`, which pins it *as* a deviation |
+| a deliberate deviation from Mutalyzer where the spec is silent | a `rulings` record — there is no spec form to diverge *from*, so `KNOWN_DIVERGENT_INPUTS` is the wrong home (see `adjudication-precedence-order`) |
+| a concrete input whose correct output is now settled | an ordinary `tests/it/*` test pinning the exact string |
+
+**State which kind of record it is, because they are not interchangeable:**
+
+- **adjudicated-correct** — pin the exact expected output and cite the clause; a real guard that
+  fails when behaviour regresses away from a decided answer.
+- **adjudicated-deviation** — pin it as a deviation via `KNOWN_DIVERGENT_INPUTS`, so a fixed
+  deviation cannot rot in the list unnoticed.
+- **undecided** — a first-class state; the generator refuses one that names a governing clause, so
+  an open question cannot smuggle in a ruling nobody made.
+- **house-choice** — decided, and ours rather than the spec's: a `rulings` record with a
+  `house_choice` object, made under rule 5's silent limb or rule 6 of
+  `docs/src/reference/normalization-rules.md`, naming no governing and no deviated-from clause;
+  never citable as conformance.
+
+#### Never hand-edit `tests/it/clause_ruling_index.rs`
+
+The file is committed, so it looks hand-maintainable. It is not: it carries a rendered index of
+every clause the ruling records cite, and `the_rendered_index_is_current` compares that block
+against what the code generates. Editing it by hand is transcription, and transcription of a
+~100-row block is lossy in a way that reads as a small diff — two attempts at it were made here
+and both dropped rows silently.
+
+Capture what the test prints **programmatically** instead. The pattern that works: add a throwaway
+test that writes `render_index()` to a file, run it, restore the source byte-for-byte from a
+pre-edit copy, then splice the generated text in on its `BEGIN`/`END` markers. Nothing is retyped.
+
+Note this is a *different* trap from the gitignored spec artifacts above. Those regenerate on
+demand and a stale one fails loudly. This one is committed, so a lossy edit survives review as an
+ordinary diff and only fails on the one assertion that re-renders it.
 
 ### Changelog
 
