@@ -182,11 +182,10 @@ record states no conflict, only a position it declines to name as one. Every cit
 quote that the generator checks against the spec checkout, so a submodule bump that moves a clause
 fails the build instead of leaving the citation pointing at unrelated prose. That check is a
 whitespace-collapsed substring match rather than a byte-for-byte one; what it does and does not
-guarantee is spelled out under **Cite the clause exactly, and quote it** below.
+guarantee is spelled out under **Cite the clause exactly, and quote it** in `CONTRIBUTING.md`, Adjudications.
 
 Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
 
 `--check` answers a different question — "is my local artifact current?" — and is not a gate: an absent artifact is generated rather than reported as drift, since a gitignored file has no committed baseline to drift from. Use it when you want to know whether a code change moved the fixture.
 
 Because the fixture is no longer in git, per-PR `parse-error → preserved` status transitions are reviewed via the PR description and the accompanying test/parser changes, not a committed diff.
-
