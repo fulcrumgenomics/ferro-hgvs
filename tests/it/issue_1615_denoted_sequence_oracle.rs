@@ -317,7 +317,7 @@ fn a_difference_carries_the_three_sequences() {
 ///
 /// The parenthesised counts below are each measured on the run that isolated that
 /// class, after the earlier ones were closed — they overlap and sum well above
-/// 344, so they are not a partition of it. `CLAUDE.md`'s table carries the full
+/// 344, so they are not a partition of it. `docs/ORACLES.md`'s table carries the full
 /// caveat; it is not restated here.
 ///
 /// **Which of the seven measured classes are here, and which are not** — the

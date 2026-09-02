@@ -6331,7 +6331,7 @@ mod tests {
     ///
     /// Correcting the seven sites fixes today and guarantees a repeat: the counts
     /// live in a `const` and the prose restates them, which is precisely the
-    /// "a count restated instead of imported" shape `CLAUDE.md` names. So the
+    /// "a count restated instead of imported" shape `CONTRIBUTING.md` names. So the
     /// counts are **derived here** — from `FAMILIES.len()`, from
     /// `PROTEIN_FAMILIES.len()`, and from the singleton `const … _FAMILY`
     /// declarations counted out of the source — and the prose is asserted against

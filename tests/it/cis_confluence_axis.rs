@@ -38,7 +38,7 @@
 //! explained; a change that lowers one should re-bless the number in the same
 //! commit.
 //!
-//! Read the pins together with `CLAUDE.md`'s note on representation stability.
+//! Read the pins together with `docs/READING_THE_SPEC.md`'s note on representation stability.
 //! Confluence and stability are different properties, and a fix for the first
 //! moves shipped strings — so a commit that lowers a divergence count here still
 //! owes the release its `dump_normalized_corpus` measurement.

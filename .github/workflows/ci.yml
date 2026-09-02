@@ -2575,7 +2575,7 @@ jobs:
       # It stays a `cargo clippy` step (not folded into the release build via
       # `RUSTFLAGS=-D warnings`) because RUSTFLAGS is part of cargo's build
       # fingerprint, so setting it busts the whole dependency cache — ~400 crates
-      # rebuild cold, the same trap the `CARGO_INCREMENTAL` note in `CLAUDE.md`
+      # rebuild cold, the same trap the `CARGO_INCREMENTAL` note in `docs/TESTING.md`
       # records. `clippy -- -D warnings` passes the flag as a clippy ARG instead,
       # leaving dependencies `--cap-lints=allow` and their fingerprints untouched.
       #

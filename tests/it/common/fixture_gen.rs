@@ -2,7 +2,7 @@
 //!
 //! Both `hgvs_spec_normalization.json` (see [`super::spec_fixture`]) and
 //! `hgvs_spec_enumeration.json` (see [`super::spec_enumeration`]) are generated
-//! build artifacts, not committed files (see `CLAUDE.md`): tracking them made
+//! build artifacts, not committed files (see `docs/TESTING.md`): tracking them made
 //! every parser PR a merge-conflict magnet. Each is produced by running a
 //! `--features dev` generator binary with `--output <tmp>` and atomically renaming the
 //! result into place. This module holds the one regeneration flow they share —
@@ -150,7 +150,7 @@ fn revision_stamp_path(fixture: &Path) -> PathBuf {
 /// generator `#[path]`-includes): those are covered by the committed
 /// per-consumer guards the fixtures feed, whereas the failure this token closes
 /// is the one nothing else observes — reusing a corpus built by an *older
-/// revision of its own generator* after a checkout that changed it. `CLAUDE.md`
+/// revision of its own generator* after a checkout that changed it. `docs/TESTING.md`
 /// files this under the "stale local artifact" class.
 ///
 /// `DefaultHasher`, not a crypto hash: this needs a value that changes when the

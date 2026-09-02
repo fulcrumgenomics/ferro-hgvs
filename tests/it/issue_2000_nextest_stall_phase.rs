@@ -493,7 +493,7 @@ fn workflow_files() -> Vec<(String, String)> {
 ///
 /// # The set is derived, never restated
 ///
-/// An earlier revision asserted `wrapped >= 6`, which is the shape `CLAUDE.md`'s
+/// An earlier revision asserted `wrapped >= 6`, which is the shape `CONTRIBUTING.md`'s
 /// "Assert the property. Measure the count. Never let a count BE the property"
 /// names as a change detector for the literal rather than a guard — and its own
 /// failure message told the reader to edit the number, which that section calls

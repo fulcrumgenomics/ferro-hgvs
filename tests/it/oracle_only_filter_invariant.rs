@@ -8,7 +8,7 @@
 //! edit that reads like tidying, turns both shards green, makes them *faster*,
 //! and deletes the census — the failure direction this repository keeps hitting
 //! (see `tests/it/soak_package_membership.rs` and the bulk-fixture skip-green
-//! note in `CLAUDE.md`).
+//! note in `CONTRIBUTING.md`, "Bulk corpora: a skip that reads as a pass").
 //!
 //! So the assertions are, in order of what they defend:
 //!

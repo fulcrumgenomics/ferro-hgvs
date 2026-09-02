@@ -17,7 +17,7 @@
 //! # Two axis clauses say it constructively, which is what scopes the rule
 //!
 //! `checklist.md` is not molecule-specific, and a `DNA/` clause cannot scope
-//! `r.` (see `CLAUDE.md`, "Cite the clause exactly"). Both axes state the rule
+//! `r.` (see `CONTRIBUTING.md`, "Cite the clause exactly"). Both axes state the rule
 //! in their own jurisdiction, and state it the same way — by enumerating what an
 //! inserted sequence may be, with no bare count among the alternatives:
 //!

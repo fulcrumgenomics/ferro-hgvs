@@ -34,7 +34,7 @@
 //! * `delins.md:17` — "two variants separated by one or more nucleotides should
 //!   be described individually and **not** as a `delins`" — recommends the
 //!   individual description. It is lowercase prose, so read strictly it
-//!   *requires* nothing (see the repository `CLAUDE.md` on RFC 2119 keywords in
+//!   *requires* nothing (see `docs/READING_THE_SPEC.md` on RFC 2119 keywords in
 //!   this spec). What makes it decisive here is not its strength but that it is
 //!   the only one of the three whose preconditions this shape actually meets.
 //! * `delins.md:18` / `general.md:35`'s codon exception ("two variants separated

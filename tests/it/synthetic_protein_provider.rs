@@ -15,7 +15,7 @@
 //!   test's doc comment with an exact `file.md:line`. Re-deriving an
 //!   expectation by running the applier would make these change detectors
 //!   rather than conformance tests — the distinction this repository's
-//!   `CLAUDE.md` draws when it says a test that merely pins today's output is
+//!   `CONTRIBUTING.md` draws when it says a test that merely pins today's output is
 //!   not an adjudication record.
 //!
 //! # The one substitution made to the spec's examples

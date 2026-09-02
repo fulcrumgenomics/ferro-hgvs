@@ -219,7 +219,7 @@ impl HouseRule {
 ///
 /// Carrying it as a *record* rather than as a `status` value is deliberate: a
 /// house choice is `decided` — a choice has been made — and the two published
-/// tables (`CLAUDE.md`, `docs/NORMALIZATION_CONTRACT.md`) partition the ledger
+/// tables (`docs/NORMALIZATION_CONTRACT.md`) partition the ledger
 /// by status. A third status would have re-partitioned both and made every
 /// house choice read as a species of open question, which is the opposite of
 /// what it is.
@@ -766,7 +766,7 @@ pub fn statuses() -> BTreeMap<String, String> {
 // Plain `#[test]`, deliberately **not** inside a `#[cfg(test)] mod tests`: this
 // tree is an integration-test binary, which compiles without `cfg(test)`, so a
 // gated module would never run and would read as coverage it does not provide
-// (see the repository `CLAUDE.md` on committed tests that have never executed).
+// (see the repository `CONTRIBUTING.md` on committed tests that have never executed).
 //
 // A well-formed document plus one mutation per field. The mutations are the
 // point: every one of them used to parse as "field absent", which converts a

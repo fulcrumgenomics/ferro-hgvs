@@ -281,7 +281,7 @@ mod a_repeat_is_decided_by_its_own_arithmetic {
 /// An insertion flush against either edge of a deletion composes uniquely, and
 /// says so **in either member order**.
 ///
-/// `CLAUDE.md` records this as a 233-fire false-positive class of the
+/// `docs/ORACLES.md` records this as a 233-fire false-positive class of the
 /// denoted-sequence oracle. The cause was that `spdi::apply::triples_are_disjoint`
 /// carried a running 3'-most `reach` compared against each triple's position,
 /// which read a tie between a zero-width triple and a span triple differently

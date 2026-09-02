@@ -8,7 +8,7 @@
 # CPU on an edit->one-test loop), but it is a *developer environment* setting, not
 # a repo one: it would also apply in CI, where a ~2 GB per-job incremental
 # directory would push an Actions cache budget that is already at its 10 GiB cap
-# (see issue #1218). The local recipe lives in CLAUDE.md under "Fast local
+# (see issue #1218). The local recipe is in docs/TESTING.md under "Fast local
 # iteration".
 
 [alias]
