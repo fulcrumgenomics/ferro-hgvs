@@ -677,7 +677,7 @@ fn every_record_publishes_its_question_and_its_ruling() {
 /// The contents list carries each decided record's one-sentence summary, so
 /// a reader can scan every ruling on one screen. An id states the question,
 /// not the answer, and the previous place this scan existed was a
-/// hand-maintained table in CLAUDE.md that drifted three times.
+/// hand-maintained agent-guidance table that drifted three times.
 #[test]
 fn the_contents_list_carries_every_decided_summary() {
     let rendered = render();
