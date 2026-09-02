@@ -347,7 +347,7 @@ FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
 ```
 
 That is the two named rows, not `test-oracle`'s selection, which is the whole
-suite minus `ORACLE_EXCLUDE`, `test(proptest)` and `SWEEP_FILTER`. The five are in two
+suite minus `ORACLE_EXCLUDE`, `test(proptest)` and `SWEEP_FILTER`. The failures are in two
 classes, **neither of them #1618 or #1619**, so neither was reachable by the
 two-row check above:
 
@@ -373,14 +373,14 @@ in that module pass — and **nothing new fired**. The 2 survivors are both
 | `the_wider_multi_member_census_is_what_the_header_says` | the same row, reached through the wider census |
 
 **The `FERRO_MANIFEST` half of that measurement is stale too.** All six
-`mutalyzer_normalize_tests` axes now **pass**, and the one extra row is
+`mutalyzer_normalize_tests` axes now **pass**, and the remaining failure is
 `multi_member_cis_axis::axis_normalized`, which is **not an oracle fire**: it
 fails identically with `FERRO_ASSERT_SEQUENCE` **unset** (measured as a control),
 on a census pin reading `unwindowed: 89` against a pinned `90` while
 `sequence_changed` stays `0`. That is the HEAD-drift this file already documents
 for that pin, and it is orthogonal to arming the flag.
 
-Three, not two — and the third could not have been named by
+Three failures, not two — and the third could not have been named by
 either reading above, because the test did not exist when they were taken. #2051
 (2026-08-16) added
 `dump_normalized_corpus::the_render_time_reference_matches_what_the_pipeline_was_given`,
@@ -480,5 +480,7 @@ actually surfaces instead: an `outcome == 'failure'` step writes it to the run's
 
 An oracle fire blocks the merge: the required `Test` context is a rollup whose
 `needs:` list includes `test-oracle` and `sweeps`; read that list from
-`.github/workflows/ci.yml`.
+`.github/workflows/ci.yml`. `generated-docs` is not in that list and still gates: the
+generators run inside `spec-fixtures`, which `test` and `test-oracle` depend on, so a
+generator failure skips them, and the rollup treats a skip as a failure.
 

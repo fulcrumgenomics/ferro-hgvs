@@ -342,7 +342,7 @@ a PR description, an issue comment, or a working document is lost: the next pers
 from scratch, and often re-derives it differently.
 
 This is cheap because the machinery already exists (the five committed guards are tabulated
-directly above). The policy is about using it consistently, not about building anything.
+in `docs/TESTING.md`, under "Generated spec fixture"). The policy is about using it consistently, not about building anything.
 
 **What counts as an adjudication:** a ruling that one clause governs another where they conflict;
 a determination that ferro's output is right or wrong against a cited clause; a decision to follow

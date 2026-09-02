@@ -66,7 +66,7 @@
 //! onto a `main` that had gained a record, while the generated block three
 //! screens down regenerated correctly and disagreed with it. That is the exact
 //! failure the pin was added to prevent, reproduced in the prose that describes
-//! the pin: the repo's own `docs/NORMALIZATION_CONTRACT.md` carried "five of its eight" long after
+//! the pin: the repo's former `CLAUDE.md` ruling tables carried "five of its eight" long after
 //! the ledger passed eight. A number worth trusting is a measured one, so the
 //! fix is to stop keeping a second copy rather than to pin the copy.
 //!
