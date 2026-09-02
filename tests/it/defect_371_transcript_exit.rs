@@ -506,7 +506,7 @@ fn the_exit_needs_the_shuffle_to_land_on_the_exons_last_base() {
 /// honours (`numbering.md:26`, the 3' rule applying across an exon/intron border)
 /// is the one that produces the 371 rows.
 ///
-/// Recorded per `CLAUDE.md`'s "record what was refuted, not only what was
+/// Recorded per `CONTRIBUTING.md`'s "record what was refuted, not only what was
 /// decided": the belief that the 371 class is a junction-clamp failure is the
 /// belief this measurement kills.
 #[test]

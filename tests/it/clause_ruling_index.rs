@@ -66,7 +66,7 @@
 //! onto a `main` that had gained a record, while the generated block three
 //! screens down regenerated correctly and disagreed with it. That is the exact
 //! failure the pin was added to prevent, reproduced in the prose that describes
-//! the pin: the repo's own `CLAUDE.md` carried "five of its eight" long after
+//! the pin: the repo's own `docs/NORMALIZATION_CONTRACT.md` carried "five of its eight" long after
 //! the ledger passed eight. A number worth trusting is a measured one, so the
 //! fix is to stop keeping a second copy rather than to pin the copy.
 //!
@@ -983,8 +983,7 @@ fn the_index_is_not_vacuous() {
         (records.len(), decided, undecided),
         (38, 35, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
-         and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
-         which was already wrong before this test existed"
+         and this pin together."
     );
     assert_eq!(
         decided + undecided,

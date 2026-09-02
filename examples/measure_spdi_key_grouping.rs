@@ -164,7 +164,7 @@ fn reference_for(axis: &str, core: &str) -> MockProvider {
 /// Only [`KeyOutcome::Refused`] is a fact about `spdi_key`. The other two are
 /// facts about the *corpus* or about a bug, and folding them into the refusal
 /// count would report a measurement failure as an API limit — the shape
-/// `CLAUDE.md` names under "a generator must account for what it dropped": a
+/// `CONTRIBUTING.md` names under "a generator must account for what it dropped": a
 /// fallible step whose failure is representable as a legitimate value, so a
 /// partial run and a clean run write indistinguishable output.
 enum KeyOutcome {

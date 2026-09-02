@@ -100,7 +100,7 @@ pub fn sweep_seeds(full: u32) -> u32 {
 /// The tests used to `set_var`/`remove_var` around their assertions, guarded by
 /// a SAFETY note arguing that nextest gives each test its own process. That
 /// argument is sound under nextest and *false* under `cargo test`, which
-/// `CLAUDE.md` lists as a supported alternative and which runs tests as threads
+/// `docs/TESTING.md` lists as a supported alternative and which runs tests as threads
 /// in one process: there, setting `FERRO_SWEEP_SEEDS=12` mid-run races every
 /// concurrently-executing sweep reading the same variable, silently shrinking
 /// its corpus. A test that can quietly hollow out the sweeps it shares a process

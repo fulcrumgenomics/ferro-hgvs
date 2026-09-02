@@ -545,7 +545,7 @@ fn asserts_transitively(functions: &[ParsedFunction]) -> BTreeMap<String, bool> 
 ///
 /// Without this, every assertion below passes trivially when the roots move,
 /// the `.rs` filter breaks, or the ledger reader stops returning citations —
-/// the structural zero this repository's `CLAUDE.md` warns about.
+/// the structural zero this repository's `CONTRIBUTING.md` warns about.
 #[test]
 fn the_guard_scan_reads_the_tree_and_the_ledger() {
     let records = rulings::records();

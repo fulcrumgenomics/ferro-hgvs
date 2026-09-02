@@ -51,7 +51,7 @@
 //!
 //! Structural blindnesses have been found in this repository's generators
 //! repeatedly, each invisible until the one before it was fixed; the maintained
-//! inventory is `CLAUDE.md`'s, under "Assert the property. Measure the count.
+//! inventory is `examples/dump_normalized_corpus.rs`'s, under "Assert the property. Measure the count.
 //! Never let a count BE the property". **No count is restated here** — one would
 //! go stale on the next instance, which is the very failure that section is
 //! about. A protein stratum is exactly the kind of generator that acquires

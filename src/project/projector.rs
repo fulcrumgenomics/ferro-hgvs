@@ -4496,7 +4496,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //
         //   `protein/frameshift.md:24` is supporting context, not the deciding
         //   authority: it is lowercase prose, not an RFC 2119 requirement (see
-        //   `CLAUDE.md`, "Almost nothing in the recommendations is normative").
+        //   `docs/READING_THE_SPEC.md`, "Almost nothing in the recommendations is normative").
         //   It reads "the (predicted) amino acid changes of additional variants
         //   on the same allele (in cis) downstream of the frameshift are not
         //   described unless they change the amino acid sequence or length of

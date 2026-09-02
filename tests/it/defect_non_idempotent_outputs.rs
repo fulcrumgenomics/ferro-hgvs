@@ -575,7 +575,7 @@ fn the_settled_output_never_changes_the_sequence_it_denotes() {
 /// further downstream" — but it states **no rule for comparing positions across
 /// zones**, and contains the word "allele" zero times. Ferro's cross-zone
 /// arithmetic is therefore house policy, not compliance; see this repository's
-/// `CLAUDE.md`, "Comparing `c.` positions across numbering zones is OUR policy".
+/// `docs/READING_THE_SPEC.md`, "Comparing `c.` positions across numbering zones is OUR policy".
 /// That is the same locus the sequence-changing and denotes-no-sequence classes
 /// localise to, which is why fixing one should be expected to move the others.
 #[test]
@@ -903,7 +903,7 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
 ///
 /// Recorded as a refutation because the reading is natural and would send a fix
 /// at the wrong knob: a length threshold is a one-line change and would move
-/// nothing. Per this repository's `CLAUDE.md`, "record what was refuted, not only
+/// nothing. Per this repository's `CONTRIBUTING.md`, "record what was refuted, not only
 /// what was decided" — a measurement that kills a plausible belief is worth as
 /// much as the ruling, because the belief recurs.
 ///
@@ -1136,7 +1136,7 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
 /// `the_five_prime_boundary_masks_the_same_per_member_defect`: a sweep that
 /// happened to place its blocks across junctions would measure **zero** and read
 /// as evidence of safety, when it is evidence that the corpus could not build the
-/// thing (`CLAUDE.md`: "a corpus zero is a claim about the corpus, not about the
+/// thing (`CONTRIBUTING.md`: "a corpus zero is a claim about the corpus, not about the
 /// change"). It is also why the affected rows are all `mid-cds` — the only region
 /// where a 124-base block fits inside one exon of this fixture.
 ///

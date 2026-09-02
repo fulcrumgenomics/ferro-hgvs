@@ -61,7 +61,7 @@
 //! closest thing it emits today.
 //!
 //! Four records live here, in **four kinds**. They are not interchangeable
-//! (see the repository `CLAUDE.md`), so each test states its own:
+//! (see the repository `CONTRIBUTING.md`), so each test states its own:
 //!
 //!  - **One adjudicated-correct.**
 //!    `two_adjacent_members_that_both_consume_reference_are_one_delins` pins the

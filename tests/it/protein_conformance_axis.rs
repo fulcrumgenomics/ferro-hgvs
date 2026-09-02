@@ -830,7 +830,7 @@ fn the_indeterminate_column_has_a_non_empty_denominator() {
 /// no codons of its own", from which it follows that the exon layout under a
 /// protein should not change what a `p.` description normalizes to. That is a
 /// claim about the axis, and this test measures it rather than assuming it —
-/// assuming it would be another entry on `CLAUDE.md`'s structural-blindness
+/// assuming it would be another entry on `examples/dump_normalized_corpus.rs`'s structural-blindness
 /// inventory, since the corpus varies phase and strand precisely so a
 /// junction-sensitive defect *could* show.
 ///

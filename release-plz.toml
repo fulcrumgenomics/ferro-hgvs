@@ -62,9 +62,10 @@ git_release_name = "v{{ version }}"
 #
 # Representation stability is a shipped guarantee: the downstream consumer keys
 # read counts on the normalized HGVS string, so a canonical form that churns
-# between releases silently re-buckets every stored design. `CLAUDE.md` asks for
-# such changes to be batched into one release, which makes the release PR the
-# place to see them together — and today its body carries only the
+# between releases silently re-buckets every stored design. CONTRIBUTING.md's
+# "Declaring a representation change" makes disclosure the obligation, which
+# makes the release PR the place to see such changes together — and today its
+# body carries only the
 # `cargo-semver-checks` dump, from which no reader can tell that (say) #1392
 # moved cis-allele output.
 #

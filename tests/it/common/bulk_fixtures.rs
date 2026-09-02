@@ -117,7 +117,7 @@ pub fn present_or_skip(path: &str) -> Option<PathBuf> {
 // Plain `#[test]`, deliberately **not** inside a `#[cfg(test)] mod tests`: this
 // tree is an integration-test binary, which compiles without `cfg(test)`, so a
 // gated module would never run and would read as coverage it does not provide
-// (see `rulings.rs`, which records the same, and the repository `CLAUDE.md` on
+// (see `rulings.rs`, which records the same, and the repository `CONTRIBUTING.md` on
 // committed tests that have never executed).
 // --------------------------------------------------------------------------
 
