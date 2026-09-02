@@ -159,8 +159,22 @@
 //!    having first shipped able to build only *growing* repeats. A count of
 //!    blindnesses is itself a number that goes stale every time the thing it
 //!    counts happens, which is the failure this whole section is about. The
-//!    maintained list is `CLAUDE.md`'s, under "Assert the property. Measure the
-//!    count. Never let a count BE the property".
+//!    maintained list follows.
+//!
+//!    | blind to | issue |
+//!    |---|---|
+//!    | member geometry | #1456 |
+//!    | scale — 20-mer cores never reach the split cap | #1460 |
+//!    | sequence structure — a random core cannot be asked for a coincidence pattern | #1517 |
+//!    | transcript geometry — a single exon with `CDS_START = 1` | #1478 |
+//!    | molecule type — no `p.` row at all until the protein axis | #1606 |
+//!    | reversed ranges | #1917 |
+//!    | a repeat placed beside a sibling it could collide with | #1749 |
+//!    | that family shipping able to build only *growing* repeats | #1752 |
+//!    | direction — every lone `delins` was equal-length or a net insertion | #1610 |
+//!    | the measurement surface — the corpus drives `Normalizer::normalize` only; a change confined to the `from_sequences`/`rederive` derivation surface reads as `0 moved` | #2204 |
+//!
+//!    Add a row; do not increment a number.
 //!
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
