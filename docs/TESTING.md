@@ -120,6 +120,12 @@ FERRO_SWEEP_SEEDS=12   cargo nextest run --features dev # an explicit count, for
 Local suite: **86.6s → 27.5s**, with no test left over nextest's 60s SLOW
 threshold.
 
+**Only the sequence diversity is reduced — never the shapes.** The loop bounds
+over member spellings, positions and directions are untouched, which is the
+axis worth keeping: each sweep's notes record that every blocking defect found
+so far lived in a shape the generator could not emit, not in a sequence it did
+not draw.
+
 The one thing to watch: `sweeps` is the only job that sets the variable, and it
 selects on `SWEEP_FILTER`. Moving a sweep out of that filter silently drops it
 to the prefix in CI, so edit the two together.
@@ -135,7 +141,7 @@ cargo run --features dev --bin generate_spec_fixture -- --output <path>   # writ
 
 Replace `<path>` with the destination you want; the first form writes to the default
 location above. Do not substitute a machine-specific absolute path into a committed file
-(see [Repository Hygiene](#no-machine-local-paths-in-committed-files)).
+(see `CLAUDE.md`, "Conventions").
 
 **Three** test modules actually read it — `tests/it/hgvs_spec_normalization_tests.rs` (the driver), `tests/it/idempotency_tests.rs` (which uses it purely as an input corpus, so its assertions are not circular) and `tests/it/normalize_axis_preserving.rs` (whose `axis_is_preserved_over_the_spec_fixture` walks it as a corpus; `ci.yml`'s `censuses` job downloads the `spec-fixtures` artifact precisely for it). They call a shared helper (`tests/it/common/spec_fixture.rs`) that regenerates it on demand if missing, so a fresh `cargo test` "just works" (one-time generation). A fourth module, `tests/it/spec_enumeration_tests.rs`, reads the *enumeration* fixture through `common/spec_enumeration.rs`, which ensures this one first as its generator's prerequisite — so **four** modules in total depend on a spec fixture being present. `mito_circular_audit.rs`, `protein_silent_eq.rs` and `protein_unknown_roundtrip.rs` only *mention* the fixture in doc comments as a cross-link; they do not read it. CI and the pre-push hook regenerate it explicitly before the test run — plain generation, not `--check`, because generation is what validates the committed overrides against the spec checkout.
 
@@ -166,7 +172,7 @@ same description**. (This used to say "conflict at equal RFC 2119 strength", cit
 That framing is withdrawn — uppercase RFC 2119 keywords appear only **twice** outside `style.md`
 itself, both in one file, so essentially every clause in play is lowercase prose and keyword
 strength cannot rank them. The count is stated once, under
-[Reading the spec](#reading-the-spec), with the grep it came from; do not restate it here.)
+`docs/READING_THE_SPEC.md`, with the grep it came from; do not restate it here.)
 Each record names the clauses in tension, which
 one governs, which is deviated from, and why. `undecided` is a first-class state and the generator
 **refuses** to build a record that is `undecided` yet names a governing *or* a deviated-from clause
