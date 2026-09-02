@@ -342,8 +342,8 @@ quoted against, and the reasoning in full.
 It is generated, not written. Every question, verdict, clause and quote below is the record's
 own text, reproduced mechanically from
 [`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`](../tests/fixtures/grammar/hgvs_spec_normalization_overrides.json).
-Nothing here is a summary of a record, because a summary is a second copy that can drift from
-the thing it summarises.
+The one-line summary beside each decided record in the contents list is the record's own
+`summary` field, copied verbatim; nothing here is paraphrased by the renderer.
 
 ## What this document is not
 
@@ -404,7 +404,20 @@ fn contents(decided: &[&Record], open: &[&Record]) -> String {
     }
     let _ = writeln!(out, "\n**Decided**\n");
     for record in decided {
-        let _ = writeln!(out, "- [`{}`](#{})", record.id, anchor(&record.id));
+        match record.summary.as_deref() {
+            Some(summary) => {
+                let _ = writeln!(
+                    out,
+                    "- [`{}`](#{}) — {}",
+                    record.id,
+                    anchor(&record.id),
+                    summary
+                );
+            }
+            None => {
+                let _ = writeln!(out, "- [`{}`](#{})", record.id, anchor(&record.id));
+            }
+        }
     }
     let _ = writeln!(out);
     out
@@ -658,6 +671,32 @@ fn every_record_publishes_its_question_and_its_ruling() {
                 citation.clause
             );
         }
+    }
+}
+
+/// The contents list carries each decided record's one-sentence summary, so
+/// a reader can scan every ruling on one screen. An id states the question,
+/// not the answer, and the previous place this scan existed was a
+/// hand-maintained table in CLAUDE.md that drifted three times.
+#[test]
+fn the_contents_list_carries_every_decided_summary() {
+    let rendered = render();
+    let contents_section = rendered
+        .split("## Contents")
+        .nth(1)
+        .and_then(|rest| rest.split(RECORDS_HEADING).next())
+        .expect("the contents list sits between its heading and the records heading");
+    for record in records().iter().filter(|r| r.status == "decided") {
+        let summary = record
+            .summary
+            .as_deref()
+            .unwrap_or_else(|| panic!("decided record {} has no summary", record.id));
+        let line = format!("- [`{}`](#{}) — {}", record.id, anchor(&record.id), summary);
+        assert!(
+            contents_section.contains(&line),
+            "contents list is missing the summary line for {}",
+            record.id
+        );
     }
 }
 
