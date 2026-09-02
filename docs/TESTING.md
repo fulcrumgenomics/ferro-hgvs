@@ -42,8 +42,12 @@ pytest -k "test_parse" -v            # Run tests matching pattern
 ## Fast local iteration
 
 A one-line test edit costing two minutes is not the crate being big; it is two
-settings. Measured on an M2 Max (12 core), interleaved A/B reps, `user` CPU
-seconds quoted because wall clock on a shared machine is not reproducible:
+settings. Measured on an Apple M2 Max (12 core), interleaved A/B reps, `user` CPU
+seconds quoted because wall clock on a shared machine is not reproducible.
+Toolchain: rustc/cargo **1.97.0** (the `rust-toolchain.toml` pin), cargo-nextest
+**0.9.133**, sccache **0.16.0**. The knob effects below are structural, so the
+speedups hold across toolchain versions; the absolute seconds do not, and are
+the figures for that toolchain.
 
 | after editing… | default setup | both knobs | speedup |
 |---|---|---|---|
@@ -182,11 +186,10 @@ record states no conflict, only a position it declines to name as one. Every cit
 quote that the generator checks against the spec checkout, so a submodule bump that moves a clause
 fails the build instead of leaving the citation pointing at unrelated prose. That check is a
 whitespace-collapsed substring match rather than a byte-for-byte one; what it does and does not
-guarantee is spelled out under **Cite the clause exactly, and quote it** below.
+guarantee is spelled out under **Cite the clause exactly, and quote it** in `CONTRIBUTING.md`, Adjudications.
 
 Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
 
 `--check` answers a different question — "is my local artifact current?" — and is not a gate: an absent artifact is generated rather than reported as drift, since a gitignored file has no committed baseline to drift from. Use it when you want to know whether a code change moved the fixture.
 
 Because the fixture is no longer in git, per-PR `parse-error → preserved` status transitions are reviewed via the PR description and the accompanying test/parser changes, not a committed diff.
-

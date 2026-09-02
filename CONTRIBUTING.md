@@ -203,6 +203,11 @@ Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
 `3 rows of 500,004 move`, `3 of 500,004 rows move` and `3 of 500,004 corpus rows move` all disclose
 three moved rows, and the rule reads three from each.
 
+This sentence used to say "the pattern requires the count to sit immediately before `rows`", and
+that was the #1647 defect rather than a description of it: in `0 of 950 rows move` the number
+immediately before `rows` is the **denominator**, so the very example offered here as passing was
+rejected, and the documented form was a merge blocker. Do not restate the rule positionally.
+
 A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
 costs the reader nothing while leaving the judgement on the record. CI enforces
@@ -321,6 +326,11 @@ and the audit called a move. The two now agree on the verdict, pinned by
 this check *renders the changelog through real git-cliff and reads the result*, which is the
 question no vocabulary-comparison test was asking. A disagreement is not a second opinion, it is an
 unsatisfiable build.
+
+The route that works is not through the template: read the trailer from the raw commit message
+with `git log`, and attach it to the rendered bullet afterwards — which is what
+`check_changelog_grouping.py` already does to attribute trailers, so the script imports its
+`trailer_value` rather than keeping a fourth copy of the column-0 rule.
 
 The checker is
 `scripts/check_representation_change.py` and the audit is

@@ -104,4 +104,3 @@ transcript and mis-normalizes only where the pair straddles the CDS/3'UTR zone b
 `the_cds_end_flush_pair_is_its_two_members_normalized_separately` and
 `the_five_prime_boundary_masks_the_same_per_member_defect` in `tests/it/spec_corpus_regressions.rs`
 — the second is the reminder that the 5' boundary is not a working case, only a masked one.
-

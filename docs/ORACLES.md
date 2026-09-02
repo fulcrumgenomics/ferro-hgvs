@@ -330,7 +330,7 @@ were real disagreements inside ferro rather than noise:
 | row | what disagreed | state |
 |---|---|---|
 | #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before `6116f84a` |
-| #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
+| #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 (the row it replaced is recorded in #1619) | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
 
 **Both are now green, and that was still not enough — the selection-wide run
 those two closures were blocking on came back RED, three times, on a different
@@ -483,4 +483,3 @@ An oracle fire blocks the merge: the required `Test` context is a rollup whose
 `.github/workflows/ci.yml`. `generated-docs` is not in that list and still gates: the
 generators run inside `spec-fixtures`, which `test` and `test-oracle` depend on, so a
 generator failure skips them, and the rollup treats a skip as a failure.
-
