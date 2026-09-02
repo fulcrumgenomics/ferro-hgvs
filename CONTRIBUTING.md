@@ -199,6 +199,9 @@ the changelog and nobody is told. CI rejects that combination: a declining
 trailer that also claims `<n> rows move` (or merge/split/respell, for any `n`
 other than zero) fails the check, and the message asks you to say which it is.
 Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
+**The number that counts is the count, never the denominator** —
+`3 rows of 500,004 move`, `3 of 500,004 rows move` and `3 of 500,004 corpus rows move` all disclose
+three moved rows, and the rule reads three from each.
 
 A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
@@ -279,6 +282,52 @@ A declining commit (`Representation-Change: none`) is grouped by its conventiona
 type, so a `fix:` that correctly declined is listed under **Fixed** rather than
 buried in **Other** — a `commit_preprocessor` in `release-plz.toml` neutralizes
 the declining trailer so the commit falls through to its type ([#1557]).
+
+**Why this is enforced rather than encouraged.** The mechanism to route these trailers into the
+changelog landed mid-cycle and was then used **zero** times: across the v0.13.0 cycle 87 commits
+landed carrying no trailer while 46 touched those four directories, so the changelog's
+Representation changes section rendered empty. An empty section looks identical whether it is
+empty because nothing moved or because nobody declared anything, so it went unnoticed for ~90
+commits and the disclosure had to be reconstructed after the fact — normalizing ClinVar, Paraphase
+and CMRG (5,761,302 expressions) through both releases and diffing row by row, which found 577
+stored strings moved and 326,404 inputs newly normalized. None of that was visible from the
+changelog as generated.
+
+**How to measure, if the answer is not obviously `none`.** `examples/dump_normalized_corpus.rs`
+diffs two revisions over a synthetic shape-family corpus (`--out` on each side, then `--compare`);
+read its `--verify-spdi` report to separate "moved" from "denotes different bases". That corpus is
+deliberately enriched for churn-prone shapes, so quote its rate as *of the affected family*, never
+as a repo-wide figure — for consumer impact, normalize a real corpus through both revisions with
+`ferro normalize -i <inputs> --reference <dir> -f tsv` instead.
+
+**The section itself is audited, not just each PR's trailer.** `Changelog grouping audit` renders
+the changelog with the real `release-plz.toml` over `<latest tag>..HEAD` and checks the result
+against the commits: nothing filed under **Representation changes** may open with a decline word,
+nothing that declares a move may be filed elsewhere, and no heading may still carry its `<!-- N -->`
+ordering prefix. It deliberately shares **no code** with the checker — #1555 passed the test written
+to catch it precisely because that test compared the two halves against each other and they were
+wrong together, so a second opinion is only worth having when it is derived differently.
+
+**"Derived differently" means the derivation, not the verdict — and reading it the other way shipped
+a defect.** The audit's rule was originally made deliberately *coarser* than the checker's (first
+word, punctuation stripped, no terminator logic) on that reasoning. The result was a rule that
+disagreed with `release-plz.toml` on trailer forms `CONTRIBUTING.md` documents as **correct**:
+`no rows move` and `none, except two rows that merge` are filed as real changes by design, and the
+audit called them declines, so **no trailer text could satisfy both halves** — and once such a
+commit is on `main` the job is red for every open PR until the next release tag. The reverse also
+bit: `none.Tests only.` (a missing space) split to `none.Tests`, which the checker called a decline
+and the audit called a move. The two now agree on the verdict, pinned by
+`test_the_audit_and_the_checker_agree_on_every_documented_form`; what stays independent is that
+this check *renders the changelog through real git-cliff and reads the result*, which is the
+question no vocabulary-comparison test was asking. A disagreement is not a second opinion, it is an
+unsatisfiable build.
+
+The checker is
+`scripts/check_representation_change.py` and the audit is
+`scripts/check_changelog_grouping.py`; the decline vocabulary is pinned against
+`release-plz.toml` and `CONTRIBUTING.md` by tests in
+`tests/python/test_representation_change_trailer.py`, because three copies of one list drift
+silently.
 
 [#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
