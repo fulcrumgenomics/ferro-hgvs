@@ -6325,7 +6325,7 @@ mod tests {
     ///
     /// The stale phrasings are given as digits above **on purpose**: the scan
     /// below reads comment text, so spelling them out here would make this
-    /// comment its own first failure. `claude_md_adjudication_tables` records the
+    /// comment its own first failure. `ruling_citation_currency` records the
     /// same hazard and the same answer — keep the prose clear of the pattern
     /// rather than exempting the file, which would blind the scan to it for good.
     ///
