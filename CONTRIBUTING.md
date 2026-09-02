@@ -367,11 +367,21 @@ adjudications and do not need records.
 - **adjudicated-deviation** — pin it as a deviation via `KNOWN_DIVERGENT_INPUTS`, so a fixed
   deviation cannot rot in the list unnoticed.
 - **undecided** — a first-class state; the generator refuses one that names a governing clause, so
-  an open question cannot smuggle in a ruling nobody made.
+  an open question cannot smuggle in a ruling nobody made. Prefer an honest `undecided` record to
+  no record.
 - **house-choice** — decided, and ours rather than the spec's: a `rulings` record with a
   `house_choice` object, made under rule 5's silent limb or rule 6 of
   `docs/src/reference/normalization-rules.md`, naming no governing and no deviated-from clause;
-  never citable as conformance.
+  never citable as conformance. It must say what was considered and rejected.
+
+**Record what was refuted, not only what was decided.** A measurement that kills a plausible
+belief is worth as much as the ruling itself, because the belief will recur —
+`MIN_SEPARATION_NO_FRAME`'s doc comment in `src/normalize/merge.rs` is a worked example of
+recording such a refutation.
+
+**Cite the clause exactly, and quote it.** Do this in prose comments too: `general.md:33`, not
+"the separation rule". A clause's directory is its jurisdiction — a claim about an `r.` axis needs
+a clause under `RNA/`, since a `DNA/` clause cannot scope `r.`.
 
 #### Never hand-edit `tests/it/clause_ruling_index.rs`
 
