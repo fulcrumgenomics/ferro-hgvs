@@ -287,6 +287,13 @@ pub struct Record {
     /// the source scan in `ruling_citation_currency.rs`, which reads `.rs` files
     /// only. See `every_record_to_record_citation_resolves` there.
     pub rationale: String,
+    /// The record's one-sentence `summary`, verbatim. Required on every
+    /// `decided` record by the fixture generator; `None` on `undecided` ones.
+    ///
+    /// Exposed because `normalization_contract_doc.rs` prints it in the
+    /// contents list and `shadow_spec.rs` transcludes it into the Interpretation
+    /// pages.
+    pub summary: Option<String>,
     /// The descriptions the record declares itself to apply to, verbatim, in the
     /// ledger's own order. Absent or `null` reads as none.
     ///
@@ -603,6 +610,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
 
             let question = required_str(record, "question", &format!("record {id}")).to_string();
             let rationale = required_str(record, "rationale", &format!("record {id}")).to_string();
+            let summary = optional_str(record, "summary", &id).map(str::to_string);
 
             let governing = optional_str(record, "governing", &id);
             let deviates_from: Vec<&str> = match record.get("deviates_from") {
@@ -727,6 +735,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 status,
                 question,
                 rationale,
+                summary,
                 applies_to,
                 equivalence_classes,
                 guard,
