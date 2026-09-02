@@ -469,6 +469,76 @@ test count the script prints is a weaker signal than the manifest check.
 FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
 ```
 
+### Assert the property, not the count
+
+**A guard that pins a number is a change detector for that number.** It is a guard for the
+property only for as long as the two agree, and nothing makes them agree. When they drift, the
+guard follows the number, stays green, and reads as coverage.
+
+Three shapes, in ascending order of how convincing the wrong answer looks.
+
+**1. A count restated instead of imported.** `the_corpus_emits_a_block_past_the_split_cap` in
+`examples/dump_normalized_corpus.rs` used to open `const SPLIT_CAP: u64 = 1024;` and assert the
+corpus builds a block wider than it, while the cap the normalizer applies
+(`MAX_CANONICAL_BLOCK` in `src/normalize/merge.rs`) had been raised to 4096 by #1899. The
+corpus's long cores are `[1024, 1100]` and were chosen — the comment says so — as "the pair a
+change to the cap moves between". The cap moved, both cores landed on the same side, and
+`1100 > 1024` kept the guard green. It even carries a comment instructing the reader to update
+the literal if the constant moves; **that comment is the defect, not a mitigation.** A guard
+that restates the value it guards cannot observe that value changing. Import the constant.
+`dump_normalized_corpus` is a genuine `[[example]]`, so it links the library as an **external
+crate** (`use ferro_hgvs::…`) and can see only the library's `pub` API — **`pub(crate)` is
+unreachable from there.** A private item must be made `pub`, with `#[doc(hidden)]` on the
+re-export to keep it off the public documentation surface; `src/lib.rs`'s `ShuffleDirection`
+re-export is the worked pattern.
+
+**Do not gate such a re-export behind `dev`.** The tree has already decided that, for this very
+constant, and `src/normalize/mod.rs` gives the reason in as many words: "**NOT gated on `dev`**:
+… a constant present in only some builds re-creates that gap for anyone building without the
+feature." A feature gate buys back the documentation surface at the price of reintroducing the
+restated literal wherever the feature is off — which is the failure this shape is about, moved
+rather than removed. Where a gate genuinely is unavoidable the consumer must **refuse** in a build
+that lacks the item rather than report a zero: `partition_blocks_cut` is `#[cfg(debug_assertions)]`
+and `measure_spec_conformance_per_arm.rs` does exactly that.
+
+Making the item `pub` is cheaper than the class of failure it buys out of. Filed as #1925, which
+made `MAX_CANONICAL_BLOCK` `pub` and imported it here.
+
+**2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs` has
+been blind in each of the ways its own header now catalogs, and that header records the
+governing fact: **fixing one blindness does not reveal the next.**
+
+**3. A rule generalised from the one case you reproduced.** #1917 reported an underflow and stated
+the rule as "any reversed range whose span exceeds `window_size`". Measured, the failure is three
+bands in `start - end` against the window: `<= w` fails somewhere else entirely (a backwards
+slice), `(w, 2w]` is the reported underflow, and `> 2w` never failed at all — the fetch bounds
+themselves invert and the provider rejects the read. The rule was wrong in **both** directions,
+and the issue's own two real-corpus rows were in the band that never panicked. One reproducer
+establishes that a defect exists. It does not establish its extent, and the extent is what a fix
+is scoped against.
+
+**Two more ways a number arrives already wrong**, both seen here:
+
+- **Right for a reason that is not the code.** #1917's widest band passed before the fix *and*
+  after it — because `JsonProvider` rejects an inverted read. That is a property of the installed
+  provider, not of the thing under test. A passing case is only evidence once you know what made
+  it pass.
+- **Two confirmations sharing one stale source are one observation.** Two agents "independently
+  confirmed" a set of `merge.rs` line numbers; both had read `main/`'s working tree, ~950 lines
+  stale. Independence is a property of the derivation, not of the number of people who reported it.
+
+**So, when you write a guard:**
+
+- Assert the **property**, in the words you would use to explain it. `longest_block > <the cap the
+  normalizer actually applies>` is a property; `longest > 1024` is a number.
+- If a count is genuinely the right assertion — a census, a ledger cardinality — say what it counts
+  and against which denominator, and pin it somewhere a change to the thing it counts must touch.
+- **Prove the guard can fail.** Sabotage it once, watch it go red, restore. An assertion never
+  observed failing is indistinguishable from one that cannot. The `ORACLE_EXCLUDE` invariants and
+  `issue_1615_denoted_sequence_oracle` are both built this way; imitate them.
+- When you report the number, report what it is made of. "46 checks" and "42 pass, 1 skipping, 3
+  cancelled corpses" describe one run, and only the second is usable.
+
 ### Adding or changing a generator under `examples/`
 
 Generators build the corpora, fixtures and tables the rest of the suite adjudicates
@@ -476,7 +546,8 @@ against, and they share one failure mode: a fallible step whose failure is
 representable as a legitimate value — `unwrap_or_default()`, `else { continue }`, a
 discarded `Result`. The dropped population is never counted, so a partial run and a
 clean run write indistinguishable artifacts. This is the same trap as the
-"a corpus zero is a claim about the corpus, not about the change" rule in `CLAUDE.md`,
+"a corpus zero is a claim about the corpus, not about the change" rule in
+[Assert the property, not the count](#assert-the-property-not-the-count),
 one level down: there the misleading number is *reported*, here it is never computed.
 
 Two rules, with two very different amounts of machinery behind them —
