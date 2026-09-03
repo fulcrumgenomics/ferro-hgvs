@@ -1,7 +1,7 @@
 //! On-demand regeneration of the HGVS spec-normalization fixture.
 //!
 //! `tests/fixtures/grammar/hgvs_spec_normalization.json` is a generated build
-//! artifact, not a committed file (see `CLAUDE.md`): it is produced by the
+//! artifact, not a committed file (see `docs/TESTING.md`): it is produced by the
 //! `generate_spec_fixture` example from the spec submodule, the parser's
 //! behavior, and the curated `hgvs_spec_normalization_overrides.json`. Tracking
 //! it made every parser PR a merge-conflict magnet, so it is regenerated

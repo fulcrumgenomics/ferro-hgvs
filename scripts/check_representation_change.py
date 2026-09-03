@@ -258,8 +258,8 @@ def declines(declaration: str) -> bool:
 #:
 #: This used to be written as "the count must sit immediately before `rows`", which reads
 #: the second form's *denominator* as the count. That made `none. 0 of 950 rows move` --
-#: the form `CONTRIBUTING.md` and `CLAUDE.md` both offer as the way to quantify a zero, and
-#: both state passes -- fire on the 950 and fail the build. The documented form was a merge
+#: the form `CONTRIBUTING.md` offers as the way to quantify a zero, and
+#: states a pass -- fire on the 950 and fail the build. The documented form was a merge
 #: blocker.
 #:
 #: Two lookbehinds carry the distinction, and the second is not redundant:

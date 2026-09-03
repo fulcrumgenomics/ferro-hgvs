@@ -384,7 +384,7 @@
 //! `converged` (`split_two` −1,550, `split_three` −62, `split_more` −2) — and
 //! #1840 and #1704 moved the intronic counter. So `converged` was **9,402** in
 //! the prose and **11,016** in the constant three hundred lines below, which is
-//! the shape this repository's `CLAUDE.md` names: a derived figure quoted
+//! the shape this repository's `CONTRIBUTING.md` names: a derived figure quoted
 //! against a base nobody restates. Quote the deltas, which survived the rebase
 //! unchanged, and re-read the absolutes off [`THREE_PRIME`] rather than from
 //! here.

@@ -151,7 +151,7 @@
 //! # Why the expected line is located rather than written down
 //!
 //! Restating `33` here would make this a change detector for the number, in the
-//! exact way the repository `CLAUDE.md` warns about under "Assert the property.
+//! exact way the repository `CONTRIBUTING.md` warns about under "Assert the property.
 //! Measure the count." — and it would be the *same* number that just went stale,
 //! kept in a second place. The signature phrases are located in the spec on every
 //! run, so the next bump moves both the expectation and the check together, and a

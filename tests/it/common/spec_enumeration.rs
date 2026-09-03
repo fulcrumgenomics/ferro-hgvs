@@ -2,7 +2,7 @@
 //!
 //! `tests/fixtures/grammar/hgvs_spec_enumeration.json` is a generated build
 //! artifact, not a committed file — same contract as
-//! `hgvs_spec_normalization.json` (see `CLAUDE.md`). It is produced by the
+//! `hgvs_spec_normalization.json` (see `docs/TESTING.md`). It is produced by the
 //! `generate_spec_enumeration` example from the spec submodule, ferro's
 //! behaviour, and the curated `hgvs_spec_enumeration_overrides.json`. Tracking
 //! it would make every parser PR a merge-conflict magnet, so it is regenerated

@@ -87,7 +87,7 @@
 //! of `x` is stated by the spec's own tabulation, and `general.md:50` supplies
 //! the case: an `r.` description states those symbols in lower case.
 //!
-//! That matters because a `DNA/` clause cannot scope `r.` (see `CLAUDE.md`,
+//! That matters because a `DNA/` clause cannot scope `r.` (see `CONTRIBUTING.md`,
 //! "Cite the clause exactly"), and `standards.md` is a `background/` document
 //! carrying **both** tables rather than a DNA-only one — so `:47`–`:61`, the
 //! table's rows, is an RNA-jurisdiction citation and not a borrowed DNA one.

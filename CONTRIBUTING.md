@@ -46,6 +46,77 @@ After modifying Python dependencies in `pyproject.toml`, run `uv lock` and commi
 the updated `uv.lock`. CI uses `--locked` and will fail if the lockfile is out of
 sync with `pyproject.toml`.
 
+#### Why `extension-module` is a separate feature
+
+**`extension-module` is a SEPARATE Cargo feature, not part of `python` (#2046).** `pyo3` is
+declared with `features = ["abi3-py310"]`, and `pyo3/extension-module` is pulled in by the
+`extension-module` feature instead.
+
+The split exists because `extension-module` deliberately does *not* link against libpython (the
+CPython symbols resolve against the host interpreter at import time). With it enabled, PyO3 emits
+no libpython link line on Linux/macOS (`is_linking_libpython_for_target` in `pyo3-build-config`),
+so a plain test/bin executable fails to link its undefined Python symbols — which is exactly why
+`src/python.rs`'s pure-Rust `#[cfg(test)]` tests ran nowhere in CI. Keeping `extension-module`
+out of `python` lets `cargo test/nextest --features python --lib` link libpython and actually run
+them; CI does this in the `Python Wheel Test` job (which has a shared-library Python available).
+
+**So every wheel/develop build must ask for `extension-module` BY NAME — `[tool.maturin]
+features` does not supply it for free.** That list in `pyproject.toml` is a **default**, not an
+addition: measured with maturin 1.13.3, a `--features` flag on the maturin command line
+**replaces** it rather than merging with it, so `maturin build --features python` hands cargo
+`--features python` alone and the pyproject entry is never consulted. The entry is therefore
+load-bearing only for builds that pass no `--features` of their own (the PEP 517 backend — `pip
+install .`, `python -m build`, `uv`), and every explicit invocation in this repo names the feature
+itself: `ci.yml`'s "Build release wheel", `release-wheels.yml`'s three `maturin-action` blocks,
+`pyproject.toml`'s two `build-*` tasks, and `CONTRIBUTING.md`.
+
+Do not "simplify" those call sites back to `--features python` on the grounds that the wheel
+still works without it. It does still work — maturin sets `PYO3_BUILD_EXTENSION_MODULE=1`, and
+pyo3 0.28's `is_extension_module()` honours that env var independently of the Cargo feature,
+whose doc comment there calls it *"(deprecated)"*. Measured: wheels built both ways are
+indistinguishable (no libpython link line, 99 undefined `_Py` symbols each). But that makes the
+linkage a property of **which maturin ran**, and `ci.yml` installs an unpinned
+`maturin>=1.0,<2.0` while `release-wheels.yml` takes `maturin-action`'s default — so a maturin
+predating that env var would build a libpython-linked wheel silently. Naming the feature restores
+exactly the cargo feature resolution this repo had before the split, and costs no version floor.
+
+#### Why the binding tests are scoped
+
+The `Python Wheel Test` job reports a **required** status check, and the lib suite is not safe to
+run in one process. `cargo test --features python --lib` runs all 4240 lib tests under libtest's
+thread pool, where `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
+asserts deltas on process-global `AtomicU64` counters (`SEQFIRST_*` in `src/normalize/merge.rs`)
+that any concurrent test reaching `partition_block_for_rule` corrupts, and
+`parallel::tests::test_stress_concurrent_throughput` is a timing test sensitive to
+oversubscription. Measured at `--test-threads=32`: **4 of 6 runs failed** — i.e. an unrelated PR's
+required check flaking. nextest is process-per-test, so the corruption is not expressible at any
+thread count (10/10 green at the same thread count), and the selection keeps the job to the tests
+it exists to run: 10 tests in 0.02s against 4240 in ~14s.
+
+`--no-tests=fail` is the non-vacuity guard, and the other reason this is nextest. A selection
+matching nothing exits **4** here (`error: no tests to run`); `cargo test -- python::tests`
+reports `ok. 0 passed; 4240 filtered out` and exits **0**, so a typo in the filter would silently
+delete the coverage without reddening anything.
+
+**Still use `maturin`, not `cargo build --features python`, for an importable module.** A plain
+`cargo build` produces a cdylib that is not a wheel-ready abi3 extension, and historically dies
+linking on macOS unless `-undefined dynamic_lookup` is passed — PyO3 ships those flags in
+`pyo3_build_config::add_extension_module_link_args()` (Darwin-only) but a crate must call them
+from its own `build.rs`, and this crate has none. Maturin passes them itself. Use
+`cargo check`/`cargo clippy --features python` to verify the bindings compile, and `maturin
+develop --features python` whenever you need a module you can import (e.g. to run
+`pytest tests/python/`).
+
+The commands, verbatim from the former CLAUDE.md:
+
+```bash
+cargo check --features python        # Typecheck the bindings (fast; does NOT link)
+cargo clippy --features python       # Lint the bindings (also does NOT link)
+# Run src/python.rs's own Rust #[test]s (#2046). SCOPED, and nextest not
+# `cargo test` — see "Why the binding tests are scoped" below.
+cargo nextest run --features python --lib --no-tests=fail -E 'test(python::tests::)'
+```
+
 ## Development Workflow
 
 ### Making Changes
@@ -138,6 +209,16 @@ the changelog and nobody is told. CI rejects that combination: a declining
 trailer that also claims `<n> rows move` (or merge/split/respell, for any `n`
 other than zero) fails the check, and the message asks you to say which it is.
 Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
+**The number that counts is the count, never the denominator** —
+`3 rows of 500,004 move`, `3 of 500,004 rows move` and `3 of 500,004 corpus rows move` all disclose
+three moved rows, and the rule reads three from each. It is a tripwire for the phrasing this repo
+actually uses, not a general contradiction detector — the enumerated forms live on
+`MOVEMENT_CLAIM_RE`, and that docstring is the one to extend when a new phrasing appears.
+
+This sentence used to say "the pattern requires the count to sit immediately before `rows`", and
+that was the #1647 defect rather than a description of it: in `0 of 950 rows move` the number
+immediately before `rows` is the **denominator**, so the very example offered here as passing was
+rejected, and the documented form was a merge blocker. Do not restate the rule positionally.
 
 A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
@@ -156,6 +237,15 @@ neighbours are deliberately **not** watched: `src/conformance/`, which is
 measurement and adjudication code that cannot move ferro's output, and
 `src/data/`, whose every measured disclosure also touches `src/reference/` and is
 therefore already covered.
+
+The last two were added by #1853 on measurement rather than on reasoning, and the reasons
+they are the *only* two added are on `WATCHED_PREFIXES` in
+`scripts/check_representation_change.py` — read that docstring before proposing a seventh.
+In short: the v0.13.0 cycle is the one place output movement was measured without relying
+on anyone declaring it, and its 326,404 newly-normalizing rows attribute to one PR touching
+only `src/reference/` and one touching only `src/error_handling/`. `src/conformance/` stays
+out because it cannot move ferro's output, and `src/data/` stays out because every measured
+disclosure that touches it also touches `src/reference/`.
 
 **Indent continuation lines**, as above. Git only folds a multi-line trailer
 value into the trailer when the continuations are whitespace-prefixed: measured
@@ -192,7 +282,7 @@ This is the house form because it has already been got wrong the other way:
 which reads to a consumer as "this lands next cycle" rather than "this is the
 release you are reading", and could not be fixed in the trailer once merged.
 
-Two related habits, from `CLAUDE.md`:
+Two related habits (see [Adjudications](#adjudications) below):
 
 - **"Fixes non-confluence" is not a sufficient description.** Confluence (two
   spellings of one variant agree) and stability (a variant normalizes to what it
@@ -219,9 +309,161 @@ type, so a `fix:` that correctly declined is listed under **Fixed** rather than
 buried in **Other** — a `commit_preprocessor` in `release-plz.toml` neutralizes
 the declining trailer so the commit falls through to its type ([#1557]).
 
+**Why this is enforced rather than encouraged.** The mechanism to route these trailers into the
+changelog landed mid-cycle and was then used **zero** times: across the v0.13.0 cycle 87 commits
+landed carrying no trailer while 46 touched those four directories, so the changelog's
+Representation changes section rendered empty. An empty section looks identical whether it is
+empty because nothing moved or because nobody declared anything, so it went unnoticed for ~90
+commits and the disclosure had to be reconstructed after the fact — normalizing ClinVar, Paraphase
+and CMRG (5,761,302 expressions) through both releases and diffing row by row, which found 577
+stored strings moved and 326,404 inputs newly normalized. None of that was visible from the
+changelog as generated.
+
+**How to measure, if the answer is not obviously `none`.** `examples/dump_normalized_corpus.rs`
+diffs two revisions over a synthetic shape-family corpus (`--out` on each side, then `--compare`);
+read its `--verify-spdi` report to separate "moved" from "denotes different bases". That corpus is
+deliberately enriched for churn-prone shapes, so quote its rate as *of the affected family*, never
+as a repo-wide figure — for consumer impact, normalize a real corpus through both revisions with
+`ferro normalize -i <inputs> --reference <dir> -f tsv` instead.
+
+**The section itself is audited, not just each PR's trailer.** `Changelog grouping audit` renders
+the changelog with the real `release-plz.toml` over `<latest tag>..HEAD` and checks the result
+against the commits: nothing filed under **Representation changes** may open with a decline word,
+nothing that declares a move may be filed elsewhere, and no heading may still carry its `<!-- N -->`
+ordering prefix. It deliberately shares **no code** with the checker — #1555 passed the test written
+to catch it precisely because that test compared the two halves against each other and they were
+wrong together, so a second opinion is only worth having when it is derived differently.
+
+**"Derived differently" means the derivation, not the verdict — and reading it the other way shipped
+a defect.** The audit's rule was originally made deliberately *coarser* than the checker's (first
+word, punctuation stripped, no terminator logic) on that reasoning. The result was a rule that
+disagreed with `release-plz.toml` on trailer forms `CONTRIBUTING.md` documents as **correct**:
+`no rows move` and `none, except two rows that merge` are filed as real changes by design, and the
+audit called them declines, so **no trailer text could satisfy both halves** — and once such a
+commit is on `main` the job is red for every open PR until the next release tag. The reverse also
+bit: `none.Tests only.` (a missing space) split to `none.Tests`, which the checker called a decline
+and the audit called a move. The two now agree on the verdict, pinned by
+`test_the_audit_and_the_checker_agree_on_every_documented_form`; what stays independent is that
+this check *renders the changelog through real git-cliff and reads the result*, which is the
+question no vocabulary-comparison test was asking. A disagreement is not a second opinion, it is an
+unsatisfiable build.
+
+The route that works is not through the template: read the trailer from the raw commit message
+with `git log`, and attach it to the rendered bullet afterwards — which is what
+`check_changelog_grouping.py` already does to attribute trailers, so the script imports its
+`trailer_value` rather than keeping a fourth copy of the column-0 rule.
+
+The checker is
+`scripts/check_representation_change.py` and the audit is
+`scripts/check_changelog_grouping.py`; the decline vocabulary is pinned against
+`release-plz.toml` and `CONTRIBUTING.md` by tests in
+`tests/python/test_representation_change_trailer.py`, because three copies of one list drift
+silently.
+
 [#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
 [#1886]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1886
+
+Two things follow for representation-stability work specifically. The repository's doctrine once
+read as "do not move a normalized output", while the downstream filer has said instability is
+acceptable **provided it is declared a breaking change** — different bars, and `docs/src/reference/normalization-rules.md`
+chooses between them: disclosure is the obligation, so the filer's bar is the project's bar. And
+Mutalyzer is not a spec oracle:
+its normalizer re-derives a description by minimizing a **weighted description length** with
+constants dated 2014, and has no separation rule at all, so a separation disagreement with it is
+two objectives meeting rather than evidence it knows something the spec does not. The full
+forensics are in the `adjudication-precedence-order` record and on `MIN_PIECE_SEPARATION` in `src/normalize/merge.rs`.
+
+### Adjudications
+
+**Policy.** When you decide what the *correct* normalization behaviour is — not how to
+implement it — that decision lands in a committed test or ruling record **in the same PR**, with
+a comment stating the question, the ruling, and the authority. An adjudication that lives only in
+a PR description, an issue comment, or a working document is lost: the next person re-derives it
+from scratch, and often re-derives it differently.
+
+This is cheap because the machinery already exists (the five committed guards are tabulated
+in `docs/TESTING.md`, under "Generated spec fixture"). The policy is about using it consistently, not about building anything.
+
+**What counts as an adjudication:** a ruling that one clause governs another where they conflict;
+a determination that ferro's output is right or wrong against a cited clause; a decision to follow
+or deviate from Mutalyzer; a choice between two competing representations of one variant; or a
+question deliberately left open. Implementation choices, refactors and performance work are not
+adjudications and do not need records.
+
+**Where it goes:**
+
+| the adjudication is about | record it in |
+|---|---|
+| two spec clauses in tension | a `rulings` record in `hgvs_spec_normalization_overrides.json` |
+| two spellings that must converge on one output | an `equivalence_classes` entry + `EQUIVALENCE_CLASS_VERDICTS` |
+| a deliberate, known deviation from the spec's stated form | `KNOWN_DIVERGENT_INPUTS`, which pins it *as* a deviation |
+| a deliberate deviation from Mutalyzer where the spec is silent | a `rulings` record — there is no spec form to diverge *from*, so `KNOWN_DIVERGENT_INPUTS` is the wrong home (see `adjudication-precedence-order`) |
+| a concrete input whose correct output is now settled | an ordinary `tests/it/*` test pinning the exact string |
+
+**State which kind of record it is, because they are not interchangeable:**
+
+- **adjudicated-correct** — pin the exact expected output and cite the clause; a real guard that
+  fails when behaviour regresses away from a decided answer.
+- **adjudicated-deviation** — pin it as a deviation via `KNOWN_DIVERGENT_INPUTS`, so a fixed
+  deviation cannot rot in the list unnoticed.
+- **undecided** — a first-class state; the generator refuses one that names a governing clause, so
+  an open question cannot smuggle in a ruling nobody made. Prefer an honest `undecided` record to
+  no record.
+- **house-choice** — decided, and ours rather than the spec's: a `rulings` record with a
+  `house_choice` object, made under rule 5's silent limb or rule 6 of
+  `docs/src/reference/normalization-rules.md`, naming no governing and no deviated-from clause;
+  never citable as conformance. It must say what was considered and rejected.
+
+**A test that merely pins today's output is not an adjudication record.** It is a change
+detector, and this repo has already been bitten by the difference —
+`pinned_v21_normalization_behavior` compares ferro against itself (see `docs/TESTING.md`, Generated spec fixture,
+on stale-local-artifact detectors). What makes a record an adjudication is the *authority*: an exact
+`file:line` into `assets/hgvs-nomenclature`, a named Mutalyzer measurement, or an explicit
+"undecided, and here is why". Without one, you have frozen the current behaviour including
+whatever is wrong with it.
+
+**Deviating from the reference implementation needs a record, not just a rationale.** Precedence
+is **spec-explicit > Mutalyzer > our judgement**. Where the spec is explicit and Mutalyzer differs,
+that is a deliberate divergence and it gets a record saying so — otherwise the next person
+measures Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
+
+**Record what was refuted, not only what was decided.** A measurement that kills a plausible
+belief is worth as much as the ruling itself, because the belief will recur —
+`MIN_SEPARATION_NO_FRAME`'s doc comment in `src/normalize/merge.rs` is a worked example of
+recording such a refutation.
+
+**Cite the clause exactly, and quote it.** Do this in prose comments too: `general.md:33`, not
+"the separation rule". A clause's directory is its jurisdiction — a claim about an `r.` axis needs
+a clause under `RNA/`, since a `DNA/` clause cannot scope `r.`.
+
+**That check is a whitespace-collapsed substring match, not a byte-for-byte one.** The generator
+joins the cited line range with spaces and collapses runs of whitespace on both sides before
+testing containment. Two consequences follow, and only the first is usually noticed. A quote may
+**span** the cited lines — which is what makes a multi-line range work at all — and re-wrapping the
+spec's prose leaves a citation valid while the clause moving out from under it still fails the
+build. That much is the deliberate trade. What the guard does **not** buy is that a quote is
+reproduced byte-for-byte: one whose only difference from the spec is spacing or a line break
+passes, and citations in this ledger do exactly that. So do not offer the guard as evidence that a
+quote is exact — if a claim rests on exactness, measure it against the spec file rather than
+inferring it from a green build.
+
+
+#### Never hand-edit `tests/it/clause_ruling_index.rs`
+
+The file is committed, so it looks hand-maintainable. It is not: it carries a rendered index of
+every clause the ruling records cite, and `the_rendered_index_is_current` compares that block
+against what the code generates. Editing it by hand is transcription, and transcription of a
+~100-row block is lossy in a way that reads as a small diff — two attempts at it were made here
+and both dropped rows silently.
+
+Capture what the test prints **programmatically** instead. The pattern that works: add a throwaway
+test that writes `render_index()` to a file, run it, restore the source byte-for-byte from a
+pre-edit copy, then splice the generated text in on its `BEGIN`/`END` markers. Nothing is retyped.
+
+Note this is a *different* trap from the gitignored spec artifacts (`docs/TESTING.md`, Generated spec fixture). Those regenerate on
+demand and a stale one fails loudly. This one is committed, so a lossy edit survives review as an
+ordinary diff and only fails on the one assertion that re-renders it.
 
 ### Changelog
 
@@ -303,14 +545,91 @@ test count the script prints is a weaker signal than the manifest check.
 FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
 ```
 
+### Assert the property. Measure the count. Never let a count BE the property
+
+**A guard that pins a number is a change detector for that number.** It is a guard for the
+property only for as long as the two agree, and nothing makes them agree. When they drift, the
+guard follows the number, stays green, and reads as coverage.
+
+Three shapes, in ascending order of how convincing the wrong answer looks.
+
+**1. A count restated instead of imported.** `the_corpus_emits_a_block_past_the_split_cap` in
+`examples/dump_normalized_corpus.rs` used to open `const SPLIT_CAP: u64 = 1024;` and assert the
+corpus builds a block wider than it, while the cap the normalizer applies
+(`MAX_SPLIT_BLOCK` in `src/normalize/merge.rs`, equal to `MAX_CANONICAL_WINDOW`) had been raised to 4096 by #1899. The
+corpus's long cores are `[1024, 1100]` and were chosen — the comment says so — as "the pair a
+change to the cap moves between". The cap moved, both cores landed on the same side, and
+`1100 > 1024` kept the guard green. It even carries a comment instructing the reader to update
+the literal if the constant moves; **that comment is the defect, not a mitigation.** A guard
+that restates the value it guards cannot observe that value changing. Import the constant.
+`dump_normalized_corpus` is a genuine `[[example]]`, so it links the library as an **external
+crate** (`use ferro_hgvs::…`) and can see only the library's `pub` API — **`pub(crate)` is
+unreachable from there.** A private item must be made `pub`, with `#[doc(hidden)]` on the
+re-export to keep it off the public documentation surface; `src/lib.rs`'s `ShuffleDirection`
+re-export is the worked pattern.
+
+**Do not gate such a re-export behind `dev`.** The tree has already decided that, for this very
+constant, and `src/normalize/mod.rs` gives the reason in as many words: "**NOT gated on `dev`**:
+… a constant present in only some builds re-creates that gap for anyone building without the
+feature." A feature gate buys back the documentation surface at the price of reintroducing the
+restated literal wherever the feature is off — which is the failure this shape is about, moved
+rather than removed. Where a gate genuinely is unavoidable the consumer must **refuse** in a build
+that lacks the item rather than report a zero: `partition_blocks_cut` is `#[cfg(debug_assertions)]`
+and `measure_spec_conformance_per_arm.rs` does exactly that.
+
+Making the item `pub` is cheaper than the class of failure it buys out of. Filed as #1925, which
+made `MAX_CANONICAL_BLOCK` `pub` and imported it in that example.
+
+**2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs` has
+been blind in each of the ways its own header now catalogs, and that header records the
+governing fact: **fixing one blindness does not reveal the next.**
+
+Each time, a `0` was available to quote as safety. So before quoting one, **name the property your
+change keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
+claim about the instrument. Report a structural zero *as* structural, in those words.
+
+**3. A rule generalised from the one case you reproduced.** #1917 reported an underflow and stated
+the rule as "any reversed range whose span exceeds `window_size`". Measured, the failure is three
+bands in `start - end` against the window: `<= w` fails somewhere else entirely (a backwards
+slice), `(w, 2w]` is the reported underflow, and `> 2w` never failed at all — the fetch bounds
+themselves invert and the provider rejects the read. The rule was wrong in **both** directions,
+and the issue's own two real-corpus rows were in the band that never panicked. One reproducer
+establishes that a defect exists. It does not establish its extent, and the extent is what a fix
+is scoped against.
+
+**Two more ways a number arrives already wrong**, both seen here:
+
+- **Right for a reason that is not the code.** #1917's widest band passed before the fix *and*
+  after it — because `JsonProvider` rejects an inverted read. That is a property of the installed
+  provider, not of the thing under test. A passing case is only evidence once you know what made
+  it pass.
+- **Two confirmations sharing one stale source are one observation.** Two agents "independently
+  confirmed" a set of `merge.rs` line numbers; both had read `main/`'s working tree, ~950 lines
+  stale. Independence is a property of the derivation, not of the number of people who reported it.
+
+**So, when you write a guard:**
+
+- Assert the **property**, in the words you would use to explain it. `longest_block > <the cap the
+  normalizer actually applies>` is a property; `longest > 1024` is a number.
+- If a count is genuinely the right assertion — a census, a ledger cardinality — say what it counts
+  and against which denominator, and pin it somewhere a change to the thing it counts must touch.
+- **Prove the guard can fail.** Sabotage it once, watch it go red, restore. An assertion never
+  observed failing is indistinguishable from one that cannot. The `ORACLE_EXCLUDE` invariants and
+  `issue_1615_denoted_sequence_oracle` are both built this way; imitate them.
+- When you report the number, report what it is made of. "46 checks" and "42 pass, 1 skipping, 3
+  cancelled corpses" describe one run, and only the second is usable.
+
 ### Adding or changing a generator under `examples/`
+
+In one sentence: a generator must account for what it dropped.
 
 Generators build the corpora, fixtures and tables the rest of the suite adjudicates
 against, and they share one failure mode: a fallible step whose failure is
 representable as a legitimate value — `unwrap_or_default()`, `else { continue }`, a
 discarded `Result`. The dropped population is never counted, so a partial run and a
 clean run write indistinguishable artifacts. This is the same trap as the
-"a corpus zero is a claim about the corpus, not about the change" rule in `CLAUDE.md`,
+"a corpus zero is a claim about the corpus, not about the change" rule in
+[Assert the property. Measure the count. Never let a count BE the property](#assert-the-property-measure-the-count-never-let-a-count-be-the-property),
 one level down: there the misleading number is *reported*, here it is never computed.
 
 Two rules, with two very different amounts of machinery behind them —

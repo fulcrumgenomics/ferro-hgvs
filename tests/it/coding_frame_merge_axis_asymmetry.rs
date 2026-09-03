@@ -81,7 +81,7 @@
 //! * **Neither clause is normative.** `general.md:35` is lowercase prose, and so
 //!   is the `general.md:34` separation rule the `n.`/`g.` axes follow — a census
 //!   of the pinned spec checkout finds an uppercase RFC 2119 keyword in exactly
-//!   one place outside `style.md` (see the repository `CLAUDE.md`). So neither
+//!   one place outside `style.md` (see `docs/READING_THE_SPEC.md`). So neither
 //!   side *requires* anything, and which recommendation ferro honours on a
 //!   frameshifting block is a house-style question the spec leaves open.
 //! * **The nearest record now rules the other way, and it does not reach this
@@ -228,7 +228,7 @@ type Row = (u64, bool, &'static str, &'static str);
 /// side. Measured on this base; see the module docs.
 ///
 /// **These are change detectors, not conformance expectations.** No ruling
-/// blesses any string in this table, and the repository `CLAUDE.md` is explicit
+/// blesses any string in this table, and the repository `CONTRIBUTING.md` is explicit
 /// that pinning today's output is not an adjudication. What the table is *for* is
 /// the cross-axis disagreement it makes visible — 14 of 14, unanimous — and the
 /// two `same_codon == false` rows, which refute the shared-codon explanation of

@@ -1197,7 +1197,7 @@ pub fn run_census(
 ///
 /// It is deliberately a **fraction of the enumeration** rather than a literal: the
 /// literal would be a pinned number nothing keeps in step with the corpus, which
-/// is the change-detector-not-a-guard failure `CLAUDE.md` names.
+/// is the change-detector-not-a-guard failure `CONTRIBUTING.md` names.
 fn max_dropped_designs(designs_considered: usize) -> usize {
     designs_considered / 2
 }

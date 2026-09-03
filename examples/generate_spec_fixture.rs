@@ -313,12 +313,10 @@ mod overrides {
         /// A one-sentence, end-user-facing statement of the ruling, transcluded
         /// into the shadow spec's "Why" blocks so the reasoning is rendered for a
         /// human reader without a second copy of it (the full [`Self::rationale`]
-        /// stays for agents). Optional: a record only needs one once a shadow-spec
-        /// page cites it. The consuming checker
+        /// stays for agents). Required on every `decided` record; `undecided`
+        /// records have no ruling to summarise. The consuming checker
         /// (`tests/it/shadow_spec.rs`) fails a cited ruling that has none.
-        // Deserialized only so `deny_unknown_fields` accepts the ledger; the
-        // shadow-spec checker reads it, this generator does not.
-        #[allow(dead_code)]
+        // Required on a `decided` record; see `validate_ruling_shape`.
         #[serde(default)]
         pub summary: Option<String>,
         /// Row inputs the ruling bears on. Every one must exist as a row.
@@ -1142,6 +1140,30 @@ mod decisions {
             ),
             _ => {}
         }
+        if ruling.status == overrides::RulingStatus::Decided {
+            let Some(summary) = ruling.summary.as_deref().map(str::trim) else {
+                anyhow::bail!(
+                    "{owner}: a `decided` ruling must carry a one-sentence `summary`. The \
+                     contents list of docs/NORMALIZATION_CONTRACT.md and the shadow-spec pages \
+                     print it; an id states the question, not the answer"
+                );
+            };
+            if summary.is_empty() {
+                anyhow::bail!("{owner}: `summary` is empty");
+            }
+            // The prose scanners read `question` and `rationale`, not `summary`,
+            // so a citation here would never be checked against the spec checkout
+            // or the test tree. Keep the field plain.
+            let cites_a_clause = summary.contains(".md:");
+            let cites_a_test = summary.contains(".rs::");
+            if cites_a_clause || cites_a_test {
+                anyhow::bail!(
+                    "{owner}: `summary` contains a `file:line` or `path.rs::name` citation. \
+                     Citations belong in `clauses`, `guard.tests` or `rationale`, where they \
+                     are checked; the summary states the ruling in plain words"
+                );
+            }
+        }
         validate_guard_shape(owner, ruling.guard.as_ref())?;
         Ok(())
     }
@@ -1499,7 +1521,7 @@ mod decisions {
                 deviates_from: deviates_from.iter().map(|c| c.to_string()).collect(),
                 house_choice: None,
                 rationale: "because".to_string(),
-                summary: None,
+                summary: Some("the ruling, stated in one plain sentence.".to_string()),
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
                 guard: Some(guard_citing(&[
@@ -1567,6 +1589,36 @@ mod decisions {
                     .is_ok()
             );
             assert!(validate_ruling_shape("r", &ruling(Decided, &["a.md:1"], None, &[])).is_err());
+        }
+
+        /// A decided record is rendered by id in two places and an id states the
+        /// question, not the answer; the one-sentence `summary` is what a reader
+        /// scanning the contents list gets. Required on `decided`, not on
+        /// `undecided`, which has no ruling to summarise.
+        #[test]
+        fn a_decided_ruling_must_carry_a_plain_summary() {
+            use overrides::RulingStatus::{Decided, Undecided};
+
+            let mut decided = ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+            decided.summary = None;
+            assert!(
+                validate_ruling_shape("r", &decided).is_err(),
+                "a decided record with no summary must be refused"
+            );
+
+            decided.summary = Some("Two adjacent changes are written as one delins.".to_string());
+            assert!(validate_ruling_shape("r", &decided).is_ok());
+
+            // The prose scanners do not read this field, so a citation here would
+            // be unguarded. Refuse the two forms they would otherwise miss.
+            decided.summary = Some("Merged, per general.md:33.".to_string());
+            assert!(validate_ruling_shape("r", &decided).is_err());
+            decided.summary = Some("Pinned by tests/it/foo.rs::bar.".to_string());
+            assert!(validate_ruling_shape("r", &decided).is_err());
+
+            // Undecided records are not required to have one.
+            let open = ruling(Undecided, &["a.md:1", "b.md:2"], None, &[]);
+            assert!(validate_ruling_shape("r", &open).is_ok());
         }
 
         /// The build must refuse a house choice that claims spec authority.

@@ -75,7 +75,7 @@
 //! separated by one or more nucleotides should be described individually and
 //! **not** as a `delins`" — recommends the individual description. It is
 //! lowercase prose and so requires nothing read strictly (the repository
-//! `CLAUDE.md` has the RFC 2119 census); what makes it decisive is that it is the
+//! `docs/READING_THE_SPEC.md` has the RFC 2119 census); what makes it decisive is that it is the
 //! only clause whose preconditions this shape meets. `delins.md:16` cannot apply
 //! (it needs consecutive changed positions) and the codon exception at
 //! `delins.md:18` / `general.md:35` cannot reach a `g.` description at all, since

@@ -219,7 +219,7 @@ impl HouseRule {
 ///
 /// Carrying it as a *record* rather than as a `status` value is deliberate: a
 /// house choice is `decided` — a choice has been made — and the two published
-/// tables (`CLAUDE.md`, `docs/NORMALIZATION_CONTRACT.md`) partition the ledger
+/// tables (`docs/NORMALIZATION_CONTRACT.md`) partition the ledger
 /// by status. A third status would have re-partitioned both and made every
 /// house choice read as a species of open question, which is the opposite of
 /// what it is.
@@ -287,6 +287,13 @@ pub struct Record {
     /// the source scan in `ruling_citation_currency.rs`, which reads `.rs` files
     /// only. See `every_record_to_record_citation_resolves` there.
     pub rationale: String,
+    /// The record's one-sentence `summary`, verbatim. Required on every
+    /// `decided` record by the fixture generator; `None` on `undecided` ones.
+    ///
+    /// Exposed because `normalization_contract_doc.rs` prints it in the
+    /// contents list and `shadow_spec.rs` transcludes it into the Interpretation
+    /// pages.
+    pub summary: Option<String>,
     /// The descriptions the record declares itself to apply to, verbatim, in the
     /// ledger's own order. Absent or `null` reads as none.
     ///
@@ -603,6 +610,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
 
             let question = required_str(record, "question", &format!("record {id}")).to_string();
             let rationale = required_str(record, "rationale", &format!("record {id}")).to_string();
+            let summary = optional_str(record, "summary", &id).map(str::to_string);
 
             let governing = optional_str(record, "governing", &id);
             let deviates_from: Vec<&str> = match record.get("deviates_from") {
@@ -727,6 +735,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 status,
                 question,
                 rationale,
+                summary,
                 applies_to,
                 equivalence_classes,
                 guard,
@@ -766,7 +775,7 @@ pub fn statuses() -> BTreeMap<String, String> {
 // Plain `#[test]`, deliberately **not** inside a `#[cfg(test)] mod tests`: this
 // tree is an integration-test binary, which compiles without `cfg(test)`, so a
 // gated module would never run and would read as coverage it does not provide
-// (see the repository `CLAUDE.md` on committed tests that have never executed).
+// (see the repository `CONTRIBUTING.md` on committed tests that have never executed).
 //
 // A well-formed document plus one mutation per field. The mutations are the
 // point: every one of them used to parse as "field absent", which converts a

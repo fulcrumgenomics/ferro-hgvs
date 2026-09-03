@@ -463,7 +463,7 @@ const GEOMETRY_CORPUS_SIZE: usize = 62_824;
 // test, no corpus build) asserts the pins still sum to at least the former
 // global floors — so coverage is a superset: per-slice floors additionally
 // catch a regression concentrated in one slice. Re-tune with the ignored
-// `report_slice_pins` diagnostic, and heed the census-pin cautions in CLAUDE.md
+// `report_slice_pins` diagnostic, and heed the census-pin cautions in CONTRIBUTING.md
 // ("Assert the property. Measure the count. Never let a count BE the property").
 
 /// Number of slices the geometry corpus's build is partitioned into.
