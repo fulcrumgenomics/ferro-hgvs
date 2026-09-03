@@ -71,7 +71,8 @@ stand.
 
 So a rejected proposal earns a **negative guard**, not an expectation. The spec corpus builds
 210 rows whose only purpose is to catch a frameless separation floor of two — what implementing
-SVD-WG010 looks like from the outside — and asserts `guard_violations == 0` over them, with the
+SVD-WG010 looks like from the outside — and pins `guard_violations` over them (read the pinned count off
+`tests/it/spec_conformance_axis.rs`; it has moved since this was written), with the
 denominator asserted non-zero so `0 of 0` cannot pass as a result. See
 `spec_conformance_axis.rs`.
 
