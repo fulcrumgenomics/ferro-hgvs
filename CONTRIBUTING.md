@@ -211,7 +211,9 @@ other than zero) fails the check, and the message asks you to say which it is.
 Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
 **The number that counts is the count, never the denominator** —
 `3 rows of 500,004 move`, `3 of 500,004 rows move` and `3 of 500,004 corpus rows move` all disclose
-three moved rows, and the rule reads three from each.
+three moved rows, and the rule reads three from each. It is a tripwire for the phrasing this repo
+actually uses, not a general contradiction detector — the enumerated forms live on
+`MOVEMENT_CLAIM_RE`, and that docstring is the one to extend when a new phrasing appears.
 
 This sentence used to say "the pattern requires the count to sit immediately before `rows`", and
 that was the #1647 defect rather than a description of it: in `0 of 950 rows move` the number
@@ -235,6 +237,15 @@ neighbours are deliberately **not** watched: `src/conformance/`, which is
 measurement and adjudication code that cannot move ferro's output, and
 `src/data/`, whose every measured disclosure also touches `src/reference/` and is
 therefore already covered.
+
+The last two were added by #1853 on measurement rather than on reasoning, and the reasons
+they are the *only* two added are on `WATCHED_PREFIXES` in
+`scripts/check_representation_change.py` — read that docstring before proposing a seventh.
+In short: the v0.13.0 cycle is the one place output movement was measured without relying
+on anyone declaring it, and its 326,404 newly-normalizing rows attribute to one PR touching
+only `src/reference/` and one touching only `src/error_handling/`. `src/conformance/` stays
+out because it cannot move ferro's output, and `src/data/` stays out because every measured
+disclosure that touches it also touches `src/reference/`.
 
 **Indent continuation lines**, as above. Git only folds a multi-line trailer
 value into the trailer when the continuations are whitespace-prefixed: measured
@@ -572,6 +583,10 @@ made `MAX_CANONICAL_BLOCK` `pub` and imported it in that example.
 **2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs` has
 been blind in each of the ways its own header now catalogs, and that header records the
 governing fact: **fixing one blindness does not reveal the next.**
+
+Each time, a `0` was available to quote as safety. So before quoting one, **name the property your
+change keys on and show the generator can vary it.** A zero you cannot attribute to the change is a
+claim about the instrument. Report a structural zero *as* structural, in those words.
 
 **3. A rule generalised from the one case you reproduced.** #1917 reported an underflow and stated
 the rule as "any reversed range whose span exceeds `window_size`". Measured, the failure is three
