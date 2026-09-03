@@ -329,7 +329,7 @@ were real disagreements inside ferro rather than noise:
 
 | row | what disagreed | state |
 |---|---|---|
-| #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before `6116f84a` |
+| #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before #1619's fix |
 | #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 (the row it replaced is recorded in #1619) | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
 
 **Both are now green, and that was still not enough — the selection-wide run
@@ -377,8 +377,8 @@ in that module pass — and **nothing new fired**. The 2 survivors are both
 `multi_member_cis_axis::axis_normalized`, which is **not an oracle fire**: it
 fails identically with `FERRO_ASSERT_SEQUENCE` **unset** (measured as a control),
 on a census pin reading `unwindowed: 89` against a pinned `90` while
-`sequence_changed` stays `0`. That is the HEAD-drift this file already documents
-for that pin, and it is orthogonal to arming the flag.
+`sequence_changed` stays `0`. That is the HEAD-drift already recorded against
+that pin, and it is orthogonal to arming the flag.
 
 Three failures, not two — and the third could not have been named by
 either reading above, because the test did not exist when they were taken. #2051
@@ -480,6 +480,6 @@ actually surfaces instead: an `outcome == 'failure'` step writes it to the run's
 
 An oracle fire blocks the merge: the required `Test` context is a rollup whose
 `needs:` list includes `test-oracle` and `sweeps`; read that list from
-`.github/workflows/ci.yml`. `generated-docs` is not in that list and still gates: the
-generators run inside `spec-fixtures`, which `test` and `test-oracle` depend on, so a
-generator failure skips them, and the rollup treats a skip as a failure.
+`.github/workflows/ci.yml`. The spec-fixture generators gate it too, one hop out: they run
+inside `spec-fixtures`, which `test` and `test-oracle` depend on, so a generator failure
+skips them, and the rollup treats a skip as a failure.

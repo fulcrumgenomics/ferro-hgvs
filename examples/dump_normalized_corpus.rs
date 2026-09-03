@@ -176,6 +176,13 @@
 //!
 //!    Add a row; do not increment a number.
 //!
+//!    **The ordinals written inside the generator disagree with each other and with this table, and that
+//!    is settled rather than pending.** `PROTEIN_FAMILIES` calls itself "the fourth instance" and
+//!    `repeat_beside_a_sibling` "the fifth", each counting a chain that omits #1517 and #1917;
+//!    `lone_net_deletion_delins` then declines to claim an ordinal at all, on the stated ground that "a
+//!    third restatement is how that drift got started". Do not renumber them into agreement — that is
+//!    the increment this section forbids. Read those ordinals as prose and this table as the inventory.
+//!
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never

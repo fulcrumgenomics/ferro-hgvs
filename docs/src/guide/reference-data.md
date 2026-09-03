@@ -58,10 +58,7 @@ ferro prepare --output-dir ferro-reference --ensembl \
 
 ## Genomic-parent placements
 
-`ferro prepare` also fetches the data used to project transcript-coordinate variants into a
-genomic parent's own frame.
-
-It also downloads genomic-parent placement data used to project transcript-coordinate variants into a genomic parent's own frame (#480):
+`ferro prepare` also downloads genomic-parent placement data used to project transcript-coordinate variants into a genomic parent's own frame (#480):
 - **RefSeqGene→genome alignments** (`GCF_*_refseqgene_alignments.gff3`, from NCBI's archived `alignments/ARCHIVE/all/` — the feed stopped updating in 2024; latest GRCh38 is the RS-109/p13 snapshot, valid for p14 since primary `NC_` accessions are unchanged) → manifest `refseqgene_alignments`; parsed by `MultiFastaProvider` into per-`NG_` `GenomicPlacement`. The corresponding GRCh37 snapshot (`GCF_000001405.25_105.*`) → manifest `refseqgene_alignments_grch37`, merged with the GRCh38 file so an `NG_` resolves to its build-appropriate placement (#653/#713).
 - **LRG XML** genomic mapping → per-`LRG_` `GenomicPlacement` (parsed on demand).
 

@@ -107,6 +107,16 @@ from its own `build.rs`, and this crate has none. Maturin passes them itself. Us
 develop --features python` whenever you need a module you can import (e.g. to run
 `pytest tests/python/`).
 
+The commands, verbatim from the former CLAUDE.md:
+
+```bash
+cargo check --features python        # Typecheck the bindings (fast; does NOT link)
+cargo clippy --features python       # Lint the bindings (also does NOT link)
+# Run src/python.rs's own Rust #[test]s (#2046). SCOPED, and nextest not
+# `cargo test` — see "Why the binding tests are scoped" below.
+cargo nextest run --features python --lib --no-tests=fail -E 'test(python::tests::)'
+```
+
 ## Development Workflow
 
 ### Making Changes
@@ -343,6 +353,16 @@ silently.
 [#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
 [#1886]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1886
 
+Two things follow for representation-stability work specifically. The repository's doctrine once
+read as "do not move a normalized output", while the downstream filer has said instability is
+acceptable **provided it is declared a breaking change** — different bars, and `docs/src/reference/normalization-rules.md`
+chooses between them: disclosure is the obligation, so the filer's bar is the project's bar. And
+Mutalyzer is not a spec oracle:
+its normalizer re-derives a description by minimizing a **weighted description length** with
+constants dated 2014, and has no separation rule at all, so a separation disagreement with it is
+two objectives meeting rather than evidence it knows something the spec does not. The full
+forensics are in the `adjudication-precedence-order` record and on `MIN_PIECE_SEPARATION` in `src/normalize/merge.rs`.
+
 ### Adjudications
 
 **Policy.** When you decide what the *correct* normalization behaviour is — not how to
@@ -384,6 +404,19 @@ adjudications and do not need records.
   `docs/src/reference/normalization-rules.md`, naming no governing and no deviated-from clause;
   never citable as conformance. It must say what was considered and rejected.
 
+**A test that merely pins today's output is not an adjudication record.** It is a change
+detector, and this repo has already been bitten by the difference —
+`pinned_v21_normalization_behavior` compares ferro against itself (see `docs/TESTING.md`, Generated spec fixture,
+on stale-local-artifact detectors). What makes a record an adjudication is the *authority*: an exact
+`file:line` into `assets/hgvs-nomenclature`, a named Mutalyzer measurement, or an explicit
+"undecided, and here is why". Without one, you have frozen the current behaviour including
+whatever is wrong with it.
+
+**Deviating from the reference implementation needs a record, not just a rationale.** Precedence
+is **spec-explicit > Mutalyzer > our judgement**. Where the spec is explicit and Mutalyzer differs,
+that is a deliberate divergence and it gets a record saying so — otherwise the next person
+measures Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
+
 **Record what was refuted, not only what was decided.** A measurement that kills a plausible
 belief is worth as much as the ruling itself, because the belief will recur —
 `MIN_SEPARATION_NO_FRAME`'s doc comment in `src/normalize/merge.rs` is a worked example of
@@ -392,6 +425,18 @@ recording such a refutation.
 **Cite the clause exactly, and quote it.** Do this in prose comments too: `general.md:33`, not
 "the separation rule". A clause's directory is its jurisdiction — a claim about an `r.` axis needs
 a clause under `RNA/`, since a `DNA/` clause cannot scope `r.`.
+
+**That check is a whitespace-collapsed substring match, not a byte-for-byte one.** The generator
+joins the cited line range with spaces and collapses runs of whitespace on both sides before
+testing containment. Two consequences follow, and only the first is usually noticed. A quote may
+**span** the cited lines — which is what makes a multi-line range work at all — and re-wrapping the
+spec's prose leaves a citation valid while the clause moving out from under it still fails the
+build. That much is the deliberate trade. What the guard does **not** buy is that a quote is
+reproduced byte-for-byte: one whose only difference from the spec is spacing or a line break
+passes, and citations in this ledger do exactly that. So do not offer the guard as evidence that a
+quote is exact — if a claim rests on exactness, measure it against the spec file rather than
+inferring it from a green build.
+
 
 #### Never hand-edit `tests/it/clause_ruling_index.rs`
 
@@ -405,7 +450,7 @@ Capture what the test prints **programmatically** instead. The pattern that work
 test that writes `render_index()` to a file, run it, restore the source byte-for-byte from a
 pre-edit copy, then splice the generated text in on its `BEGIN`/`END` markers. Nothing is retyped.
 
-Note this is a *different* trap from the gitignored spec artifacts above. Those regenerate on
+Note this is a *different* trap from the gitignored spec artifacts (`docs/TESTING.md`, Generated spec fixture). Those regenerate on
 demand and a stale one fails loudly. This one is committed, so a lossy edit survives review as an
 ordinary diff and only fails on the one assertion that re-renders it.
 
@@ -489,7 +534,7 @@ test count the script prints is a weaker signal than the manifest check.
 FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
 ```
 
-### Assert the property, not the count
+### Assert the property. Measure the count. Never let a count BE the property
 
 **A guard that pins a number is a change detector for that number.** It is a guard for the
 property only for as long as the two agree, and nothing makes them agree. When they drift, the
@@ -500,7 +545,7 @@ Three shapes, in ascending order of how convincing the wrong answer looks.
 **1. A count restated instead of imported.** `the_corpus_emits_a_block_past_the_split_cap` in
 `examples/dump_normalized_corpus.rs` used to open `const SPLIT_CAP: u64 = 1024;` and assert the
 corpus builds a block wider than it, while the cap the normalizer applies
-(`MAX_CANONICAL_BLOCK` in `src/normalize/merge.rs`) had been raised to 4096 by #1899. The
+(`MAX_SPLIT_BLOCK` in `src/normalize/merge.rs`, equal to `MAX_CANONICAL_WINDOW`) had been raised to 4096 by #1899. The
 corpus's long cores are `[1024, 1100]` and were chosen — the comment says so — as "the pair a
 change to the cap moves between". The cap moved, both cores landed on the same side, and
 `1100 > 1024` kept the guard green. It even carries a comment instructing the reader to update
@@ -522,7 +567,7 @@ that lacks the item rather than report a zero: `partition_blocks_cut` is `#[cfg(
 and `measure_spec_conformance_per_arm.rs` does exactly that.
 
 Making the item `pub` is cheaper than the class of failure it buys out of. Filed as #1925, which
-made `MAX_CANONICAL_BLOCK` `pub` and imported it here.
+made `MAX_CANONICAL_BLOCK` `pub` and imported it in that example.
 
 **2. A zero whose instrument cannot vary the property.** `examples/dump_normalized_corpus.rs` has
 been blind in each of the ways its own header now catalogs, and that header records the
@@ -561,13 +606,15 @@ is scoped against.
 
 ### Adding or changing a generator under `examples/`
 
+In one sentence: a generator must account for what it dropped.
+
 Generators build the corpora, fixtures and tables the rest of the suite adjudicates
 against, and they share one failure mode: a fallible step whose failure is
 representable as a legitimate value — `unwrap_or_default()`, `else { continue }`, a
 discarded `Result`. The dropped population is never counted, so a partial run and a
 clean run write indistinguishable artifacts. This is the same trap as the
 "a corpus zero is a claim about the corpus, not about the change" rule in
-[Assert the property, not the count](#assert-the-property-not-the-count),
+[Assert the property. Measure the count. Never let a count BE the property](#assert-the-property-measure-the-count-never-let-a-count-be-the-property),
 one level down: there the misleading number is *reported*, here it is never computed.
 
 Two rules, with two very different amounts of machinery behind them —
