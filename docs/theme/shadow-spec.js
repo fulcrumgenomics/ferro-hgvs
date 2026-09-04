@@ -125,6 +125,7 @@
         Array.prototype.forEach.call(h2s, function (h2) {
             var code = h2.querySelector("code");
             if (!code || !CLAUSE_RE.test(code.textContent.trim()) || !h2.id) return;
+            h2.classList.add("ss-clause"); // divider + clause-chip styling
             var token = code.textContent.trim();
             var line = token.slice(token.indexOf(":")); // ":5", ":16-17"
             // title = heading text after the em dash, trimmed
