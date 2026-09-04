@@ -240,7 +240,7 @@
                         btn.title = showLabel;
                         btn.setAttribute("aria-label", showLabel);
                         btn.innerHTML =
-                            'align <span class="ss-align-caret" aria-hidden="true">▸</span>';
+                            'alignment <span class="ss-align-caret" aria-hidden="true">▸</span>';
 
                         var alnRow = document.createElement("tr");
                         alnRow.className = "ss-align-row";

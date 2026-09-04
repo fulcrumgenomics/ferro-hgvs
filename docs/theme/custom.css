@@ -1109,15 +1109,15 @@ nav.ss-onpage-nav a:hover .ss-nav-line { color: #d9eef5; }
     font-size: 0.72rem;
     font-weight: 600;
     line-height: 1.5;
-    color: var(--fg-green);
-    background: #eef7ef;
-    border: 1px solid #bfe3c4;
+    color: #b45309;               /* dark orange text */
+    background: #fdecd8;          /* light orange */
+    border: 1px solid #f0cfa0;
     border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
 }
-.ss-align-toggle:hover { background: var(--fg-green); color: #fff; border-color: var(--fg-green); }
-.ss-align-toggle.ss-open { background: var(--fg-green); color: #fff; border-color: var(--fg-green); }
+.ss-align-toggle:hover { background: #b45309; color: #fff; border-color: #b45309; }
+.ss-align-toggle.ss-open { background: #b45309; color: #fff; border-color: #b45309; }
 
 .content table.ss-examples tr.ss-align-row > td {
     background: #f7f8fb;

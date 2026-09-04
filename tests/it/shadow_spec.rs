@@ -685,9 +685,8 @@ fn shadow_spec_pages_are_current() {
     // the ONLY thing built from these pages and is committed + blessed (BLESS_SHADOW_CORPUS=1).
     let mut corpus: Vec<String> = Vec::new();
 
-    // Biopython-style alignments for each executable example, computed off the committed slice
-    // and served to the page's JS via a blessed sidecar under docs/. Prototype: currently only
-    // the RNA/inversion page is generated, until the visual format is approved.
+    // Biopython-style alignments for every executable example across all pages, computed off the
+    // committed slice and served to the page's JS via a blessed sidecar under docs/.
     let align_provider = MockProvider::from_json(&root.join(SLICE)).ok();
     let mut alignments: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
@@ -857,8 +856,8 @@ fn shadow_spec_pages_are_current() {
                     }
                 }
 
-                // Prototype: a visual alignment for each executable row on the inversion page.
-                if expected.is_some() && rel.ends_with("RNA/inversion.md") {
+                // A visual alignment for each executable row (every page).
+                if expected.is_some() {
                     if let Some(p) = &align_provider {
                         if let Some(al) = build_alignment(&ex.spelling, p) {
                             alignments.entry(ex.spelling.clone()).or_insert(al);
