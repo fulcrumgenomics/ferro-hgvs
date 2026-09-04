@@ -1004,13 +1004,13 @@ details.ss-notes > *:last-child { margin-bottom: 0.8rem; }
 nav.ss-onpage-nav {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.3rem 0.4rem;
+    gap: 0.35rem 0.45rem;
     align-items: baseline;
-    margin: 0 0 1.6rem;
-    padding: 0.7rem 0.8rem;
-    border: 1px solid var(--fg-ghost, #e6e8ea);
+    margin: 0 0 1.8rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #cdd6e4;
     border-radius: 8px;
-    background: #fafbfc;
+    background: #e9edf4;
 }
 nav.ss-onpage-nav .ss-nav-title {
     width: 100%;
@@ -1018,21 +1018,59 @@ nav.ss-onpage-nav .ss-nav-title {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--fg-gray);
-    margin-bottom: 0.15rem;
+    color: #5b6572;
+    margin-bottom: 0.2rem;
 }
 nav.ss-onpage-nav a {
     font-size: 0.8rem;
     text-decoration: none;
     color: var(--fg-pacific);
-    padding: 0.12em 0.5em;
-    border: 1px solid var(--fg-ghost, #e6e8ea);
+    padding: 0.16em 0.6em;
+    border: 1px solid #aeb9cb;
     border-radius: 999px;
-    background: #fff;
+    background: #ffffff;
+    box-shadow: 0 1px 1px rgba(22, 42, 82, 0.06);
     white-space: nowrap;
 }
-nav.ss-onpage-nav a:hover { background: #eef1fb; border-color: #d3daf1; text-decoration: none; }
-nav.ss-onpage-nav a .ss-nav-line { color: var(--fg-gray); font-family: var(--mono-font, monospace); font-size: 0.92em; }
+nav.ss-onpage-nav a:hover {
+    background: var(--fg-pacific);
+    color: #fff;
+    border-color: var(--fg-pacific);
+    text-decoration: none;
+}
+nav.ss-onpage-nav a .ss-nav-line {
+    color: #7a828d;
+    font-family: var(--mono-font, monospace);
+    font-size: 0.92em;
+    font-weight: 600;
+}
+nav.ss-onpage-nav a:hover .ss-nav-line { color: #d9eef5; }
+
+/* Clause section breaks. shadow-spec.js tags each `file.md:lines` heading
+   `.ss-clause`; each one opens with a full-width divider, generous space, and
+   a colored "clause chip" (the leading code span) so the eye catches every
+   section start without the noise of zebra striping. */
+.content h2.ss-clause {
+    margin-top: 3.2rem;
+    padding-top: 1.3rem;
+    border-top: 3px solid var(--fg-pacific);
+    line-height: 1.3;
+}
+.content h2.ss-clause:first-of-type { margin-top: 2rem; }
+.content h2.ss-clause > code:first-child {
+    display: inline-block;
+    background: var(--fg-pacific);
+    color: #fff;
+    font-size: 0.6em;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    padding: 0.2em 0.6em;
+    border-radius: 6px;
+    vertical-align: middle;
+    margin-right: 0.55em;
+    position: relative;
+    top: -0.12em;
+}
 
 /* Compact, balanced example tables. shadow-spec.js tags each example table
    `.ss-examples` and each cell with a column class so widths hold regardless
