@@ -7,25 +7,6 @@ recurring terms.
 
 *RNA twin: [Insertion (`r.`)](../RNA/insertion.md).*
 
-Three ledger records reach this page's clauses. `duplication-must-ranks-the-label-not-the-partition`
-governs the `dup`/`ins` boundary the definition (`insertion.md:5`) and the tandem-duplication Note
-(`insertion.md:17`) draw. `inverted-duplication-is-derived-as-ins-range-inv` governs the
-inverted-duplication Note (`insertion.md:18`). `canonical-form-choice-when-both-legal` governs
-which spelling ferro emits when a payload may be written as literal bases or as a reference-range
-citation (`insertion.md:22-23`). The flanking/order Notes, the 3'rule Note, the separation
-boilerplate and the literal-base Examples carry **no Why block** — the reading is
-CONFIRM-by-inspection against the spec text and the shipped code, not an adjudicated ruling.
-
-Executable rows use `NM_004006.3`, the one transcript in the committed slice. The spec's own
-examples are written on `LRG_199t1`, `NM_004006.2` and on foreign genomic accessions
-(`NC_000023.10`, `NC_000002.11`, `NC_000004.11`, `NC_000006.11`), none of which the slice carries,
-so those rows are parse-only (`—`) — ferro cannot read their bases here. The `NM_004006.3` base
-facts the executable rows rely on are the ones `deletion.md`, `substitution.md` and the RNA twin
-establish: `c.123` is `C` and `c.124` is `A`; `c.5_7` is the run `TTT` (so `c.6` and `c.7` are both
-`T`); `c.5_16` reads `TTTGGTGGGAAG`; the transcript spans `c.-237` … `c.*2697`. Every executable
-`NM_004006.3` row below shows ferro's actual normalized output, verified against the bless
-harness.
-
 ## `insertion.md:5` — definition: inserted, and not a copy of the 5' flank
 
 > Insertion: a sequence change where, compared to the reference sequence, one or more nucleotides are inserted **and** where the insertion is not a copy of a sequence immediately 5'.
@@ -38,7 +19,7 @@ so ferro relabels a duplicating insertion to `dup` rather than leaving it as an 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.3:c.123_124insG` | recommended | self | a genuine single-nucleotide insertion between `c.123` (`C`) and `c.124` (`A`); the inserted `G` copies neither flank, so it is neither a `dup` nor 3'-shiftable — a fixed point |
-| `NM_004006.3:c.6_7insT` | recommended | `NM_004006.3:c.7dup` | the boundary case: the inserted `T` **is** a copy of the `T` at `c.6` immediately 5', so by the definition it is not an insertion — ferro relabels it to the recommended `dup` (`rules::insertion_is_duplication`, reached by `normalize_cds`), landing on the 3'-most `T` of the `c.5_7` run (`c.7`) |
+| `NM_004006.3:c.6_7insT` | recommended | `NM_004006.3:c.7dup` | the boundary case: the inserted `T` **is** a copy of the `T` at `c.6` immediately 5', so by the definition it is not an insertion — ferro relabels it to the recommended `dup`, landing on the 3'-most `T` of the `c.5_7` run (`c.7`) |
 
 ## `insertion.md:15` — the flanking positions must be two *adjacent* nucleotides
 
@@ -73,11 +54,10 @@ than reordered.
 
 Ferro: the `dup`-over-`ins` preference seen from the insertion side — a copy directly
 3'-flanking of its original is spelled `dup`, so a duplicating insertion is relabeled rather than
-kept as an `ins`. `rules::insertion_is_duplication` performs the relabel. The spec's own invalid
-tandem-as-insertion spelling `g.456_457ins123_456` is accession-less here, so it is not
-table-executable, but on a real reference ferro expands the range payload to literal bases, finds
-the payload is a copy of the bases immediately 5', and relabels it `dup`. The inverted-duplication
-sub-bullet (`insertion.md:18`) is worked separately below.
+kept as an `ins`. The spec's own invalid tandem-as-insertion spelling `g.456_457ins123_456` is
+accession-less here, so it is not table-executable, but on a real reference ferro expands the range
+payload to literal bases, finds the payload is a copy of the bases immediately 5', and relabels it
+`dup`. The inverted-duplication sub-bullet (`insertion.md:18`) is worked separately below.
 
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
@@ -101,23 +81,20 @@ from — never `dup`, and never the `dupinv` shorthand, which is refused at pars
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
+> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
 
 </details>
 
-**The inverted-duplication form is not yet derived on the coding axis.** The `ins<range>inv`
-re-spell is wired only in `normalize_genome` (the sole caller of
-`rules::inverted_adjacent_copy_span`); `normalize_cds` has no equivalent, so on the `c.` axis ferro
+**The inverted-duplication form is not yet derived on the coding axis.** On the `c.` axis ferro
 **expands** an already-spelled `ins<range>inv` payload to literal reverse-complement bases rather
-than deriving or preserving the range-inv spelling. The ledger record discloses this gap itself
-("wired only in `normalize_genome`") and names #1946's render stage as the intended fix. The output
-stays literal on `c.` — valid HGVS that re-parses and denotes the same sequence, so the verdict is
-`conformant`, not `bug`.
+than deriving or preserving the range-inv spelling — a known gap, with #2236 tracking the
+render-stage fix. The output is valid HGVS that re-parses and denotes the same sequence, so the
+verdict is `conformant`, not `bug`.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:c.849_850ins850_900inv` | conformant | `NM_004006.3:c.849_850insGGCATAGCTCTTGAATCGAGGCTTAGGGGAAGAAGTTCTCTCATATCCCTG` | executable twin of the spec's inverted-duplication spelling: ferro expands the `850_900inv` payload to literal reverse-complement bases via the `INSERTED_SEQUENCE_EXPANDED` path rather than deriving/preserving the `ins<range>inv` form, because the mint/keep is wired only in `normalize_genome`. Valid HGVS that re-parses (`inverted-duplication-is-derived-as-ins-range-inv`; #1946) |
+| `NM_004006.3:c.849_850ins850_900inv` | conformant | `NM_004006.3:c.849_850insGGCATAGCTCTTGAATCGAGGCTTAGGGGAAGAAGTTCTCTCATATCCCTG` | executable twin of the spec's inverted-duplication spelling: ferro expands the `850_900inv` payload to literal reverse-complement bases rather than deriving/preserving the `ins<range>inv` form. Valid HGVS that re-parses (`inverted-duplication-is-derived-as-ins-range-inv`; #2236) |
 | `NM_004006.2:c.849_850ins850_900inv` | conformant | — | the spec's own accession (inverted copy inserted 5' of the original) — parse-only |
 | `NM_004006.2:c.900_901ins850_900inv` | conformant | — | the spec's own accession (inverted copy inserted 3' of the original) — parse-only |
 | `NM_004006.3:c.850_900dupinv` | refused | — | the `dupinv` shorthand — rejected at parse; `:18` requires the `ins<range>inv` form |
@@ -127,12 +104,9 @@ stays literal on `c.` — valid HGVS that re-parses and denotes the same sequenc
 > - two variants separated by one or more nucleotides should be described individually and **not** as a "delins".<br>
 >   **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins".<br>
 
-Ferro: this is the shared separation/codon clause (`general.md:33`/`:34`), reproduced verbatim
-across nine files. A single `ins` variant has no internal separation, so this Note is boilerplate
-about a *second, separate* variant appearing near the insertion — not about the insertion's own
-grammar. The clause is adjudicated where the merge geometry actually lives (`deletion.md:18-19`,
-`delins.md`), out of this file's scope; nothing in `insertion.md`'s own text bears on it
-differently, so there is no insertion-specific question to re-litigate and no verdict row here.
+Ferro: a single `ins` variant has no internal separation, so this Note is boilerplate about a
+*second, separate* variant appearing near the insertion — not about the insertion's own grammar.
+The merge geometry is adjudicated where it actually lives (`deletion.md:18-19`).
 
 ## `insertion.md:21` — the 3'rule
 
@@ -140,13 +114,11 @@ differently, so there is no insertion-specific question to re-litigate and no ve
 
 Ferro: the 3'rule applies to insertions exactly as to deletions and duplications — an inserted
 sequence that could be written at more than one equivalent position is assigned its most 3'
-placement. There is no exon/exon-junction NOTE on this page (contrast the deletion page's
-`deletion.md:20-22`), so this clause is CONFIRM-by-inspection.
+placement.
 
-A pure-insertion 3'-shift is hard to exhibit on this transcript's homopolymer runs: an inserted
-base that matches an adjacent run base is by definition a copy of its 5' flank, so it is a
-duplication (`insertion.md:17`), not an insertion, and is relabeled `dup` before any
-insertion-level shift can be shown. The executable row below is therefore a fixed-point insertion.
+An inserted base that matches an adjacent run base is by definition a copy of its 5' flank, so it
+is a duplication (`insertion.md:17`), not an insertion — the row below is a fixed-point insertion
+instead.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -177,7 +149,7 @@ not a normalization obligation.
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.3:c.123_124insG` | recommended | self | a literal-base insert — the recommended spelling for a short insert |
-| `NM_004006.2:c.849_850ins858_895` | conformant | — | the spec's own same-reference range-citation payload — parse-only; ferro expands the range to literal bases on a real reference (`canonical-form-choice-when-both-legal`; the range form is what #1946's render stage would restore) |
+| `NM_004006.2:c.849_850ins858_895` | conformant | — | the spec's own same-reference range-citation payload — parse-only; ferro expands the range to literal bases on a real reference (`canonical-form-choice-when-both-legal`; #2236 tracks the render-stage fix that would restore the range form) |
 | `NC_000002.11:g.47643464_47643465ins[NC_000022.10:g.35788169_35788352]` | conformant | — | the spec's cross-reference citation payload — parse-only |
 
 ## `insertion.md:24` — uncertain: the dagger form
@@ -247,7 +219,7 @@ accessions, so they are parse-only; the executable twin below is on the slice ac
 | `NM_004006.2:c.900_901ins850_900inv` | conformant | — | inverted copy inserted 3' of the original — parse-only |
 | `LRG_199t1:c.940_941ins[885_940inv;A;851_883inv]` | conformant | — | inverted copy with an internal `G>A` substitution — parse-only |
 | `NM_004006.2:c.940_941ins[903_940inv;851_885inv]` | conformant | — | inverted copy with an internal deletion (a "hole" in the cited range) — parse-only |
-| `NM_004006.3:c.849_850ins850_900inv` | conformant | `NM_004006.3:c.849_850insGGCATAGCTCTTGAATCGAGGCTTAGGGGAAGAAGTTCTCTCATATCCCTG` | executable twin — ferro expands the range-inv payload to literal reverse-complement bases on the `c.` axis (`inverted-duplication-is-derived-as-ins-range-inv`; #1946) |
+| `NM_004006.3:c.849_850ins850_900inv` | conformant | `NM_004006.3:c.849_850insGGCATAGCTCTTGAATCGAGGCTTAGGGGAAGAAGTTCTCTCATATCCCTG` | executable twin — ferro expands the range-inv payload to literal reverse-complement bases on the `c.` axis (`inverted-duplication-is-derived-as-ins-range-inv`; #2236) |
 
 ## `insertion.md:64-87` — Examples: incomplete descriptions
 
@@ -256,14 +228,10 @@ accessions, so they are parse-only; the executable twin below is on the slice ac
 
 Ferro: the uncertainty forms — a `G` at a parenthesised uncertain position, and runs of
 unspecified `N` bases given either spelled out (`insNNNNN`) or as a repeat count (`insN[5]`,
-`insN[100]`, `insN[(80_120)]`, `insN[?]`). `N` is a legal HGVS symbol (`general.md:47` admits
-IUPAC-IUBMB symbols), so an unspecified insert parses and normalizes as itself, and a parenthesised
-uncertain position is preserved. The spec states `insNNNNN` and `insN[5]` as equivalent
-("alternatively"); ferro rewrites the bracketed exact count to the literal run (the #920 rewrite),
-so `insN[5]` lands on the spec's primary spelling `insNNNNN`. This `NNNNN`≡`N[5]` equivalence is
-stated by the spec but not currently pinned as an `equivalence_classes` entry in the ledger — a
-candidate for one (flagged for the operator). Most spec examples are genomic/foreign, so parse-only;
-the executable twins are on the slice accession.
+`insN[100]`, `insN[(80_120)]`, `insN[?]`). `N` is a legal HGVS symbol, so an unspecified insert
+parses and normalizes as itself, and a parenthesised uncertain position is preserved. The spec
+states `insNNNNN` and `insN[5]` as equivalent ("alternatively"); ferro rewrites the bracketed exact
+count to the literal run, so `insN[5]` lands on the spec's primary spelling `insNNNNN`.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -273,7 +241,7 @@ the executable twins are on the slice accession.
 | `NC_000023.10:g.32717298_32717299insN` | recommended | — | one unspecified nucleotide — parse-only |
 | `NM_004006.2:c.761_762insNNNNN` | recommended | — | spelled-out unspecified 5-mer, the spec's primary spelling — parse-only |
 | `NM_004006.3:c.761_762insNNNNN` | recommended | self | executable twin — the literal run is a fixed point |
-| `NM_004006.3:c.761_762insN[5]` | recommended | `NM_004006.3:c.761_762insNNNNN` | the spec's "alternatively" spelling, rewritten to the literal run (#920) — which is the spec's primary spelling, so recommended |
+| `NM_004006.3:c.761_762insN[5]` | recommended | `NM_004006.3:c.761_762insNNNNN` | the spec's "alternatively" spelling, rewritten to the literal run — which is the spec's primary spelling, so recommended |
 | `NC_000023.10:g.32717298_32717299insN[100]` | recommended | — | 100 unspecified nucleotides via the repeat-count spelling — parse-only |
 | `NC_000023.10:g.32717298_32717299insN[(80_120)]` | recommended | — | 80–120 unspecified nucleotides (uncertain count) — parse-only |
 | `NC_000023.10:g.32717298_32717299insN[?]` | recommended | — | an unknown number of unspecified nucleotides — parse-only |
@@ -284,17 +252,11 @@ the executable twins are on the slice accession.
 > - **`g.?_?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]`**<br>
 >   the insertion of a sequence from the X-chromosome (`NC_000023.10`), maximally involving nucleotides `12345_45678` but certainly nucleotides `23456_34567`, at an unknown position (`g.?_?`) in the genome (see [Uncertain](../uncertain.md)).
 
-Ferro: the doc's single most complex worked form — an entirely unknown insertion site (`g.?_?`)
-combined with a cross-reference payload whose own span is doubly uncertain. It is legal by
-composition of two already-legal conventions (the uncertain-range and cross-reference citations),
-and it **parses**. It carries no accession of its own, so it is not table-executable here; and on a
-real reference ferro's normalizer currently **declines** to expand this exact combination
-(cross-reference payload plus uncertain range), naming its own scope limit ("Expansion currently
-covers g./m./o./c./n./r. axes with simple positive-integer positions or ranges, optionally with a
-trailing `inv` on a range") rather than mis-normalizing. This is the one worked example on the page
-that does not round-trip through the normalizer — a real, locatable implementation gap (no clause
-is in tension; ferro has simply not built the combination). No ledger record names it; flagged for
-the operator as an issue candidate, not a ledger question.
+Ferro: an entirely unknown insertion site (`g.?_?`) combined with a cross-reference payload whose
+own span is doubly uncertain. It is legal by composition of two already-legal conventions and
+**parses**, but on a real reference ferro's normalizer currently declines to expand this exact
+combination (cross-reference payload plus uncertain range) rather than mis-normalizing — the one
+worked example on this page that does not round-trip through the normalizer.
 
 ## `insertion.md:95-101` — Discussion: a single-position insertion is not allowed
 
@@ -344,14 +306,11 @@ dropped fails the same way.
 >     A description using "dup" is not correct since, by definition, a duplication should be **directly 3'-flanking of the original copy** (in tandem).
 >     Note that the description given still makes it clear that the sequence inserted between `g.17` and `g.18` is probably derived from nearby, i.e. positions `g.5` to `g.16`, and thus likely derived from a duplicative event.
 
-Ferro: the worked case of the definition (`insertion.md:5`) and `:17` — a copy present in the
-reference but **not** directly 3'-flanking is an **insertion**, not a duplication, even when it
-plainly derives from a duplicative event. Ferro will not relabel a non-3'-flanking copy as `dup`
-(`rules::insertion_is_duplication` checks only the immediate 5' flank). The final sentence is about
-provenance ("probably derived from"), which no normalizer can recover — the correct description is
-stated flatly as `ins` regardless. The by-range payload (`ins5_16`) versus a literal payload is the
-representation choice `:22-23` leaves open, governed by `canonical-form-choice-when-both-legal`;
-ferro expands the range payload to literal bases on the `c.` axis.
+Ferro: a copy present in the reference but not directly 3'-flanking is an insertion, not a
+duplication, even when it plainly derives from a duplicative event — ferro will not relabel it
+`dup`. The by-range payload (`ins5_16`) versus a literal payload is the representation choice
+`:22-23` leaves open (`canonical-form-choice-when-both-legal`); ferro expands the range payload to
+literal bases on the `c.` axis.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

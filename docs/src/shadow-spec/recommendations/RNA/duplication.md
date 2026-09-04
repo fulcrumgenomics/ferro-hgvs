@@ -7,21 +7,15 @@ conventions, and the recurring terms.
 
 *DNA twin: [Duplication (`c.`/`g.`)](../DNA/duplication.md).*
 
-Two ledger records reach this page's clauses. `inverted-duplication-is-derived-as-ins-range-inv`
-cites `RNA/duplication.md:21` (and `RNA/insertion.md:18`) directly, so it carries `r.` authority on
-its own molecule-native basis; `duplication-must-ranks-the-label-not-the-partition` cites the DNA
-twin `DNA/duplication.md:18`, so on the `r.` axis the MUST it grades rests on the verbatim RNA twin
-`RNA/duplication.md:19` — noted where it applies rather than claimed as an `r.`-jurisdiction ruling.
-The `:16`, `:17`, `:22-25` and the definition/Discussion clauses carry **no Why block** — the
-reading is CONFIRM-by-inspection against the spec text and the shipped code, not an adjudicated
-ruling.
+Two ledger records reach this page. `inverted-duplication-is-derived-as-ins-range-inv` carries
+`r.` authority on its own molecule-native basis (`RNA/duplication.md:21`, `RNA/insertion.md:18`).
+`duplication-must-ranks-the-label-not-the-partition` is grounded on the DNA twin, so on `r.` the
+MUST it grades rests on the verbatim RNA twin at `:19` — noted where it applies rather than
+claimed as its own `r.`-jurisdiction ruling. Other clauses here carry no Why block and are
+CONFIRM-by-inspection against the spec text and the shipped code.
 
-Executable rows use `NM_004006.3`, the one transcript in the committed slice. The spec's own
-examples are written on bare illustrative sequences (`r.7dup`, `r.6_8dup`) and on `LRG_2t1`, which
-the slice does not carry, so those rows are parse-only (`—`) — ferro cannot read their bases here.
-The `NM_004006.3` base facts the executable rows rely on (`r.75_77` is `aaa`; `r.6_8` is `uug` with
-`r.9` = `g`; `r.1470_1478` is `aca` x 3 with `r.1479` = `u`; `r.123` is `c`) are the same ones
-established on `RNA/deletion.md`.
+Executable rows use `NM_004006.3`, the one transcript in the committed slice. Spec examples on
+bare illustrative sequences or on accessions the slice doesn't carry are parse-only (`—`).
 
 ## `duplication.md:5` — definition: a copy inserted directly 3'
 
@@ -34,32 +28,31 @@ description carries only the duplicated range, never the duplicated bases (see `
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.7dup` | recommended | self | single-nucleotide RNA duplication; the 3'-most `u` of the `r.6_7` `uu` pair, so already a fixed point. The spec's own bare example is the accession-less `r.7dup` (`:28-31`) — not table-executable, so shown here on the slice accession |
+| `NM_004006.3:r.7dup` | recommended | self | single-nucleotide RNA duplication; already 3'-most within its run, a fixed point. Shown here on the slice accession since the spec's own example is accession-less |
 
 ## `duplication.md:15` — DNA-level reporting is authoring practice, not a normalizer rule
 
 > all variants **should be** described on the DNA level; descriptions on the RNA and/or protein
 > level may be given in addition.
 
-Ferro: this is guidance to authors about which level(s) to report, not a constraint on how a given
-`r.` description, once written, is normalized. An `r.` description stands on its own.
+Ferro: guidance for authors on which level(s) to report — not a constraint on normalizing an `r.`
+description, which stands on its own.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.7dup` | recommended | self | a lone RNA-level description is fully valid; ferro does not require an accompanying `c.`/`g.` form |
+| `NM_004006.3:r.7dup` | recommended | self | a lone RNA-level description is valid; no accompanying `c.`/`g.` form required |
 
 ## `duplication.md:16` — the range must name two different positions
 
 > `positions_duplicated` should contain **two different positions**, e.g., `123_126`, not `123_123`.
 
-Ferro: rule 2 (lowercase "should"); a same-position range is repaired to the single-position form.
-The `W4003 SinglePositionRange` machinery is axis-general, so it handles an `r.` range identically
-to its `c.` twin.
+Ferro: rule 2 (lowercase "should"); a same-position range is repaired to the single-position form
+— the same machinery as the `c.` axis.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.123dup` | recommended | self | the correct single-position form (`r.123` is `c`, with no `c` run to shift along) |
-| `NM_004006.3:r.123_123dup` | refused | — | same-position range — rejected at parse (`W4003 SinglePositionRange`) in strict mode; lenient repairs to `r.123dup` (`error_mode_tests::w4003_single_position_range_emission` pins the `c.` twin, the machinery is axis-general) |
+| `NM_004006.3:r.123dup` | recommended | self | the correct single-position form — no run to shift along |
+| `NM_004006.3:r.123_123dup` | refused | — | same-position range — rejected at parse (`W4003 SinglePositionRange`) in strict mode; lenient repairs to `r.123dup` |
 
 ## `duplication.md:17` — the range is listed 5' to 3'
 
@@ -86,40 +79,34 @@ admitted only for `o.`/`m.` circular references), so it is refused rather than r
 >       duplication (see [Inversion](inversion.md)).
 
 Ferro: four points. (i) a `dup` is only for a copy directly 3'-flanking the original; (ii) a
-duplicating insertion **must** be relabeled `dup` — ferro collapses `r.X_Yins<5'-flank>` to `dup`
-through the shared canonical-form path (`rules::insertion_is_duplication`, reached by
-`normalize_rna`); (iii) a copy that is *not* directly 3'-flanking is an insertion, not a `dup`
-(worked at `:47-52`); (iv) an inverted duplication is spelled `ins<range>inv`, never `dup` — the
-`dupinv` shorthand is refused at parse.
+duplicating insertion **must** be relabeled `dup`; (iii) a copy that is *not* directly 3'-flanking
+is an insertion, not a `dup` (worked at `:47-52`); (iv) an inverted duplication is spelled
+`ins<range>inv`, never `dup` — the `dupinv` shorthand is refused at parse.
 
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
 > **[duplication-must-ranks-the-label-not-the-partition](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
 >
-> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
+> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum.
 <!-- why:END:duplication-must-ranks-the-label-not-the-partition,inverted-duplication-is-derived-as-ins-range-inv -->
 
 </details>
 
-`duplication-must-ranks-the-label-not-the-partition` cites `DNA/duplication.md:18`; on the `r.`
-axis the same MUST is carried verbatim by `RNA/duplication.md:19`, and a `DNA/` citation cannot
-scope `r.` on its own — the record is surfaced here for its mechanism (the MUST ranks a *label*,
-not a partition), with the `r.`-jurisdiction authority being the RNA twin.
+`duplication-must-ranks-the-label-not-the-partition` is grounded on the DNA twin; on `r.` the same
+MUST is carried verbatim by `:19`, which supplies the `r.`-jurisdiction authority.
 
-**The inverted-duplication form is not yet derived on `r.`** The `ins<range>inv` re-spell is wired
-only in `normalize_genome`; `normalize_rna` has no equivalent, so ferro **preserves** an already
-spelled `r.234_235ins123_234inv` input but does not **mint** it from a reverse-complement literal
-payload on the `r.` axis. The ledger record calls this its "largest known gap" and names #1946's
-render stage as the intended fix. An inverted-dup input whose payload is spelled as literal
-reverse-complement bases therefore stays literal on `r.` — valid HGVS that re-parses, so the
-verdict is `conformant`, not `bug`.
+**The inverted-duplication form is not yet derived on `r.`** Ferro preserves an already-spelled
+`r.234_235ins123_234inv` input but does not mint one from a reverse-complement literal payload on
+this axis — the ledger record calls this its largest known gap, and names #2236 as the intended
+fix. A literal reverse-complement payload therefore stays literal on `r.` — valid HGVS that
+re-parses, so the verdict is `conformant`, not `bug`.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.6_7insu` | recommended | `NM_004006.3:r.7dup` | the spec example-1 NOTE: the duplicating insertion `r.6_7insu` copies the `u` at `r.6` directly 3', so `:19`'s MUST relabels it to the `dup`, landing on the 3'-most `u` (`r.7`). Mirrors `issue_736::rna_insertion_with_u_collapses_to_dup` |
-| `NM_004006.3:r.234_235ins123_234inv` | conformant | `NM_004006.3:r.234_235insguugacauuguucagggcaugaacucuuguggauccuuuuucuuuuggcaguuuuugcccugucaggccuucgaggaggucuaggaggcgccucccauccuguaggucacug` | the spec's own inverted-duplication spelling — an `ins<range>inv`. On a real reference ferro **expands** the range payload to literal reverse-complement bases via `try_expand_rna_ins` rather than preserving the `ins<range>inv` spelling: the derivation that mints/keeps the range-inv form is wired only in `normalize_genome`, so the `r.` axis emits literals (`inverted-duplication-is-derived-as-ins-range-inv`; #1946 names the render-stage fix). Valid HGVS that re-parses and denotes the same sequence, so conformant, not the recommended spelling |
-| `NM_004006.3:r.123_456dupinv` | refused | — | the `dupinv` shorthand — rejected at parse ("Unexpected trailing characters: 'inv'"); `:21` requires the `ins<range>inv` form. Pinned by `reject_dupins`/`recommended_form_pins` |
+| `NM_004006.3:r.6_7insu` | recommended | `NM_004006.3:r.7dup` | the spec example-1 NOTE: the duplicating insertion `r.6_7insu` copies the `u` at `r.6` directly 3', so `:19`'s MUST relabels it to `dup`, landing on the 3'-most copy |
+| `NM_004006.3:r.234_235ins123_234inv` | conformant | `NM_004006.3:r.234_235insguugacauuguucagggcaugaacucuuguggauccuuuuucuuuuggcaguuuuugcccugucaggccuucgaggaggucuaggaggcgccucccauccuguaggucacug` | the spec's own inverted-duplication spelling. Ferro expands the range payload to literal reverse-complement bases rather than preserving `ins<range>inv` — that derivation is wired only for the genomic axis (`inverted-duplication-is-derived-as-ins-range-inv`; tracked as #2236). Valid HGVS that re-parses and denotes the same sequence, so conformant, not the recommended spelling |
+| `NM_004006.3:r.123_456dupinv` | refused | — | the `dupinv` shorthand — rejected at parse; `:21` requires the `ins<range>inv` form |
 
 ## `duplication.md:22-25` — the 3'rule, and the exon/exon-junction exception that does not apply here
 
@@ -130,35 +117,29 @@ verdict is `conformant`, not `bug`.
 >       [Duplications](../DNA/duplication.md)) does not apply when describing variants based on an
 >       RNA reference sequence.
 
-Ferro: the 3'rule itself applies on `r.` exactly as elsewhere, including across single-residue runs
-and tandem repeats — the two executable rows below show each. The NOTE is a second, separate
-instruction — it **switches off** the DNA exon/exon-junction 3'rule exception on the RNA axis, so
-an `r.` duplication must still shift to its 3'-most position even when doing so crosses an intron.
-This is the twin of `RNA/deletion.md:20`.
+Ferro: the 3'rule applies on `r.` as elsewhere, including across single-residue runs and tandem
+repeats. The NOTE switches off the DNA exon/exon-junction 3'rule exception on the RNA axis, so an
+`r.` duplication must still shift to its 3'-most position even across an intron — the twin of
+`RNA/deletion.md:20`.
 
-**Ferro currently gets the second half wrong.** `normalize_rna` (#334) applies the DNA exon/exon
-clamp to `r.` del/dup edits — it never lets a duplication 3'-shift across an exon/exon junction on
-the RNA axis — which is exactly what this NOTE says must not happen. No ledger record governs this
-clause; the nearest record, `exon-junction-dup-converge-from-the-far-side`, decides only the
-far-side pull-back on `c.`/`n.` and rests its own `r.` reach on `general.md:43`, which lists `r.`
-as in-scope and is in tension with this NOTE's flat exclusion of the RNA axis. Filed as
-[#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211). The output is valid HGVS — it
-is the wrong *preference*, not a malformed string — so the verdict is `conformant`, not `bug`.
+**Ferro currently gets this wrong.** It clamps at the exon/exon junction instead of crossing it,
+matching the DNA behavior this NOTE says should not apply here. The output is still valid HGVS —
+a wrong preference, not a malformed string — so the verdict is `conformant`, not `bug`. Filed as
+[#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.76dup` | recommended | `NM_004006.3:r.77dup` | 3'rule over a single-residue stretch: `r.75_77` is `aaa`, so the duplicated `a` lands on `r.77` |
-| `NM_004006.3:r.1470_1472dup` | recommended | `NM_004006.3:r.1476_1478dup` | 3'rule over a tandem repeat: `r.1470_1478` is `aca` x 3 (`r.1479` is `u`), so the duplicated unit lands on the 3'-most copy |
-| `LRG_2t1:r.1034_1036dup` | recommended | — | illustrative junction-crossing form (the exon/exon boundary sits between `r.1035` and `r.1036`, as in `RNA/deletion.md`'s `LRG_2t1` example); on `r.` the 3'rule must cross it. No committed `LRG_2t1` fixture, so parse-only here |
-| `LRG_2t1:r.1033_1035dup` | conformant | — | on `r.` the exon/exon-junction exception should not apply, so the 3'rule requires crossing to `r.1034_1036dup`. Ferro's `normalize_rna` wrongly clamps at the junction and keeps this spelling as a fixed point ([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211)); recommended is the 3'-most-crossing form. Code-derived: no committed `LRG_2t1` fixture exercises this row, and the `c.`/`n.` sibling clamp is pinned in `tests/it/issue_334_exon_junction_exception.rs`, which carries no `r.` del/dup case |
+| `NM_004006.3:r.76dup` | recommended | `NM_004006.3:r.77dup` | 3'rule over a single-residue stretch — the duplicated base lands on the run's 3'-most position |
+| `NM_004006.3:r.1470_1472dup` | recommended | `NM_004006.3:r.1476_1478dup` | 3'rule over a tandem repeat — the duplicated unit lands on the 3'-most copy |
+| `LRG_2t1:r.1034_1036dup` | recommended | — | illustrative junction-crossing form; on `r.` the 3'rule must cross the exon/exon boundary. No committed fixture for this accession — parse-only |
+| `LRG_2t1:r.1033_1035dup` | conformant | — | on `r.` the exon/exon-junction exception should not apply, so the 3'rule requires crossing to `r.1034_1036dup`. Ferro wrongly clamps at the junction and keeps this spelling as a fixed point ([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211)); recommended is the 3'-most-crossing form. Code-derived — no committed fixture for this accession exercises the row |
 
-No executable `NM_004006.3` row can show the wrong behavior: the committed slice is built as a
-single flat exon (`tests/fixtures/shadow_spec/build_fixture.py`), so no `r.` duplication on it can
-reach an exon/exon junction. The clamp is enforced by code and, so far, by no test.
+No executable row on the committed slice can show the wrong behavior — it's built as a single flat
+exon, so no `r.` duplication on it reaches an exon/exon junction.
 
-**Non-confluence.** The pair `{r.1033_1035dup, r.1034_1036dup}` describes one variant but, under the
-current defect, does not converge: ferro treats `r.1033_1035dup` as its own fixed point rather than
-normalizing it to the recommended `r.1034_1036dup`.
+**Non-confluence.** `{r.1033_1035dup, r.1034_1036dup}` describe one variant but do not converge
+under the current defect — ferro treats `r.1033_1035dup` as its own fixed point instead of
+normalizing it to `r.1034_1036dup`.
 
 See also → `RNA/deletion.md:18-20` (the identical NOTE for deletions, same defect shape, #2211).
 
@@ -174,7 +155,7 @@ insertion `r.6_7insu` must be spelled `dup` (the MUST of `:19`).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.7dup` | recommended | self | executable twin of the spec's bare `r.7dup`: `r.7` is the 3'-most `u` of the `r.6_7` `uu` pair, so it is a fixed point (the accession-less spec spelling is not table-executable) |
+| `NM_004006.3:r.7dup` | recommended | self | executable twin of the spec's bare `r.7dup` — already 3'-most, a fixed point (the spec's own spelling is accession-less, not table-executable) |
 | `NM_004006.3:r.6_7insu` | recommended | `NM_004006.3:r.7dup` | the NOTE's forbidden `insu` spelling — relabeled to the recommended `dup` (see `:18-21`); a duplicating insertion is written as a duplication |
 
 ## `duplication.md:32-35` — several nucleotides, and no payload-bearing spelling
@@ -185,12 +166,12 @@ insertion `r.6_7insu` must be spelled `dup` (the MUST of `:19`).
 >   <code class="invalid">r.6_8dupugc</code>, i.e., describe the deleted nucleotide sequence.
 
 Ferro: a plain multi-nucleotide duplication carries only the range, never the duplicated payload
-sequence. `canonicalize_edit` drops an explicit `dup` sequence/length even without a reference.
+sequence.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.6_8dup` | recommended | self | executable twin of the spec's bare `r.6_8dup`: `r.6_8` is `uug`, with `r.9` = `g` and no 3' tandem copy, so it is already 3'-most (the accession-less spec spelling is not table-executable) |
-| `NM_004006.3:r.6_8dupugc` | refused | — | the disallowed payload-bearing spelling — `class="invalid"`; rejected at parse in strict mode; lenient drops the payload and normalizes to `r.6_8dup` (`issue_1615_denoted_sequence_oracle.rs` pins the analogous `NR_TEST.1:r.6_8dupugc` → `r.6_8dup`) |
+| `NM_004006.3:r.6_8dup` | recommended | self | executable twin of the spec's bare `r.6_8dup` — already 3'-most, no tandem copy to shift into (accession-less in the spec, not table-executable) |
+| `NM_004006.3:r.6_8dupugc` | refused | — | the disallowed payload-bearing spelling — `class="invalid"`; rejected at parse in strict mode; lenient drops the payload and normalizes to `r.6_8dup` |
 
 ## `duplication.md:38-46` — Discussion: why not describe a duplication as an insertion
 
@@ -206,9 +187,8 @@ sequence. `canonicalize_edit` drops an explicit `dup` sequence/length even witho
 >       Mechanistically, a duplication is most likely caused by a local event, DNA polymerase
 >       slippage, duplicating a local sequence.
 
-Ferro: rationale prose for the dup-over-ins preference. It states no rule beyond the `:19` MUST
-already covered at `:18-21` (a duplicating insertion is written as a `dup`); nothing here is a
-constraint the normalizer applies separately.
+Ferro: rationale prose for the dup-over-ins preference; states no rule beyond the `:19` MUST
+already covered at `:18-21`.
 
 ## `duplication.md:47-51` — Discussion: a non-tandem duplicative copy is an insertion
 
@@ -221,17 +201,15 @@ constraint the normalizer applies separately.
 >     and `r.18` is probably derived from nearby, i.e. positions `r.5` to `r.16`, and thus likely
 >     derived from a duplicative event.
 
-Ferro: the worked case of `:20` — a copy present in the reference but **not** directly 3'-flanking
-is an **insertion**, not a duplication, even when it plainly derives from a duplicative event. The
-classification is what the spec fixes here; the by-range payload (`ins5_16`) versus a literal
-payload is a representation choice the spec leaves open (`insertion.md:20` admits both), governed
-by `canonical-form-choice-when-both-legal`. Ferro will not relabel a non-3'-flanking copy as `dup`
-(`rules::insertion_is_duplication` checks only the immediate 5' flank) and expands range payloads
-to literal bases on `r.` (`try_expand_rna_ins`) — both conformant.
+Ferro: the worked case of `:20` — a copy present in the reference but not directly 3'-flanking is
+an insertion, not a duplication, even when it plainly derives from a duplicative event. Whether the
+payload is written by range (`ins5_16`) or as literal bases is a representation choice the spec
+leaves open, governed by `canonical-form-choice-when-both-legal`; ferro expands range payloads to
+literal bases on `r.` — both conformant.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_004006.3:r.17_18ins5_16` | conformant | `NM_004006.3:r.17_18insuuuggugggaag` | executable twin of the spec's own answer `r.17_18ins5_16` (accession-less, not table-executable) — an insertion naming its likely source range, **not** a `dup`, because the copy is not directly 3'-flanking. ferro will not relabel a non-3'-flanking copy as `dup`; it does expand the range payload to literal bases via `try_expand_rna_ins`, a representation choice left open by the spec (`insertion.md:20` admits both), governed by `canonical-form-choice-when-both-legal` — valid HGVS that re-parses, so conformant |
+| `NM_004006.3:r.17_18ins5_16` | conformant | `NM_004006.3:r.17_18insuuuggugggaag` | executable twin of the spec's own answer `r.17_18ins5_16` (accession-less, not table-executable) — an insertion naming its likely source range, not a `dup`, since the copy isn't directly 3'-flanking. Ferro expands the range payload to literal bases, a representation choice the spec leaves open, governed by `canonical-form-choice-when-both-legal` — valid HGVS that re-parses, so conformant |
 
 See also → `RNA/deletion.md:18-20` (the twin exon/exon-junction NOTE and the #2211 defect shape),
 `RNA/insertion.md` (the `ins`/`ins<range>inv` forms a non-tandem or inverted copy takes),
