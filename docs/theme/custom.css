@@ -959,7 +959,7 @@ details.ss-why > summary, details.ss-spec > summary {
     cursor: pointer;
     font-size: 0.82rem;
     font-weight: 600;
-    color: var(--fg-gray);
+    color: var(--fg-green);
     list-style: none;
     padding: 0.1rem 0;
     user-select: none;
@@ -988,7 +988,7 @@ details.ss-notes > summary {
     cursor: pointer;
     font-size: 0.82rem;
     font-weight: 600;
-    color: var(--fg-gray);
+    color: var(--fg-green);
     list-style: none;
     padding: 0.55rem 0;
     user-select: none;
@@ -1109,15 +1109,15 @@ nav.ss-onpage-nav a:hover .ss-nav-line { color: #d9eef5; }
     font-size: 0.72rem;
     font-weight: 600;
     line-height: 1.5;
-    color: var(--fg-pacific);
-    background: #eef5f9;
-    border: 1px solid #bcd6e3;
+    color: var(--fg-green);
+    background: #eef7ef;
+    border: 1px solid #bfe3c4;
     border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
 }
-.ss-align-toggle:hover { background: var(--fg-pacific); color: #fff; border-color: var(--fg-pacific); }
-.ss-align-toggle.ss-open { background: var(--fg-pacific); color: #fff; border-color: var(--fg-pacific); }
+.ss-align-toggle:hover { background: var(--fg-green); color: #fff; border-color: var(--fg-green); }
+.ss-align-toggle.ss-open { background: var(--fg-green); color: #fff; border-color: var(--fg-green); }
 
 .content table.ss-examples tr.ss-align-row > td {
     background: #f7f8fb;
