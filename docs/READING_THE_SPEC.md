@@ -46,7 +46,7 @@ alternative description" as a split, `c.[850_869del;874_881del;887_897del;901_90
 deletes 39 bases and inserts one. `:47` recommends the delins: "it is simpler and prevents
 software tools making incorrect predictions for the consequences on protein level". State that
 direction when you cite the passage, and cite the ruling that scopes it,
-`rulings[delins-merge-vs-individual-gap-two-or-more]`.
+`rulings[delins-merge-vs-individual-gap-two-or-more]`. That is the spec preferring the larger form *for this example's stated reasons*, not a general "prefer the larger delins" — the scope is that ruling, nothing wider.
 
 ## A split is rarely unique, which is a stability argument by itself
 
