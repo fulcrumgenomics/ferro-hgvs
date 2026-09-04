@@ -6,7 +6,8 @@ recommendations prefer. Verdicts describe **ferro's output**:
 - **recommended** — ferro's output is the form the recommendations prefer (whether the input was
   already that form, or ferro normalized it there).
 - **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation, with a tracking issue.
+  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
+  issue where one exists.
 - **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
 - **bug** — ferro's output is not valid HGVS (a defect). None on this page.
 
@@ -117,6 +118,32 @@ idempotent.
 
 See also → `substitution.md:15`, `substitution.md:16-18`.
 
+## `substitution.md:39-41` — an IUPAC ambiguity code as the replacing base
+
+> a substitution of the `G` nucleotide at `c.54` (coding DNA reference sequence) by `A`, `C`, or `T`
+
+Ferro: the single replacing base may be an IUPAC ambiguity code, not only `A`/`C`/`G`/`T`; the
+one-for-one substitution shape is unchanged.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NM_004006.3:c.54G>H` | recommended | self | replacement is IUPAC `H` = `A`, `C`, or `T` |
+| `LRG_199t1:c.54G>H` | recommended | — | the spec's own example, on `LRG_199t1` — parse-only here |
+
+## `substitution.md:42-46` — `=` at a position, over the whole sequence, and over a range
+
+> the description `NM_004006.2:c.=` can not be used
+
+Ferro: three `=` notations denote different things and stay distinct — `c.123=` (one position
+screened, unchanged), `c.=` (the *entire* reference sequence analysed, no change found), and a
+range `=` (no variant found across that region). A normalizer must not collapse one into another.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NM_004006.3:c.123=` | recommended | self | one position screened, unchanged (reference `C`) |
+| `NM_004006.3:c.=` | recommended | self | whole-sequence "no change" — a distinct claim from a position `=` |
+| `LRG_199t1:c.94-23_188+33=` | recommended | — | a range `=`: no variant found across the region (exon 3 of _DMD_) — parse-only here |
+
 ## `substitution.md:47-49` — mosaic and chimeric
 
 > a mosaic case where at position
@@ -129,3 +156,71 @@ allele first.
 | `NM_004006.3:c.85=/T>C` | recommended | self | mosaic: reference `=` written first, then `T>C` |
 | `NM_004006.3:c.85=//T>C` | recommended | self | chimeric: a mix of `c.85=` and `c.85T>C` cells |
 | `NM_004006.3:c.85T>C/=` | conformant | self | valid, but `substitution.md:49` writes the reference first; ferro does not yet reorder this to the recommended `c.85=/T>C`. Tracked by [#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034). |
+
+## `substitution.md:57-60` — the parenthesized (predicted) form on the DNA axis
+
+> it should be described as `c.(76A>G)`
+
+Ferro: when only RNA (cDNA) was sequenced, the DNA-level consequence is written parenthesized as
+`c.(76A>G)` (the RNA-level form is `r.76a>g`). Ferro accepts and preserves the parenthesized `c.`
+form.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NM_004006.3:c.(76A>G)` | recommended | self | parenthesized (predicted) substitution on the `c.` axis |
+
+## `substitution.md:61-69` — shortened manuscript notations are not HGVS
+
+> simplified descriptions can be used like
+
+Ferro: the spec frames these as informal shorthand for manuscripts — conditioned on a full,
+unequivocal description existing elsewhere in the publication — not as HGVS. None carries the
+`accession:coordinate` structure, so ferro declines them; that is the expected outcome, not a
+defect.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NM_004006.1 3G>T` | refused | — | manuscript shorthand — no `:` accession structure |
+| `GJB2 76A>C` | refused | — | gene-symbol shorthand — not an accession |
+| `rs2306220 T>C` | refused | — | dbSNP-id shorthand — not an accession |
+| `DXS1219 CA[18];[21]` | refused | — | marker-name shorthand — not an accession |
+
+## `substitution.md:70-79` — promoter variants need a wider reference
+
+> <code class="invalid">NM_004006.1:c.-128354C>T</code> or <code class="invalid">NM_000109.3:c.-401C>T</code> are invalid
+
+Ferro: a `c.` position outside its transcript's own numbered span is not describable against that
+transcript (a reference-bounds fact, not a parse fact); describe the variant against a
+genomic-with-transcript-coordinates reference or a plain genomic `g.` reference instead. These
+escape forms are valid HGVS that ferro accepts.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NC_000023.10(NM_004006.1):c.-128354C>T` | recommended | — | genomic reference carrying transcript coordinates — parse-only here |
+| `NC_000023.10:g.33357783G>A` | recommended | — | plain genomic reference (chrX, hg19) — parse-only here |
+| `L01538.1:g.1407C>T` | recommended | — | a genomic reference containing the promoter region — parse-only here |
+
+## `substitution.md:80-96` — polymorphism slash, and two tail Q&As ruled elsewhere
+
+> No, all substitutions are described as `NM_004006.1:c.76A>G`
+
+Ferro: the historical "polymorphism" slash `c.76A/G` is not valid HGVS — the only conformant form
+is `A>G`, and ferro rejects the slash at parse. The two Q&As that follow restate rules already on
+this page: the di-nucleotide `NG_012232.1:g.12GC>TG` is a multi-base substitution written as a
+delins (`substitution.md:15`), and the _BRCA1_ `c.[2077G>A;2077_2078insTA]` → `c.2077delinsATA`
+answer — whose `:96` NOTE records that the passage permitting the split spelling was removed — is
+the separation-zero merge of two members that both consume reference bases (`substitution.md:32`).
+The dinucleotide Q&A also carries a second, distinct rule: when the two variants' **phase is
+unavailable**, the spec writes them with the `(;)` unknown-phase separator
+(`NG_012232.1:g.12G>T(;)13C>G`, `substitution.md:91`) rather than a delins — a different
+situation from the known-phase dinucleotide above, and one ferro parses and preserves.
+
+| Input | Verdict | Normalizes to | Notes |
+|---|---|---|---|
+| `NM_004006.3:c.76A>G` | recommended | self | the correct substitution form |
+| `NM_004006.3:c.76A/G` | refused | — | the disallowed "polymorphism" slash — rejected at parse |
+| `NG_012232.1:g.12GC>TG` | refused | — | di-nucleotide substitution — use `g.12_13delinsTG` (`substitution.md:15`); parse-only here |
+| `NG_012232.1:g.12G>T(;)13C>G` | recommended | — | the unknown-phase form: two substitutions whose phase is unavailable, written with the `(;)` separator (`substitution.md:91`) rather than a delins; ferro parses and preserves it (parse-only here) |
+| `NM_007294.3:c.2077delinsATA` | recommended | — | the _BRCA1_ Q&A's correct form; the split `c.[2077G>A;2077_2078insTA]` merges to it (`substitution.md:32`) — parse-only here |
+
+See also → `substitution.md:15`, `substitution.md:32`.
