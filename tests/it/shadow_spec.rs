@@ -26,6 +26,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use ferro_hgvs::conformance::completeness::CaptureLedger;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::reference::mock::MockProvider;
@@ -63,22 +64,31 @@ fn collapse(s: &str) -> String {
 const CONTRACT_URL: &str =
     "https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md";
 
-/// Ledger ruling ids -> `summary` (None where the record has no summary yet).
+/// Ledger ruling ids -> the one-line text a "Why" block transcludes (None where the record
+/// has none yet). A `decided` (or `house_choice`) record states its ruling in `summary`; an
+/// `undecided` record has no ruling to summarise — the ledger convention forbids a `summary`
+/// there — so its Why block transcludes the open `question` instead.
 fn ledger_summaries() -> BTreeMap<String, Option<String>> {
     let text = read(&repo_root().join(LEDGER));
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse ledger json");
     let mut out = BTreeMap::new();
     for r in v["rulings"].as_array().expect("rulings array") {
         let id = r["id"].as_str().expect("ruling id").to_string();
-        let summary = r["summary"].as_str().map(|s| s.to_string());
-        out.insert(id, summary);
+        let field = if r["status"].as_str() == Some("undecided") {
+            "question"
+        } else {
+            "summary"
+        };
+        let text = r[field].as_str().map(|s| s.to_string());
+        out.insert(id, text);
     }
     out
 }
 
 /// The rendered "Why" body for a comma-separated list of ruling ids: one blockquote line
-/// per ruling, each carrying the ledger's own `summary` and a link to the full record.
-/// Returns `Err(id)` for the first cited id that is missing or has no summary.
+/// per ruling, each carrying the ledger's own text (a decided record's `summary`, or an
+/// undecided record's `question`) and a link to the full record. Returns `Err(id)` for the
+/// first cited id that is missing or has no such text.
 fn render_why_body(
     ids: &[String],
     summaries: &BTreeMap<String, Option<String>>,
@@ -319,27 +329,48 @@ fn render_alignment(del: &[char], ins: &[char], left: &str, right: &str) -> serd
 /// Build a biopython-style 3-line alignment for one example spelling, computed from its SPDI
 /// against the committed slice. Returns `None` for inputs that do not resolve on the slice
 /// (foreign accessions, parse-only rows) or that denote no change.
+/// Build a visual alignment for one executable row.
+///
+/// Returns `Ok(Some(_))` when an alignment was produced, `Ok(None)` when there is legitimately
+/// nothing to show, and `Err(reason)` only for a genuine failure the caller must account for
+/// rather than silently drop.
+///
+/// "Nothing to show" is any input SPDI cannot denote a single edit interval for — a `p.`
+/// description, an allele, a splice/uncertain/identity edit, an `N`-unit repeat — plus an identity
+/// edit whose deletion equals its insertion. These have no alignment by construction. A genuine
+/// failure is a sequence-lookup error: the input *did* resolve to an SPDI, so the slice is supposed
+/// to serve its flanks, and a miss there is a silently-absent alignment the sidecar must not hide.
 fn build_alignment<P: ReferenceProvider + ?Sized>(
     input: &str,
     provider: &P,
-) -> Option<serde_json::Value> {
-    let variant = parse_hgvs(input).ok()?;
-    let spdi = hgvs_to_spdi(&variant, provider).ok()?;
+) -> Result<Option<serde_json::Value>, String> {
+    let variant = parse_hgvs(input).map_err(|e| format!("parse failed: {e}"))?;
+    // A protein description has no SPDI by design, so there is nothing to align — not a failure.
+    if input.contains(":p.") {
+        return Ok(None);
+    }
+    // Inputs SPDI cannot denote (alleles, splice, uncertain positions, `=`, `N`-unit repeats) have
+    // no single edit interval to align, so they are "nothing to show", not a failure.
+    let Ok(spdi) = hgvs_to_spdi(&variant, provider) else {
+        return Ok(None);
+    };
     let is_rna = input.contains(":r.");
     let del: Vec<char> = align_cast(&spdi.deletion, is_rna).chars().collect();
     let ins: Vec<char> = align_cast(&spdi.insertion, is_rna).chars().collect();
     if del == ins {
-        return None; // identity — nothing to show
+        return Ok(None); // identity — nothing to show
     }
 
     let seq = &spdi.sequence;
-    let seq_len = provider.get_sequence_length(seq).ok()?;
+    let seq_len = provider
+        .get_sequence_length(seq)
+        .map_err(|e| format!("get_sequence_length({seq}) failed: {e}"))?;
     let pos = spdi.position;
     let del_len = del.len() as u64;
     let left = align_cast(
         &provider
             .get_sequence(seq, pos.saturating_sub(ALIGN_FLANK), pos)
-            .ok()?,
+            .map_err(|e| format!("left flank of {seq} failed: {e}"))?,
         is_rna,
     );
     // Right flank, clamped to the sequence end: an edit ending exactly at the 3' end has an
@@ -347,12 +378,17 @@ fn build_alignment<P: ReferenceProvider + ?Sized>(
     let rstart = pos + del_len;
     let rend = (rstart + ALIGN_FLANK).min(seq_len);
     let right = if rend > rstart {
-        align_cast(&provider.get_sequence(seq, rstart, rend).ok()?, is_rna)
+        align_cast(
+            &provider
+                .get_sequence(seq, rstart, rend)
+                .map_err(|e| format!("right flank of {seq} failed: {e}"))?,
+            is_rna,
+        )
     } else {
         String::new()
     };
 
-    Some(render_alignment(&del, &ins, &left, &right))
+    Ok(Some(render_alignment(&del, &ins, &left, &right)))
 }
 
 /// Bless (`BLESS_SHADOW_CORPUS=1`) or check a committed, generated artifact: on bless, write
@@ -683,13 +719,19 @@ fn shadow_spec_pages_are_current() {
     let mut norm_crosschecked = 0usize;
     // The single shadow-spec example corpus: one JSONL row per example, in page order. It is
     // the ONLY thing built from these pages and is committed + blessed (BLESS_SHADOW_CORPUS=1).
+    // Every example yields exactly one row, so the ledger below has no drops — it is here to
+    // refuse an empty pass and to keep both blessed artifacts on the same accounting discipline.
     let mut corpus: Vec<String> = Vec::new();
+    let mut corpus_ledger = CaptureLedger::new("shadow-spec corpus rows");
 
-    // Biopython-style alignments for each executable example, computed off the committed slice
-    // and served to the page's JS via a blessed sidecar under docs/. Prototype: currently only
-    // the RNA/inversion page is generated, until the visual format is approved.
+    // Biopython-style alignments for every executable example across all pages, computed off the
+    // committed slice and served to the page's JS via a blessed sidecar under docs/. An executable
+    // row that legitimately has nothing to show (a protein axis with no SPDI, or an identity edit)
+    // is a success of the alignment step; only a genuine failure — an unexpected parse, SPDI, or
+    // sequence-lookup error — is a drop, and finish() below refuses to bless a partial sidecar.
     let align_provider = MockProvider::from_json(&root.join(SLICE)).ok();
     let mut alignments: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut align_ledger = CaptureLedger::new("shadow-spec alignments");
 
     for page in &pages {
         let rel = page.strip_prefix(&shadow_root).unwrap();
@@ -857,11 +899,18 @@ fn shadow_spec_pages_are_current() {
                     }
                 }
 
-                // Prototype: a visual alignment for each executable row on the inversion page.
-                if expected.is_some() && rel.ends_with("RNA/inversion.md") {
+                // A visual alignment for each executable row (every page). Route the outcome
+                // through the ledger: a produced alignment or a legitimate "nothing to show" is a
+                // success; a genuine error is a drop that finish() will refuse to bless past.
+                if expected.is_some() {
                     if let Some(p) = &align_provider {
-                        if let Some(al) = build_alignment(&ex.spelling, p) {
-                            alignments.entry(ex.spelling.clone()).or_insert(al);
+                        match build_alignment(&ex.spelling, p) {
+                            Ok(Some(al)) => {
+                                align_ledger.record_success();
+                                alignments.entry(ex.spelling.clone()).or_insert(al);
+                            }
+                            Ok(None) => align_ledger.record_success(),
+                            Err(reason) => align_ledger.record_drop(ex.spelling.clone(), reason),
                         }
                     }
                 }
@@ -879,6 +928,7 @@ fn shadow_spec_pages_are_current() {
                     ex.verdict,
                     norm_json,
                 ));
+                corpus_ledger.record_success();
             }
 
             // 4. coverage (reported, not gated)
@@ -916,6 +966,12 @@ fn shadow_spec_pages_are_current() {
         );
     }
 
+    // Account for the corpus population before writing it: refuse to bless a partial (or empty)
+    // pass rather than let one write output indistinguishable from a complete run.
+    if let Err(shortfall) = corpus_ledger.finish() {
+        errors.push(format!("shadow-spec corpus: {shortfall}"));
+    }
+
     // Committed + blessed corpus: BLESS_SHADOW_CORPUS=1 rewrites it, otherwise it must match.
     let corpus_path = root.join(CORPUS);
     let rendered = if corpus.is_empty() {
@@ -933,6 +989,12 @@ fn shadow_spec_pages_are_current() {
     // it stale. (In practice the slice always loads — `slice_normalizer` panics above if it does
     // not — but do not couple the sidecar's verdict to that.)
     if align_provider.is_some() {
+        // Account for the alignment population before writing the sidecar: a genuine
+        // alignment failure is a drop finish() refuses to bless past, so a partial sidecar
+        // cannot masquerade as a complete one.
+        if let Err(shortfall) = align_ledger.finish() {
+            errors.push(format!("shadow-spec alignments: {shortfall}"));
+        }
         let align_path = root.join(ALIGNMENTS);
         let align_rendered =
             serde_json::to_string_pretty(&alignments).expect("serialize alignments") + "\n";
