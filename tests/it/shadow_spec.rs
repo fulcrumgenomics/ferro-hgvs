@@ -29,7 +29,8 @@ use std::path::{Path, PathBuf};
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::reference::mock::MockProvider;
-use ferro_hgvs::{parse_hgvs, MultiFastaProvider, NormalizeConfig, Normalizer};
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{parse_hgvs, MultiFastaProvider, NormalizeConfig, Normalizer, ReferenceProvider};
 
 const SHADOW_ROOT: &str = "docs/src/shadow-spec";
 const SPEC_ROOT: &str = "assets/hgvs-nomenclature/docs";
@@ -41,6 +42,8 @@ const SLICE: &str = "tests/fixtures/shadow_spec/transcripts.json";
 /// The single shadow-spec example corpus — committed + blessed, generated from the pages.
 /// Kept out of `docs/src/` so mdBook does not try to render it.
 const CORPUS: &str = "tests/fixtures/shadow_spec/corpus.jsonl";
+/// Blessed per-input alignment sidecar, served to the page JS by mdBook (kept in `docs/src`).
+const ALIGNMENTS: &str = "docs/src/shadow-spec/alignments.json";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -204,6 +207,174 @@ fn parse_norm(cell: &str) -> Norm {
         return Norm::To(tok);
     }
     Norm::To(t.trim_start_matches('→').trim().to_string())
+}
+
+/// Flank width (bases each side) shown around an edit in a shadow-spec alignment.
+const ALIGN_FLANK: u64 = 12;
+/// Edited spans wider than this are windowed to head + ellipsis + tail.
+const ALIGN_WINDOW_MAX: usize = 40;
+/// Bases kept at each end of a windowed edit.
+const ALIGN_WINDOW_KEEP: usize = 15;
+
+/// Render a base string in the axis's own casing: RNA lowercase with `u`, DNA uppercase.
+fn align_cast(s: &str, is_rna: bool) -> String {
+    if is_rna {
+        s.chars()
+            .map(|c| match c {
+                'T' | 't' => 'u',
+                o => o.to_ascii_lowercase(),
+            })
+            .collect()
+    } else {
+        s.to_ascii_uppercase()
+    }
+}
+
+/// Window a padded allele to `head … tail` when it exceeds the cap; else return it whole.
+fn align_window(chars: &[char]) -> String {
+    if chars.len() > ALIGN_WINDOW_MAX {
+        let head: String = chars[..ALIGN_WINDOW_KEEP].iter().collect();
+        let tail: String = chars[chars.len() - ALIGN_WINDOW_KEEP..].iter().collect();
+        format!("{head} … {tail}")
+    } else {
+        chars.iter().collect()
+    }
+}
+
+/// Per-column identity marker for two equal-length spans: `|` where the base is unchanged
+/// (same reference position before and after the edit), a space where it changed.
+fn align_connector(a: &[char], b: &[char]) -> String {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| if x == y { '|' } else { ' ' })
+        .collect()
+}
+
+/// The pure formatting half of [`build_alignment`]: given the already-cast reference and
+/// alternate alleles and their flanks, produce the 3-line alignment JSON
+/// (`ref` / `connector` / `alt`, plus the edited-column span `editStart`/`editEnd` and a
+/// size `note`). Split out from the provider I/O so it can be unit-tested against
+/// hand-computed expectations without a reference. Honest by construction: the connector
+/// marks per-column identity only for equal-length edits; a length-changing edit has no
+/// per-base correspondence across the changed span, so its connector there is blank.
+fn render_alignment(del: &[char], ins: &[char], left: &str, right: &str) -> serde_json::Value {
+    let equal = del.len() == ins.len();
+    let width = del.len().max(ins.len());
+    // Pad both alleles to a common width with `-` so the flanks line up on both rows.
+    let pad = |bases: &[char]| -> Vec<char> {
+        bases
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n('-', width - bases.len()))
+            .collect()
+    };
+    let ref_full = pad(del);
+    let alt_full = pad(ins);
+    let windowed = width > ALIGN_WINDOW_MAX;
+
+    let ref_edit = align_window(&ref_full);
+    let alt_edit = align_window(&alt_full);
+    let connector_edit: String = if !equal {
+        " ".repeat(ref_edit.chars().count())
+    } else if !windowed {
+        align_connector(&ref_full, &alt_full)
+    } else {
+        // Head and tail columns correspond position-for-position; the middle is elided.
+        let n = ALIGN_WINDOW_KEEP;
+        let head = align_connector(&ref_full[..n], &alt_full[..n]);
+        let tail = align_connector(
+            &ref_full[ref_full.len() - n..],
+            &alt_full[alt_full.len() - n..],
+        );
+        format!("{head}   {tail}") // three columns under " … "
+    };
+
+    let note = if equal {
+        let changed = del.iter().zip(ins).filter(|(r, a)| r != a).count();
+        format!("{width} nt · {changed} changed")
+    } else if del.is_empty() {
+        format!("insertion · {} nt", ins.len())
+    } else if ins.is_empty() {
+        format!("deletion · {} nt", del.len())
+    } else {
+        format!("delins · {} → {} nt", del.len(), ins.len())
+    };
+
+    let edit_start = left.chars().count();
+    let edit_end = edit_start + ref_edit.chars().count();
+    serde_json::json!({
+        "ref": format!("{left}{ref_edit}{right}"),
+        "connector": format!(
+            "{}{connector_edit}{}",
+            "|".repeat(edit_start),
+            "|".repeat(right.chars().count())
+        ),
+        "alt": format!("{left}{alt_edit}{right}"),
+        "editStart": edit_start,
+        "editEnd": edit_end,
+        "note": note,
+    })
+}
+
+/// Build a biopython-style 3-line alignment for one example spelling, computed from its SPDI
+/// against the committed slice. Returns `None` for inputs that do not resolve on the slice
+/// (foreign accessions, parse-only rows) or that denote no change.
+fn build_alignment<P: ReferenceProvider + ?Sized>(
+    input: &str,
+    provider: &P,
+) -> Option<serde_json::Value> {
+    let variant = parse_hgvs(input).ok()?;
+    let spdi = hgvs_to_spdi(&variant, provider).ok()?;
+    let is_rna = input.contains(":r.");
+    let del: Vec<char> = align_cast(&spdi.deletion, is_rna).chars().collect();
+    let ins: Vec<char> = align_cast(&spdi.insertion, is_rna).chars().collect();
+    if del == ins {
+        return None; // identity — nothing to show
+    }
+
+    let seq = &spdi.sequence;
+    let seq_len = provider.get_sequence_length(seq).ok()?;
+    let pos = spdi.position;
+    let del_len = del.len() as u64;
+    let left = align_cast(
+        &provider
+            .get_sequence(seq, pos.saturating_sub(ALIGN_FLANK), pos)
+            .ok()?,
+        is_rna,
+    );
+    // Right flank, clamped to the sequence end: an edit ending exactly at the 3' end has an
+    // empty flank rather than a dropped alignment (the 5' end is symmetric via saturating_sub).
+    let rstart = pos + del_len;
+    let rend = (rstart + ALIGN_FLANK).min(seq_len);
+    let right = if rend > rstart {
+        align_cast(&provider.get_sequence(seq, rstart, rend).ok()?, is_rna)
+    } else {
+        String::new()
+    };
+
+    Some(render_alignment(&del, &ins, &left, &right))
+}
+
+/// Bless (`BLESS_SHADOW_CORPUS=1`) or check a committed, generated artifact: on bless, write
+/// `rendered` to `path`; otherwise push a stale-artifact error when the on-disk bytes differ.
+fn bless_or_check(path: &Path, label: &str, rendered: &str, bless: bool, errors: &mut Vec<String>) {
+    if bless {
+        std::fs::write(path, rendered).unwrap_or_else(|e| panic!("write {label}: {e}"));
+        eprintln!(
+            "shadow-spec: blessed {label} ({} lines)",
+            rendered.lines().count()
+        );
+    } else {
+        let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+        if on_disk != rendered {
+            errors.push(format!(
+                "{label} is stale ({} committed lines vs {} rendered) — regenerate with \
+                 BLESS_SHADOW_CORPUS=1",
+                on_disk.lines().count(),
+                rendered.lines().count()
+            ));
+        }
+    }
 }
 
 struct Anchor {
@@ -514,6 +685,12 @@ fn shadow_spec_pages_are_current() {
     // the ONLY thing built from these pages and is committed + blessed (BLESS_SHADOW_CORPUS=1).
     let mut corpus: Vec<String> = Vec::new();
 
+    // Biopython-style alignments for each executable example, computed off the committed slice
+    // and served to the page's JS via a blessed sidecar under docs/. Prototype: currently only
+    // the RNA/inversion page is generated, until the visual format is approved.
+    let align_provider = MockProvider::from_json(&root.join(SLICE)).ok();
+    let mut alignments: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
     for page in &pages {
         let rel = page.strip_prefix(&shadow_root).unwrap();
         let spec_dir_rel = rel
@@ -680,6 +857,15 @@ fn shadow_spec_pages_are_current() {
                     }
                 }
 
+                // Prototype: a visual alignment for each executable row on the inversion page.
+                if expected.is_some() && rel.ends_with("RNA/inversion.md") {
+                    if let Some(p) = &align_provider {
+                        if let Some(al) = build_alignment(&ex.spelling, p) {
+                            alignments.entry(ex.spelling.clone()).or_insert(al);
+                        }
+                    }
+                }
+
                 // one corpus row per example (JSON, stable field order)
                 let norm_json = match &expected {
                     Some(e) => format!("{:?}", e),
@@ -737,19 +923,20 @@ fn shadow_spec_pages_are_current() {
     } else {
         format!("{}\n", corpus.join("\n"))
     };
-    if std::env::var("BLESS_SHADOW_CORPUS").is_ok() {
-        std::fs::write(&corpus_path, &rendered).expect("write corpus");
-        eprintln!("shadow-spec: blessed {CORPUS} ({} rows)", corpus.len());
-    } else {
-        let on_disk = std::fs::read_to_string(&corpus_path).unwrap_or_default();
-        if on_disk != rendered {
-            errors.push(format!(
-                "{CORPUS} is stale ({} committed lines vs {} rendered) — regenerate with \
-                 BLESS_SHADOW_CORPUS=1",
-                on_disk.lines().count(),
-                rendered.lines().count()
-            ));
-        }
+    bless_or_check(&corpus_path, CORPUS, &rendered, bless, &mut errors);
+
+    // Blessed alignment sidecar, served to the page JS by mdBook. Gated by the same flag as the
+    // corpus so one bless command refreshes both. Kept in docs/src so mdBook copies it into the
+    // book output (it carries no `path:line` heading, so parse_page never treats it as a page).
+    // Only run when the slice provider loaded: otherwise `alignments` is empty for a reason
+    // unrelated to the sidecar's contents, and comparing empty-vs-committed would falsely report
+    // it stale. (In practice the slice always loads — `slice_normalizer` panics above if it does
+    // not — but do not couple the sidecar's verdict to that.)
+    if align_provider.is_some() {
+        let align_path = root.join(ALIGNMENTS);
+        let align_rendered =
+            serde_json::to_string_pretty(&alignments).expect("serialize alignments") + "\n";
+        bless_or_check(&align_path, ALIGNMENTS, &align_rendered, bless, &mut errors);
     }
 
     assert!(
@@ -758,4 +945,74 @@ fn shadow_spec_pages_are_current() {
         errors.len(),
         errors.join("\n")
     );
+}
+
+/// Grounds [`render_alignment`]'s presentation logic against hand-computed expectations —
+/// independent of the bless-vs-disk self-consistency the page gate relies on, and exercising
+/// the substitution / deletion / insertion / delins / windowed branches (the single-page
+/// prototype only ever feeds it inversions and one insertion).
+mod alignment_render_tests {
+    use super::render_alignment;
+
+    fn cv(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+    fn s<'a>(v: &'a serde_json::Value, k: &str) -> &'a str {
+        v[k].as_str().unwrap()
+    }
+
+    #[test]
+    fn substitution_marks_the_single_changed_column() {
+        let v = render_alignment(&cv("A"), &cv("G"), "ACC", "GGT");
+        assert_eq!(s(&v, "ref"), "ACCAGGT");
+        assert_eq!(s(&v, "alt"), "ACCGGGT");
+        assert_eq!(s(&v, "connector"), "||| |||");
+        assert_eq!(v["editStart"], 3);
+        assert_eq!(v["editEnd"], 4);
+        assert_eq!(s(&v, "note"), "1 nt · 1 changed");
+    }
+
+    #[test]
+    fn deletion_gaps_the_alternate_row_with_a_blank_connector() {
+        let v = render_alignment(&cv("AT"), &cv(""), "CCC", "GGG");
+        assert_eq!(s(&v, "ref"), "CCCATGGG");
+        assert_eq!(s(&v, "alt"), "CCC--GGG");
+        assert_eq!(s(&v, "connector"), "|||  |||");
+        assert_eq!(s(&v, "note"), "deletion · 2 nt");
+    }
+
+    #[test]
+    fn insertion_gaps_the_reference_row() {
+        let v = render_alignment(&cv(""), &cv("GC"), "CCC", "GGG");
+        assert_eq!(s(&v, "ref"), "CCC--GGG");
+        assert_eq!(s(&v, "alt"), "CCCGCGGG");
+        assert_eq!(s(&v, "note"), "insertion · 2 nt");
+    }
+
+    #[test]
+    fn unequal_delins_pads_the_shorter_allele_and_blanks_the_connector() {
+        let v = render_alignment(&cv("A"), &cv("GCT"), "CC", "GG");
+        assert_eq!(s(&v, "ref"), "CCA--GG");
+        assert_eq!(s(&v, "alt"), "CCGCTGG");
+        assert_eq!(s(&v, "connector"), "||   ||");
+        assert_eq!(s(&v, "note"), "delins · 1 → 3 nt");
+    }
+
+    #[test]
+    fn a_wide_span_is_windowed_and_the_note_reports_the_full_size() {
+        let del: String = std::iter::repeat_n('A', 50).collect();
+        let mut ins = del.clone();
+        ins.replace_range(0..1, "C"); // 3 changes, one of them
+        ins.replace_range(25..26, "C"); // elided in the windowed middle
+        ins.replace_range(49..50, "C");
+        let v = render_alignment(&cv(&del), &cv(&ins), "TT", "GG");
+        assert!(
+            s(&v, "ref").contains(" … "),
+            "wide span should be windowed: {}",
+            s(&v, "ref")
+        );
+        assert_eq!(s(&v, "note"), "50 nt · 3 changed"); // counts the elided change too
+        assert_eq!(v["editStart"], 2); // 2-base left flank
+        assert_eq!(v["editEnd"], 2 + 15 + 3 + 15); // head + " … " + tail
+    }
 }

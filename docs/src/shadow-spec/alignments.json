@@ -1,0 +1,26 @@
+{
+  "NM_004006.3:r.177_180inv": {
+    "alt": "aggccugacagguugcaaacugccaaaa",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "4 nt · 4 changed",
+    "ref": "aggccugacagggcaaaaacugccaaaa"
+  },
+  "NM_004006.3:r.203_506inv": {
+    "alt": "aagaaaaaggauaaagccaggccauca … caugaacucuugugggaaugcucucau",
+    "connector": "||||||||||||  |     |               |     |  ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "304 nt · 222 changed",
+    "ref": "aagaaaaaggauccacaagaguucaug … ugauggccuggcuuugaaugcucucau"
+  },
+  "NM_004006.3:r.234_235ins123_234inv": {
+    "alt": "aacaaugucaacguugacauuguucag … uccuguaggucacugaaggcacugcgg",
+    "connector": "||||||||||||                                 ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "insertion · 112 nt",
+    "ref": "aacaaugucaac--------------- … ---------------aaggcacugcgg"
+  }
+}
