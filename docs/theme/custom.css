@@ -1157,3 +1157,21 @@ pre.ss-align-pre {
     border-radius: 2px;
     box-shadow: 0 0 0 1px #d9ccf5 inset;
 }
+
+/* mdBook's wide chapter-nav arrows (`.nav-wide-wrapper`) are a full-height `position: fixed`
+   hover strip pinned to the content's left/right edge — they overlap and clip the content and
+   pop up on hover exactly where the reader is looking. The sidebar covers navigation and the
+   bottom `.mobile-nav-chapters` prev/next remain, so hide the overlapping side arrows. */
+.nav-wide-wrapper { display: none !important; }
+
+/* Prettified spec admonitions: the shadow pages quote the spec's MkDocs `!!! note "…"` blocks
+   verbatim (byte-pinned), which mdBook renders raw; shadow-spec.js reformats the rendered DOM
+   into a titled note. These style what it produces. */
+.ss-note-title {
+    font-weight: 600;
+    color: var(--fg-deep-blue);
+    margin: 0 0 0.4rem;
+}
+.ss-note .ss-note-body {
+    margin: 0.25rem 0;
+}

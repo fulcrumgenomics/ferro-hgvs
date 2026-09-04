@@ -271,10 +271,45 @@
             });
     }
 
+    // The spec's MkDocs `!!! note "…"` admonitions are quoted verbatim (the source bytes are
+    // pinned by the harness), so mdBook renders them raw: a literal `!!! note "…"` line plus the
+    // indented answer as a code block. Reformat the RENDERED DOM to read like the note the spec
+    // intends — display-only, the source is untouched.
+    function inlineMarkdown(text) {
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/`([^`]+)`/g, "<code>$1</code>")
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    }
+
+    function prettifySpecNotes() {
+        var quotes = document.querySelectorAll(".content blockquote");
+        Array.prototype.forEach.call(quotes, function (bq) {
+            var first = bq.querySelector("p");
+            if (!first) return;
+            // Match a leading `!!! <type> "<title>"` line (mdBook curls the quotes).
+            var m = first.innerHTML.match(/^\s*!!!\s*\w+\s*["“”]([\s\S]*)["“”]\s*$/);
+            if (!m) return;
+            bq.classList.add("ss-note");
+            first.classList.add("ss-note-title");
+            first.innerHTML = m[1]; // keep the title's already-rendered <code> spans
+            var blocks = bq.querySelectorAll("pre > code");
+            Array.prototype.forEach.call(blocks, function (code) {
+                var p = document.createElement("p");
+                p.className = "ss-note-body";
+                p.innerHTML = inlineMarkdown(code.textContent);
+                code.parentNode.replaceWith(p);
+            });
+        });
+    }
+
     function run() {
         enhanceTables();
         buildOnPageNav();
         wireAlignments();
+        prettifySpecNotes();
     }
 
     if (document.readyState === "loading") {
