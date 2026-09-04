@@ -17,7 +17,7 @@ create-missing = false
 
 [output.html]
 additional-css = ["theme/custom.css"]
-additional-js = ["theme/sidebar-brand.js"]
+additional-js = ["theme/sidebar-brand.js", "theme/shadow-spec.js"]
 git-repository-url = "https://github.com/fulcrumgenomics/ferro-hgvs"
 edit-url-template = "https://github.com/fulcrumgenomics/ferro-hgvs/edit/main/docs/{path}"
 no-section-label = true
