@@ -6,8 +6,8 @@ that output. New here? See [How to read a page](../../reading-guide.md) for the 
 table conventions, and the recurring terms.
 
 Two `conformant` rows on this page are not mere limitations: ferro's output re-parses in both,
-which is what the verdict measures, while the parse behind it is wrong or an RFC 2119 MUST goes
-unenforced. Those are filed as
+which is what the verdict measures, while the parse behind it is wrong or a requirement the spec
+states plainly goes unenforced. Those are filed as
 [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212) (single-position breakpoints
 accepted) and [#2213](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2213) (linker
 silently absorbed into the 3' accession).
@@ -15,8 +15,11 @@ silently absorbed into the 3' accession).
 **No ledger record cites any `RNA/adjoined_transcript.md` clause** — the whole document is a
 record-level gap, so every section below carries **no Why block**. The reading is CONFIRM- (or
 DISPUTE-) by-inspection against the spec text and the shipped code, not an adjudicated ruling. This
-includes the document's two RFC 2119 clauses (`:20` REQUIRES, `:21` SHOULD) — the only two uppercase
-keyword uses in all of `recommendations/` outside `style.md`.
+includes the document's two uppercase-keyword clauses (`:20` REQUIRES, `:21` SHOULD) — the only
+uppercase keyword uses in all of `recommendations/` outside `style.md`. Note only `:21`'s **SHOULD**
+is an actual RFC 2119 keyword; `:20`'s **REQUIRES** is not in RFC 2119 (which lists REQUIRED), so it
+reads as emphatic spec prose, not a formal keyword — and per `READING_THE_SPEC.md`, clauses are not
+ranked by keyword strength regardless.
 
 An adjoined transcript is a two-partner fusion (`5'partner :: 3'partner`); ferro parses it to an
 `RnaFusion` variant and normalization is a **pass-through** (`normalize/mod.rs:5388`), so the
@@ -96,13 +99,16 @@ does not exist yet.
 
 > - This syntax REQUIRES the use of a range (not a single position) for `five_prime_range` / `three_prime_range`.
 
-Ferro: `REQUIRES` is RFC 2119 MUST-strength (`style.md:9-12`) — a well-formed adjoined transcript has
-a `_`-range on **both** sides. Ferro **accepts single-position breakpoints** on either or both sides
+Ferro: `:20` states this plainly — "REQUIRES the use of a range (not a single position)". (`REQUIRES`
+is not itself an RFC 2119 keyword — RFC 2119 lists REQUIRED — so this is emphatic spec prose, not a
+formal MUST; `READING_THE_SPEC.md` does not rank clauses by keyword strength, but the plain wording
+here is unambiguous.) A well-formed adjoined transcript has a `_`-range on **both** sides. Ferro
+**accepts single-position breakpoints** on either or both sides
 in every mode: `parse_rna_interval`'s last alternative builds a bare `RnaInterval::point`,
 `parse_rna_fusion_breakpoint` performs no range check, and the pass-through normalizer emits the
 input verbatim. Since ferro's output for a fusion is its input, an accepted single position becomes an
-output that violates the `:20` REQUIRES — a ferro **enforcement gap** on the document's only
-MUST-strength clause.
+output that violates `:20`'s stated requirement — a ferro **enforcement gap** on the one clause in
+this document that reads as a hard requirement.
 
 **Filed as [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212).** Worse than
 unguarded: `test_parse_rna_fusion_single_positions` (`variant.rs:10042`) **pins the violation as
@@ -114,9 +120,9 @@ below are `conformant` in the verdict's sense — the output is well-formed HGVS
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `NM_152263.2:r.775::NM_002609.3:r.1580` | conformant | self | single position on **both** sides — accepted and round-tripped; violates `adjoined_transcript.md:20` (RFC 2119 REQUIRES a range). Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); pinned as accepted by `test_parse_rna_fusion_single_positions`. Recommended form uses `_`-ranges on both sides |
-| `NM_152263.2:r.-115_775::NM_002609.3:r.1580` | conformant | self | one-sided violation — a range on the 5' side, a single position on the 3' side; violates `adjoined_transcript.md:20` (RFC 2119 REQUIRES a range). Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); recommended form uses `_`-ranges on both sides |
-| `NM_152263.2:r.(-115_775)::NM_002609.3:r.1580_*1924` | conformant | self | `(a_b)` is **one uncertain position** (`uncertain.md`), not a range, so the 5' side violates `adjoined_transcript.md:20` (RFC 2119 REQUIRES a range); accepted and round-tripped. Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); recommended form uses `_`-ranges on both sides |
+| `NM_152263.2:r.775::NM_002609.3:r.1580` | conformant | self | single position on **both** sides — accepted and round-tripped; violates `adjoined_transcript.md:20` (`:20` requires a range). Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); pinned as accepted by `test_parse_rna_fusion_single_positions`. Recommended form uses `_`-ranges on both sides |
+| `NM_152263.2:r.-115_775::NM_002609.3:r.1580` | conformant | self | one-sided violation — a range on the 5' side, a single position on the 3' side; violates `adjoined_transcript.md:20` (`:20` requires a range). Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); recommended form uses `_`-ranges on both sides |
+| `NM_152263.2:r.(-115_775)::NM_002609.3:r.1580_*1924` | conformant | self | `(a_b)` is **one uncertain position** (`uncertain.md`), not a range, so the 5' side violates `adjoined_transcript.md:20` (`:20` requires a range); accepted and round-tripped. Ferro should refuse in strict mode — [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212); recommended form uses `_`-ranges on both sides |
 
 ## `adjoined_transcript.md:21-22` — `?` outer bounds when only the junction is analyzed
 
