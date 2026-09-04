@@ -120,7 +120,7 @@ split under `delins.md:17`.
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[delins-codon-carve-out-gap-one](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together affect a single amino acid are written as one delins on the coding sequence, the explicit exception the spec makes to describing them individually; the merged span must stay within the reading frame's codon boundary regardless of the members' edit types.
+> **[delins-codon-carve-out-gap-one](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together affect a single amino acid are written as one delins on the coding sequence, the explicit exception the spec makes to describing them individually.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 >
@@ -226,7 +226,7 @@ jurisdiction (a DNA document cannot scope `r.`, and `RNA/delins.md` states no `:
 >
 > **[delins-recommendation-reach-when-the-input-arrives-split](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro merges a re-derived split into one delins only when some member supplies inserted bases while consuming a different number of reference bases; a split of pure deletions inserts nothing and stays individual.
 >
-> **[unequal-length-block-a-placed-gap-is-not-a-separation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A lone unequal-length net-deletion delins whose payload merely coincides with the reference, with no higher-priority competing type, is kept whole on every DNA axis (c./g./m./n., but not r.) rather than split at that coincidence into a separate residual member, since a placed alignment gap is not itself a fact about the variant for a separation rule to key on.
+> **[unequal-length-block-a-placed-gap-is-not-a-separation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A lone unequal-length net-deletion delins whose payload merely coincides with the reference, and whose every member other than the placed gap would itself render as a delins, is kept whole on every DNA axis (c./g./m./n., but not r.) rather than split at that coincidence into a separate residual member.
 >
 > **[delins-payload-coincidence-carve-out-is-coding-dna-scoped](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Where a split exists only because payload bases coincide with the reference, ferro writes it as one spanning delins on every DNA axis (c./g./m./n., but not r.); on the frameless axes this is a disclosed rule-2 deviation and the project's choice among conformant forms.
 <!-- why:END:delins-merge-vs-individual-gap-two-or-more,delins-recommendation-reach-when-the-input-arrives-split,unequal-length-block-a-placed-gap-is-not-a-separation,delins-payload-coincidence-carve-out-is-coding-dna-scoped -->

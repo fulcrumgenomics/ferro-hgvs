@@ -84,7 +84,7 @@ the bases.
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[confluence-gate-is-apply-equality-on-every-determined-axis](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro's release gate asserts, over the decided equivalence classes, that inputs denoting the same sequence on every determined axis — a transcript and its genomic projection, or a genome alone — normalize to one output; the protein axis is excluded because translation is many-to-one and states a consequence rather than a denotation, and equivalence is judged by applying the descriptions to the reference rather than by comparing normalized strings.
+> **[confluence-gate-is-apply-equality-on-every-determined-axis](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro's release gate asserts that inputs denoting the same sequence on every determined axis, the protein axis excluded, normalize to one output; it is asserted over decided equivalence classes only, and equivalence is judged by applying the descriptions to the reference rather than by comparing normalized strings.
 <!-- why:END:confluence-gate-is-apply-equality-on-every-determined-axis -->
 
 </details>

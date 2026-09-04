@@ -44,7 +44,7 @@ reference bases needed).
 <!-- why:START -->
 > **[conflicting-member-geometry-refusal-scope](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two members of one allele that claim intersecting reference territory — nested, overlapping, or two insertions at one interbase — are refused, whatever edit types they render as.
 >
-> **[inversion-vs-a-mixed-member-competitor](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When a span replaced by its reverse complement competes with a description mixing lone substitutions and multi-column members, ferro writes it as one inv rather than typing to the competitor's member shapes, which would make the description turn on incidental base coincidence rather than the event itself; both forms are conformant, so this is the project's choice among them.
+> **[inversion-vs-a-mixed-member-competitor](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When a span replaced by its reverse complement competes with a description mixing lone substitutions and multi-column members, ferro writes it as one inv; both forms are conformant, so this is the project's choice among them.
 <!-- why:END:conflicting-member-geometry-refusal-scope,inversion-vs-a-mixed-member-competitor -->
 
 </details>
@@ -93,7 +93,7 @@ coordinate type — which is exactly the shape of every worked cis example in th
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[junction-exit-wrapper-scope-in-a-mixed-allele](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Whether a mixed cis allele needing both a genomic wrapper for a ferro-manufactured intronic offset and an author-spelled intronic position on the same bare transcript should lift the wrapper to the whole description or expand to per-member accessions is undecided, and ferro's current behavior of shipping the offset bare is the unresolved status quo rather than a ruling.
+> **[junction-exit-wrapper-scope-in-a-mixed-allele](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An allele on one bare transcript that pairs a ferro-manufactured intronic offset, which needs a genomic wrapper, with an author-spelled intronic position, which must stay as authored, has no decided form: lift the wrapper to the whole description, or expand to per-member accessions.
 <!-- why:END:junction-exit-wrapper-scope-in-a-mixed-allele -->
 
 </details>
