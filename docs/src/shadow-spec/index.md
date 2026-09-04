@@ -8,7 +8,7 @@ section records the decision, mirrored page-for-page against the official recomm
 
 <div class="use-cards">
   <div class="use-card">
-    <h3>29 pages, one per spec section</h3>
+    <h3>32 pages, one per spec section</h3>
     <p>Each page shows the spec's own text, ferro's reading of it, and a table of example spellings
     with ferro's verdict on each.</p>
   </div>
@@ -89,6 +89,17 @@ SPDI — so the pages rely on the executed verdict and "normalizes to" columns.
 | [Frameshift](recommendations/protein/frameshift.md) | translation shifted to another frame |
 | [Extension](recommendations/protein/extension.md) | the sequence extended past a terminus |
 | [Alleles](recommendations/protein/alleles.md) | cis / trans / unknown phase on the protein |
+
+### Cross-cutting
+
+These three shadow the spec's non-axis pages — the rules and notation that apply across DNA, RNA,
+and protein.
+
+| Page | Covers |
+|---|---|
+| [General notation](recommendations/general.md) | the DNA-level-primary rule, mandatory prefixes, prioritisation, and the special characters (`=`, `/`, `_`, …) |
+| [Uncertain descriptions](recommendations/uncertain.md) | `( )` / `?` / `^` notation for predicted or incompletely-known variants, across all axes |
+| [Publication checklist](recommendations/checklist.md) | the most frequently offended rules, as correct-vs-refused pairs |
 
 ## What this section is *not*
 

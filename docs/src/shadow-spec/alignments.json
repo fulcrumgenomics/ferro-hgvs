@@ -31,6 +31,30 @@
     "note": "2 nt · 2 changed",
     "ref": "TGAGAACCTCTTCAGTGACCTACAGG"
   },
+  "NM_004006.3:c.123_125del": {
+    "alt": "TGAGAACCTCTT---TGACCTACAGGA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "TGAGAACCTCTTCAGTGACCTACAGGA"
+  },
+  "NM_004006.3:c.127G>A": {
+    "alt": "AACCTCTTCAGTAACCTACAGGATG",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "AACCTCTTCAGTGACCTACAGGATG"
+  },
+  "NM_004006.3:c.12_14del": {
+    "alt": "AATGCTTTGGTG---AGAAGTAGAGGA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "AATGCTTTGGTGGGAAGAAGTAGAGGA"
+  },
   "NM_004006.3:c.145_146delinsAT": {
     "alt": "CAGGATGGGAGGATCCTCCTAGACCT",
     "connector": "||||||||||||  ||||||||||||",
@@ -78,6 +102,14 @@
     "editStart": 12,
     "note": "3 nt · 2 changed",
     "ref": "AACAATGTCAACAAGGCACTGCGGGTT"
+  },
+  "NM_004006.3:c.51_52insT": {
+    "alt": "GAAGATGTTCAATAAGAAAACATTC",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "GAAGATGTTCAA-AAGAAAACATTC"
   },
   "NM_004006.3:c.54G>H": {
     "alt": "AGATGTTCAAAAHAAAACATTCACA",
