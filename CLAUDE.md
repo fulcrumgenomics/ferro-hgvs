@@ -39,23 +39,20 @@ cargo nextest run -E 'test(parse)'   # by name
 pytest tests/python/ -v              # Python bindings (needs maturin develop first)
 ```
 
-Rules that will bite you:
+Rules that will bite you. The reasons and the recipes are in `docs/TESTING.md`.
 
-- Use `cargo nextest`, not `cargo test`, for the lib suite. Two lib tests are not safe
-  under libtest's shared thread pool (`normalize::merge::tests`, `parallel::tests`).
-- Do not export `CARGO_INCREMENTAL=0`. It disables incremental builds for the very large
-  `it` test crate and makes every one-line test edit a full rebuild. Fast-iteration
-  recipe: `docs/TESTING.md`.
+- Use `cargo nextest`, not `cargo test`. Two lib tests are not safe under libtest's
+  shared thread pool.
+- Declare every new test file as a `mod` in `tests/it/main.rs`, or it never runs.
+- Do not export `CARGO_INCREMENTAL=0`. It makes every one-line test edit a full rebuild.
 - `FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run` is always red on `main`. Run the oracles
-  through `scripts/run_oracle_suite.sh`, which mirrors CI's selection and flags.
-  Details: `docs/ORACLES.md`.
+  through `scripts/run_oracle_suite.sh`. Details: `docs/ORACLES.md`.
 - The exhaustive sweeps run a short seed prefix by default. `FERRO_SWEEP_SEEDS=full` is
   what CI runs.
 - `tests/fixtures/grammar/hgvs_spec_normalization.json` is generated and gitignored.
   Tests regenerate it on demand; it needs the `assets/hgvs-nomenclature` submodule.
-- Manifest-backed and bulk-corpus suites return early and report PASS when their data is
-  absent. Use `scripts/run_conformance_axis.sh` and `FERRO_REQUIRE_BULK_FIXTURES=1`.
-  See `CONTRIBUTING.md`.
+- Manifest-backed and bulk-corpus suites report PASS when their data is absent. Set
+  `FERRO_REQUIRE_BULK_FIXTURES=1` to make the skip fail. See `CONTRIBUTING.md`.
 
 ## Lint and format
 
@@ -120,7 +117,7 @@ is a no-op kept for compatibility.
 ## Reading the HGVS spec
 
 Almost no clause in `assets/hgvs-nomenclature/docs/recommendations/` is RFC 2119
-normative, the spec states no minimality principle, and several forward-looking notes
-describe proposals that were later rejected. Do not argue from keyword strength or from
-"the direction of travel". The house guide to reading it, with the checks behind each
-claim, is `docs/READING_THE_SPEC.md`.
+normative, the spec states no minimality principle, and a forward-looking note may
+describe a proposal that was later rejected. Do not argue from keyword strength or from
+"the direction of travel". The house guide to reading it, with the spec citations behind
+each claim, is `docs/READING_THE_SPEC.md`.
