@@ -407,9 +407,10 @@ adjudications and do not need records.
   fails when behaviour regresses away from a decided answer.
 - **adjudicated-deviation** — pin it as a deviation via `KNOWN_DIVERGENT_INPUTS`, so a fixed
   deviation cannot rot in the list unnoticed.
-- **undecided** — a first-class state; the generator refuses one that names a governing clause, so
-  an open question cannot smuggle in a ruling nobody made. Prefer an honest `undecided` record to
-  no record.
+- **undecided** — a first-class state; the generator refuses one that names a governing or a
+  deviated-from clause, so an open question cannot smuggle in a ruling nobody made, and one that
+  cites fewer than two clauses, since that states no conflict. Prefer an honest `undecided` record
+  to no record.
 - **house-choice** — decided, and ours rather than the spec's: a `rulings` record with a
   `house_choice` object, made under rule 5's silent limb or rule 6 of
   `docs/src/reference/normalization-rules.md`, naming no governing and no deviated-from clause;

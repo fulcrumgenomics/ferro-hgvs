@@ -4,23 +4,19 @@
 # this file cannot invalidate a CI cache or re-fingerprint a dependency tree.
 #
 # In particular this file does NOT set `[build] incremental`. Turning incremental
-# compilation on is the single largest local win available (measured: 7-9x less
-# CPU on an edit->one-test loop), but it is a *developer environment* setting, not
-# a repo one: it would also apply in CI, where a ~2 GB per-job incremental
-# directory would push an Actions cache budget that is already at its 10 GiB cap
-# (see issue #1218). The local recipe is in docs/TESTING.md under "Fast local
-# iteration".
+# compilation on is the single largest local win available, but it is a *developer
+# environment* setting, not a repo one: it would also apply in CI, where a ~2 GB
+# per-job incremental directory would push an Actions cache budget that is already
+# at its 10 GiB cap (see issue #1218). The local recipe, and the measurement behind
+# it, are in docs/TESTING.md under "Fast local iteration".
 
 [alias]
 # Focused edit->test loop: build and run only the library's unit tests and the
-# single `it` integration binary, skipping the ~17 other test binaries plus every
-# `[[example]]` and `[[bin]]` that a bare `cargo nextest run` also builds.
+# single `it` integration binary, skipping every other test binary plus every
+# `[[example]]` and `[[bin]]` that a bare `cargo nextest run` also builds. The
+# measurement is in docs/TESTING.md under "Fast local iteration".
 #
 #     cargo t -E 'test(the_boundary_delins_preserves_the_sequence)'
-#
-# Measured on an M2 Max: after editing `src/lib.rs`, this halves the work of the
-# same run with the default target set (37.3 -> 18.1 user CPU seconds, three
-# interleaved reps each, spread under 2%).
 #
 # It is NOT a substitute for the full run: it skips the two standalone
 # integration targets (`conformance_reference_snapshot_tests`,

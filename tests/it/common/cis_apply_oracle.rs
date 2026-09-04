@@ -99,9 +99,9 @@ pub fn sweep_seeds(full: u32) -> u32 {
 /// Split out so the rule can be tested **without touching the environment**.
 /// The tests used to `set_var`/`remove_var` around their assertions, guarded by
 /// a SAFETY note arguing that nextest gives each test its own process. That
-/// argument is sound under nextest and *false* under `cargo test`, which
-/// `docs/TESTING.md` lists as a supported alternative and which runs tests as threads
-/// in one process: there, setting `FERRO_SWEEP_SEEDS=12` mid-run races every
+/// argument is sound under nextest and *false* under `cargo test`, which nothing
+/// prevents and which runs tests as threads in one process: there, setting
+/// `FERRO_SWEEP_SEEDS=12` mid-run races every
 /// concurrently-executing sweep reading the same variable, silently shrinking
 /// its corpus. A test that can quietly hollow out the sweeps it shares a process
 /// with is not worth the coverage, and none is lost by parsing a string instead.
