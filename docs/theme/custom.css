@@ -872,3 +872,306 @@ blockquote strong {
     text-decoration: none;
 }
 .fg-related-list a:hover { text-decoration: underline; }
+
+/* ============================================================
+   Shadow-spec readability layer
+   Verdict badges, "Normalizes to" chips, axis nav, and the
+   collapsible <details> containers used on the interpretation
+   pages. The verdict/self/— cell TEXT stays bare (the shadow_spec
+   test matches the literal words), so badges are applied to the
+   rendered DOM by theme/shadow-spec.js — these rules just style
+   the spans it injects, plus the badges authored inline on the
+   overview and reading-guide pages.
+   ============================================================ */
+
+.verdict-badge {
+    display: inline-block;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.78em;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 0.08em 0.55em;
+    border-radius: 5px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+.verdict-recommended { background: #e5f7e7; color: var(--fg-forest);    border: 1px solid #b7e6bd; }
+.verdict-conformant  { background: #fff5df; color: #8a6400;            border: 1px solid #f0dca0; }
+.verdict-refused     { background: #eef1fb; color: var(--fg-deep-blue); border: 1px solid #d3daf1; }
+.verdict-bug         { background: #fde7e7; color: #a3242a;            border: 1px solid #f3bcbe; }
+
+/* "Normalizes to" chips for the two bare tokens `self` and `—`. */
+.norm-chip {
+    display: inline-block;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.76em;
+    font-weight: 600;
+    padding: 0.05em 0.5em;
+    border-radius: 5px;
+    white-space: nowrap;
+    cursor: help;
+}
+.norm-self { background: #eef1fb; color: var(--fg-deep-blue); border: 1px solid #d3daf1; }
+.norm-na   { background: #f2f3f4; color: var(--fg-gray);      border: 1px solid #e0e2e3; }
+
+/* Axis / sibling navigation pill row at the top of each page. */
+.ss-axis-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.4rem;
+    align-items: center;
+    margin: 0 0 1.4rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--fg-ghost, #e6e8ea);
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+.ss-axis-nav .ss-axis-label {
+    font-weight: 700;
+    color: var(--fg-gray);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+    margin-right: 0.15rem;
+}
+.ss-axis-nav a {
+    text-decoration: none;
+    color: var(--fg-pacific);
+    padding: 0.05em 0.5em;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+.ss-axis-nav a:hover { background: #eef1fb; text-decoration: none; }
+.ss-axis-nav a.ss-current {
+    background: var(--fg-pacific);
+    color: #fff;
+    font-weight: 600;
+}
+.ss-axis-nav .ss-sep { color: var(--fg-ghost, #cfd2d5); }
+
+/* Collapsible supporting material (Why-block stacks, long spec Q&A quotes). */
+details.ss-why, details.ss-spec {
+    margin: 0.6rem 0 1rem;
+    border-left: 3px solid var(--fg-ghost, #e6e8ea);
+    padding: 0 0 0 0.9rem;
+}
+details.ss-why > summary, details.ss-spec > summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--fg-green);
+    list-style: none;
+    padding: 0.1rem 0;
+    user-select: none;
+}
+details.ss-why > summary::before, details.ss-spec > summary::before {
+    content: "\25B8\00a0";  /* ▸ */
+    display: inline-block;
+    transition: transform 0.12s ease;
+}
+details.ss-why[open] > summary::before, details.ss-spec[open] > summary::before {
+    transform: rotate(90deg);
+}
+details.ss-why > summary::-webkit-details-marker,
+details.ss-spec > summary::-webkit-details-marker { display: none; }
+
+/* "Page notes" — the deep grounding/derivation prose, collapsed out of the
+   reading flow so it is available without walling the page. */
+details.ss-notes {
+    margin: 0.6rem 0 1.2rem;
+    border: 1px solid var(--fg-ghost, #e6e8ea);
+    border-radius: 8px;
+    background: #fafbfc;
+    padding: 0 0.9rem;
+}
+details.ss-notes > summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--fg-green);
+    list-style: none;
+    padding: 0.55rem 0;
+    user-select: none;
+}
+details.ss-notes[open] > summary { border-bottom: 1px solid var(--fg-ghost, #eceef0); margin-bottom: 0.6rem; }
+details.ss-notes > summary::before { content: "\25B8\00a0"; display: inline-block; transition: transform 0.12s ease; }
+details.ss-notes[open] > summary::before { transform: rotate(90deg); }
+details.ss-notes > summary::-webkit-details-marker { display: none; }
+details.ss-notes > *:last-child { margin-bottom: 0.8rem; }
+
+/* On-page clause index: a chip row of jump links built by shadow-spec.js from
+   the page's `file.md:lines` headings. */
+nav.ss-onpage-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.45rem;
+    align-items: baseline;
+    margin: 0 0 1.8rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #cdd6e4;
+    border-radius: 8px;
+    background: #e9edf4;
+}
+nav.ss-onpage-nav .ss-nav-title {
+    width: 100%;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #5b6572;
+    margin-bottom: 0.2rem;
+}
+nav.ss-onpage-nav a {
+    font-size: 0.8rem;
+    text-decoration: none;
+    color: var(--fg-pacific);
+    padding: 0.16em 0.6em;
+    border: 1px solid #aeb9cb;
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: 0 1px 1px rgba(22, 42, 82, 0.06);
+    white-space: nowrap;
+}
+nav.ss-onpage-nav a:hover {
+    background: var(--fg-pacific);
+    color: #fff;
+    border-color: var(--fg-pacific);
+    text-decoration: none;
+}
+nav.ss-onpage-nav a .ss-nav-line {
+    color: #7a828d;
+    font-family: var(--mono-font, monospace);
+    font-size: 0.92em;
+    font-weight: 600;
+}
+nav.ss-onpage-nav a:hover .ss-nav-line { color: #d9eef5; }
+
+/* Clause section breaks. shadow-spec.js tags each `file.md:lines` heading
+   `.ss-clause`; each one opens with a full-width divider, generous space, and
+   a colored "clause chip" (the leading code span) so the eye catches every
+   section start without the noise of zebra striping. */
+.content h2.ss-clause {
+    margin-top: 3.2rem;
+    padding-top: 1.3rem;
+    border-top: 3px solid var(--fg-pacific);
+    line-height: 1.3;
+}
+.content h2.ss-clause:first-of-type { margin-top: 2rem; }
+.content h2.ss-clause > code:first-child {
+    display: inline-block;
+    background: var(--fg-pacific);
+    color: #fff;
+    font-size: 0.6em;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    padding: 0.2em 0.6em;
+    border-radius: 6px;
+    vertical-align: middle;
+    margin-right: 0.55em;
+    position: relative;
+    top: -0.12em;
+}
+
+/* Compact, balanced example tables. shadow-spec.js tags each example table
+   `.ss-examples` and each cell with a column class so widths hold regardless
+   of the 3- or 4-column shape. */
+.content table.ss-examples {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 0.83rem;
+    line-height: 1.45;
+    display: table;   /* override mdBook's default block+scroll on tables */
+}
+.content table.ss-examples th,
+.content table.ss-examples td {
+    vertical-align: top;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    padding: 0.4em 0.6em;
+}
+.content table.ss-examples .ss-col-input   { width: 23%; font-family: var(--mono-font, monospace); font-size: 0.95em; }
+.content table.ss-examples .ss-col-verdict { width: 6.6rem; white-space: nowrap; }
+.content table.ss-examples .ss-col-norm    { width: 27%; font-family: var(--mono-font, monospace); font-size: 0.92em; }
+.content table.ss-examples .ss-col-notes   { color: #4a4f55; }
+@media (max-width: 900px) {
+    .content table.ss-examples { font-size: 0.78rem; }
+    .content table.ss-examples .ss-col-input  { width: 26%; }
+    .content table.ss-examples .ss-col-norm   { width: 26%; }
+}
+
+/* Per-example alignment: a toggle in the "Normalizes to" cell (added by shadow-spec.js
+   from the blessed alignments.json) that reveals a biopython-style 3-line block. */
+.ss-align-toggle {
+    display: inline-block;
+    margin-left: 0.5em;
+    padding: 0.05em 0.5em;
+    font-family: var(--sans-font, system-ui, sans-serif);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.5;
+    color: #b45309;               /* dark orange text */
+    background: #fdecd8;          /* light orange */
+    border: 1px solid #f0cfa0;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ss-align-toggle:hover { background: #b45309; color: #fff; border-color: #b45309; }
+.ss-align-toggle.ss-open { background: #b45309; color: #fff; border-color: #b45309; }
+
+.content table.ss-examples tr.ss-align-row > td {
+    background: #f7f8fb;
+    border-top: 0;
+    padding: 0.3rem 0.6rem 0.7rem;
+}
+.ss-align { overflow-x: auto; }
+.ss-align-note {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #6b7280;
+    margin: 0.1rem 0 0.35rem;
+}
+pre.ss-align-pre {
+    margin: 0;
+    padding: 0.55rem 0.7rem;
+    background: #fbfbfd;
+    border: 1px solid #e2e6ee;
+    border-radius: 6px;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.82rem;
+    line-height: 1.35;
+    white-space: pre;
+    overflow-x: auto;
+    color: #2b2f36;
+}
+.ss-align-gutter {
+    display: inline-block;
+    width: 3ch;
+    margin-right: 0.6ch;
+    color: #a2a8b3;
+    user-select: none;
+}
+.ss-align-edit {
+    background: #ece3fb;          /* soft violet — deliberately NOT a verdict color */
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px #d9ccf5 inset;
+}
+
+/* mdBook's wide chapter-nav arrows (`.nav-wide-wrapper`) are a full-height `position: fixed`
+   hover strip pinned to the content's left/right edge — they overlap and clip the content and
+   pop up on hover exactly where the reader is looking. The sidebar covers navigation and the
+   bottom `.mobile-nav-chapters` prev/next remain, so hide the overlapping side arrows. */
+.nav-wide-wrapper { display: none !important; }
+
+/* Prettified spec admonitions: the shadow pages quote the spec's MkDocs `!!! note "…"` blocks
+   verbatim (byte-pinned), which mdBook renders raw; shadow-spec.js reformats the rendered DOM
+   into a titled note. These style what it produces. */
+.ss-note-title {
+    font-weight: 600;
+    color: var(--fg-deep-blue);
+    margin: 0 0 0.4rem;
+}
+.ss-note .ss-note-body {
+    margin: 0.25rem 0;
+}

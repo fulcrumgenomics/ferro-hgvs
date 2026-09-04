@@ -1,0 +1,690 @@
+{
+  "NM_004006.3:c.(76A>G)": {
+    "alt": "ACAAAATGGGTAGATGCACAATTTT",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "ACAAAATGGGTAAATGCACAATTTT"
+  },
+  "NM_004006.3:c.*460AC[9]": {
+    "alt": "AAAACAAAACAAACACACACACACACACACATACACACACAC",
+    "connector": "||||||||||||                  ||||||||||||",
+    "editEnd": 30,
+    "editStart": 12,
+    "note": "delins · 16 → 18 nt",
+    "ref": "AAAACAAAACAAACACACACACACACAC--ATACACACACAC"
+  },
+  "NM_004006.3:c.123_124insG": {
+    "alt": "GAGAACCTCTTCGAGTGACCTACAG",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "GAGAACCTCTTC-AGTGACCTACAG"
+  },
+  "NM_004006.3:c.123_124inv": {
+    "alt": "TGAGAACCTCTTTGGTGACCTACAGG",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "2 nt · 2 changed",
+    "ref": "TGAGAACCTCTTCAGTGACCTACAGG"
+  },
+  "NM_004006.3:c.123_125del": {
+    "alt": "TGAGAACCTCTT---TGACCTACAGGA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "TGAGAACCTCTTCAGTGACCTACAGGA"
+  },
+  "NM_004006.3:c.127G>A": {
+    "alt": "AACCTCTTCAGTAACCTACAGGATG",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "AACCTCTTCAGTGACCTACAGGATG"
+  },
+  "NM_004006.3:c.12_14del": {
+    "alt": "AATGCTTTGGTG---AGAAGTAGAGGA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "AATGCTTTGGTGGGAAGAAGTAGAGGA"
+  },
+  "NM_004006.3:c.145_146delinsAT": {
+    "alt": "CAGGATGGGAGGATCCTCCTAGACCT",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "2 nt · 2 changed",
+    "ref": "CAGGATGGGAGGCGCCTCCTAGACCT"
+  },
+  "NM_004006.3:c.145_147delinsTGG": {
+    "alt": "CAGGATGGGAGGTGGCTCCTAGACCTC",
+    "connector": "|||||||||||| | ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "3 nt · 2 changed",
+    "ref": "CAGGATGGGAGGCGCCTCCTAGACCTC"
+  },
+  "NM_004006.3:c.16_17ins5_16inv": {
+    "alt": "TTTGGTGGGAAGCTTCCCACCAAAAAGTAGAGGACT",
+    "connector": "||||||||||||            ||||||||||||",
+    "editEnd": 24,
+    "editStart": 12,
+    "note": "insertion · 12 nt",
+    "ref": "TTTGGTGGGAAG------------AAGTAGAGGACT"
+  },
+  "NM_004006.3:c.17_18ins5_16": {
+    "alt": "TTGGTGGGAAGATTTGGTGGGAAGAGTAGAGGACTG",
+    "connector": "||||||||||||            ||||||||||||",
+    "editEnd": 24,
+    "editStart": 12,
+    "note": "insertion · 12 nt",
+    "ref": "TTGGTGGGAAGA------------AGTAGAGGACTG"
+  },
+  "NM_004006.3:c.234_235ins123_234inv": {
+    "alt": "AACAATGTCAACGTTGACATTGTTCAG … TCCTGTAGGTCACTGAAGGCACTGCGG",
+    "connector": "||||||||||||                                 ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "insertion · 112 nt",
+    "ref": "AACAATGTCAAC--------------- … ---------------AAGGCACTGCGG"
+  },
+  "NM_004006.3:c.235_237delinsTAT": {
+    "alt": "AACAATGTCAACTATGCACTGCGGGTT",
+    "connector": "|||||||||||| | ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "3 nt · 2 changed",
+    "ref": "AACAATGTCAACAAGGCACTGCGGGTT"
+  },
+  "NM_004006.3:c.51_52insT": {
+    "alt": "GAAGATGTTCAATAAGAAAACATTC",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "GAAGATGTTCAA-AAGAAAACATTC"
+  },
+  "NM_004006.3:c.54G>H": {
+    "alt": "AGATGTTCAAAAHAAAACATTCACA",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "AGATGTTCAAAAGAAAACATTCACA"
+  },
+  "NM_004006.3:c.5690A[10]": {
+    "alt": "TGGATGACATTGAAAAAAAAAATTAGCCAGCCTA",
+    "connector": "||||||||||||          ||||||||||||",
+    "editEnd": 22,
+    "editStart": 12,
+    "note": "delins · 8 → 10 nt",
+    "ref": "TGGATGACATTGAAAAAAAA--TTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5690_5692del": {
+    "alt": "TGGATGACATTG---AAAAATTAGCCA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "TGGATGACATTGAAAAAAAATTAGCCA"
+  },
+  "NM_004006.3:c.5690_5692dup": {
+    "alt": "ATGACATTGAAAAAAAAAAATTAGCCA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "insertion · 3 nt",
+    "ref": "ATGACATTGAAA---AAAAATTAGCCA"
+  },
+  "NM_004006.3:c.5690_5697inv": {
+    "alt": "TGGATGACATTGTTTTTTTTTTAGCCAGCCTA",
+    "connector": "||||||||||||        ||||||||||||",
+    "editEnd": 20,
+    "editStart": 12,
+    "note": "8 nt · 8 changed",
+    "ref": "TGGATGACATTGAAAAAAAATTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5690del": {
+    "alt": "TGGATGACATTG-AAAAAAATTAGC",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "deletion · 1 nt",
+    "ref": "TGGATGACATTGAAAAAAAATTAGC"
+  },
+  "NM_004006.3:c.5690dup": {
+    "alt": "GGATGACATTGAAAAAAAAATTAGC",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "GGATGACATTGA-AAAAAAATTAGC"
+  },
+  "NM_004006.3:c.5692_5697del": {
+    "alt": "GATGACATTGAA------TTAGCCAGCCTA",
+    "connector": "||||||||||||      ||||||||||||",
+    "editEnd": 18,
+    "editStart": 12,
+    "note": "deletion · 6 nt",
+    "ref": "GATGACATTGAAAAAAAATTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5692_5697dup": {
+    "alt": "ATTGAAAAAAAAAAAAAATTAGCCAGCCTA",
+    "connector": "||||||||||||      ||||||||||||",
+    "editEnd": 18,
+    "editStart": 12,
+    "note": "insertion · 6 nt",
+    "ref": "ATTGAAAAAAAA------TTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5695_5697del": {
+    "alt": "GACATTGAAAAA---TTAGCCAGCCTA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "GACATTGAAAAAAAATTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5695_5697dup": {
+    "alt": "ATTGAAAAAAAAAAATTAGCCAGCCTA",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "insertion · 3 nt",
+    "ref": "ATTGAAAAAAAA---TTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5697_5698insA": {
+    "alt": "ATTGAAAAAAAAATTAGCCAGCCTA",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "ATTGAAAAAAAA-TTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5697del": {
+    "alt": "CATTGAAAAAAA-TTAGCCAGCCTA",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "deletion · 1 nt",
+    "ref": "CATTGAAAAAAAATTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5697dup": {
+    "alt": "ATTGAAAAAAAAATTAGCCAGCCTA",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "ATTGAAAAAAAA-TTAGCCAGCCTA"
+  },
+  "NM_004006.3:c.5_16delins123_134": {
+    "alt": "TTTTCAAAATGCCAGTGACCTACAAAGTAGAGGACT",
+    "connector": "||||||||||||    |    |  ||||||||||||",
+    "editEnd": 24,
+    "editStart": 12,
+    "note": "12 nt · 10 changed",
+    "ref": "TTTTCAAAATGCTTTGGTGGGAAGAAGTAGAGGACT"
+  },
+  "NM_004006.3:c.5_8inv": {
+    "alt": "TTTTCAAAATGCCAAAGTGGGAAGAAGT",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "4 nt · 4 changed",
+    "ref": "TTTTCAAAATGCTTTGGTGGGAAGAAGT"
+  },
+  "NM_004006.3:c.6_7insT": {
+    "alt": "TTCAAAATGCTTTTGGTGGGAAGAA",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "TTCAAAATGCTT-TGGTGGGAAGAA"
+  },
+  "NM_004006.3:c.761_762insNNNNN": {
+    "alt": "AGTGGAAATGTTNNNNNGCCAAGGCCACC",
+    "connector": "||||||||||||     ||||||||||||",
+    "editEnd": 17,
+    "editStart": 12,
+    "note": "insertion · 5 nt",
+    "ref": "AGTGGAAATGTT-----GCCAAGGCCACC"
+  },
+  "NM_004006.3:c.76A>G": {
+    "alt": "ACAAAATGGGTAGATGCACAATTTT",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "ACAAAATGGGTAAATGCACAATTTT"
+  },
+  "NM_004006.3:c.76_83inv": {
+    "alt": "ACAAAATGGGTATGTGCATTATTTTCTAAGTT",
+    "connector": "||||||||||||  ||||  ||||||||||||",
+    "editEnd": 20,
+    "editStart": 12,
+    "note": "8 nt · 4 changed",
+    "ref": "ACAAAATGGGTAAATGCACAATTTTCTAAGTT"
+  },
+  "NM_004006.3:c.76delinsG": {
+    "alt": "ACAAAATGGGTAGATGCACAATTTT",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "ACAAAATGGGTAAATGCACAATTTT"
+  },
+  "NM_004006.3:c.76delinsGTA": {
+    "alt": "ACAAAATGGGTAGTAATGCACAATTTT",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "delins · 1 → 3 nt",
+    "ref": "ACAAAATGGGTAA--ATGCACAATTTT"
+  },
+  "NM_004006.3:c.79_80delinsTT": {
+    "alt": "AAATGGGTAAATTTACAATTTTCTAA",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "2 nt · 2 changed",
+    "ref": "AAATGGGTAAATGCACAATTTTCTAA"
+  },
+  "NM_004006.3:c.849_850ins850_900inv": {
+    "alt": "GTCAGTCTAGCAGGCATAGCTCTTGAA … TCTCTCATATCCCTGCAGGGATATGAG",
+    "connector": "||||||||||||                                 ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "insertion · 51 nt",
+    "ref": "GTCAGTCTAGCA--------------- … ---------------CAGGGATATGAG"
+  },
+  "NM_004006.3:r.(1388g>a)": {
+    "alt": "aguugaaugacuagcuaacaaaaac",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "aguugaaugacuggcuaacaaaaac"
+  },
+  "NM_004006.3:r.(76a>c)": {
+    "alt": "acaaaauggguacaugcacaauuuu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "acaaaauggguaaaugcacaauuuu"
+  },
+  "NM_004006.3:r.*40u>a": {
+    "alt": "ugggcagagcgaaggaguccuuagu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "ugggcagagcgauggaguccuuagu"
+  },
+  "NM_004006.3:r.*460ac[9]": {
+    "alt": "aaaacaaaacaaacacacacacacacacacauacacacacac",
+    "connector": "||||||||||||                  ||||||||||||",
+    "editEnd": 30,
+    "editStart": 12,
+    "note": "delins · 16 → 18 nt",
+    "ref": "aaaacaaaacaaacacacacacacacac--auacacacacac"
+  },
+  "NM_004006.3:r.-14a>c": {
+    "alt": "cgcugccuugaucuacacuuuucaa",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "cgcugccuugauauacacuuuucaa"
+  },
+  "NM_004006.3:r.103_105delinsa": {
+    "alt": "aaguuugggaaga--cauauugagaac",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "delins · 3 → 1 nt",
+    "ref": "aaguuugggaagcagcauauugagaac"
+  },
+  "NM_004006.3:r.123_124insg": {
+    "alt": "gagaaccucuucgagugaccuacag",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "gagaaccucuuc-agugaccuacag"
+  },
+  "NM_004006.3:r.123_124insu": {
+    "alt": "gagaaccucuucuagugaccuacag",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "gagaaccucuuc-agugaccuacag"
+  },
+  "NM_004006.3:r.123_125delinsa": {
+    "alt": "ugagaaccucuua--ugaccuacagga",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "delins · 3 → 1 nt",
+    "ref": "ugagaaccucuucagugaccuacagga"
+  },
+  "NM_004006.3:r.123_126del": {
+    "alt": "ugagaaccucuu----gaccuacaggau",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "deletion · 4 nt",
+    "ref": "ugagaaccucuucagugaccuacaggau"
+  },
+  "NM_004006.3:r.123_126dup": {
+    "alt": "aaccucuucagucagugaccuacaggau",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "insertion · 4 nt",
+    "ref": "aaccucuucagu----gaccuacaggau"
+  },
+  "NM_004006.3:r.123del": {
+    "alt": "ugagaaccucuu-agugaccuacag",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "deletion · 1 nt",
+    "ref": "ugagaaccucuucagugaccuacag"
+  },
+  "NM_004006.3:r.123dup": {
+    "alt": "gagaaccucuuccagugaccuacag",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "gagaaccucuuc-agugaccuacag"
+  },
+  "NM_004006.3:r.124_129del": {
+    "alt": "gagaaccucuuc------cuacaggauggg",
+    "connector": "||||||||||||      ||||||||||||",
+    "editEnd": 18,
+    "editStart": 12,
+    "note": "deletion · 6 nt",
+    "ref": "gagaaccucuucagugaccuacaggauggg"
+  },
+  "NM_004006.3:r.1388g>a": {
+    "alt": "aguugaaugacuagcuaacaaaaac",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "aguugaaugacuggcuaacaaaaac"
+  },
+  "NM_004006.3:r.142_144delinsugc": {
+    "alt": "cuacaggaugggugccgccuccuagac",
+    "connector": "|||||||||||| | ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "3 nt · 2 changed",
+    "ref": "cuacaggaugggaggcgccuccuagac"
+  },
+  "NM_004006.3:r.142_144delinsugg": {
+    "alt": "cuacaggauggguggcgccuccuagac",
+    "connector": "|||||||||||| ||||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "3 nt · 1 changed",
+    "ref": "cuacaggaugggaggcgccuccuagac"
+  },
+  "NM_004006.3:r.1470_1472del": {
+    "alt": "aaaacgccaagu---acaacauaaggu",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "aaaacgccaaguacaacaacauaaggu"
+  },
+  "NM_004006.3:r.1470_1472dup": {
+    "alt": "acgccaaguacaacaacaacauaaggu",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "insertion · 3 nt",
+    "ref": "acgccaaguaca---acaacauaaggu"
+  },
+  "NM_004006.3:r.149delinsaga": {
+    "alt": "augggaggcgccagaccuagaccuccu",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "delins · 1 → 3 nt",
+    "ref": "augggaggcgccu--ccuagaccuccu"
+  },
+  "NM_004006.3:r.149delinsga": {
+    "alt": "augggaggcgccgaccuagaccuccu",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "delins · 1 → 2 nt",
+    "ref": "augggaggcgccu-ccuagaccuccu"
+  },
+  "NM_004006.3:r.177_180inv": {
+    "alt": "aggccugacagguugcaaacugccaaaa",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "4 nt · 4 changed",
+    "ref": "aggccugacagggcaaaaacugccaaaa"
+  },
+  "NM_004006.3:r.17_18ins5_16": {
+    "alt": "uuggugggaagauuuggugggaagaguagaggacug",
+    "connector": "||||||||||||            ||||||||||||",
+    "editEnd": 24,
+    "editStart": 12,
+    "note": "insertion · 12 nt",
+    "ref": "uuggugggaaga------------aguagaggacug"
+  },
+  "NM_004006.3:r.203_506inv": {
+    "alt": "aagaaaaaggauaaagccaggccauca … caugaacucuugugggaaugcucucau",
+    "connector": "||||||||||||  |     |               |     |  ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "304 nt · 222 changed",
+    "ref": "aagaaaaaggauccacaagaguucaug … ugauggccuggcuuugaaugcucucau"
+  },
+  "NM_004006.3:r.234_235ins123_234inv": {
+    "alt": "aacaaugucaacguugacauuguucag … uccuguaggucacugaaggcacugcgg",
+    "connector": "||||||||||||                                 ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "insertion · 112 nt",
+    "ref": "aacaaugucaac--------------- … ---------------aaggcacugcgg"
+  },
+  "NM_004006.3:r.426_427insa": {
+    "alt": "auucuccugagcauggguccgacaa",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "auucuccugagc-uggguccgacaa"
+  },
+  "NM_004006.3:r.456_457ins123_456": {
+    "alt": "cguaauuauccacagugaccuacagga … acucguaauuauccacagguuaaugua",
+    "connector": "||||||||||||                                 ||||||||||||",
+    "editEnd": 45,
+    "editStart": 12,
+    "note": "insertion · 334 nt",
+    "ref": "cguaauuaucca--------------- … ---------------cagguuaaugua"
+  },
+  "NM_004006.3:r.549_550insn": {
+    "alt": "cuauuugacuggnaauagugugguu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "cuauuugacugg-aauagugugguu"
+  },
+  "NM_004006.3:r.54g>h": {
+    "alt": "agauguucaaaahaaaacauucaca",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "agauguucaaaagaaaacauucaca"
+  },
+  "NM_004006.3:r.5_16delins123_134": {
+    "alt": "uuuucaaaaugccagugaccuacaaaguagaggacu",
+    "connector": "||||||||||||    |    |  ||||||||||||",
+    "editEnd": 24,
+    "editStart": 12,
+    "note": "12 nt · 10 changed",
+    "ref": "uuuucaaaaugcuuuggugggaagaaguagaggacu"
+  },
+  "NM_004006.3:r.5_6delinsag": {
+    "alt": "uuuucaaaaugcaguggugggaagaa",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "2 nt · 2 changed",
+    "ref": "uuuucaaaaugcuuuggugggaagaa"
+  },
+  "NM_004006.3:r.5delinsa": {
+    "alt": "uuuucaaaaugcauuggugggaaga",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "uuuucaaaaugcuuuggugggaaga"
+  },
+  "NM_004006.3:r.6_7insu": {
+    "alt": "uucaaaaugcuuuuggugggaagaa",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "uucaaaaugcuu-uggugggaagaa"
+  },
+  "NM_004006.3:r.6_8del": {
+    "alt": "uuucaaaaugcu---gugggaagaagu",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "deletion · 3 nt",
+    "ref": "uuucaaaaugcuuuggugggaagaagu"
+  },
+  "NM_004006.3:r.6_8dup": {
+    "alt": "caaaaugcuuuguuggugggaagaagu",
+    "connector": "||||||||||||   ||||||||||||",
+    "editEnd": 15,
+    "editStart": 12,
+    "note": "insertion · 3 nt",
+    "ref": "caaaaugcuuug---gugggaagaagu"
+  },
+  "NM_004006.3:r.756_757insuacu": {
+    "alt": "caggaaguggaauacuauguugccaagg",
+    "connector": "||||||||||||    ||||||||||||",
+    "editEnd": 16,
+    "editStart": 12,
+    "note": "insertion · 4 nt",
+    "ref": "caggaaguggaa----auguugccaagg"
+  },
+  "NM_004006.3:r.761_762insnnnnn": {
+    "alt": "aguggaaauguunnnnngccaaggccacc",
+    "connector": "||||||||||||     ||||||||||||",
+    "editEnd": 17,
+    "editStart": 12,
+    "note": "insertion · 5 nt",
+    "ref": "aguggaaauguu-----gccaaggccacc"
+  },
+  "NM_004006.3:r.76_77delinsug": {
+    "alt": "acaaaauggguaugugcacaauuuuc",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "2 nt · 2 changed",
+    "ref": "acaaaauggguaaaugcacaauuuuc"
+  },
+  "NM_004006.3:r.76a>c": {
+    "alt": "acaaaauggguacaugcacaauuuu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "acaaaauggguaaaugcacaauuuu"
+  },
+  "NM_004006.3:r.76a>g": {
+    "alt": "acaaaauggguagaugcacaauuuu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "1 nt · 1 changed",
+    "ref": "acaaaauggguaaaugcacaauuuu"
+  },
+  "NM_004006.3:r.76del": {
+    "alt": "acaaaaugggua-augcacaauuuu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "deletion · 1 nt",
+    "ref": "acaaaauggguaaaugcacaauuuu"
+  },
+  "NM_004006.3:r.76dup": {
+    "alt": "caaaauggguaaaaugcacaauuuu",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "caaaauggguaa-augcacaauuuu"
+  },
+  "NM_004006.3:r.775_776delinsa": {
+    "alt": "ccaaggccaccua-agugacuaaaga",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "delins · 2 → 1 nt",
+    "ref": "ccaaggccaccuaaagugacuaaaga"
+  },
+  "NM_004006.3:r.775delinsga": {
+    "alt": "ccaaggccaccugaaagugacuaaag",
+    "connector": "||||||||||||  ||||||||||||",
+    "editEnd": 14,
+    "editStart": 12,
+    "note": "delins · 1 → 2 nt",
+    "ref": "ccaaggccaccua-aagugacuaaag"
+  },
+  "NM_004006.3:r.77del": {
+    "alt": "caaaauggguaa-ugcacaauuuuc",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "deletion · 1 nt",
+    "ref": "caaaauggguaaaugcacaauuuuc"
+  },
+  "NM_004006.3:r.7dup": {
+    "alt": "ucaaaaugcuuuuggugggaagaag",
+    "connector": "|||||||||||| ||||||||||||",
+    "editEnd": 13,
+    "editStart": 12,
+    "note": "insertion · 1 nt",
+    "ref": "ucaaaaugcuuu-ggugggaagaag"
+  },
+  "NM_004006.3:r.849_850ins858_895": {
+    "alt": "gucagucuagcaugagagaacuucuuccccuaagccucgauucaagagcucagggauaugag",
+    "connector": "||||||||||||                                      ||||||||||||",
+    "editEnd": 50,
+    "editStart": 12,
+    "note": "insertion · 38 nt",
+    "ref": "gucagucuagca--------------------------------------cagggauaugag"
+  },
+  "NM_004006.3:r.902_909delinsuuu": {
+    "alt": "agagcuaugccuuuu-----gcugcuuauguc",
+    "connector": "||||||||||||        ||||||||||||",
+    "editEnd": 20,
+    "editStart": 12,
+    "note": "delins · 8 → 3 nt",
+    "ref": "agagcuaugccuacacacaggcugcuuauguc"
+  }
+}
