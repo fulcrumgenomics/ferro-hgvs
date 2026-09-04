@@ -1,25 +1,16 @@
 # Adjoined transcript — ferro's reading
 
-ferro's reading of `RNA/adjoined_transcript.md`. The rules are HGVS's; ferro's job is to produce the
-form the recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **adjoined transcript** recommendations on the transcript (`r.`)
+axis, clause by clause — each spelling with the form ferro normalizes it to and a verdict on
+that output. New here? See [How to read a page](../../reading-guide.md) for the verdicts, the
+table conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page — but note two `conformant`
-  rows that are *not* mere limitations: ferro's output re-parses in both, which is what the verdict
-  measures, while the parse behind it is wrong or an RFC 2119 MUST goes unenforced. Those are filed as
-  [#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212) (single-position breakpoints
-  accepted) and [#2213](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2213) (linker silently
-  absorbed into the 3' accession).
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+Two `conformant` rows on this page are not mere limitations: ferro's output re-parses in both,
+which is what the verdict measures, while the parse behind it is wrong or an RFC 2119 MUST goes
+unenforced. Those are filed as
+[#2212](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2212) (single-position breakpoints
+accepted) and [#2213](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2213) (linker
+silently absorbed into the 3' accession).
 
 **No ledger record cites any `RNA/adjoined_transcript.md` clause** — the whole document is a
 record-level gap, so every section below carries **no Why block**. The reading is CONFIRM- (or

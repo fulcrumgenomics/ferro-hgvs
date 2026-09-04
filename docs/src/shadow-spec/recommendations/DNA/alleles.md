@@ -1,27 +1,19 @@
 # Alleles — ferro's reading
 
-ferro's reading of `DNA/alleles.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **alleles** recommendations, clause by clause — each spelling with the
+form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page — but two kinds of
-  `conformant` row here are not mere limitations, and the verdict word undersells both. Three rows
-  at `alleles.md:5` are inputs ferro **refuses in strict mode at normalize** (`W5002`), which the
-  checked `refused` verdict — a strict *parse* check — cannot carry, so they are recorded on what
-  the lenient tier emits. The `[?]` and `[0]` rows at `alleles.md:65` / `alleles.md:103-106`
-  re-spell the spec's own compact form to an expanded one; the output re-parses, which is what the
-  verdict measures, and the defect is filed as
-  [#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
+*RNA twin: [Alleles (`r.`)](../RNA/alleles.md).*
 
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+Two kinds of `conformant` row here are not mere limitations, and the verdict word undersells both.
+Three rows at `alleles.md:5` are inputs ferro **refuses in strict mode at normalize** (`W5002`),
+which the checked `refused` verdict — a strict *parse* check — cannot carry, so they are recorded
+on what the lenient tier emits. The `[?]` and `[0]` rows at `alleles.md:65` / `alleles.md:103-106`
+re-spell the spec's own compact form to an expanded one; the output re-parses, which is what the
+verdict measures, and the defect is filed as
+[#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
 
 How ferro treats an allele, which every section below rests on: the members are parsed into an
 `AllelePhase` — `Cis` (`[a;b]`), `Trans` (`[a];[b]`), `Unknown` (`a(;)b`) — and **each member is
@@ -47,12 +39,15 @@ reference territory** — nested, overlapping, or two insertions at one point �
 of variants" and are refused. The refusal is coordinate-based (it compares member spans, no
 reference bases needed).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[conflicting-member-geometry-refusal-scope](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two members of one allele that claim intersecting reference territory — nested, overlapping, or two insertions at one interbase — are refused, whatever edit types they render as.
 >
 > **[inversion-vs-a-mixed-member-competitor](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When a span replaced by its reverse complement competes with a description mixing lone substitutions and multi-column members, ferro writes it as one inv rather than typing to the competitor's member shapes, which would make the description turn on incidental base coincidence rather than the event itself; both forms are conformant, so this is the project's choice among them.
 <!-- why:END:conflicting-member-geometry-refusal-scope,inversion-vs-a-mixed-member-competitor -->
+
+</details>
 
 The **geometry-refusal** record's jurisdiction is DNA: it governs this very clause, `alleles.md:5`.
 It is the one place the definition is load-bearing — the definition ("a series of variants on **one
@@ -95,10 +90,13 @@ scope). Members two or more nucleotides apart stay individual, and the `;` join 
 compact, single-prefix form (`ACC:c.[a;b]`) is used only when every member shares accession and
 coordinate type — which is exactly the shape of every worked cis example in this doc.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[junction-exit-wrapper-scope-in-a-mixed-allele](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Whether a mixed cis allele needing both a genomic wrapper for a ferro-manufactured intronic offset and an author-spelled intronic position on the same bare transcript should lift the wrapper to the whole description or expand to per-member accessions is undecided, and ferro's current behavior of shipping the offset bare is the unresolved status quo rather than a ruling.
 <!-- why:END:junction-exit-wrapper-scope-in-a-mixed-allele -->
+
+</details>
 
 **The mixed-allele wrapper-scope question is open (undecided).** `alleles.md:16` describes the cis
 shape only when a shared accession+axis prefix already exists — every worked cis example here shares

@@ -1,17 +1,10 @@
 # Other — ferro's reading
 
-ferro's reading of `other.md` — the "no change" (`=`) assertion, methylation
-(`|gom`/`|lom`/`|met=`), and the mosaic (`=/`) and chimeric (`=//`) mixtures. The rules are
-HGVS's; ferro's job is to produce the form the recommendations prefer. Verdicts describe
-**ferro's output**:
-
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
+ferro's reading of the HGVS **other** recommendations — the "no change" (`=`) assertion,
+methylation (`|gom`/`|lom`/`|met=`), and the mosaic (`=/`) and chimeric (`=//`) mixtures — clause
+by clause, each spelling with the form ferro normalizes it to and a verdict on that output. New
+here? See [How to read a page](../../reading-guide.md) for the verdicts, the table conventions,
+and the recurring terms.
 
 **No Why block appears on this page.** No ruling record in the ledger cites `other.md`, and the
 notation families this doc carries are either mechanical (the `=` identity and the methylation

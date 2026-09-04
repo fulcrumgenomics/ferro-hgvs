@@ -1,20 +1,11 @@
 # Insertion — ferro's reading
 
-ferro's reading of `RNA/insertion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **insertion** recommendations on the transcript (`r.`) axis, clause
+by clause — each spelling with the form ferro normalizes it to and a verdict on that output.
+New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Insertion (`c.`/`g.`)](../DNA/insertion.md).*
 
 Five ledger records reach this page's clauses.
 `inverted-duplication-is-derived-as-ins-range-inv` cites `RNA/insertion.md:18` directly, so it
@@ -90,10 +81,13 @@ tandem-as-insertion spelling `r.456_457ins123_456` is executable on the slice ac
 expands the range payload to literal bases (`try_expand_rna_ins`, `INSERTED_SEQUENCE_EXPANDED`),
 finds the payload is a copy of the 334 bases immediately 5', and relabels it `dup`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[duplication-must-ranks-the-label-not-the-partition](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
 <!-- why:END:duplication-must-ranks-the-label-not-the-partition -->
+
+</details>
 
 `duplication-must-ranks-the-label-not-the-partition` cites `DNA/duplication.md:18`; on the `r.`
 axis the same MUST is carried verbatim by `RNA/duplication.md:19`, and a `DNA/` citation cannot
@@ -122,10 +116,13 @@ Ferro: an inverted duplication is spelled `ins<range>inv`, naming the span the i
 from — never `dup`, and never the `dupinv` shorthand, which is refused at parse. `:18` is the one
 clause on this page the ledger cites directly on its own `r.` authority.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 **The inverted-duplication form is not yet derived on `r.`** The `ins<range>inv` re-spell is wired
 only in `normalize_genome` (the sole production caller of `rules::inverted_adjacent_copy_span`);
@@ -180,10 +177,13 @@ with `Reference not found` when it does not. Since `:20` states in as many words
 literal and the range-citation forms are legal, and no clause selects between them, which spelling
 ferro emits is a representation choice governed by the ledger — not a defect.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -255,10 +255,13 @@ storable-but-wrong SPDI triple; `hgvs_to_spdi` declines with `UnrepresentableInS
 normalized `r.` string, and the rows below stay valid HGVS — so it is recorded here rather than
 executed: the harness runs `normalize`, not the SPDI conversion.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[spdi-n-unit-repeat-refusal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — On the HGVS-to-SPDI path ferro refuses an 'N'-unit or 'N'-containing repeat rather than expand it to literal 'N' bases — a project choice, since 'N' states a length, not identified bases, and the recommendations do not reach SPDI conversion.
 <!-- why:END:spdi-n-unit-repeat-refusal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -293,10 +296,13 @@ strict does not do). `cross_doc_compliance::xdoc_rna_invalid_intronic_anchor_ins
 round-trip parse, not a rejection. **No tracking issue found** for the parse-stage half — flagged
 for the operator, not filed here.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -320,10 +326,13 @@ allowed on r.; the anchor MUST be two adjacent positions"), and lenient/silent a
 there is nothing to normalize the ambiguity into. `reject_single_position_insertion.rs` pins the
 refusal across `g.`/`c.`/`n.`/`r.`/`m.`/`o.` "by construct-symmetry".
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

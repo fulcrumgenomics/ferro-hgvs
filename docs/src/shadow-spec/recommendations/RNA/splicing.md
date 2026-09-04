@@ -1,20 +1,9 @@
 # Splicing — ferro's reading
 
-ferro's reading of `RNA/splicing.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
-
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+ferro's reading of the HGVS **splicing** recommendations on the transcript (`r.`) axis, clause
+by clause — each spelling with the form ferro normalizes it to and a verdict on that output.
+New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
 **No ledger record cites any `RNA/splicing.md` clause** — the whole document is a record-level gap,
 so **every section below carries no Why block**. The reading is CONFIRM-by-inspection against the
@@ -105,10 +94,14 @@ its bare example).
 
 ## `splicing.md:16-19` — HGNC / VICC gene-fusion nomenclature
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - HGVS recommends following the [HGNC guidelines](https://www.genenames.org/about/guidelines/) and the [VICC Gene Fusion Specification](https://fusions.cancervariants.org/en/latest) nomenclature to describe products of gene fusions.
 >     - The HGNC recommendations include using a `GENESYMBOL1::GENESYMBOL2` syntax for gene-level fusion descriptions, and a `GENESYMBOL1-GENESYMBOL2` syntax for read-through transcripts.
 >     - The VICC nomenclature extends the HGNC recommendations to include a terminology, information model, and nomenclature for gene-level and exon-level representation, with components for disambiguating regulatory fusions from chimeric transcript fusions.
 >     - HGVS also recommends the use of adjoined transcripts (see examples) for precise and unambiguous characterization of chimeric transcripts at the sequence level.
+
+</details>
 
 Ferro: gene-symbol-level fusion nomenclature is delegated to HGNC/VICC and is **not an HGVS
 description**. The only HGVS-level form here is the adjoined transcript, which is governed by its own
@@ -133,6 +126,8 @@ each in its own frame, and neither merges nor reorders them. (Adjudication is un
 
 ## `splicing.md:27-36` — example: splice acceptor site
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **splice acceptor site**
 >     - **`NC_000023.11(NM_004006.2):r.650_831del`**<br>
 >       as a consequence of a variant destroying a splice acceptor site, the sequence from nucleotide `r.650` to `r.831` (exon 8) is deleted from the transcript.
@@ -143,6 +138,8 @@ each in its own frame, and neither merges nor reorders them. (Adjudication is un
 >     - **`NC_000023.11(NM_004006.2):r.649_650ins[650-52_650-2;c]`**<br>
 >       as a consequence of a variant destroying a splice acceptor site (`c.650-1G>C`), a new acceptor site in intron 7 is activated and the intron 7 sequence from positions `650-52` to `650-1` is inserted in the transcript.<br>
 >       **NOTE**: nucleotide `650-1` changed from `g` to `c`.
+
+</details>
 
 Ferro: two of these are ordinary RNA deletions (governed by `RNA/deletion.md`) and preserve; the third
 is the page's **central form** — intron retention written as an `r.` insertion whose payload is a
@@ -188,6 +185,8 @@ bold examples) governs over one formatting-commit class attribute.**
 
 ## `splicing.md:38-47` — example: splice donor site
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **splice donor site** (`c.831+2T>A`)
 >     - **`NC_000023.11(NM_004006.2):r.650_831del`**<br>
 >       as a consequence of a variant destroying the exon 8 splice donor site, the sequence from nucleotide `r.650` to `r.831` (exon 8) is deleted from the transcript.
@@ -198,6 +197,8 @@ bold examples) governs over one formatting-commit class attribute.**
 >     - **`NC_000023.11(NM_004006.2):r.831_832ins[ga;831+3_831+60]`**<br>
 >       as a consequence of a variant destroying the exon 8 splice donor site, a new donor site in intron 8 (positions `831+60` / `831+61`) is activated and the intron 8 sequence from positions `831+1` to `831+60` is inserted in the transcript.<br>
 >       **NOTE**: nucleotide `831+2` changed from `u` to `a`.
+
+</details>
 
 Ferro: the acceptor-site shape at `splicing.md:27-36`, mirrored to the donor side — the literal `ga`
 spells `831+1` and the mutated `831+2`, and the range resumes at `831+3`. Two ordinary deletions
@@ -213,6 +214,8 @@ there.
 
 ## `splicing.md:49-57` — example: intron variant
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **intron variant**
 >     - **`NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1`**<br>
 >       as a consequence of an intron 7 variant (`c.650-52_650-51del`), a new stronger exon 8 splice acceptor site is created (positions `650-51` / `650-50`) and the intron 7 sequence from positions `650-50` to `650-1` is inserted in the transcript.
@@ -222,6 +225,8 @@ there.
 >
 >     - **`NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268`**<br>
 >       as a consequence of an intron 7 variant (`c.650-1401T>G`), a new exon is created and its sequence (positions `650-1400` to `650-1268`) is inserted in the transcript.
+
+</details>
 
 Ferro: the **unbracketed** intronic-range payload — the plainest form of the intron-retention shape,
 with no literal component at all. All three decline at normalize with the *spec-undefined* message.
@@ -251,6 +256,8 @@ page, not here.
 
 ## `splicing.md:63-71` — example: uncertain (RNA not analysed)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **uncertain** (RNA not analysed)
 >     - **`NC_000023.11(NM_004006.2):r.(76a>c)`**<br>
 >       RNA was not analysed, but a substitution of the `a` nucleotide at `r.76` by a `c` is predicted.
@@ -260,6 +267,8 @@ page, not here.
 >
 >     - **`NC_000023.11(NM_004006.2):r.spl`**<br>
 >       RNA has not been analysed, but it is very likely that splicing is affected.
+
+</details>
 
 Ferro: three whole-transcript or predicted statements. `r.(76a>c)` is an ordinary predicted
 substitution (the parentheses mark it predicted); `r.?` and `r.spl` carry no position and no sequence
@@ -278,12 +287,16 @@ distinct from `r.?` (`rna_spl_marker.rs`).
 
 ## `splicing.md:75-80` — discussion: `r.spl` and `r.(spl?)`
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "A variant changes the +1 intron sequence (`GT` to `AT`). Although I did not analyse RNA, I am quite sure that normal splicing is affected. How can I best indicate this?"
 >
 >     HGVS recommends to use the format `r.spl` to indicate that RNA was not analysed, but splicing is most probably affected.
 >     In general, the format is used for variants changing the +1, +2, -2 and -1 position of an intron, i.e. affecting the `GT` splice donor and `AG` splice acceptor site (excluding `GT` to `GC` and `GC` to `GT` variants).
 >     `r.(spl?)` is frequently used to indicate that normal splicing might be affected as a consequence of variants in the first or last nucleotide of an exon, the +3 to +5 intron position (splice donor site), and variants generating a new `AG` di-nucleotide close to the normal splice acceptor site (`AG`).
 >     See [Uncertain](../uncertain.md).
+
+</details>
 
 Ferro: three things live in this Q&A, and two are unrecorded open questions.
 

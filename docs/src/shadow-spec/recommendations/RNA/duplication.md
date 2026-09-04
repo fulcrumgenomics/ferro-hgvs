@@ -1,20 +1,11 @@
 # Duplication — ferro's reading
 
-ferro's reading of `RNA/duplication.md`. The rules are HGVS's; ferro's job is to produce the form
-the recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **duplication** recommendations on the transcript (`r.`) axis,
+clause by clause — each spelling with the form ferro normalizes it to and a verdict on that
+output. New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Duplication (`c.`/`g.`)](../DNA/duplication.md).*
 
 Two ledger records reach this page's clauses. `inverted-duplication-is-derived-as-ins-range-inv`
 cites `RNA/duplication.md:21` (and `RNA/insertion.md:18`) directly, so it carries `r.` authority on
@@ -101,12 +92,15 @@ through the shared canonical-form path (`rules::insertion_is_duplication`, reach
 (worked at `:47-52`); (iv) an inverted duplication is spelled `ins<range>inv`, never `dup` — the
 `dupinv` shorthand is refused at parse.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[duplication-must-ranks-the-label-not-the-partition](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
 >
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:duplication-must-ranks-the-label-not-the-partition,inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 `duplication-must-ranks-the-label-not-the-partition` cites `DNA/duplication.md:18`; on the `r.`
 axis the same MUST is carried verbatim by `RNA/duplication.md:19`, and a `DNA/` citation cannot

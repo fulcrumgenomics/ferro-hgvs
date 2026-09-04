@@ -1,20 +1,11 @@
 # Substitution — ferro's reading
 
-ferro's reading of `substitution.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **substitution** recommendations, clause by clause — each spelling with
+the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Substitution (`r.`)](../RNA/substitution.md).*
 
 ## `substitution.md:5` — definition: one nucleotide for one
 
@@ -35,10 +26,13 @@ Ferro: a substitution is exactly 1→1; IUPAC ambiguity codes stand in for the s
 
 Ferro: a multi-base replacement is never a substitution; write it as a delins.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -52,12 +46,15 @@ Ferro: a multi-base replacement is never a substitution; write it as a delins.
 Ferro: the separation rule (ruleset rule 2); the exception folds two subs into one delins only when
 they sit one nucleotide apart and together change one amino acid.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 <!-- why:END:separation-rule-force-modal-or-negation,codon-carve-out-shape-restriction -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -101,12 +98,15 @@ bases are one delins. The same rule licenses re-merging adjacency that per-membe
 creates (protein `p.[Gly16Ala;Gly17del]` → `p.Gly16_Gly17delinsAla`), keeping normalization
 idempotent.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-adjacent-members-when-both-consume-reference](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
 >
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:delins-adjacent-members-when-both-consume-reference,canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

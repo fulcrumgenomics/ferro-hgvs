@@ -1,26 +1,19 @@
 # Alleles — ferro's reading
 
-ferro's reading of `RNA/alleles.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **alleles** recommendations on the transcript (`r.`) axis, clause
+by clause — each spelling with the form ferro normalizes it to and a verdict on that output.
+New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page — but two kinds of
-  `conformant` row here are not mere limitations, and the verdict word undersells both. Three rows
-  at `:5` are inputs ferro **refuses in strict mode at normalize** (`W5002`), which the checked
-  `refused` verdict — a strict *parse* check — cannot carry, so they are recorded on what the
-  lenient tier emits. Two rows at `:36-52` / `:82-85` re-spell the spec's own compact form to an
-  expanded one; the output re-parses, which is what the verdict measures, and the defect is filed as
-  [#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
+*DNA twin: [Alleles (`c.`/`g.`)](../DNA/alleles.md).*
 
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+Two kinds of `conformant` row on this page are not mere limitations, and the verdict word
+undersells both. Three rows at `:5` are inputs ferro **refuses in strict mode at normalize**
+(`W5002`), which the checked `refused` verdict — a strict *parse* check — cannot carry, so they
+are recorded on what the lenient tier emits. Two rows at `:36-52` / `:82-85` re-spell the
+spec's own compact form to an expanded one; the output re-parses, which is what the verdict
+measures, and the defect is filed as
+[#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
 
 **No ledger record cites any `RNA/alleles.md` clause** — the whole document is a record-level gap,
 so every section below carries **no Why block**. The reading is CONFIRM-by-inspection against the
@@ -185,6 +178,8 @@ yet filed).
 
 ## `alleles.md:27-34` — examples: variants on one allele (cis)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **variants on one allele**
 >     - **`LRG_199t1:r.[76a>u;103del]`**<br>
 >       one transcript contains two different changes, `r.76a>u` and `r.103del`.
@@ -193,6 +188,8 @@ yet filed).
 >     - **`LRG_199t1:r.[(578c>u;1339a>g;1680del)]`**<br>
 >       one transcript contains three different predicted changes, `r.(578c>u)`, `r.(1339a>g)`, and `r.(1680del)`.
 >       The variants are found in _cis_.
+
+</details>
 
 Ferro: the plain cis allele (ex 1) is `AllelePhase::Cis` with members individually normalized and
 preserved. The second example wraps the whole allele in `[(...)]` — a **predicted** (uncertain) cis
@@ -207,6 +204,8 @@ the prediction to a concrete assertion.
 | `NM_004006.3:r.[(76del;124_129del)]` | recommended | `NM_004006.3:r.[(77del;124_129del)]` | the wrap is preserved **and** the members inside it are normalized: `r.76del` 3'-shifts to `r.77del` without the prediction being collapsed |
 
 ## `alleles.md:36-52` — examples: variants on two alleles (trans), and `[76=]` vs `[=]`
+
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
 
 > - **variants on two alleles**
 >     - **`LRG_199t1:r.[76a>u];[103del]`**<br>
@@ -225,6 +224,8 @@ the prediction to a concrete assertion.
 >
 >     - **`NM_004006.2:r.[76a>u];[?]`**<br>
 >       one transcript allele contains a variant, `r.76a>u`, while a variant in the other transcript allele is expected but not yet identified (`r.?`) (e.g., in individuals affected by a recessive disease).
+
+</details>
 
 Ferro: four trans shapes, all preserved unmerged — heterozygous (two different members), homozygous
 (the same member on both alleles), one allele wild-type at a named position (`[76=]`), and one
@@ -261,10 +262,14 @@ round-trip or a `contains(";[?]")`, which both renderings satisfy.
 
 ## `alleles.md:54-57` — alleles not certain (unknown phase)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **alleles not certain**
 >     - **`NM_004006.2:r.76a>u(;)103del`**<br>
 >       two variants are found in a transcript, `r.76a>u` and `r.103del`, but it is not known whether they derive from the same or from different transcript alleles (chromosomes).<br>
 >       **NOTE**: when it is not known on which allele a variant is, allele brackets should not be used.
+
+</details>
 
 Ferro: the worked example of the `:19-20` unknown-phase rule — the bracket-less `(;)` form is kept
 bracket-less, members individually normalized, phase not inferred.
@@ -292,11 +297,15 @@ merged or reordered against each other, each normalized in its own frame. (Adjud
 
 ## `alleles.md:65-69` — Discussion: the retracted `+` separator
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "Was originally the recommendation to use the format <code class="invalid">[r.76a>c+r.83g>c]</code>?"
 >
 >     Indeed, originally [den Dunnen and Antonarakis, 2000](http://dx.doi.org/10.1002/%28SICI%291098-1004%28200001%2915:1%3c7::AID-HUMU4%3e3.0.CO;2-N) the suggestion was to describe two changes in a transcript from one chromosome as <code class="invalid">[r.76a>c+r.83g>c]</code>, i.e. using a "+"-character to separate the two changes, while an earlier publication suggested to use a ";" (<code class="invalid">[r.76a>c;r.83g>c]</code> [(Antonarakis and the Nomenclature Working Group, 1998](http://dx.doi.org/10.1002/%28SICI%291098-1004%281998%2911:1%3c1::AID-HUMU1%3e3.0.CO;2-O)).
 >     To prevent confusion with older publications, to improve overall consistency, and to keep descriptions as short as possible, the 2000 proposal was retracted.
 >     The recommended format is `r.[76a>c;83g>c]`.
+
+</details>
 
 Ferro: the `+` separator inside allele brackets is `class="invalid"` — a retracted 2000 proposal.
 The `;` is the recommended cis separator; ferro does not emit `+` and rejects it at parse.
@@ -307,12 +316,16 @@ The `;` is the recommended cis separator; ferro does not emit `+` and rejects it
 
 ## `alleles.md:71-76` — Discussion: recording variant combinations in recessive disease
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "In recessive diseases, is it important I show in which combination variants were found?"
 >
 >     When in one individual you find more than one variant, it is essential that you clearly indicate on which transcript allele(s) variant(s) were found.
 >
 >     - disease severity will depend on the combination of variants found;
 >     - in recessive disease, when two variants are in one transcript, an individual is a carrier or you might not have found the variant on transcripts from the second allele.
+
+</details>
 
 Ferro: advisory guidance to the author to record the cis/trans combination clearly. It picks no
 canonical form and constrains no normalization — descriptive, nothing for the normalizer to enforce.
@@ -344,10 +357,14 @@ recommended form on the reading the rest of the spec supports.
 
 ## `alleles.md:82-85` — Discussion: X-chromosome male, `r.0` for an absent transcript
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "How should I describe the variants detected in males and females for a transcript from the X-chromosome?"
 >
 >     In **females**, the description is straightforward, like `LRG_199t1:r.[76a>c];[76=]`.
 >     In **males**, there is no transcript from the second allele (X-chromosome), which can be described as `LRG_199t1:r.[76a>c];[0]`, i.e. using `r.0` to indicate the absence of a transcript from the second X-chromosome.
+
+</details>
 
 Ferro: `r.0` denotes an absent transcript (no expression from the second X allele in a male). Ferro
 accepts the `[0]` member and lowers it to the dedicated `NullAllele` sentinel on the `r.` axis

@@ -1,20 +1,11 @@
 # Inversion — ferro's reading
 
-ferro's reading of `inversion.md` (DNA axes). The rules are HGVS's; ferro's job is to produce the
-form the recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **inversion** recommendations (DNA axes), clause by clause — each
+spelling with the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Inversion (`r.`)](../RNA/inversion.md).*
 
 Two questions carry the adjudication on this page, and both have a Why block. The **typing**
 question — a span whose whole content is replaced by its exact reverse complement types as one
@@ -60,10 +51,13 @@ a fact about the whole span, with no term for its interior columns. Per the deri
 this typing *mints* an `inv` only in `normalize_genome`; on `c.`/`n.` ferro preserves an
 already-spelled inversion but does not turn a reverse-complement split into one.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[whole-span-reverse-complement-types-as-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A span whose whole content is replaced by its exact reverse complement is written as one inv, however much of its interior coincides with the reference and whatever the competing partition is made of — a project choice among conformant forms, not a conformance requirement, since the spec's type-ranking rule cannot settle a merge-versus-split question at all.
 <!-- why:END:whole-span-reverse-complement-types-as-inv -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -118,10 +112,13 @@ range payload to literal reverse-complement bases rather than preserving the ran
 valid HGVS that re-parses and denotes the same sequence, so `conformant`, not the recommended
 spelling. #1946's render stage is the named long-term fix.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -150,12 +147,15 @@ complement types as one `inv` against both a pure-`delins` competitor and a mixe
 substitution/multi-column competitor — but their competitor-type reasoning is **superseded** by the
 uniform `:5` rule above.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inversion-vs-two-delins-76-83](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A span replaced by its exact reverse complement is written as a single inv even where its interior columns coincide with the reference, not as the two delins those columns would separate.
 >
 > **[inversion-vs-a-mixed-member-competitor](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When a span replaced by its reverse complement competes with a description mixing lone substitutions and multi-column members, ferro writes it as one inv rather than typing to the competitor's member shapes, which would make the description turn on incidental base coincidence rather than the event itself; both forms are conformant, so this is the project's choice among them.
 <!-- why:END:inversion-vs-two-delins-76-83,inversion-vs-a-mixed-member-competitor -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

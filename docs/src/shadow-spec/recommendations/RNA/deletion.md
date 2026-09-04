@@ -1,20 +1,11 @@
 # Deletion — ferro's reading
 
-ferro's reading of `RNA/deletion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **deletion** recommendations on the transcript (`r.`) axis, clause
+by clause — each spelling with the form ferro normalizes it to and a verdict on that output.
+New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Deletion (`c.`/`g.`)](../DNA/deletion.md).*
 
 No ledger record currently cites an `RNA/deletion.md` clause directly, so most sections below carry
 no Why block — the reading is CONFIRM-by-inspection against the spec text and the shipped code, not
@@ -196,10 +187,13 @@ uncertain form, preserved as written.
 Ferro: `class="invalid"` — rule 1. The repair is determinate: a length-`N` suffix starting at
 position `p` becomes the range `p_(p+N-1)`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

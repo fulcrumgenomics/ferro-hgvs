@@ -1,20 +1,11 @@
 # Substitution — ferro's reading
 
-ferro's reading of `RNA/substitution.md`. The rules are HGVS's; ferro's job is to produce the form
-the recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **substitution** recommendations on the transcript (`r.`) axis,
+clause by clause — each spelling with the form ferro normalizes it to and a verdict on that
+output. New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Substitution (`c.`/`g.`)](../DNA/substitution.md).*
 
 The RNA axis mirrors DNA substitution in substance — the same 1→1 definition, the same
 separation/codon-exception rule, the same ban on the multi-base spelling and on the "polymorphism"
@@ -43,10 +34,13 @@ DNA axis — but only the fifteen symbols the RNA table assigns; `x`, which the 
 alignment-only and the RNA table does not list at all, is refused. The rule applies uniformly
 across the transcript's numbering zones — 5'UTR (`-n`), CDS, and 3'UTR (`*n`).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[rna-axis-alignment-only-symbol-reach](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A non-leading lower-case 'x', which is not an assigned RNA nucleotide symbol, is refused in an 'r.' description, mirroring the refusal of the alignment-only 'X' on the DNA axes.
 <!-- why:END:rna-axis-alignment-only-symbol-reach -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -80,10 +74,13 @@ Ferro: a multi-base replacement is never a substitution on the `r.` axis either;
 delins. The substitution-style spellings are marked `class="invalid"` in the spec's own worked
 example (`:28-29`, below).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -107,7 +104,8 @@ the `r.` axis. The spec's worked example states codon 48 as `cga`; on `NM_004006
 so the literal `r.142_144delinsugg` changes only `r.142` there and ferro re-derives it to the
 single substitution it actually is. The executable rows use the same-shaped `agg` → `ugc`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
@@ -115,6 +113,8 @@ single substitution it actually is. The executable rows use the same-shaped `agg
 >
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:separation-rule-force-modal-or-negation,delins-codon-carve-out-gap-one,canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -148,10 +148,13 @@ single-position and the range form are fixed points.
 Ferro: the slash form for "polymorphism" is not valid HGVS on the `r.` axis either; ferro rejects
 it at parse in strict mode.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -169,10 +172,13 @@ Ferro: two adjacent changed nucleotides (separation zero) are one delins — the
 separation-zero merge the DNA axis makes at `DNA/substitution.md:32`, here on RNA's own worked
 example. The two substitution-style spellings are `class="invalid"` and refused.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-adjacent-members-when-both-consume-reference](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
 <!-- why:END:delins-adjacent-members-when-both-consume-reference -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

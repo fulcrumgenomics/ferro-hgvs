@@ -1,20 +1,11 @@
 # Repeated Sequences — ferro's reading
 
-ferro's reading of `repeated.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **repeated sequences** recommendations, clause by clause — each
+spelling with the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Repeated Sequences (`r.`)](../RNA/repeated.md).*
 
 Most of this page is CONFIRM-by-inspection against the spec text and the shipped code: the 3'rule
 over a repeat tract, the mixed/composite listing form, the sequenced-versus-sized dichotomy, and
@@ -80,10 +71,13 @@ upstream text copied. So on the DNA axis the shape is presented as valid and fer
 whether it *should be* the canonical form is held **open**, tracked on the RNA-scoped record below
 and owed upstream (`#466`).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[rna-repeat-range-plus-unit-redundancy](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Whether an RNA repeat may combine a position range with its own repeat unit is undecided — the recommendations both call that shape invalid as redundant and publish it as a worked example — and ferro's current lenient-mode agreement with the published form is an incidental effect of tract maximization rather than a resolution.
 <!-- why:END:rna-repeat-range-plus-unit-redundancy -->
+
+</details>
 
 The record is RNA-scoped; it is cited here because the DNA page inherits the same shape by copy
 (`c.-6_-3G[6]` at `:24`) while raising no conflict of its own — so the DNA reading is OPEN by
@@ -195,10 +189,13 @@ The ATXN7 row is the 3'rule over a repeat unit: literature calls it a `CAG` repe
 coding DNA reference the 3'rule selects the `AGC` rotation, so it is described `AGC[13]` — the same
 strand-plus-3'rule unit selection `general.md` states generally. No dispute.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

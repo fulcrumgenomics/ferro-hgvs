@@ -1,20 +1,11 @@
 # Deletion — ferro's reading
 
-ferro's reading of `deletion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **deletion** recommendations, clause by clause — each spelling with the
+form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Deletion (`r.`)](../RNA/deletion.md).*
 
 Most of this page is CONFIRM-by-inspection against the spec text and the shipped code: the plain
 3'rule, the range-order and two-position rules, and the payload/length-suffix prohibitions are
@@ -88,12 +79,15 @@ changes into one delins only when they sit one nucleotide apart and together cha
 This is the shared separation clause (`general.md:33`/`:34`), reproduced verbatim across nine files;
 the deletion-specific merge geometry is adjudicated on `delins.md`, out of this file's scope.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 <!-- why:END:separation-rule-force-modal-or-negation,codon-carve-out-shape-restriction -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -118,10 +112,13 @@ translate to the wrong nucleotide in the wrong exon. On `r.` the same NOTE *swit
 off* and the 3'rule must cross the junction — which ferro does not yet do
 ([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211), on the RNA deletion page).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[exon-junction-dup-converge-from-the-far-side](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A duplication is placed at the most 3' position that does not cross an exon/exon junction, reached from either side, so a copy spelled past the junction is pulled back to it.
 <!-- why:END:exon-junction-dup-converge-from-the-far-side -->
+
+</details>
 
 The governing record's title and worked example read as duplication-only (`c.3922dup`→`c.3921dup`),
 but its SCOPE paragraph and the shipped clamp both cover deletion on the `c.`/`n.` axes — the code
@@ -270,10 +267,13 @@ Ferro: `class="invalid"` — rule 1. The repair is determinate: a length-`N` suf
 position `p` becomes the range `p_(p+N-1)` (`detect_del_size_suffix`, whose fixture is this clause's
 own `NG_012232.1:g.123del6`).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
