@@ -81,7 +81,7 @@ have been reported (or might occur) individually". That reason is provenance: ho
 were observed. No rule over the sequence alone can recover it. So any sequence-local merge or
 split rule in ferro is a house approximation of the spec's criterion; argue it as one. The
 governing records are `rulings[delins-merge-vs-individual-gap-two-or-more]` and
-`rulings[canonical-form-choice-when-both-legal]`.
+`rulings[canonical-form-choice-when-both-legal]`. Provenance is how the change was observed, not "preserve the input's spelling": ferro re-derives from the resulting sequence, so the input's spelling gets no weight.
 
 `DNA/delins.md:86-89` answers a BRCA1 case: a substitution plus an adjacent insertion is
 `NM_007294.3:c.2077delinsATA`. `:89` records that a sentence permitting the two-member spelling
