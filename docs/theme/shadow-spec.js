@@ -14,6 +14,8 @@
  *      compact/balanced column widths in custom.css apply regardless of the
  *      3- or 4-column shape
  *   4. an "On this page" clause index is built from the `file.md:lines` headings
+ *   5. each executable row gets an expand toggle that reveals a biopython-style
+ *      3-line alignment, fetched from the blessed alignments.json sidecar
  *
  * Purely cosmetic; the source bytes the harness reads are untouched. Scoped to
  * /shadow-spec/ pages.
@@ -158,9 +160,121 @@
         first.parentNode.insertBefore(nav, first);
     }
 
+    // --- Per-example alignments -------------------------------------------
+    // Fetch the blessed sidecar (served at <shadow-spec root>/alignments.json), and for each
+    // executable table row whose input has an entry, add a toggle that reveals a biopython-style
+    // 3-line alignment in a row beneath it. Data-driven: rows without an entry get no toggle.
+
+    function shadowRoot() {
+        var p = window.location.pathname;
+        var i = p.indexOf("/shadow-spec/");
+        return i === -1 ? null : p.slice(0, i + "/shadow-spec/".length);
+    }
+
+    function esc(s) {
+        return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // One sequence line with its edited columns [es,ee) wrapped for the background tint.
+    function hlLine(label, seq, es, ee, tint) {
+        var body = tint
+            ? esc(seq.slice(0, es)) +
+              '<span class="ss-align-edit">' +
+              esc(seq.slice(es, ee)) +
+              "</span>" +
+              esc(seq.slice(ee))
+            : esc(seq);
+        return '<span class="ss-align-gutter">' + label + "</span>" + body;
+    }
+
+    function alignBlock(a) {
+        var pre =
+            hlLine("ref", a.ref, a.editStart, a.editEnd, true) +
+            "\n" +
+            hlLine("   ", a.connector, a.editStart, a.editEnd, false) +
+            "\n" +
+            hlLine("alt", a.alt, a.editStart, a.editEnd, true);
+        return (
+            '<div class="ss-align">' +
+            '<div class="ss-align-note">' +
+            esc(a.note) +
+            "</div>" +
+            '<pre class="ss-align-pre">' +
+            pre +
+            "</pre>" +
+            "</div>"
+        );
+    }
+
+    var alignSeq = 0;
+
+    function wireAlignments() {
+        var root = shadowRoot();
+        if (!root) return;
+        fetch(root + "alignments.json")
+            .then(function (r) {
+                return r.ok ? r.json() : null;
+            })
+            .then(function (map) {
+                if (!map) return;
+                var tables = document.querySelectorAll(".content table.ss-examples");
+                Array.prototype.forEach.call(tables, function (table) {
+                    var nCols = table.querySelectorAll("thead th").length;
+                    var rows = table.querySelectorAll("tbody tr");
+                    Array.prototype.forEach.call(rows, function (tr) {
+                        var inputCell = tr.querySelector(".ss-col-input");
+                        var normCell = tr.querySelector(".ss-col-norm");
+                        if (!inputCell || !normCell) return;
+                        var key = inputCell.textContent.trim();
+                        var a = map[key];
+                        if (!a) return;
+
+                        var id = "ss-aln-" + ++alignSeq;
+                        var btn = document.createElement("button");
+                        btn.className = "ss-align-toggle";
+                        btn.type = "button";
+                        btn.setAttribute("aria-expanded", "false");
+                        btn.setAttribute("aria-controls", id);
+                        var showLabel = "Show alignment for " + key;
+                        var hideLabel = "Hide alignment for " + key;
+                        btn.title = showLabel;
+                        btn.setAttribute("aria-label", showLabel);
+                        btn.innerHTML =
+                            'align <span class="ss-align-caret" aria-hidden="true">▸</span>';
+
+                        var alnRow = document.createElement("tr");
+                        alnRow.className = "ss-align-row";
+                        alnRow.id = id;
+                        alnRow.hidden = true;
+                        var td = document.createElement("td");
+                        td.colSpan = nCols;
+                        td.innerHTML = alignBlock(a);
+                        alnRow.appendChild(td);
+                        tr.parentNode.insertBefore(alnRow, tr.nextSibling);
+
+                        btn.addEventListener("click", function () {
+                            var open = alnRow.hidden;
+                            alnRow.hidden = !open;
+                            btn.setAttribute("aria-expanded", open ? "true" : "false");
+                            btn.classList.toggle("ss-open", open);
+                            btn.title = open ? hideLabel : showLabel;
+                            btn.setAttribute("aria-label", open ? hideLabel : showLabel);
+                            var caret = btn.querySelector(".ss-align-caret");
+                            if (caret) caret.textContent = open ? "▾" : "▸";
+                        });
+                        normCell.appendChild(btn);
+                    });
+                });
+            })
+            .catch(function () {
+                /* no alignments served (or offline) — leave the tables as-is */
+            });
+    }
+
     function run() {
         enhanceTables();
         buildOnPageNav();
+        wireAlignments();
     }
 
     if (document.readyState === "loading") {

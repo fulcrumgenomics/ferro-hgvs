@@ -1098,3 +1098,62 @@ nav.ss-onpage-nav a:hover .ss-nav-line { color: #d9eef5; }
     .content table.ss-examples .ss-col-input  { width: 26%; }
     .content table.ss-examples .ss-col-norm   { width: 26%; }
 }
+
+/* Per-example alignment: a toggle in the "Normalizes to" cell (added by shadow-spec.js
+   from the blessed alignments.json) that reveals a biopython-style 3-line block. */
+.ss-align-toggle {
+    display: inline-block;
+    margin-left: 0.5em;
+    padding: 0.05em 0.5em;
+    font-family: var(--sans-font, system-ui, sans-serif);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--fg-pacific);
+    background: #eef5f9;
+    border: 1px solid #bcd6e3;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.ss-align-toggle:hover { background: var(--fg-pacific); color: #fff; border-color: var(--fg-pacific); }
+.ss-align-toggle.ss-open { background: var(--fg-pacific); color: #fff; border-color: var(--fg-pacific); }
+
+.content table.ss-examples tr.ss-align-row > td {
+    background: #f7f8fb;
+    border-top: 0;
+    padding: 0.3rem 0.6rem 0.7rem;
+}
+.ss-align { overflow-x: auto; }
+.ss-align-note {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #6b7280;
+    margin: 0.1rem 0 0.35rem;
+}
+pre.ss-align-pre {
+    margin: 0;
+    padding: 0.55rem 0.7rem;
+    background: #fbfbfd;
+    border: 1px solid #e2e6ee;
+    border-radius: 6px;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.82rem;
+    line-height: 1.35;
+    white-space: pre;
+    overflow-x: auto;
+    color: #2b2f36;
+}
+.ss-align-gutter {
+    display: inline-block;
+    width: 3ch;
+    margin-right: 0.6ch;
+    color: #a2a8b3;
+    user-select: none;
+}
+.ss-align-edit {
+    background: #ece3fb;          /* soft violet — deliberately NOT a verdict color */
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px #d9ccf5 inset;
+}
