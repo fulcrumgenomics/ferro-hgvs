@@ -91,6 +91,10 @@ const GENERAL_SIGNATURES: &[Signature] = &[
         phrase: "the preferred description is: (1) substitution, (2) deletion, (3) inversion",
     },
     Signature {
+        identity: "three-prime-rule",
+        phrase: "the most 3' position possible of the reference sequence is arbitrarily assigned",
+    },
+    Signature {
         identity: "self-replacement-prohibition",
         phrase: "descriptions removing part of a reference sequence and replacing it with part \
                  of the same sequence are not allowed",
@@ -101,14 +105,27 @@ const GENERAL_SIGNATURES: &[Signature] = &[
     },
 ];
 
-/// `DNA/delins.md` clauses. The docs cite `:17` (individual-not-delins), `:18`
-/// (the codon exception), and `:47` (the worked example's "delins recommended"
-/// note, also reached by the `:44-47` range).
+/// `DNA/delins.md` clauses. The docs cite `:16` (consecutive-nucleotides-are-
+/// delins), `:17` (individual-not-delins), `:18` (the codon exception), the
+/// worked example at `:44` and its `:46` "alternative description" align-note and
+/// `:47` "delins recommended" note (the last also reached by the `:44-47` range),
+/// plus the two trailing `!!! note` Q&As the docs walk through: the separated-
+/// variants note (reached by `:79-84`) and the BRCA1 modified-answer note
+/// (reached by `:86-89`).
 const DELINS_SIGNATURES: &[Signature] = &[
+    Signature {
+        identity: "delins-consecutive-are-delins",
+        phrase: "changes involving two or more consecutive nucleotides are described as \
+                 deletion/insertion",
+    },
     Signature {
         identity: "delins-separation-rule",
         phrase: "two variants separated by one or more nucleotides should be described \
                  individually",
+    },
+    Signature {
+        identity: "delins-worked-example",
+        phrase: "c.850_901delinsTTCCTCGATGCCTG",
     },
     Signature {
         identity: "delins-codon-exception",
@@ -116,8 +133,20 @@ const DELINS_SIGNATURES: &[Signature] = &[
                  one amino acid",
     },
     Signature {
+        identity: "delins-alternative-description",
+        phrase: r#"parts of the inserted sequence "align" with the reference sequence"#,
+    },
+    Signature {
         identity: "delins-format-recommended",
         phrase: r#"**The "delins" format is recommended**"#,
+    },
+    Signature {
+        identity: "delins-provenance-qa",
+        phrase: "the two variants may have been reported",
+    },
+    Signature {
+        identity: "delins-brca1-modified-answer",
+        phrase: "the answer was modified",
     },
 ];
 
@@ -129,12 +158,19 @@ const INVERSION_SIGNATURES: &[Signature] = &[Signature {
 }];
 
 /// `DNA/duplication.md` clauses. The docs cite `:18` as read-strong for its
-/// "**must** be described as a duplication" wording.
-const DUPLICATION_SIGNATURES: &[Signature] = &[Signature {
-    identity: "duplication-must-be-duplication",
-    phrase: "when a variant can be described as a duplication, it **must** be described as a \
-             duplication",
-}];
+/// "**must** be described as a duplication" wording, and `:86`'s note marking
+/// the worked example above it as part of the (undecided) SVD-WG003 proposal.
+const DUPLICATION_SIGNATURES: &[Signature] = &[
+    Signature {
+        identity: "duplication-must-be-duplication",
+        phrase: "when a variant can be described as a duplication, it **must** be described as a \
+                 duplication",
+    },
+    Signature {
+        identity: "duplication-svd-wg003-note",
+        phrase: "proposal SVD-WG003 (undecided)",
+    },
+];
 
 /// Every spec file whose citations are line-keyed.
 const SPEC_FILES: &[SpecFile] = &[
