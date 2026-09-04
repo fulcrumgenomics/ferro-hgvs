@@ -29,6 +29,7 @@
 # Interpretation
 
 - [Overview](shadow-spec/index.md)
+- [How to read a page](shadow-spec/reading-guide.md)
 - [DNA]()
   - [Substitution](shadow-spec/recommendations/DNA/substitution.md)
   - [Deletion](shadow-spec/recommendations/DNA/deletion.md)

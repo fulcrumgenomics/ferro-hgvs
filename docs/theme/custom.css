@@ -872,3 +872,105 @@ blockquote strong {
     text-decoration: none;
 }
 .fg-related-list a:hover { text-decoration: underline; }
+
+/* ============================================================
+   Shadow-spec readability layer
+   Verdict badges, "Normalizes to" chips, axis nav, and the
+   collapsible <details> containers used on the interpretation
+   pages. The verdict/self/— cell TEXT stays bare (the shadow_spec
+   test matches the literal words), so badges are applied to the
+   rendered DOM by theme/shadow-spec.js — these rules just style
+   the spans it injects, plus the badges authored inline on the
+   overview and reading-guide pages.
+   ============================================================ */
+
+.verdict-badge {
+    display: inline-block;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.78em;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 0.08em 0.55em;
+    border-radius: 5px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+.verdict-recommended { background: #e5f7e7; color: var(--fg-forest);    border: 1px solid #b7e6bd; }
+.verdict-conformant  { background: #fff5df; color: #8a6400;            border: 1px solid #f0dca0; }
+.verdict-refused     { background: #eef1fb; color: var(--fg-deep-blue); border: 1px solid #d3daf1; }
+.verdict-bug         { background: #fde7e7; color: #a3242a;            border: 1px solid #f3bcbe; }
+
+/* "Normalizes to" chips for the two bare tokens `self` and `—`. */
+.norm-chip {
+    display: inline-block;
+    font-family: var(--mono-font, "IBM Plex Mono", ui-monospace, monospace);
+    font-size: 0.76em;
+    font-weight: 600;
+    padding: 0.05em 0.5em;
+    border-radius: 5px;
+    white-space: nowrap;
+    cursor: help;
+}
+.norm-self { background: #eef1fb; color: var(--fg-deep-blue); border: 1px solid #d3daf1; }
+.norm-na   { background: #f2f3f4; color: var(--fg-gray);      border: 1px solid #e0e2e3; }
+
+/* Axis / sibling navigation pill row at the top of each page. */
+.ss-axis-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.4rem;
+    align-items: center;
+    margin: 0 0 1.4rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--fg-ghost, #e6e8ea);
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+.ss-axis-nav .ss-axis-label {
+    font-weight: 700;
+    color: var(--fg-gray);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+    margin-right: 0.15rem;
+}
+.ss-axis-nav a {
+    text-decoration: none;
+    color: var(--fg-pacific);
+    padding: 0.05em 0.5em;
+    border-radius: 5px;
+    white-space: nowrap;
+}
+.ss-axis-nav a:hover { background: #eef1fb; text-decoration: none; }
+.ss-axis-nav a.ss-current {
+    background: var(--fg-pacific);
+    color: #fff;
+    font-weight: 600;
+}
+.ss-axis-nav .ss-sep { color: var(--fg-ghost, #cfd2d5); }
+
+/* Collapsible supporting material (Why-block stacks, long spec Q&A quotes). */
+details.ss-why, details.ss-spec {
+    margin: 0.6rem 0 1rem;
+    border-left: 3px solid var(--fg-ghost, #e6e8ea);
+    padding: 0 0 0 0.9rem;
+}
+details.ss-why > summary, details.ss-spec > summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--fg-gray);
+    list-style: none;
+    padding: 0.1rem 0;
+    user-select: none;
+}
+details.ss-why > summary::before, details.ss-spec > summary::before {
+    content: "\25B8\00a0";  /* ▸ */
+    display: inline-block;
+    transition: transform 0.12s ease;
+}
+details.ss-why[open] > summary::before, details.ss-spec[open] > summary::before {
+    transform: rotate(90deg);
+}
+details.ss-why > summary::-webkit-details-marker,
+details.ss-spec > summary::-webkit-details-marker { display: none; }
