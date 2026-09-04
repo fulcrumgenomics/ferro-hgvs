@@ -25,7 +25,7 @@
 //! derived line out from under a stale citation and reddens this test.
 //!
 //! The docs cite these clauses mostly by enumeration (`general.md:33`, `:34`,
-//! `:55`, `:57`; `DNA/delins.md:17`, `:18`, `:47`) rather than one clause per
+//! `:55`; `DNA/delins.md:16`, `:17`, `:18`, `:47`) rather than one clause per
 //! argumentative sentence, so a sentence-trigger check has almost nothing to
 //! judge. The line-set check covers every citation instead, which is the right
 //! shape for an enumeration and still catches the uniform line shift that
@@ -39,9 +39,22 @@
 //! is unique by name, so a bare `general.md:N` is safe. A bare `delins.md:N`
 //! would be ambiguous across `DNA/`, `RNA/` and `protein/`, so it is *not*
 //! keyed — but the docs cite these clauses **path-qualified** (`DNA/delins.md`,
-//! `DNA/inversion.md`, `DNA/duplication.md`), which names the file exactly and is
-//! what makes them keyable here. A bare, unqualified `delins.md:N` is left
-//! unchecked by design; qualify it to bring it under the guard.
+//! `DNA/inversion.md`, `DNA/duplication.md`, `background/basics.md`), which names
+//! the file exactly and is what makes them keyable here. A bare, unqualified
+//! `delins.md:N` is left unchecked by design; qualify it to bring it under the
+//! guard. This also means a bare `:N` shorthand is only keyed when its
+//! `<file>.md:` establisher sits on the **same source line** (attribution resets
+//! at each newline), so keep a bare `:N` on the line of the token it inherits,
+//! or spell the qualified form out when a wrap would separate them.
+//!
+//! The files line-keyed here are `general.md`, `DNA/delins.md`,
+//! `DNA/inversion.md`, `DNA/duplication.md` and `background/basics.md` (see
+//! [`SPEC_FILES`]). The docs also cite other spec files — `style.md`,
+//! `RNA/adjoined_transcript.md`, `DNA/other.md`, `DNA/repeated.md`,
+//! `RNA/repeated.md`, `background/refseq.md`, and the `consultation/` proposals —
+//! whose line numbers are **not** machine-verified. Those citations must be
+//! re-checked by hand after a submodule bump; add a `SpecFile` with a unique
+//! signature to bring one under the guard.
 
 use std::path::PathBuf;
 
@@ -108,10 +121,10 @@ const GENERAL_SIGNATURES: &[Signature] = &[
 /// `DNA/delins.md` clauses. The docs cite `:16` (consecutive-nucleotides-are-
 /// delins), `:17` (individual-not-delins), `:18` (the codon exception), the
 /// worked example at `:44` and its `:46` "alternative description" align-note and
-/// `:47` "delins recommended" note (the last also reached by the `:44-47` range),
-/// plus the two trailing `!!! note` Q&As the docs walk through: the separated-
-/// variants note (reached by `:79-84`) and the BRCA1 modified-answer note
-/// (reached by `:86-89`).
+/// `:47` "delins recommended" note, plus the two trailing `!!! note` Q&As the
+/// docs walk through: the separated-variants note (reached by `:79-84`) and the
+/// BRCA1 modified-answer note (cited both as the `:86-89` range and as `:89`, the
+/// line recording that the two-member spelling was removed).
 const DELINS_SIGNATURES: &[Signature] = &[
     Signature {
         identity: "delins-consecutive-are-delins",
@@ -172,6 +185,14 @@ const DUPLICATION_SIGNATURES: &[Signature] = &[
     },
 ];
 
+/// `background/basics.md` clauses. The docs cite `:38` for the spec's stated
+/// design values ("stable, meaningful, memorable, unequivocal"), which the
+/// "stability is first" argument leans on and repeats, so it is line-keyed.
+const BASICS_SIGNATURES: &[Signature] = &[Signature {
+    identity: "basics-design-values",
+    phrase: "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**",
+}];
+
 /// Every spec file whose citations are line-keyed.
 const SPEC_FILES: &[SpecFile] = &[
     SpecFile {
@@ -194,6 +215,11 @@ const SPEC_FILES: &[SpecFile] = &[
         path: "docs/recommendations/DNA/duplication.md",
         signatures: DUPLICATION_SIGNATURES,
     },
+    SpecFile {
+        token: "background/basics.md",
+        path: "docs/background/basics.md",
+        signatures: BASICS_SIGNATURES,
+    },
 ];
 
 /// The prose docs that cite spec clauses by line. `CLAUDE.md` carries none today
@@ -207,10 +233,11 @@ const DOCS: &[&str] = &[
 
 /// Floor for how many clause citations this test actually checks.
 ///
-/// Measured at 14 on the commit that generalised this file (7 `general.md`, 5
-/// `DNA/delins.md`, 1 `DNA/inversion.md`, 1 `DNA/duplication.md`). The floor sits
-/// below that, so ordinary prose edits cannot trip it while a citation scanner
-/// that stopped finding citations would.
+/// The docs cite these tracked spec files many times over, and the count grows
+/// as the docs cite more clauses, so an exact figure is deliberately not pinned
+/// here — it would go stale on every prose edit that adds a citation. The floor
+/// sits well below the actual count, so ordinary edits cannot trip it while a
+/// citation scanner that stopped finding citations (a parser regression) would.
 const CITATIONS_FLOOR: usize = 12;
 
 fn crate_root() -> PathBuf {

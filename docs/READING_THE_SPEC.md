@@ -45,12 +45,15 @@ meaningful, memorable, and unequivocal". Minimality is not among them; stability
 argument from length, or from bases touched, is a house argument.
 
 The spec's own worked example prefers the larger form. `DNA/delins.md:44` gives
-`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, a delins that replaces 52 bases. `:46` gives "an
-alternative description" as a split, `c.[850_869del;874_881del;887_897del;901_902insG]`, which
-deletes 39 bases and inserts one. `:47` recommends the delins: "it is simpler and prevents
+`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, a delins that replaces 52 bases. `DNA/delins.md:46`
+gives "an alternative description" as a split, `c.[850_869del;874_881del;887_897del;901_902insG]`,
+which deletes 39 bases and inserts one. `DNA/delins.md:47` recommends the delins: "it is simpler
+and prevents
 software tools making incorrect predictions for the consequences on protein level". State that
 direction when you cite the passage, and cite the ruling that scopes it,
-`rulings[delins-merge-vs-individual-gap-two-or-more]`. That is the spec preferring the larger form *for this example's stated reasons*, not a general "prefer the larger delins" — the scope is that ruling, nothing wider.
+`rulings[delins-merge-vs-individual-gap-two-or-more]`. That is the spec preferring the larger form
+*for this example's stated reasons*, not a general "prefer the larger delins" — the scope is that
+ruling, nothing wider.
 
 ## A split is rarely unique, which is a stability argument by itself
 
@@ -60,9 +63,9 @@ change, and it never claims a split is unique. Before you adopt a split, count t
 In the rows ferro enumerated, most admit more than one compliant set of members. Picking one
 trades a stable canonical form for an arbitrary member of a family, and one before-and-after
 comparison cannot show that. Check the family, not the row. An argument for a split is an
-argument against `basics.md:38`'s stability; say so.
+argument against `background/basics.md:38`'s stability; say so.
 
-There are two kinds of stability. `basics.md:38` means a variant keeps one description across
+There are two kinds of stability. `background/basics.md:38` means a variant keeps one description across
 time and tools. Ferro also requires determinism, rule 4 of
 `docs/src/reference/normalization-rules.md`: same input, same output, on every run. That is not
 confluence, rule 3, which is about inputs denoting one variant producing one output. The spec
@@ -88,11 +91,13 @@ have been reported (or might occur) individually". That reason is provenance: ho
 were observed. No rule over the sequence alone can recover it. So any sequence-local merge or
 split rule in ferro is a house approximation of the spec's criterion; argue it as one. The
 governing records are `rulings[delins-merge-vs-individual-gap-two-or-more]` and
-`rulings[canonical-form-choice-when-both-legal]`.
+`rulings[canonical-form-choice-when-both-legal]`. Provenance is how the change was observed, not
+"preserve the input's spelling": ferro re-derives from the resulting sequence, so the input's
+spelling gets no weight.
 
 `DNA/delins.md:86-89` answers a BRCA1 case: a substitution plus an adjacent insertion is
-`NM_007294.3:c.2077delinsATA`. `:89` records that a sentence permitting the two-member spelling
-was removed. Do not cite the removed text.
+`NM_007294.3:c.2077delinsATA`. `DNA/delins.md:89` records that a sentence permitting the two-member
+spelling was removed. Do not cite the removed text.
 
 ## Cross-check forward-looking statements against `consultation/`
 
@@ -111,10 +116,11 @@ The notes found at the pinned commit:
 
 - `general.md:35-38`: "the SVD-WG is preparing a proposal to modify this recommendation ... The
   new recommendation will be: two variants separated by less than two nucleotides should be
-  described as a delins." Read alone, it says the rule at `:33-34` will change. The proposal is
+  described as a delins." Read alone, it says the rule at `general.md:33-34` will change. The proposal is
   SVD-WG010: `consultation/SVD-WG010.md:12` states the same rule, `:27` the same reason, and
-  `:30-33` names `general.md:33-34` as the rule to replace. It was rejected (`SVD-WG010.md:5`).
-  The note was not updated. The rule at `:33-34` stands, codon exception included.
+  `:30-33` names `general.md:33-34` as the rule to replace. It was rejected
+  (`consultation/SVD-WG010.md:5`).
+  The note was not updated. The rule at `general.md:33-34` stands, codon exception included.
 - `DNA/duplication.md:86` marks the worked example above it as "part of proposal SVD-WG003
   (undecided)". `SVD-WG003.md:5` reads "new proposal to be made"; `:10` says the example's format
   "does follow current recommendations". The example stands.
