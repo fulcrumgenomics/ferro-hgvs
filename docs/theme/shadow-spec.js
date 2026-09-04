@@ -276,10 +276,12 @@
     // indented answer as a code block. Reformat the RENDERED DOM to read like the note the spec
     // intends — display-only, the source is untouched.
     function inlineMarkdown(text) {
+        // The answer text comes from the committed, byte-pinned spec quote (trusted), and may
+        // already carry the spec's own HTML — notably <code class="invalid">…</code>, which the
+        // spec uses to mark an invalid example and the theme styles. Pass that through, and render
+        // the remaining Markdown inline (`code` and **bold**). Do NOT escape `<`/`>`, or the spec's
+        // HTML shows as literal tag text.
         return text
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
             .replace(/`([^`]+)`/g, "<code>$1</code>")
             .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     }
