@@ -62,3 +62,6 @@
   - [Frameshift](shadow-spec/recommendations/protein/frameshift.md)
   - [Extension](shadow-spec/recommendations/protein/extension.md)
   - [Alleles](shadow-spec/recommendations/protein/alleles.md)
+- [General notation](shadow-spec/recommendations/general.md)
+- [Uncertain descriptions](shadow-spec/recommendations/uncertain.md)
+- [Publication checklist](shadow-spec/recommendations/checklist.md)

@@ -8,14 +8,14 @@ section records the decision, mirrored page-for-page against the official recomm
 
 <div class="use-cards">
   <div class="use-card">
-    <h3>29 pages, one per spec section</h3>
+    <h3>32 pages, one per spec section</h3>
     <p>Each page shows the spec's own text, ferro's reading of it, and a table of example spellings
     with ferro's verdict on each.</p>
   </div>
   <div class="use-card">
-    <h3>Every example is executed</h3>
-    <p>A build check runs each spelling through ferro against a real GRCh38 reference. A wrong
-    verdict, a moved quote, or a changed normalization fails the build.</p>
+    <h3>Every example is exercised</h3>
+    <p>A build check parses each spelling and asserts every reference-backed output against a real
+    GRCh38 reference. A wrong verdict, a moved quote, or a changed normalization fails the build.</p>
   </div>
   <div class="use-card">
     <h3>New to the vocabulary?</h3>
@@ -90,6 +90,17 @@ SPDI — so the pages rely on the executed verdict and "normalizes to" columns.
 | [Extension](recommendations/protein/extension.md) | the sequence extended past a terminus |
 | [Alleles](recommendations/protein/alleles.md) | cis / trans / unknown phase on the protein |
 
+### Cross-cutting
+
+These three shadow the spec's non-axis pages — the rules and notation that apply across DNA, RNA,
+and protein.
+
+| Page | Covers |
+|---|---|
+| [General notation](recommendations/general.md) | the DNA-level-primary rule, mandatory prefixes, prioritisation, and the special characters (`=`, `/`, `_`, …) |
+| [Uncertain descriptions](recommendations/uncertain.md) | `( )` / `?` / `^` notation for predicted or incompletely-known variants, across all axes |
+| [Publication checklist](recommendations/checklist.md) | the most frequently offended rules, as correct-vs-refused pairs |
+
 ## What this section is *not*
 
 It is not a second copy of the rules. The canonical ruleset lives in the
@@ -103,8 +114,10 @@ in two places is a rule that drifts.
 
 ## How it stays honest
 
-Every example is executed through ferro by a build check: each spec quote is verified against the
-pinned spec checkout, each spelling is parsed (and strict-refused where marked
-<span class="verdict-badge verdict-refused">refused</span>), and each normalized output is asserted
-against a real GRCh38 reference. A wrong verdict, a moved quote, or a changed normalization fails the
-build — so a page cannot claim behavior ferro does not have.
+Every example is exercised through ferro by a build check, though not every row is checked the same
+way: each spec quote is verified against the pinned spec checkout, every spelling is parsed (and
+strict-refused where marked <span class="verdict-badge verdict-refused">refused</span>), and every
+reference-backed output — a row on an accession in the committed slice — is asserted against a real
+GRCh38 reference. Rows marked `—` (parse-only foreign accessions, and `p.` rows with no genomic
+SPDI) are checked for parsing only. A wrong verdict, a moved quote, or a changed normalization on a
+checked row fails the build — so a page cannot claim reference-backed behavior ferro does not have.
