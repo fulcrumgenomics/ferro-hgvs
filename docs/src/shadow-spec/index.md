@@ -8,7 +8,7 @@ section records the decision, mirrored page-for-page against the official recomm
 
 <div class="use-cards">
   <div class="use-card">
-    <h3>20 pages, one per spec section</h3>
+    <h3>29 pages, one per spec section</h3>
     <p>Each page shows the spec's own text, ferro's reading of it, and a table of example spellings
     with ferro's verdict on each.</p>
   </div>
@@ -71,6 +71,24 @@ are on the [How to read a page](reading-guide.md) reference.
 | [Alleles](recommendations/RNA/alleles.md) | cis / trans / unknown / product combinations |
 | [Splicing](recommendations/RNA/splicing.md) | splice-site consequences written as del/ins |
 | [Adjoined transcript](recommendations/RNA/adjoined_transcript.md) | gene-fusion transcripts |
+
+### Protein
+
+Protein examples run against `NP_003997.1` (dystrophin, the translation of `NM_004006.3`) in the
+committed slice. There are no genomic sequence alignments on this axis — a `p.` description has no
+SPDI — so the pages rely on the executed verdict and "normalizes to" columns.
+
+| Page | Covers |
+|---|---|
+| [Substitution](recommendations/protein/substitution.md) | one amino acid for one (missense, nonsense, silent) |
+| [Deletion](recommendations/protein/deletion.md) | removing one or more residues, 3′-placed |
+| [Duplication](recommendations/protein/duplication.md) | a tandem copy of residues |
+| [Insertion](recommendations/protein/insertion.md) | residues added between two flanking positions |
+| [Deletion-insertion](recommendations/protein/delins.md) | residues replaced by others |
+| [Repeated Sequences](recommendations/protein/repeated.md) | amino-acid repeat notation |
+| [Frameshift](recommendations/protein/frameshift.md) | translation shifted to another frame |
+| [Extension](recommendations/protein/extension.md) | the sequence extended past a terminus |
+| [Alleles](recommendations/protein/alleles.md) | cis / trans / unknown phase on the protein |
 
 ## What this section is *not*
 
