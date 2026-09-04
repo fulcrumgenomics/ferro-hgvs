@@ -1,57 +1,40 @@
 # Splicing — ferro's reading
 
-ferro's reading of `RNA/splicing.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
-
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+ferro's reading of the HGVS **splicing** recommendations on the transcript (`r.`) axis, clause
+by clause, with each spelling's normalized form and a verdict. See
+[How to read a page](../../reading-guide.md) for verdicts, table conventions, and recurring terms.
 
 **No ledger record cites any `RNA/splicing.md` clause** — the whole document is a record-level gap,
-so **every section below carries no Why block**. The reading is CONFIRM-by-inspection against the
-spec text and the shipped code. Three of this page's findings are live and unrecorded, and are
-written up as Notes rather than rulings because no committed record backs them yet:
+so **every section below carries no Why block**; the reading is CONFIRM-by-inspection against the
+spec text and the shipped code. Three findings on this page are live and unrecorded, written up as
+Notes rather than rulings:
 
 - the intron-retention `r.` insert (`splicing.md:34`, `:45`, `:50-57`) — the page's central form —
   is spec-**recommended** (five bold examples), yet ferro declines it at normalize with a
-  *spec-undefined* reason that is a **misstatement on the `r.` axis**. The decided campaign reading
-  (a proposed new record) is that the form is spec-defined and the house choice is
-  coordinate-space-resolvability — flatten a range the rendering reference can resolve, **preserve**
-  an intronic-offset range it cannot. Documented at `splicing.md:27-36`;
+  *spec-undefined* reason that is a **misstatement on the `r.` axis**. The proposed reading is that
+  the form is spec-defined and the house choice should be coordinate-space-resolvability: flatten a
+  range the rendering reference can resolve, **preserve** an intronic-offset range it cannot.
+  Documented at `splicing.md:27-36`;
 - the same shape is wrapped in `<code class="invalid">` at `RNA/insertion.md:44` — a
-  formatting-commit accident that contradicts this page's five bold examples. `splicing.md` governs;
-  the upstream inconsistency is owed a filing on #466 and is noted at `splicing.md:27-36`;
+  formatting accident that contradicts this page's five bold examples; `splicing.md` governs, and
+  the upstream inconsistency is owed a filing (noted at `splicing.md:27-36`);
 - `r.(spl?)` (`splicing.md:79`) versus `r.spl?` (`uncertain.md:194`) — one statement, two spellings,
-  confluence unadjudicated; and `r.(spl)`, which appears nowhere in the spec yet ferro's **projector**
-  manufactures it on the watched `src/project/` axis. Both are open; documented at `splicing.md:75-80`.
+  confluence unadjudicated; and `r.(spl)`, which appears nowhere in the spec yet ferro's
+  **projector** manufactures it. Both open; documented at `splicing.md:75-80`.
 
-Executable rows use `NM_004006.3`, the one transcript in the committed slice. The spec's own splicing
-examples are written on `NC_000023.11(NM_004006.2)`, on `NM_002354.2`/`NM_000251.2`, and on
-`LRG_199t1`, none of which the slice carries, so those rows are parse-only (`—`) — ferro cannot read
-their bases here, and the intron-retention forms among them additionally decline at normalize (see
-`splicing.md:27-36`). The `NM_004006.3` base facts the executable rows rely on (`r.75_77` is `aaa`, so
-`r.76` reads `a` and `r.77del` is a fixed point; `r.6_8` is `uug`; `r.124_129del` is a fixed point)
-are the same ones established on `RNA/deletion.md` and `RNA/alleles.md`. The four splice markers
-(`r.spl`, `r.spl?`, `r.(spl?)`, `r.(spl)`) are reserved tokens reachable only on the `r.` parse path
-(`parser/variant.rs`; `c.spl`/`g.spl` do not parse) and are pinned by `tests/it/rna_spl_marker.rs`.
+Executable rows use `NM_004006.3`, the one transcript in the committed slice. The spec's own
+splicing examples sit on accessions outside the slice, so those rows are parse-only (`—`), and the
+intron-retention forms among them additionally decline at normalize (see `splicing.md:27-36`). The
+four splice markers (`r.spl`, `r.spl?`, `r.(spl?)`, `r.(spl)`) are reserved tokens reachable only on
+the `r.` parse path — `c.spl`/`g.spl` do not parse.
 
 ## `splicing.md:5` — definition
 
 > Splicing: a sequence change where, compared to a reference sequence, the normal RNA splicing pattern is altered.
 
 Ferro: this defines a **biological outcome**, not a description form. Splicing has no edit type of
-its own (see the Syntax below), so there is nothing here a normalizer applies or violates. The Phase-0
-unit for this section captured the HTML comment `<!-- ## Definition -->` on `splicing.md:3` and missed
-the sentence on `:5`; harmless here, noted so the extractor behaviour is on record. **Descriptive.**
+its own (see the Syntax below), so there is nothing here a normalizer applies or violates.
+**Descriptive.**
 
 ## `splicing.md:8-11` — syntax
 
@@ -76,23 +59,17 @@ form. Nothing for the normalizer to enforce. **Descriptive.**
 
 > - a `,` (comma) is used to separate different transcripts/proteins derived from one allele; `r.[123a>u,122_154del]`.
 
-Ferro: the `,` separates **different transcripts** — downstream products of one DNA event — a fourth
-allele relationship distinct from cis `;`, trans `];[`, and unknown `(;)`. Ferro models it as
-`AllelePhase::Products`, restricts the form to the `r.`/`p.` axes, normalizes each member in its own
-frame, and — because Products is not `Cis` — **never merges or reorders** the members. Two properties
-of the spec's own examples fall directly out of this and are worth stating, since a "treat every
-bracket the same" refactor would destroy them: members may **overlap** in coordinates (`123a>u` sits
-inside `122_154del`) without that being a conflict, and members are **not position-ordered**
-(`r.[897u>g,832_960del]` at `splicing.md:24` lists 897 before 832). The full treatment lives on
-`RNA/alleles.md:21`, whose `general.md:80` cross-reference gives the bare form
-`r.[123a>u,122_154del]`.
+Ferro: the `,` separates **different transcripts** — downstream products of one DNA event — a
+fourth allele relationship distinct from cis `;`, trans `];[`, and unknown `(;)`. Ferro models it
+as `AllelePhase::Products`, restricts the form to the `r.`/`p.` axes, normalizes each member in
+its own frame, and — because Products is not `Cis` — **never merges or reorders** the members.
+Members may **overlap** in coordinates (`123a>u` sits inside `122_154del`) without that being a
+conflict, and are **not position-ordered** (`r.[897u>g,832_960del]` lists 897 before 832). The
+full treatment lives on `RNA/alleles.md:21`, whose `general.md:80` cross-reference gives the bare
+form `r.[123a>u,122_154del]`.
 
-**No ledger record cites `splicing.md:15`, `RNA/alleles.md:21`, or `general.md:80`, and none
-adjudicates Products-allele normalization semantics** — so this section carries no Why block. The
-behaviour is a defensible but unrecorded ferro reading; the campaign worksheet proposes a `decided`
-house-choice record pinning it (`,` members are distinct-transcript products, never merged or
-re-partitioned; `r.`/`p.`-only; each member normalized in its own frame), which is a proposal, not yet
-filed.
+**No ledger record adjudicates Products-allele normalization semantics** — so this section carries
+no Why block. The behaviour is a defensible but unrecorded ferro reading.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -105,10 +82,14 @@ its bare example).
 
 ## `splicing.md:16-19` — HGNC / VICC gene-fusion nomenclature
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - HGVS recommends following the [HGNC guidelines](https://www.genenames.org/about/guidelines/) and the [VICC Gene Fusion Specification](https://fusions.cancervariants.org/en/latest) nomenclature to describe products of gene fusions.
 >     - The HGNC recommendations include using a `GENESYMBOL1::GENESYMBOL2` syntax for gene-level fusion descriptions, and a `GENESYMBOL1-GENESYMBOL2` syntax for read-through transcripts.
 >     - The VICC nomenclature extends the HGNC recommendations to include a terminology, information model, and nomenclature for gene-level and exon-level representation, with components for disambiguating regulatory fusions from chimeric transcript fusions.
 >     - HGVS also recommends the use of adjoined transcripts (see examples) for precise and unambiguous characterization of chimeric transcripts at the sequence level.
+
+</details>
 
 Ferro: gene-symbol-level fusion nomenclature is delegated to HGNC/VICC and is **not an HGVS
 description**. The only HGVS-level form here is the adjoined transcript, which is governed by its own
@@ -133,6 +114,8 @@ each in its own frame, and neither merges nor reorders them. (Adjudication is un
 
 ## `splicing.md:27-36` — example: splice acceptor site
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **splice acceptor site**
 >     - **`NC_000023.11(NM_004006.2):r.650_831del`**<br>
 >       as a consequence of a variant destroying a splice acceptor site, the sequence from nucleotide `r.650` to `r.831` (exon 8) is deleted from the transcript.
@@ -144,41 +127,32 @@ each in its own frame, and neither merges nor reorders them. (Adjudication is un
 >       as a consequence of a variant destroying a splice acceptor site (`c.650-1G>C`), a new acceptor site in intron 7 is activated and the intron 7 sequence from positions `650-52` to `650-1` is inserted in the transcript.<br>
 >       **NOTE**: nucleotide `650-1` changed from `g` to `c`.
 
-Ferro: two of these are ordinary RNA deletions (governed by `RNA/deletion.md`) and preserve; the third
-is the page's **central form** — intron retention written as an `r.` insertion whose payload is a
-**range in intronic (`c.`-style offset) coordinates**, with the mutated base spelled literally in a
-`[…;…]` composite. It is **bold, with no `invalid` markup: the spec's recommended way to write intron
-retention.** Ferro parses it (`InsertedPart::CdsPositionRange`) and then **declines at normalize** with
-`Unsupported variant type: ins[…] CDS-offset range (intronic or UTR-marker) is spec-undefined and not
-yet supported by ferro` (`src/normalize/rules.rs`), producing no output. Nothing malformed is emitted —
-ferro refuses a spec-recommended form — so the row is recorded `conformant`, not `bug` and not
-`refused` (the harness checks `refused` at strict *parse*, which accepts this input).
+</details>
 
-**Note — the decline reason is a misstatement on the `r.` axis (proposed record γ1, unfiled).** The
-message says "spec-undefined". For a `c.` payload that is arguable; for `r.` the spec **defines** this
-form five times on this page (`splicing.md:34`, `:45`, `:50`, `:53`, `:56`) as the recommended way to
-describe intron retention. A decline may be legitimate — expanding the range to literal bases needs
-the pre-mRNA sequence the `r.` reference does not hold (the `NC_…(NM_…)` context is precisely what
-would supply it) — but a decline *labelled a spec gap* is wrong. The decided campaign reading is that
-the form is spec-defined and the house choice is **coordinate-space-resolvability**: flatten a range
-whose coordinates the rendering reference resolves, and **preserve** a range whose coordinates lie
-outside it (an intronic-offset range → preserve, not decline). There is no ledger record for this yet
-(γ1 is a proposed new record); it is documented here in prose. Ferro's own flatten-vs-preserve policy
-is separately inconsistent across payload shapes on the same axis: #773/#1183
-(`issue_1183_rna_axis_ins_expansion.rs`) decided a resolvable same-reference `r.` range payload
-flattens to a literal, and **no ledger record exists for that rule-6 choice on any axis** either — the
-intronic-range shape inherits a decline instead of either half of that unrecorded policy.
+Ferro: two of these are ordinary RNA deletions (governed by `RNA/deletion.md`) and preserve; the
+third is the page's **central form** — intron retention written as an `r.` insertion whose payload
+is a **range in intronic (`c.`-style offset) coordinates**, with the mutated base spelled literally
+in a `[…;…]` composite. It is bold with no `invalid` markup: the spec's recommended way to write
+intron retention. Ferro parses it, then **declines at normalize** as spec-undefined, producing no
+output. Nothing malformed is emitted, so the row is `conformant`, not `bug` and not `refused`
+(strict parse accepts this input).
 
-**Note — an upstream inconsistency owed to #466 (no issue filed here).** `RNA/insertion.md:44` wraps
-the identical shape, `NG_012232.1(NM_004006.2):r.2949_2950ins[2950-30_2950-12;2950-4_2950-1]` (and its
-`…;uuag]` alternative), in `<code class="invalid">`, while describing it as a valid intron-retention
-insertion and cross-linking back to this page. The class was added in a formatting commit that converted
-a plain list to code spans; it contradicts this page's five bold examples. In ferro's fixture the
-`insertion.md` twin therefore sits as `false-acceptance` (ferro expected to reject) while these
-`splicing.md` rows sit as `needs-reference` — one shape, two contradictory expectations — and
-`cross_doc_compliance.rs` has already taken the `invalid` side. #466 tracks a related expansion
-ambiguity but does not list this one; it is owed a filing. Until it is answered, **`splicing.md` (five
-bold examples) governs over one formatting-commit class attribute.**
+**Note — the decline reason misstates the spec on `r.`.** The spec **defines** this form five
+times on this page as the recommended way to describe intron retention, so labelling the decline
+"spec-undefined" is wrong, even though declining may be legitimate: expanding the range to literal
+bases needs the pre-mRNA sequence the `r.` reference does not hold. The proposed reading is
+**coordinate-space-resolvability**: flatten a range whose coordinates the rendering reference
+resolves, and **preserve** one whose coordinates lie outside it (an intronic-offset range →
+preserve, not decline). No ledger record exists for this yet. Ferro's flatten-vs-preserve policy is
+separately inconsistent across payload shapes on this axis — a resolvable same-reference `r.` range
+payload flattens to a literal elsewhere, with no ledger record for that choice either — so the
+intronic-range shape inherits a decline instead of either half of an unrecorded policy.
+
+**Note — an upstream inconsistency, owed a filing.** `RNA/insertion.md:44` wraps the identical
+shape in `<code class="invalid">` while describing it as a valid intron-retention insertion and
+cross-linking back to this page — a formatting accident that contradicts this page's five bold
+examples. Until answered, **`splicing.md` (five bold examples) governs over one formatting-commit
+class attribute.**
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -187,6 +161,8 @@ bold examples) governs over one formatting-commit class attribute.**
 | `NC_000023.11(NM_004006.2):r.649_650ins[650-52_650-2;c]` | conformant | — | the spec's central intron-retention form — a range in intronic offset coordinates plus the mutated base `c`. Ferro parses it (`InsertedPart::CdsPositionRange`) then **declines at normalize** with the *spec-undefined* message. Nothing wrong is emitted, so `conformant`; parse-only here. The message misstates the spec on `r.` and the decided preserve policy is unrecorded — see the Notes above |
 
 ## `splicing.md:38-47` — example: splice donor site
+
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
 
 > - **splice donor site** (`c.831+2T>A`)
 >     - **`NC_000023.11(NM_004006.2):r.650_831del`**<br>
@@ -198,6 +174,8 @@ bold examples) governs over one formatting-commit class attribute.**
 >     - **`NC_000023.11(NM_004006.2):r.831_832ins[ga;831+3_831+60]`**<br>
 >       as a consequence of a variant destroying the exon 8 splice donor site, a new donor site in intron 8 (positions `831+60` / `831+61`) is activated and the intron 8 sequence from positions `831+1` to `831+60` is inserted in the transcript.<br>
 >       **NOTE**: nucleotide `831+2` changed from `u` to `a`.
+
+</details>
 
 Ferro: the acceptor-site shape at `splicing.md:27-36`, mirrored to the donor side — the literal `ga`
 spells `831+1` and the mutated `831+2`, and the range resumes at `831+3`. Two ordinary deletions
@@ -213,6 +191,8 @@ there.
 
 ## `splicing.md:49-57` — example: intron variant
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **intron variant**
 >     - **`NC_000023.11(NM_004006.2):r.649_650ins650-50_650-1`**<br>
 >       as a consequence of an intron 7 variant (`c.650-52_650-51del`), a new stronger exon 8 splice acceptor site is created (positions `650-51` / `650-50`) and the intron 7 sequence from positions `650-50` to `650-1` is inserted in the transcript.
@@ -222,6 +202,8 @@ there.
 >
 >     - **`NC_000023.11(NM_004006.2):r.649_650ins650-1400_650-1268`**<br>
 >       as a consequence of an intron 7 variant (`c.650-1401T>G`), a new exon is created and its sequence (positions `650-1400` to `650-1268`) is inserted in the transcript.
+
+</details>
 
 Ferro: the **unbracketed** intronic-range payload — the plainest form of the intron-retention shape,
 with no literal component at all. All three decline at normalize with the *spec-undefined* message.
@@ -251,6 +233,8 @@ page, not here.
 
 ## `splicing.md:63-71` — example: uncertain (RNA not analysed)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **uncertain** (RNA not analysed)
 >     - **`NC_000023.11(NM_004006.2):r.(76a>c)`**<br>
 >       RNA was not analysed, but a substitution of the `a` nucleotide at `r.76` by a `c` is predicted.
@@ -260,6 +244,8 @@ page, not here.
 >
 >     - **`NC_000023.11(NM_004006.2):r.spl`**<br>
 >       RNA has not been analysed, but it is very likely that splicing is affected.
+
+</details>
 
 Ferro: three whole-transcript or predicted statements. `r.(76a>c)` is an ordinary predicted
 substitution (the parentheses mark it predicted); `r.?` and `r.spl` carry no position and no sequence
@@ -278,6 +264,8 @@ distinct from `r.?` (`rna_spl_marker.rs`).
 
 ## `splicing.md:75-80` — discussion: `r.spl` and `r.(spl?)`
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "A variant changes the +1 intron sequence (`GT` to `AT`). Although I did not analyse RNA, I am quite sure that normal splicing is affected. How can I best indicate this?"
 >
 >     HGVS recommends to use the format `r.spl` to indicate that RNA was not analysed, but splicing is most probably affected.
@@ -285,37 +273,32 @@ distinct from `r.?` (`rna_spl_marker.rs`).
 >     `r.(spl?)` is frequently used to indicate that normal splicing might be affected as a consequence of variants in the first or last nucleotide of an exon, the +3 to +5 intron position (splice donor site), and variants generating a new `AG` di-nucleotide close to the normal splice acceptor site (`AG`).
 >     See [Uncertain](../uncertain.md).
 
-Ferro: three things live in this Q&A, and two are unrecorded open questions.
+</details>
+
+Ferro: three things live in this Q&A, two of them unrecorded open questions.
 
 - *When to write `r.spl` versus the weaker marker* (±1/±2 versus exon-edge/+3..+5/new AG, `GT`↔`GC`
-  excluded): guidance to an author or an effect predictor. Ferro's effect module never constructs the
-  splice edit outside the parser, so ferro neither applies nor violates this. Descriptive.
+  excluded) is guidance to an author or effect predictor. Ferro's effect module never constructs
+  the splice edit outside the parser, so it neither applies nor violates this. Descriptive.
 
-- *The spelling of the weaker marker is given two ways across two spec pages.* This page writes
-  **`r.(spl?)`** (`splicing.md:79`); `uncertain.md:194` writes **`r.spl?`** for the identical statement
-  with the identical scope text. The spec never says whether they are equivalent. The `(…)` wrapper
-  means "predicted / RNA not analysed", and `r.spl?` already asserts RNA-not-analysed, so the parens
-  add nothing the bare form does not already state — an adjudicable confluence question the spec leaves
-  open. Ferro keeps `r.spl?` and `r.(spl?)` as **distinct, non-canonicalized** values
-  (`rna_spl_marker.rs` pins hash/`Eq` distinctness across the four forms). That is a defensible reading,
-  but it is a *choice* governed by nothing — **no ledger record exists**; the campaign worksheet proposes
-  an `undecided` record and an upstream filing, with a provisional projector house choice (below).
+- *The weaker marker's spelling differs across two spec pages*: this page writes `r.(spl?)`;
+  `uncertain.md:194` writes `r.spl?` for the identical statement. The spec never says whether they
+  are equivalent, and since `(…)` means "predicted / RNA not analysed" while `r.spl?` already
+  asserts RNA-not-analysed, the parens arguably add nothing. Ferro keeps `r.spl?` and `r.(spl?)` as
+  **distinct, non-canonicalized** values — a defensible but ungoverned choice; no ledger record
+  exists.
 
-- *`r.(spl)` appears nowhere in the spec.* Ferro accepts it as the symmetric predicted-but-certain form
-  and, on the **projector** (not the normalizer), manufactures it: projecting `r.spl` onto the rna axis
-  returns the uncertain-wrapped splice edit, rendered `r.(spl)`, preserved on an explicit **stability**
-  argument. Emitting a spelling the spec never shows, for an input the spec does show, is a rule-1
-  question on the watched `src/project/` axis — and `adjudication-precedence-order` ranks stability as a
-  tiebreaker only. The **provisional house choice** (unfiled) is that the projector should emit the
-  input's own spelling (`r.spl` → `r.spl`), not a manufactured wrapper.
+- *`r.(spl)` appears nowhere in the spec.* Ferro accepts it as the symmetric predicted-but-certain
+  form and, on the **projector** (not the normalizer), manufactures it: projecting `r.spl` onto the
+  rna axis returns the uncertain-wrapped splice edit, rendered `r.(spl)`, on a stability argument.
+  Emitting a spelling the spec never shows, for an input the spec does show, is open on the
+  projection axis; `adjudication-precedence-order` ranks stability as a tiebreaker only. The
+  provisional preference is for the projector to emit the input's own spelling instead.
 
-**Note — the #1264/#1332 principle lives only in code (no ledger record).** #1264 found the projector
-had carried the RNA-only `spl` token verbatim onto other axes (`g.spl`, `c.1spl`, `n.245spl`); #1332
-(`issue_1264_reparse_asymmetry.rs`) fixed it so the projector now *refuses* those axes with "an
-RNA-level effect, not a sequence change, so it has no genomic representation". That principle — an
-RNA-level effect has no representation on another axis — is stated only in code comments and a test
-census; the worksheet's proposed marker record would codify it. The normalizer was never affected;
-on the normalize path (what these rows measure) all four markers are identity fixed points.
+**Note.** The projector also once carried the RNA-only `spl` token verbatim onto other axes
+(`g.spl`, `c.1spl`, `n.245spl`); it now refuses those axes because an RNA-level effect has no
+genomic representation. That principle is stated only in code, with no ledger record. The
+normalizer is unaffected — on the normalize path all four markers are identity fixed points.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -330,9 +313,9 @@ on the normalize path (what these rows measure) all four markers are identity fi
 >
 >     The best format seems to use `p.?`, meaning "I do not know what to expect on the protein level".
 
-Ferro: hedged ("seems"), about the protein axis, authored-description advice — not a normalization rule.
-One observation for the projection axis: since #1332 the projector **declines** the protein axis for
+Ferro: hedged ("seems"), about the protein axis, authored-description advice — not a normalization
+rule. One observation for the projection axis: the projector **declines** the protein axis for
 `r.spl` ("has no representation on another axis") rather than emitting `p.?`, while the spec's soft
 preference here would be `p.?`. That is weaker than rule-2 force and belongs to any future
-projection-axis record (the worksheet folds it into the proposed marker record), not a ledger change of
-its own. Nothing for the normalizer to enforce. **Descriptive.**
+projection-axis record, not a ledger change of its own. Nothing for the normalizer to enforce.
+**Descriptive.**

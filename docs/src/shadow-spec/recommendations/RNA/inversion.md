@@ -1,20 +1,11 @@
 # Inversion — ferro's reading
 
-ferro's reading of `RNA/inversion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **inversion** recommendations on the transcript (`r.`) axis, clause
+by clause — each spelling with the form ferro normalizes it to and a verdict on that output.
+New here? See [How to read a page](../../reading-guide.md) for the verdicts, the table
+conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Inversion (`c.`/`g.`)](../DNA/inversion.md).*
 
 Two ledger records reach this page's clauses, and neither is an `r.`-jurisdiction ruling on its own
 terms. `whole-span-reverse-complement-types-as-inv` governs the whole-span reverse-complement →
@@ -59,10 +50,13 @@ complement. When a span's whole content is its reverse complement, that span typ
 whatever the competing split partition's members would type as — the property is a fact about the
 whole span, with no term for its interior columns.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[whole-span-reverse-complement-types-as-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A span whose whole content is replaced by its exact reverse complement is written as one inv, however much of its interior coincides with the reference and whatever the competing partition is made of — a project choice among conformant forms, not a conformance requirement, since the spec's type-ranking rule cannot settle a merge-versus-split question at all.
 <!-- why:END:whole-span-reverse-complement-types-as-inv -->
+
+</details>
 
 `whole-span-reverse-complement-types-as-inv` is grounded on `DNA/inversion.md:5` and `general.md:55`
 and guarded on the coding and genomic axes only — no `r.` guard exists. `RNA/inversion.md:5` here
@@ -133,10 +127,13 @@ Ferro: an inverted duplication is spelled `ins<range>inv`, naming the span the i
 from — never `dup`, and never the `dupinv` shorthand, which is refused at parse. This clause is the
 `r.`-native basis for the `ins<range>inv` form worked from the insertion and duplication sides.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 `inverted-duplication-is-derived-as-ins-range-inv` reaches the `r.` axis on RNA's own authority
 (`RNA/insertion.md:18`, `RNA/duplication.md:21`), not by stretching a `DNA/` clause. Per the

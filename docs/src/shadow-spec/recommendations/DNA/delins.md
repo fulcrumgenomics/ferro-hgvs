@@ -1,29 +1,20 @@
 # Deletion-Insertion — ferro's reading
 
-ferro's reading of `delins.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **deletion-insertion (delins)** recommendations, clause by clause —
+each spelling with the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Deletion-Insertion (`r.`)](../RNA/delins.md).*
 
 Most of this page is CONFIRM-by-inspection against the spec text and the shipped code: the delins
 definition, the substitution boundary, the conversions housekeeping, and the 3'rule are mechanical
 parser or re-derivation behaviour with no clause in tension. The units that are actually
 adjudicated — and carry a Why block — are the separation rule at `delins.md:17`, the one-codon
 exception at `delins.md:18`, the two separation-zero merges (`delins.md:16` sub+sub and
-`delins.md:86-89` sub+ins), and the central payload-coincidence example at `delins.md:44-47`, which
-is where the merge geometry that the sibling `deletion.md` and `substitution.md` pages defer to
-this file is actually decided.
+`delins.md:86-89` sub+ins), and the central example at `delins.md:44-47` of when part of the
+inserted sequence happens to match the reference, which is where the merge geometry that the
+sibling `deletion.md` and `substitution.md` pages defer to this file is actually decided.
 
 **The payload-coincidence carve-out reaches every DNA axis (`c.`, `g.`, `m.`, `n.`), not `c.` alone.**
 On `c.` the merged spanning delins is the **recommended** form; on `g.`/`m.`/`n.` — the frameless
@@ -76,10 +67,13 @@ the spec states an outright merge requirement rather than a preference: at separ
 spelling is marked `class="invalid"` and called "not correct" by name (`substitution.md:32`). Both
 members consume reference bases, so they coalesce.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-adjacent-members-when-both-consume-reference](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
 <!-- why:END:delins-adjacent-members-when-both-consume-reference -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -96,12 +90,15 @@ allele, described individually. The separation that this clause keys on is read 
 **re-derived from the resulting sequence**, never off the input's member boundaries, so two spellings
 of one variant converge on one separation count and one output.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[separation-is-a-property-of-the-spelling-not-of-the-variant](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro reads the separation between changes off the partition it re-derives from the resulting sequence, not off the input's spelling, so two spellings of one variant converge on one output.
 <!-- why:END:separation-rule-force-modal-or-negation,separation-is-a-property-of-the-spelling-not-of-the-variant -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -120,7 +117,8 @@ amino-acid consequence, the exception reaches only an axis that declares a readi
 coding-axis merge under it does **not** propagate to its derived genomic projection, which stays
 split under `delins.md:17`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-codon-carve-out-gap-one](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together affect a single amino acid are written as one delins on the coding sequence, the explicit exception the spec makes to describing them individually; the merged span must stay within the reading frame's codon boundary regardless of the members' edit types.
 >
@@ -128,6 +126,8 @@ split under `delins.md:17`.
 >
 > **[projection-codon-exception-is-decided-by-the-rendered-axis](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The codon merge fires only on an axis that declares a reading frame, so when a coding description merges under it ferro leaves the members individual on the derived genomic axis rather than re-merging it to match.
 <!-- why:END:delins-codon-carve-out-gap-one,codon-carve-out-shape-restriction,projection-codon-exception-is-decided-by-the-rendered-axis -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -164,10 +164,13 @@ coincide with the reference into residual pieces, which then shift; where two le
 and no clause selects, ferro emits what falls out of the resulting sequence rather than preserving the
 input's spelling.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -193,7 +196,7 @@ currently enforce at parse. No Why block — this is parser/strict behaviour, no
 | `NC_000023.11:g.32386323delTinsGA` | conformant | — | the spec's `class="invalid"` deleted-sequence spelling; ferro accepts it (strict does **not** reject the explicit-deleted `delins`) and canonicalizes to the short `delins` form (parse-only — foreign genomic) |
 | `NM_004006.2:c.6775_6777delGAGinsC` | conformant | — | the same explicit-deleted spelling on the coding example — accepted, canonicalizes to short form (parse-only — `NM_004006.2` version not in the slice) |
 
-## `delins.md:44-47` — the central payload-coincidence example
+## `delins.md:44-47` — when part of the inserted sequence happens to match the reference
 
 > - **`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`**<br>
 >   a deletion of nucleotides `c.850` to `c.901`, replaced by `TTCCTCGATGCCTG`.<br>
@@ -216,7 +219,8 @@ predictions — has nothing to bite on where there is no reading frame, so the w
 choice among conformant forms rather than a conformance requirement. The `r.` axis is out of
 jurisdiction (a DNA document cannot scope `r.`, and `RNA/delins.md` states no `:47` counterpart).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-merge-vs-individual-gap-two-or-more](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two changes two or more nucleotides apart arise only because part of the inserted sequence coincides with the reference and the block is a net deletion, ferro writes them as one spanning delins rather than individually.
 >
@@ -226,6 +230,8 @@ jurisdiction (a DNA document cannot scope `r.`, and `RNA/delins.md` states no `:
 >
 > **[delins-payload-coincidence-carve-out-is-coding-dna-scoped](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Where a split exists only because payload bases coincide with the reference, ferro writes it as one spanning delins on every DNA axis (c./g./m./n., but not r.); on the frameless axes this is a disclosed rule-2 deviation and the project's choice among conformant forms.
 <!-- why:END:delins-merge-vs-individual-gap-two-or-more,delins-recommendation-reach-when-the-input-arrives-split,unequal-length-block-a-placed-gap-is-not-a-separation,delins-payload-coincidence-carve-out-is-coding-dna-scoped -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -274,10 +280,13 @@ ferro re-derives from the resulting sequence and discloses the deviation rather 
 input's spelling. The separation ferro measures is read off the re-derived partition, so two spellings
 of one variant converge.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-is-a-property-of-the-spelling-not-of-the-variant](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro reads the separation between changes off the partition it re-derives from the resulting sequence, not off the input's spelling, so two spellings of one variant converge on one output.
 <!-- why:END:separation-is-a-property-of-the-spelling-not-of-the-variant -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -304,10 +313,13 @@ form for a variant that is, on this reference, purely insertional; it simply is 
 BRCA1 locus produces. The parse-only BRCA1 rows below carry the merge; the executable rows carry the
 collapse.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-adjacent-members-when-both-consume-reference](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
 <!-- why:END:delins-adjacent-members-when-both-consume-reference -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

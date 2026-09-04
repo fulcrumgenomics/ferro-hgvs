@@ -1,20 +1,11 @@
 # Repeated Sequences — ferro's reading
 
-ferro's reading of `RNA/repeated.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **repeated sequence** recommendations on the transcript (`r.`)
+axis, clause by clause — each spelling with the form ferro normalizes it to and a verdict on
+that output. New here? See [How to read a page](../../reading-guide.md) for the verdicts, the
+table conventions, and the recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*DNA twin: [Repeated Sequences (`c.`/`g.`)](../DNA/repeated.md).*
 
 Three ledger records reach this page's clauses. `rna-repeat-range-plus-unit-redundancy` is the one
 record that governs the central `:22`/`:27` conflict, and it is **undecided** on purpose — its
@@ -90,10 +81,13 @@ re-introduce spelling-dependence the gate exists to remove. `:21` grounds the di
 whether the tract "was sequenced", which is provenance, not sequence, and is not recoverable from
 the bases.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[confluence-gate-is-apply-equality-on-every-determined-axis](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Ferro's release gate asserts, over the decided equivalence classes, that inputs denoting the same sequence on every determined axis — a transcript and its genomic projection, or a genome alone — normalize to one output; the protein axis is excluded because translation is many-to-one and states a consequence rather than a denotation, and equivalence is judged by applying the descriptions to the reference rather than by comparing normalized strings.
 <!-- why:END:confluence-gate-is-apply-equality-on-every-determined-axis -->
+
+</details>
 
 The two forms are accession-less in the spec, so there is no executable verdict row; the record's
 own summary names `RNA/repeated.md:20-21` as the clause it does **not** try to collapse — the
@@ -143,10 +137,13 @@ canonical valid form being the start-plus-unit `r.-6g[6]` — but it is held **o
 upstream filing**, since the conflict is genuinely upstream's to correct (the ledger notes it as
 owed upstream, `#466`). The record stays undecided.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[rna-repeat-range-plus-unit-redundancy](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Whether an RNA repeat may combine a position range with its own repeat unit is undecided — the recommendations both call that shape invalid as redundant and publish it as a worked example — and ferro's current lenient-mode agreement with the published form is an incidental effect of tract maximization rather than a resolution.
 <!-- why:END:rna-repeat-range-plus-unit-redundancy -->
+
+</details>
 
 **Ferro's behaviour is what makes the decision non-free, and it hides an open finding.** Since the
 `#1631` lenient repair (`tests/it/issue_1631_repeat_label_repair.rs`), a repair hands the
@@ -218,10 +215,13 @@ Which of the two ferro emits is the representation choice `canonical-form-choice
 governs: ferro derives the form from the resulting sequence rather than preserving the input's
 spelling.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
+
+</details>
 
 Second, the "preferred when variable in the population" NOTEs are **provenance-conditioned**: which
 description is preferred depends on the repeat being variable in the population and on the reference

@@ -1,20 +1,11 @@
 # Substitution — ferro's reading
 
-ferro's reading of `substitution.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **substitution** recommendations, clause by clause — each spelling with
+the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Substitution (`r.`)](../RNA/substitution.md).*
 
 ## `substitution.md:5` — definition: one nucleotide for one
 
@@ -35,10 +26,13 @@ Ferro: a substitution is exactly 1→1; IUPAC ambiguity codes stand in for the s
 
 Ferro: a multi-base replacement is never a substitution; write it as a delins.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -52,12 +46,15 @@ Ferro: a multi-base replacement is never a substitution; write it as a delins.
 Ferro: the separation rule (ruleset rule 2); the exception folds two subs into one delins only when
 they sit one nucleotide apart and together change one amino acid.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 <!-- why:END:separation-rule-force-modal-or-negation,codon-carve-out-shape-restriction -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -65,10 +62,6 @@ they sit one nucleotide apart and together change one amino acid.
 | `NM_004006.3:c.[145C>T;147C>G]` | recommended | `NM_004006.3:c.145_147delinsTGG` | ferro normalizes the split to the recommended delins (warns `MEMBERS_COALESCED_FROM_REPORTED_FORM`) |
 | `NM_004006.3:c.235_237delinsTAT` | recommended | self | the Lys79 codon; the split predicts `p.[Lys79*;Lys79Asn]`, the delins `p.Lys79Tyr` |
 | `NM_004006.3:c.[235A>T;237G>T]` | recommended | `NM_004006.3:c.235_237delinsTAT` | split → the recommended delins (same codon exception) |
-
-**Confluence.** Each split and its delins converge on one recommended output —
-`{c.[145C>T;147C>G], c.145_147delinsTGG} → c.145_147delinsTGG`, and the Lys79 pair →
-`c.235_237delinsTAT`.
 
 ## `substitution.md:19` — no change is `=`, not a substitution
 
@@ -101,22 +94,21 @@ bases are one delins. The same rule licenses re-merging adjacency that per-membe
 creates (protein `p.[Gly16Ala;Gly17del]` → `p.Gly16_Gly17delinsAla`), keeping normalization
 idempotent.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[delins-adjacent-members-when-both-consume-reference](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
 >
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:delins-adjacent-members-when-both-consume-reference,canonical-form-choice-when-both-legal -->
 
+</details>
+
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.3:c.79_80delinsTT` | recommended | self | adjacent `c.79`,`c.80` written as one delins |
 | `NM_004006.3:c.[79G>T;80C>T]` | recommended | `NM_004006.3:c.79_80delinsTT` | ferro normalizes the adjacent split to the recommended delins |
 | `NM_004006.3:c.79_80GC>TT` | refused | — | the multi-base substitution spelling — rejected |
-
-**Confluence.** `{c.[79G>T;80C>T], c.79_80delinsTT} → c.79_80delinsTT`.
-
-See also → `substitution.md:15`, `substitution.md:16-18`.
 
 ## `substitution.md:39-41` — an IUPAC ambiguity code as the replacing base
 
@@ -161,9 +153,8 @@ allele first.
 
 > it should be described as `c.(76A>G)`
 
-Ferro: when only RNA (cDNA) was sequenced, the DNA-level consequence is written parenthesized as
-`c.(76A>G)` (the RNA-level form is `r.76a>g`). Ferro accepts and preserves the parenthesized `c.`
-form.
+Ferro: when only RNA was sequenced, the DNA-level consequence is written parenthesized as
+`c.(76A>G)`; ferro accepts and preserves this form.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -173,10 +164,8 @@ form.
 
 > simplified descriptions can be used like
 
-Ferro: the spec frames these as informal shorthand for manuscripts — conditioned on a full,
-unequivocal description existing elsewhere in the publication — not as HGVS. None carries the
-`accession:coordinate` structure, so ferro declines them; that is the expected outcome, not a
-defect.
+Ferro: these are informal manuscript shorthand, not HGVS — none carries the
+`accession:coordinate` structure, so ferro declines them.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -190,8 +179,8 @@ defect.
 > <code class="invalid">NM_004006.1:c.-128354C>T</code> or <code class="invalid">NM_000109.3:c.-401C>T</code> are invalid
 
 Ferro: a `c.` position outside its transcript's own numbered span is not describable against that
-transcript (a reference-bounds fact, not a parse fact); describe the variant against a
-genomic-with-transcript-coordinates reference or a plain genomic `g.` reference instead. These
+transcript (a reference-bounds fact, not a parse fact) — describe it against a
+genomic-with-transcript-coordinates reference or a plain genomic `g.` reference instead. Both
 escape forms are valid HGVS that ferro accepts.
 
 | Input | Verdict | Normalizes to | Notes |
@@ -205,15 +194,13 @@ escape forms are valid HGVS that ferro accepts.
 > No, all substitutions are described as `NM_004006.1:c.76A>G`
 
 Ferro: the historical "polymorphism" slash `c.76A/G` is not valid HGVS — the only conformant form
-is `A>G`, and ferro rejects the slash at parse. The two Q&As that follow restate rules already on
-this page: the di-nucleotide `NG_012232.1:g.12GC>TG` is a multi-base substitution written as a
-delins (`substitution.md:15`), and the _BRCA1_ `c.[2077G>A;2077_2078insTA]` → `c.2077delinsATA`
-answer — whose `:96` NOTE records that the passage permitting the split spelling was removed — is
-the separation-zero merge of two members that both consume reference bases (`substitution.md:32`).
-The dinucleotide Q&A also carries a second, distinct rule: when the two variants' **phase is
-unavailable**, the spec writes them with the `(;)` unknown-phase separator
-(`NG_012232.1:g.12G>T(;)13C>G`, `substitution.md:91`) rather than a delins — a different
-situation from the known-phase dinucleotide above, and one ferro parses and preserves.
+is `A>G`, and ferro rejects the slash at parse. A di-nucleotide substitution like
+`NG_012232.1:g.12GC>TG` is a multi-base substitution written as a delins
+(`substitution.md:15`); the _BRCA1_ `c.[2077G>A;2077_2078insTA]` → `c.2077delinsATA` case is the
+separation-zero merge of two members that both consume reference bases (`substitution.md:32`).
+When two variants' **phase is unavailable**, the spec instead writes them with the `(;)`
+unknown-phase separator (`NG_012232.1:g.12G>T(;)13C>G`) rather than a delins, and ferro parses
+and preserves that form.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -222,5 +209,3 @@ situation from the known-phase dinucleotide above, and one ferro parses and pres
 | `NG_012232.1:g.12GC>TG` | refused | — | di-nucleotide substitution — use `g.12_13delinsTG` (`substitution.md:15`); parse-only here |
 | `NG_012232.1:g.12G>T(;)13C>G` | recommended | — | the unknown-phase form: two substitutions whose phase is unavailable, written with the `(;)` separator (`substitution.md:91`) rather than a delins; ferro parses and preserves it (parse-only here) |
 | `NM_007294.3:c.2077delinsATA` | recommended | — | the _BRCA1_ Q&A's correct form; the split `c.[2077G>A;2077_2078insTA]` merges to it (`substitution.md:32`) — parse-only here |
-
-See also → `substitution.md:15`, `substitution.md:32`.

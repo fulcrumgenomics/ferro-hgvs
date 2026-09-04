@@ -1,20 +1,11 @@
 # Insertion — ferro's reading
 
-ferro's reading of `insertion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **insertion** recommendations, clause by clause — each spelling with
+the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+*RNA twin: [Insertion (`r.`)](../RNA/insertion.md).*
 
 Three ledger records reach this page's clauses. `duplication-must-ranks-the-label-not-the-partition`
 governs the `dup`/`ins` boundary the definition (`insertion.md:5`) and the tandem-duplication Note
@@ -88,10 +79,13 @@ table-executable, but on a real reference ferro expands the range payload to lit
 the payload is a copy of the bases immediately 5', and relabels it `dup`. The inverted-duplication
 sub-bullet (`insertion.md:18`) is worked separately below.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[duplication-must-ranks-the-label-not-the-partition](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
 <!-- why:END:duplication-must-ranks-the-label-not-the-partition -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -104,10 +98,13 @@ sub-bullet (`insertion.md:18`) is worked separately below.
 Ferro: an inverted duplication is spelled `ins<range>inv`, naming the span the inverted copy came
 from — never `dup`, and never the `dupinv` shorthand, which is refused at parse.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 **The inverted-duplication form is not yet derived on the coding axis.** The `ins<range>inv`
 re-spell is wired only in `normalize_genome` (the sole caller of
@@ -169,10 +166,13 @@ spelling ferro emits is a representation choice governed by the ledger — not a
 sentence is authoring workflow advice (submit novel sequence to a database, cite the accession),
 not a normalization obligation.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

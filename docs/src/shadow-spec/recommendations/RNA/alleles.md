@@ -1,52 +1,35 @@
 # Alleles — ferro's reading
 
-ferro's reading of `RNA/alleles.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **alleles** recommendations on the transcript (`r.`) axis, clause
+by clause, with each spelling's normalized form and a verdict. See
+[How to read a page](../../reading-guide.md) for verdicts, table conventions, and recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page — but two kinds of
-  `conformant` row here are not mere limitations, and the verdict word undersells both. Three rows
-  at `:5` are inputs ferro **refuses in strict mode at normalize** (`W5002`), which the checked
-  `refused` verdict — a strict *parse* check — cannot carry, so they are recorded on what the
-  lenient tier emits. Two rows at `:36-52` / `:82-85` re-spell the spec's own compact form to an
-  expanded one; the output re-parses, which is what the verdict measures, and the defect is filed as
-  [#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
+*DNA twin: [Alleles (`c.`/`g.`)](../DNA/alleles.md).*
 
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
+Two kinds of `conformant` row on this page are not mere limitations. Three rows at `:5` are
+inputs ferro **refuses in strict mode at normalize** (`W5002`), which the checked `refused`
+verdict — a strict *parse* check — cannot carry, so they are recorded on what the lenient tier
+emits. Two rows at `:36-52` / `:82-85` re-spell the spec's own compact form to an expanded one;
+the output re-parses, which is what the verdict measures, and the defect is filed as
+[#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
 
 **No ledger record cites any `RNA/alleles.md` clause** — the whole document is a record-level gap,
-so every section below carries **no Why block**. The reading is CONFIRM-by-inspection against the
-spec text and the shipped code, not an adjudicated ruling. The one cross-axis record that touches
-allele member geometry, `conflicting-member-geometry-refusal-scope`, governs **`DNA/alleles.md:5`**
-and its guard (`the_three_conflicting_geometries_are_refused_in_strict_mode_on_every_axis`)
-enumerates only `c.`/`g.` shapes — so by the repo's own jurisdiction rule (an `r.` claim needs a
-clause under `RNA/`) it carries no RNA authority. Where it is relevant it is documented in a Note,
-not a Why block; see `alleles.md:5`.
+so every section below carries **no Why block**; the reading is CONFIRM-by-inspection against the
+spec text and the shipped code. The one cross-axis record touching allele member geometry,
+`conflicting-member-geometry-refusal-scope`, governs only `DNA/alleles.md:5` and enumerates just
+`c.`/`g.` shapes, so it carries no RNA authority; where relevant it is documented in a Note, not a
+Why block (see `alleles.md:5`).
 
-How ferro treats an allele, which every section below rests on: the members are parsed into an
-`AllelePhase` — `Cis` (`[a;b]`), `Trans` (`[a];[b]`), `Unknown` (`a(;)b`), `Products` (`,`) — and
-**each member is normalized in its own frame**. Every merge/collapse pass is gated on
-`phase != Cis`, so a **cis** allele's members may merge when they sit adjacent, while **trans**,
-**unknown** and **Products** members are *only* individually normalized — never merged, never
-reordered. An `r.` allele therefore round-trips member-wise. Measured on the executable rows
-below: a shiftable member 3'-shifts inside every phase, including a predicted `[(…)]` wrap and a
-`,` Products allele, and the join is preserved in each.
+How ferro treats an allele: members are parsed into an `AllelePhase` — `Cis` (`[a;b]`), `Trans`
+(`[a];[b]`), `Unknown` (`a(;)b`), `Products` (`,`) — and **each member is normalized in its own
+frame**. Merge/collapse passes fire only for **cis**, so a cis allele's adjacent members may
+merge, while **trans**, **unknown** and **Products** members are only individually normalized —
+never merged, never reordered. An `r.` allele therefore round-trips member-wise: a shiftable
+member 3'-shifts inside every phase, including a predicted `[(…)]` wrap and a `,` Products
+allele, and the join is preserved in each.
 
 Executable rows use `NM_004006.3`, the one transcript in the committed slice. The spec's own
-examples sit on `LRG_199t1` and `NM_004006.2`, neither of which the slice carries, so those rows
-are parse-only (`—`) — ferro cannot read their bases here. The `NM_004006.3` base facts the
-executable rows rely on (`r.75_77` is `aaa`, so `r.76del` → `r.77del` and `r.77del` is a fixed
-point; `r.6_8` is `uug` with `r.9` = `g`, a fixed point; `r.124_129del` is a fixed point) are the
-same ones established on `RNA/deletion.md`. One further measured fact: `r.345del` 3'-shifts to
-`r.346del`, which is what makes the syntax table's own `NM_004006.3` example executable at `:17`.
+examples sit on accessions outside the slice, so those rows are parse-only (`—`).
 
 ## `alleles.md:5` — definition, and the member-geometry refusal
 
@@ -54,32 +37,25 @@ same ones established on `RNA/deletion.md`. One further measured fact: `r.345del
 
 Ferro: an allele is a series of variants on one transcript from one chromosome. Two members that
 claim **intersecting reference territory** — nested, overlapping, or two insertions at one point —
-contradict "a series of variants" and are refused. The refusal is coordinate-based (it compares
-member spans, no reference bases needed) and **is axis-general in behaviour**: on the committed
-slice each `r.` row below fails strict-mode normalization with the same `W5002
-OverlapConflictingEdits` message as its `c.` twin (`NM_004006.3:c.[9_12del;10_11del]`,
-`c.[9_12del;11_14del]`, `c.[8_9insAT;8_9insTC]` — measured, byte-identical apart from the axis).
+contradict "a series of variants" and are refused. The refusal is coordinate-based (compares
+member spans, no reference bases needed) and is axis-general in behaviour: each `r.` row below
+fails strict-mode normalization with the same `W5002 OverlapConflictingEdits` message as its `c.`
+twin.
 
 **The stage matters for how the rows are recorded.** The refusal fires at **normalize**, not at
-parse: strict *parse* accepts all three, and the check runs on the parsed allele's member spans
-before any merge. This page's `refused` verdict is checked at strict **parse**, so it cannot carry
-a normalize-time refusal; the three rows are therefore recorded on what the lenient tier — the tier
-`Normalizes to` is checked against — emits, which is the input unchanged, carrying the `W5002`
-warning. Read `conformant` there as "strict refuses; lenient passes through", not as "ferro accepts
-intersecting members".
+parse — strict parse accepts all three. This page's `refused` verdict is checked at strict parse,
+so it cannot carry a normalize-time refusal; the three rows below are recorded on what the lenient
+tier emits, which is the input unchanged, carrying the `W5002` warning. Read `conformant` there as
+"strict refuses; lenient passes through", not as "ferro accepts intersecting members".
 
-**No ledger record scopes this to `r.`.** `conflicting-member-geometry-refusal-scope` decides the
-refusal but cites only `DNA/alleles.md:5`, and its guard enumerates `RefShape::CodingSingleExon`,
-`Genomic`, `CodingMultiExon` — c. and g. only, no `r.` case. `RNA/alleles.md:5` is a verbatim twin
-of that definition, but a `DNA/` citation cannot carry an `r.` ruling, so the `r.` refusal is
-measured behaviour that is currently un-authorised and un-guarded (worksheet AL2 proposes co-citing
-`RNA/alleles.md:5` and adding an `r.` guard row — a proposal, not yet in the ledger; the extension
-is not invented here).
+**No ledger record scopes this to `r.`.** `conflicting-member-geometry-refusal-scope` cites only
+`DNA/alleles.md:5` and covers `c.`/`g.` shapes only, so the `r.` refusal is measured behaviour that
+is currently unauthorised and unguarded in the ledger.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.3:r.[6_8del;77del]` | recommended | self | a well-formed cis allele — two disjoint members, each a fixed point; kept as a series of variants |
-| `NM_004006.3:r.[9_12del;10_11del]` | conformant | self | nested members — the second is inside the first; intersecting territory violates the definition. **Strict refuses at normalize**: `NM_004006.3:r.9_12 has 2 coincident cis-allele edits (del, del); HGVS spec defines no canonical form for this case (OverlapConflictingEdits / W5002)`. Lenient emits the input unchanged with that warning, which is what this row records. No `r.`-jurisdiction ledger record or guard covers the refusal (worksheet AL2) |
+| `NM_004006.3:r.[9_12del;10_11del]` | conformant | self | nested members — the second is inside the first; intersecting territory violates the definition. Strict refuses at normalize (`OverlapConflictingEdits` / `W5002`); lenient emits the input unchanged with that warning, which is what this row records. No `r.`-jurisdiction ledger record or guard covers the refusal |
 | `NM_004006.3:r.[9_12del;11_14del]` | conformant | self | overlapping members — same `W5002` refusal in strict, same lenient pass-through |
 | `NM_004006.3:r.[8_9insau;8_9insuc]` | conformant | self | two insertions at one point (`r.8_9`) — coincident insertions; strict refuses (`… has 2 coincident cis-allele edits (ins, ins) … W5002`), lenient passes through. The RNA payloads (`au`, `uc`) are valid symbols; the geometry is what is refused |
 
@@ -118,21 +94,18 @@ scope). Members two or more nucleotides apart stay individual, and the `;` join 
 
 Ferro: parses the `];[` join to `AllelePhase::Trans`. Trans is two chromosomes — two distinct
 variants — so it is gated out of every merge pass: members are only individually normalized, never
-merged against each other and never reordered. A distinct object from cis, and preserved as such.
+merged against each other and never reordered.
 
-The recommended spelling lists each allele's own variant, `r.[a];[b]`. Padding each allele's bracket
-with the *other* allele's positions as `=` fillers — `r.[a;p=];[p=;b]` — is the cross-spelled form
-the DNA twin marks `class="invalid"` by name (`DNA/alleles.md:19`, restated at `:49`: the "not
-changed" indication is used only when one variant was identified). Ferro rejects it **at parse**,
-in every mode: `trans_has_cross_spelled_identity` (`src/hgvs/parser/variant.rs`, on the trans
-production) refuses a position that carries a concrete edit in one bracket and an `=` inside a
-*multi-member* bracket elsewhere. A single-member `[77=]` beside `[77del]` is the sanctioned form
-and is accepted (`:47-49` below); so is an `=` at a position nothing else touches
-(`r.[77del;78=];[78=;6_8del]` parses). This is not the `:5` geometry refusal — an earlier draft
-of this page attributed it there — and the clause it enforces is a `DNA/` one, so on `r.` the
-rejection rests on the DNA twin's NOTE with no `RNA/alleles.md` counterpart. The error surfaces as a
-generic parse failure (`Parse error at position 12 … input: "]"`) that names neither the clause nor
-the cross-spelled position (minor gap).
+The recommended spelling lists each allele's own variant, `r.[a];[b]`. Padding each allele's
+bracket with the *other* allele's positions as `=` fillers — `r.[a;p=];[p=;b]` — is the
+cross-spelled form the DNA twin marks `class="invalid"` (`DNA/alleles.md:19`, restated at `:49`).
+Ferro rejects it **at parse**, in every mode, when a position carries a concrete edit in one
+bracket and an `=` inside a *multi-member* bracket elsewhere. A single-member `[77=]` beside
+`[77del]` is the sanctioned form and is accepted (`:47-49` below); so is an `=` at a position
+nothing else touches. This is not the `:5` geometry refusal; the clause it enforces is a `DNA/`
+one, so on `r.` the rejection rests on the DNA twin's NOTE with no `RNA/alleles.md` counterpart.
+The error surfaces as a generic parse failure that names neither the clause nor the cross-spelled
+position (minor gap).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -169,12 +142,9 @@ rejected), forbids mixing `,` with `;` in one bracket, normalizes each member in
 — because Products is not Cis — never merges or reorders them. The cross-reference `general.md:80`
 gives the bare form `r.[123a>u,122_154del]`.
 
-**There is no ledger record for this form.** No record cites `RNA/alleles.md:21` or `general.md:80`,
-and none adjudicates Products-allele normalization semantics, so this section carries **no Why
-block**; the behaviour is a defensible but unrecorded ferro reading (worksheet AL1 proposes a
-`decided` house-choice record pinning: `,` members are distinct-transcript products, never merged or
-re-partitioned; restricted to `r.`/`p.`; each member normalized in its own frame — a proposal, not
-yet filed).
+**There is no ledger record for this form.** No record adjudicates Products-allele normalization
+semantics, so this section carries **no Why block**; the behaviour is a defensible but unrecorded
+ferro reading.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -185,6 +155,8 @@ yet filed).
 
 ## `alleles.md:27-34` — examples: variants on one allele (cis)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **variants on one allele**
 >     - **`LRG_199t1:r.[76a>u;103del]`**<br>
 >       one transcript contains two different changes, `r.76a>u` and `r.103del`.
@@ -193,6 +165,8 @@ yet filed).
 >     - **`LRG_199t1:r.[(578c>u;1339a>g;1680del)]`**<br>
 >       one transcript contains three different predicted changes, `r.(578c>u)`, `r.(1339a>g)`, and `r.(1680del)`.
 >       The variants are found in _cis_.
+
+</details>
 
 Ferro: the plain cis allele (ex 1) is `AllelePhase::Cis` with members individually normalized and
 preserved. The second example wraps the whole allele in `[(...)]` — a **predicted** (uncertain) cis
@@ -207,6 +181,8 @@ the prediction to a concrete assertion.
 | `NM_004006.3:r.[(76del;124_129del)]` | recommended | `NM_004006.3:r.[(77del;124_129del)]` | the wrap is preserved **and** the members inside it are normalized: `r.76del` 3'-shifts to `r.77del` without the prediction being collapsed |
 
 ## `alleles.md:36-52` — examples: variants on two alleles (trans), and `[76=]` vs `[=]`
+
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
 
 > - **variants on two alleles**
 >     - **`LRG_199t1:r.[76a>u];[103del]`**<br>
@@ -226,6 +202,8 @@ the prediction to a concrete assertion.
 >     - **`NM_004006.2:r.[76a>u];[?]`**<br>
 >       one transcript allele contains a variant, `r.76a>u`, while a variant in the other transcript allele is expected but not yet identified (`r.?`) (e.g., in individuals affected by a recessive disease).
 
+</details>
+
 Ferro: four trans shapes, all preserved unmerged — heterozygous (two different members), homozygous
 (the same member on both alleles), one allele wild-type at a named position (`[76=]`), and one
 allele's variant not yet identified (`[?]`). The `:47-49` NOTE draws a **meaning** distinction the
@@ -233,19 +211,13 @@ parser must not erase: `[76=]` asserts wild-type **at position 76**, while `[=]`
 sequence** was analysed and unchanged. Ferro preserves each exactly and never collapses one into the
 other.
 
-**The `[?]` shape is re-spelled.** Ferro keeps the `[?]` member (it lowers to the dedicated
-`UnknownAllele` sentinel) but renders the whole allele in the **expanded** per-bracket-accession
-form, `[NM_004006.3:r.77del];[?]` — the accession moves inside the first bracket. That happens at
-parse → `Display`, before normalization touches it, in every mode, on `c.` as well as `r.`, and for
-`[0]` too (`:82-85`); a `[76=]` or `[=]` second member stays compact. The output is valid HGVS and
-re-parses — the expanded form is the one `DNA/alleles.md:110` recommends for a *two-accession*
-trans allele — but it is not the shape of the spec's own same-accession example at `:51`, and
-`trans_compact_anchor` (`src/hgvs/variant.rs`) states in its own doc that `[0]`/`[?]` members are
-meant to keep the compact form. Filed as
-[#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214); the existing pins
-(`allele_trans_phase.rs::test_trans_n_with_unknown_allele_round_trip`,
-`issue_396_trans_allele_consolidation.rs::rna_trans_with_unknown_allele_roundtrip`) assert only a
-round-trip or a `contains(";[?]")`, which both renderings satisfy.
+**The `[?]` shape is re-spelled.** Ferro keeps the `[?]` member but renders the whole allele in the
+**expanded** per-bracket-accession form, `[NM_004006.3:r.77del];[?]` — the accession moves inside
+the first bracket, in every mode, on `c.` as well as `r.`, and for `[0]` too (`:82-85`); a `[76=]`
+or `[=]` second member stays compact. The output is valid HGVS and re-parses — the expanded form
+is what `DNA/alleles.md:110` recommends for a *two-accession* trans allele — but it is not the
+shape of the spec's own same-accession example at `:51`. Filed as
+[#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -254,17 +226,21 @@ round-trip or a `contains(";[?]")`, which both renderings satisfy.
 | `NM_004006.3:r.[77del];[77del]` | recommended | self | executable homozygous twin — identical members on two alleles, kept as two brackets |
 | `LRG_199t1:r.[76a>u];[76=]` | recommended | — | `[76=]` = position-wild-type member, preserved; parse-only here |
 | `NM_004006.3:r.[77del];[76=]` | recommended | self | executable twin — the `[76=]` position-reference member is preserved, not collapsed to `[=]` |
-| `NM_004006.3:r.[76del];[76=]` | conformant | `NM_004006.3:r.[77del];[76=]` | the variant 3'-shifts to `r.77` while the `[76=]` filler stays where it was authored — an identity member has nothing to shift. Valid, and still true of the second allele; but the spec's examples always pair the filler with the variant's own position, so `r.[77del];[76=]` and the authored-at-77 `r.[77del];[77=]` are two spellings of one observation that do not converge. Not adjudicated and no issue filed — flagged for a ruling on whether the filler should be re-anchored to the shifted member |
+| `NM_004006.3:r.[76del];[76=]` | conformant | `NM_004006.3:r.[77del];[76=]` | the variant 3'-shifts to `r.77` while the `[76=]` filler stays where it was authored — an identity member has nothing to shift. Valid, but the spec's examples always pair the filler with the variant's own position, so `r.[77del];[76=]` and the authored-at-77 `r.[77del];[77=]` are two spellings of one observation that do not converge. Not adjudicated — open whether the filler should be re-anchored to the shifted member |
 | `NM_004006.3:r.[77del];[=]` | recommended | self | the whole-sequence `[=]` member — a *different* meaning from `[76=]`, preserved as written |
 | `NM_004006.2:r.[76a>u];[?]` | recommended | — | `[?]` = unknown second allele, preserved; parse-only here |
 | `NM_004006.3:r.[77del];[?]` | conformant | `[NM_004006.3:r.77del];[?]` | executable twin — the `[?]` member is kept, but the allele is re-spelled from the compact form the spec's example uses to the expanded per-bracket-accession form. Valid, re-parses; not the recommended shape ([#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214)) |
 
 ## `alleles.md:54-57` — alleles not certain (unknown phase)
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > - **alleles not certain**
 >     - **`NM_004006.2:r.76a>u(;)103del`**<br>
 >       two variants are found in a transcript, `r.76a>u` and `r.103del`, but it is not known whether they derive from the same or from different transcript alleles (chromosomes).<br>
 >       **NOTE**: when it is not known on which allele a variant is, allele brackets should not be used.
+
+</details>
 
 Ferro: the worked example of the `:19-20` unknown-phase rule — the bracket-less `(;)` form is kept
 bracket-less, members individually normalized, phase not inferred.
@@ -292,11 +268,15 @@ merged or reordered against each other, each normalized in its own frame. (Adjud
 
 ## `alleles.md:65-69` — Discussion: the retracted `+` separator
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "Was originally the recommendation to use the format <code class="invalid">[r.76a>c+r.83g>c]</code>?"
 >
 >     Indeed, originally [den Dunnen and Antonarakis, 2000](http://dx.doi.org/10.1002/%28SICI%291098-1004%28200001%2915:1%3c7::AID-HUMU4%3e3.0.CO;2-N) the suggestion was to describe two changes in a transcript from one chromosome as <code class="invalid">[r.76a>c+r.83g>c]</code>, i.e. using a "+"-character to separate the two changes, while an earlier publication suggested to use a ";" (<code class="invalid">[r.76a>c;r.83g>c]</code> [(Antonarakis and the Nomenclature Working Group, 1998](http://dx.doi.org/10.1002/%28SICI%291098-1004%281998%2911:1%3c1::AID-HUMU1%3e3.0.CO;2-O)).
 >     To prevent confusion with older publications, to improve overall consistency, and to keep descriptions as short as possible, the 2000 proposal was retracted.
 >     The recommended format is `r.[76a>c;83g>c]`.
+
+</details>
 
 Ferro: the `+` separator inside allele brackets is `class="invalid"` — a retracted 2000 proposal.
 The `;` is the recommended cis separator; ferro does not emit `+` and rejects it at parse.
@@ -307,12 +287,16 @@ The `;` is the recommended cis separator; ferro does not emit `+` and rejects it
 
 ## `alleles.md:71-76` — Discussion: recording variant combinations in recessive disease
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "In recessive diseases, is it important I show in which combination variants were found?"
 >
 >     When in one individual you find more than one variant, it is essential that you clearly indicate on which transcript allele(s) variant(s) were found.
 >
 >     - disease severity will depend on the combination of variants found;
 >     - in recessive disease, when two variants are in one transcript, an individual is a carrier or you might not have found the variant on transcripts from the second allele.
+
+</details>
 
 Ferro: advisory guidance to the author to record the cis/trans combination clearly. It picks no
 canonical form and constrains no normalization — descriptive, nothing for the normalizer to enforce.
@@ -328,13 +312,11 @@ The cis/trans/unknown machinery that lets the author express the combination is 
 Ferro: the empty second allele `[]` is `class="invalid"` — refused at parse. The spec's recommended
 answer is the position-factored trans form `r.76[a>c];[=]`, which shares the position out of the
 brackets. Ferro neither produces nor **accepts** that factored spelling — it rejects it at parse
-and emits the fully-bracketed `r.[76a>c];[76=]`-style form. That is the DNA twin's reading, which
-forbids the analogous factoring by name: `DNA/alleles.md:54` marks `c.2376[G>C];[G>C]`
-`class="invalid"` ("it is not allowed to shorten this"), and the RNA syntax table (`syntax.yaml`,
-`rna.alleles`) publishes no factored form. So the RNA Q&A's answer contradicts both its DNA
-parallel and the grammar — a spec-internal inconsistency for the upstream-filing lane, not
-ferro-actionable (worksheet marks it DESCRIPTIVE). Ferro's fully-bracketed output is the
-recommended form on the reading the rest of the spec supports.
+and emits the fully-bracketed `r.[76a>c];[76=]`-style form instead, matching the DNA twin's
+reading: `DNA/alleles.md:54` marks the analogous factoring `class="invalid"`, and no RNA grammar
+publishes a factored form. So the RNA Q&A's answer contradicts both its DNA parallel and the
+grammar — a spec-internal inconsistency, not ferro-actionable. Ferro's fully-bracketed output is
+the recommended form on the reading the rest of the spec supports.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -344,19 +326,20 @@ recommended form on the reading the rest of the spec supports.
 
 ## `alleles.md:82-85` — Discussion: X-chromosome male, `r.0` for an absent transcript
 
+<details class="ss-spec"><summary>Spec discussion (verbatim)</summary>
+
 > !!! note "How should I describe the variants detected in males and females for a transcript from the X-chromosome?"
 >
 >     In **females**, the description is straightforward, like `LRG_199t1:r.[76a>c];[76=]`.
 >     In **males**, there is no transcript from the second allele (X-chromosome), which can be described as `LRG_199t1:r.[76a>c];[0]`, i.e. using `r.0` to indicate the absence of a transcript from the second X-chromosome.
 
+</details>
+
 Ferro: `r.0` denotes an absent transcript (no expression from the second X allele in a male). Ferro
-accepts the `[0]` member and lowers it to the dedicated `NullAllele` sentinel on the `r.` axis
-(pinned by `issue_277_trans_allele_protein_zero.rs::non_protein_compact_trans_allele_zero_stays_null_allele`
-on `NR_002196.2:r.[100a>g];[0]`, and by
-`issue_396_trans_allele_consolidation.rs::rna_trans_with_null_allele_roundtrip`). The female case is
-the ordinary `[variant];[76=]` trans form from `:47-49`. The male case is subject to the same
-re-spelling as `[?]` at `:36-52`: the member is preserved, but the allele is rendered in the
-expanded per-bracket-accession form ([#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214)).
+accepts the `[0]` member and lowers it to a dedicated `NullAllele` sentinel on the `r.` axis. The
+female case is the ordinary `[variant];[76=]` trans form from `:47-49`. The male case is subject to
+the same re-spelling as `[?]` at `:36-52`: the member is preserved, but the allele is rendered in
+the expanded per-bracket-accession form ([#2214](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2214)).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|

@@ -1,43 +1,16 @@
 # Deletion — ferro's reading
 
-ferro's reading of `deletion.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **deletion** recommendations, clause by clause — each spelling with the
+form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
+*RNA twin: [Deletion (`r.`)](../RNA/deletion.md).*
 
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
-
-Most of this page is CONFIRM-by-inspection against the spec text and the shipped code: the plain
-3'rule, the range-order and two-position rules, and the payload/length-suffix prohibitions are
-mechanical parser or W-code behaviour with no clause in tension. Three units are adjudicated and
-carry a Why block: the separation-and-codon clause at `deletion.md:18-19`, the exon/exon-junction
-3'rule exception at `deletion.md:20-22`, and the length-suffix prohibition at `deletion.md:114-117`.
-The exon/exon exception is the one place worth watching against the RNA twin — **on the coding axis
-the exception applies and ferro is correct** (a `c.`/`n.` deletion is *not* shifted across the
-junction), the opposite of the `r.` axis, where the same NOTE switches the exception off and ferro
-does not yet honour it ([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211), on the
-RNA deletion page).
-
-Executable rows use `NM_004006.3`, the one transcript in the committed slice. It carries the spec's
-own worked 3'rule example: the 8-nucleotide A-stretch `c.5690_5697` (`ATTG`·`AAAAAAAA`·`TT` at
-`c.5686_5699`) that `deletion.md:33-34` describes on `NM_004006.2`, so the `c.5690del`/`c.5697del`
-pair and the length-suffix repair below are the spec's own bases, one transcript version later.
-The slice's transcript begins at `c.-237` and ends at `c.*2697` (the boundary rows at
-`deletion.md:67-96` use those, where the spec's `NM_004006.2` runs `c.-244` to `c.*2691`). The
-CDS base facts the separation rows rely on (`c.76` is `A`; the codon `c.145_147` is `CGC`;
-`c.123` is `C`) are the ones `substitution.md` and `alleles.md` establish. The spec's other examples
-sit on `LRG_199t1`, `NM_004006.2`, `NM_000492.3`, `NG_012232.1` and foreign genomic accessions
-(`NC_000023.11`, `NC_000023.10`, `NC_000003.12`), none of which the slice carries, so those rows
-are parse-only (`—`) — ferro cannot read their bases here.
+On the coding axis (`c.`/`n.`) the exon/exon-junction 3'rule exception applies and a deletion is
+not shifted across the junction. On the `r.` axis the same NOTE switches the exception off, which
+ferro does not yet honour
+([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211), on the RNA deletion page).
 
 ## `deletion.md:5` — definition
 
@@ -68,10 +41,9 @@ Ferro: rule 2 (lowercase "should"); a same-position range is repaired to the sin
 >     - **exception**: when a circular genomic reference sequence is used ("o" and "m" prefix) nucleotide positions may be listed from 3' to 5' when the deletion includes both the last and first nucleotides of the reference sequence.
 
 Ferro: the ordinary range is listed 5'→3'; a reversed, non-circular range is refused rather than
-reordered. The circular carve-out (SVD-WG006) admits the reversed `<high>_<low>` spelling only on an
-`o.`/`m.` reference for an origin-spanning deletion, and ferro honours it there (the reversed-range
-allowance in `src/normalize/footprint.rs`); the two endpoints of such a deletion are checked
-independently rather than order-compared.
+reordered. On a circular reference (`o.`/`m.`), the reversed `<high>_<low>` spelling is allowed for
+an origin-spanning deletion, with the two endpoints checked independently rather than
+order-compared.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -85,15 +57,16 @@ independently rather than order-compared.
 
 Ferro: the separation rule (ruleset rule 2 — a preference, not a ban); the exception folds two
 changes into one delins only when they sit one nucleotide apart and together change one amino acid.
-This is the shared separation clause (`general.md:33`/`:34`), reproduced verbatim across nine files;
-the deletion-specific merge geometry is adjudicated on `delins.md`, out of this file's scope.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[separation-rule-force-modal-or-negation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
 >
 > **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
 <!-- why:END:separation-rule-force-modal-or-negation,codon-carve-out-shape-restriction -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -113,20 +86,18 @@ position that does not cross, reached from **either** side — a description app
 stops at it, and one already spelled on the far side (`c.3922del`) is pulled back to `c.3921del`.
 
 **This is where the coding axis and the RNA axis diverge, and ferro is correct here.** On `c.`/`n.`
-the exception applies (`src/normalize/mod.rs`'s `edit_is_del_or_dup` clamp), so `c.3922del` does not
-translate to the wrong nucleotide in the wrong exon. On `r.` the same NOTE *switches the exception
-off* and the 3'rule must cross the junction — which ferro does not yet do
+the exception applies, so `c.3922del` does not translate to the wrong nucleotide in the wrong exon.
+On `r.` the same NOTE *switches the exception off* and the 3'rule must cross the junction — which
+ferro does not yet do
 ([#2211](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2211), on the RNA deletion page).
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[exon-junction-dup-converge-from-the-far-side](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A duplication is placed at the most 3' position that does not cross an exon/exon junction, reached from either side, so a copy spelled past the junction is pulled back to it.
 <!-- why:END:exon-junction-dup-converge-from-the-far-side -->
 
-The governing record's title and worked example read as duplication-only (`c.3922dup`→`c.3921dup`),
-but its SCOPE paragraph and the shipped clamp both cover deletion on the `c.`/`n.` axes — the code
-gates on `edit_is_del_or_dup`, not on `dup` alone. Broadening the record's title/question to name
-deletion is a proposed cosmetic strengthen for discoverability, not a ruling change, and is not done.
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -134,20 +105,14 @@ deletion is a proposed cosmetic strengthen for discoverability, not a ruling cha
 | `NM_004006.3:c.5697del` | recommended | self | already the 3'-most base of that run — a fixed point |
 | `NM_004006.3:c.5690_5692del` | recommended | `NM_004006.3:c.5695_5697del` | the same rule over a multi-nucleotide deletion inside the run — shifted to the 3'-most three |
 | `LRG_199t1:c.3921del` | recommended | — | the spec's own worked example — the deletion held at the exon/exon junction (parse-only here) |
-| `LRG_199t1:c.3922del` | recommended | — | the far-side spelling, which the exception pulls back to `c.3921del` on the coding axis (parse-only here — no `LRG_199t1` in the slice; both directions of the `c.`/`n.` deletion clamp are pinned on a synthetic two-exon transcript in `tests/it/issue_1621_exon_junction_far_side.rs`, and the near-side halt in `tests/it/issue_334_exon_junction_exception.rs`) |
-
-No executable `NM_004006.3` row can exercise the exon/exon clamp: the committed slice is built as a
-single flat exon, so no deletion on it reaches an exon/exon junction.
-
-See also → `deletion.md:119-122` (the same exception restated as a Q&A).
+| `LRG_199t1:c.3922del` | recommended | — | the far-side spelling, which the exception pulls back to `c.3921del` on the coding axis (parse-only here) |
 
 ## `deletion.md:23` — uncertain deletions
 
 > - † = see [Uncertain](../uncertain.md); when the position and/or the sequence of a deletion has not been defined, a description may have a format like `g.(100_150)delN[15]`.
 
 Ferro: an uncertain deletion's parenthesised range is preserved verbatim — the 3'rule has nothing
-determinate to shift when neither the exact position nor the exact length is asserted. The
-`delN[15]` shape parses (`src/hgvs/parser/edit.rs`).
+determinate to shift when neither the exact position nor the exact length is asserted.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -157,13 +122,9 @@ determinate to shift when neither the exact position nor the exact length is ass
 
 >     - **`NM_004006.2:c.5697del` (3'rule)**<br>
 
-Ferro: three sub-examples — a plain deletion (`g.33344591del`), the 3'rule over an A-stretch
-(`c.5697del`, the last A of an 8-nucleotide run), and the same underlying variant expressed on the
-minus strand (`g.32343183del` ↔ `c.5697del`, confirming that minus-strand mapping and the 3'rule
-compose). Each carries a NOTE that the deleted base is **never** spelled (`delA` is `class="invalid"`).
-The A-stretch is present unchanged on the slice's `NM_004006.3`, so the middle example — including
-the `class="invalid"` `c.5690del` spelling the minus-strand NOTE at `deletion.md:40` names — runs
-here on the spec's own bases.
+Ferro: the deleted base is never spelled (`delA` is `class="invalid"`); the 3'rule shifts a
+deletion within a run of identical bases to its most-3' position, including under minus-strand
+mapping.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -209,19 +170,13 @@ unambiguously sits" — no exception fires, because no run of identical bases st
 
 >       following current recommendations (see [Numbering](../../background/numbering.md)), it is not allowed to describe variants in nucleotides beyond the boundaries of a reference sequence.
 
-Ferro: multi-exon deletions are written with concrete or uncertain (parenthesized) positions that
-stay within the transcript. The two `class="invalid"` forms describe a deletion running **beyond the
-transcript's own boundaries** (5' of `c.-244` or 3' of `c.*2691` on `NM_004006.2`); that is a rank-1
-prohibition — genomic coordinates are required instead. Ferro enforces the boundary for a
-*concrete* transcript position: a `c.` coordinate past the CDS or transcript end is `W4004
-PositionPastEnd` (refused in strict), and an `n.` position past either end is `W4008`
-(`src/hgvs/noncoding_zones.rs`, which cites the `background/numbering.md` clause forbidding a
-position beyond a transcript's boundaries). The two spec forms are different: each
-names only in-bounds concrete positions and reaches past the boundary through an **open** `?`
-end, and ferro accepts them — the fact that `c.-244` *is* the first nucleotide is the reference's,
-invisible at parse, and no normalize-time check reads the `?`-open end against the transcript's
-extent. The size of the deletion is never appended (`delXXXXX`; the length-suffix prohibition is
-adjudicated at `deletion.md:114-117`).
+Ferro: multi-exon deletions use concrete or uncertain (parenthesized) positions that stay within
+the transcript. The two `class="invalid"` forms below describe a deletion running beyond the
+transcript's own boundaries — a rank-1 prohibition; genomic coordinates are required instead.
+Ferro enforces this for a concrete transcript position (rejected in strict mode), but the spec's
+own boundary-crossing examples reach past the boundary through an open `?` end, which
+normalization does not check against the transcript's extent — so ferro accepts them. The
+deletion length is never appended as a suffix (`deletion.md:114-117`).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -248,11 +203,10 @@ normalization.
 
 >     - **`NC_000023.11:g.33344590_33344592=/del`**<br>
 
-Ferro: the deletion-specific instances of the general mosaic (`=/`) and chimeric (`=//`) compact
-forms — not deletion-specific rules; the `del` member inside carries the same 3'rule as a standalone
-deletion (`src/hgvs/parser/variant.rs`). When that 3'rule moves the `del` member, the compact form's
-shared range no longer holds, and ferro re-spells the description with the accession repeated on
-each side of the `=/` rather than shifting the shared range with the deletion (see the last row).
+Ferro: the mosaic (`=/`) and chimeric (`=//`) compact forms are not deletion-specific; the `del`
+member inside carries the same 3'rule as a standalone deletion. When the 3'rule moves that member,
+the compact form's shared range no longer holds, and ferro re-spells the description with the
+accession repeated on each side of `=/` rather than shifting the shared range (see the last row).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -267,13 +221,15 @@ each side of the `=/` rather than shifting the shared range with the deletion (s
 > !!! note "Can I use <code class="invalid">NG_012232.1:g.123del6</code> to describe a 6 nucleotide deletion?"
 
 Ferro: `class="invalid"` — rule 1. The repair is determinate: a length-`N` suffix starting at
-position `p` becomes the range `p_(p+N-1)` (`detect_del_size_suffix`, whose fixture is this clause's
-own `NG_012232.1:g.123del6`).
+position `p` becomes the range `p_(p+N-1)`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[absolute-prohibition-enforcement-stage](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
 <!-- why:END:absolute-prohibition-enforcement-stage -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -286,14 +242,13 @@ own `NG_012232.1:g.123del6`).
 
 > !!! note "In the example above, `LRG_199t1:c.3921del`, should the description based on a coding DNA reference sequence not be `LRG_199t1:c.3922del`?"
 
-Ferro: this restates the exon/exon-junction exception adjudicated at `deletion.md:20-22` as a Q&A —
-the far-side `c.3922del` is pulled back to `c.3921del` so that translating the position back does not
-land in the wrong exon. Same governing record (`exon-junction-dup-converge-from-the-far-side`); ferro
-is correct here on the coding axis.
+Ferro: this restates the exon/exon-junction exception (`deletion.md:20-22`) as a Q&A — the
+far-side `c.3922del` is pulled back to `c.3921del` so that translating the position back does not
+land in the wrong exon (`exon-junction-dup-converge-from-the-far-side`).
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
-| `LRG_199t1:c.3922del` | recommended | — | the far-side spelling, pulled back to `c.3921del` by the clamp (parse-only here — see `deletion.md:20-22` for where the pull-back is pinned) |
+| `LRG_199t1:c.3922del` | recommended | — | the far-side spelling, pulled back to `c.3921del` by the clamp (parse-only here; see `deletion.md:20-22`) |
 
 ## `deletion.md:124-127` — a deletion is never written by exon label
 
@@ -311,31 +266,25 @@ rejection, not a normalization.
 
 > !!! note "Deletions in the _BRCA1_ gene are usually mediated by Alu sequences having a very high homology, reaching 100% in the breakpoint region. In such cases, what nucleotide should be used to describe the deletion breakpoint?"
 
-Ferro: a plain restatement of the 3'rule mechanics — shift the alignment as far 3' as possible, and
-the first nucleotide that then differs is the first nucleotide deleted. No new content beyond the
-3'rule already covered at `deletion.md:20-22`; it is independent textual support for the general
-shuffle algorithm's correctness criterion. Descriptive — nothing deletion-specific to adjudicate,
-no verdict row.
+Ferro: a restatement of the 3'rule mechanics — shift the alignment as far 3' as possible, and the
+first nucleotide that then differs is the first nucleotide deleted.
 
 ## `deletion.md:134-141` — PCR breakpoint uncertainty (Kamsteeg letter)
 
 > !!! note "PCR analysis of a gene on the X-chromosome shows products for exons 1_3, no product is detected for exons 4_14 (exon 14 is the last exon of the gene). Since PCR fails already when one primer is not hybridising, we are not sure whether exon 4 and 14 are completely absent, or only partially. To describe the deletion I would therefore like to use the last base of exon 3 with "+?" and the last base of exon 13 with a "+?". What are your recommendations? (Erik-Jan Kamsteeg, Nijmegen, Nederland)"
 
-Ferro: the spec's own answer ends in an open rhetorical question ("Is this really more
-informative...") and does not commit to one of `c.(987+123_?)del` or `c.(987+1_?)del` as canonical —
-both are legal uncertain-position deletions denoting *different breakpoint claims from different
-evidence*, so there is no confluence question to resolve. Ferro accepts both; there is nothing to
-enforce beyond that. Descriptive / open — no verdict row, and not a ledger-change candidate.
+Ferro: the spec's answer does not commit to one of `c.(987+123_?)del` or `c.(987+1_?)del` as
+canonical — both are legal uncertain-position deletions denoting different breakpoint claims, so
+ferro accepts both.
 
 ## `deletion.md:143-150` — CFTR deltaF508
 
 > !!! note "In literature I often see the description "deltaF508" for a variant in the _CFTR_ gene in patients with Cystic Fibrosis. Is the variant detected in these patients <code class="invalid">NM_000492.3:c.1522_1524delTTT</code>?"
 
-Ferro: a worked 3'rule example inside a repeat-like run (`..ATCTTTGGT..`): three literal deletions
-all give `p.Phe508del`, and the 3'rule alone reduces them only to one of *two* forms
-(`c.1521_1523del` or `c.1522_1524del`) — it cannot distinguish which triplet was truly altered
-without external evidence. That is a statement about the limits of sequence-alone re-derivation, not
-a normalization defect. The payload-bearing `delTTT` is `class="invalid"`.
+Ferro: a worked 3'rule example — three literal deletions all give `p.Phe508del`, but the 3'rule
+alone reduces them only to one of two forms (`c.1521_1523del` or `c.1522_1524del`); it cannot
+distinguish which triplet was truly altered without external evidence. The payload-bearing
+`delTTT` is `class="invalid"`.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -346,9 +295,7 @@ a normalization defect. The payload-bearing `delTTT` is `class="invalid"`.
 
 > !!! note "Suggestion to use "los" for a loss from a mono-nucleotide stretch."
 
-Ferro: historical correspondence — the proposal to add `los`/`dec` terms alongside `del` was not
-adopted; `del` stands, and no `los`/`dec` token exists in the grammar. Nothing to enforce. The
-closing line — "a description should be clear/unequivocal and it is not intended to contain other
-information" — is quoted in the ledger's `canonical-form-choice-when-both-legal` rationale as spec
-support for re-derivation-from-sequence over provenance-preservation, but the passage itself states
-no rule. Descriptive — no verdict row.
+Ferro: the `los`/`dec` naming proposal was not adopted — `del` stands, and no `los`/`dec` token
+exists in the grammar. The closing line ("a description should be clear/unequivocal and it is not
+intended to contain other information") supports `canonical-form-choice-when-both-legal`'s
+preference for re-derivation from sequence over provenance-preservation.

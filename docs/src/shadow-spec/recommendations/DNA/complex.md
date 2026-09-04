@@ -1,22 +1,11 @@
 # Complex (HGVS/ISCN) — ferro's reading
 
-ferro's reading of `DNA/complex.md`. The rules are HGVS's; ferro's job is to produce the form the
-recommendations prefer. Verdicts describe **ferro's output**:
+ferro's reading of the HGVS **complex (HGVS/ISCN)** recommendations, clause by clause — each
+spelling with the form ferro normalizes it to and a verdict on that output. New here? See
+[How to read a page](../../reading-guide.md) for the verdicts, the table conventions, and the
+recurring terms.
 
-- **recommended** — ferro's output is the form the recommendations prefer (whether the input was
-  already that form, or ferro normalized it there).
-- **conformant** — ferro's output is valid HGVS but not *yet* the recommended form — a ferro
-  limitation or a deliberate maintainer house choice among conformant forms, with a tracking
-  issue where one exists.
-- **refused** — the input is not valid HGVS; ferro rejects it in strict mode (correct behavior).
-- **bug** — ferro's output is not valid HGVS (a defect). None on this page.
-
-Each **Why** block is transcluded from the ruling ledger — the record's own one-line summary,
-rendered here and linked to its full entry in
-[NORMALIZATION_CONTRACT.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md).
-The reasoning lives once, in the ledger; it is never re-typed here.
-
-`complex.md` is almost entirely the ISCN named extension — translocations, ring chromosomes,
+This page is almost entirely the ISCN named extension — translocations, ring chromosomes,
 pericentric inversions, supernumerary/marker chromosomes and the symbol conventions those need.
 Those descriptions are **genomic**: they sit on chromosome (`NC_`), `chr`, `NG_` or foreign
 accessions, none of which the committed reference slice carries (it holds one transcript,
@@ -100,10 +89,13 @@ complex by definition, `complex.md:5`) has no such single-type description. Ferr
 composites; the `ring_segment_wellformedness` and `issue_1578_followup_self_cancelling_rings` guards
 exercise this.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[self-cancelling-across-ring-junctions](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The prohibition on replacing part of a sequence with part of itself does not reach the '::'-joined segments of a ring chromosome, so ferro keeps a ring's members rather than collapsing them to a linear delins.
 <!-- why:END:self-cancelling-across-ring-junctions -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -125,10 +117,13 @@ complicate any simple "first endpoint must be `pter`" predicate. **This is undec
 `a_ring_with_no_telomere_anchor_is_still_accepted`, not a ruling either way. No verdict row: the
 status quo is acceptance, and no fix direction is taken.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[ring-telomere-anchoring](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Whether a ring chromosome's '::'-joined segments must be anchored at 'pter' and 'qter' is undecided — no clause states the requirement, only biological reasoning and two worked examples support it — and ferro's current acceptance of an unanchored ring is the unresolved status quo, not a ruling either way.
 <!-- why:END:ring-telomere-anchoring -->
+
+</details>
 
 ## `complex.md:49-55` — the 3' rule and breakpoint ordering
 
@@ -152,10 +147,13 @@ naming the source span — never as `dupinv`. `dupinv` is `class="invalid"` in `
 the primary authority for the derived form is `inversion.md:69`. Ferro derives the `ins<range>inv`
 form rather than expanding the payload to literal reverse-complement bases, and refuses `dupinv`.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum, so a short chance reverse-complement match is not misread as one.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
@@ -186,12 +184,15 @@ insert of known size (`complex.md:175`) — a legal HGVS description; the only p
 `N`-unit repeat is the HGVS→SPDI conversion path, where it declines rather than emit a
 storable-but-wrong triple, leaving the HGVS spelling untouched.
 
-**Why.**
+<details class="ss-why"><summary>Why ferro reads it this way</summary>
+
 <!-- why:START -->
 > **[duplication-must-ranks-the-label-not-the-partition](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
 >
 > **[spdi-n-unit-repeat-refusal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — On the HGVS-to-SPDI path ferro refuses an 'N'-unit or 'N'-containing repeat rather than expand it to literal 'N' bases — a project choice, since 'N' states a length, not identified bases, and the recommendations do not reach SPDI conversion.
 <!-- why:END:duplication-must-ranks-the-label-not-the-partition,spdi-n-unit-repeat-refusal -->
+
+</details>
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
