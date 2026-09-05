@@ -10,6 +10,8 @@ Run the suite with nextest:
 ```bash
 cargo nextest run --features dev              # the whole suite
 cargo nextest run -E 'test(parse)'            # one test, or a name pattern
+cargo nextest run --features dev --no-capture # with test output
+cargo bench --features dev                    # benchmarks; `seqfirst_align` requires `dev`
 ```
 
 Use `cargo nextest`, not `cargo test`. `cargo test` runs all tests as threads in one process.
@@ -103,10 +105,11 @@ needs every test job to succeed. If it is red while every shard is green, read t
 to find the upstream job. Read its `needs:` list from the file, not from this page. The jobs, and
 how to run each one locally:
 
-- `test`: the default suite, with `FERRO_REQUIRE_BULK_FIXTURES=1`. Some suites skip and report
-  PASS when their bulk data is absent. That variable turns the skip into a failure. Set it
-  locally when you have the data. `scripts/run_conformance_axis.sh` runs one manifest-backed
-  axis.
+- `test`: the default suite, with `FERRO_REQUIRE_BULK_FIXTURES=1`. `test-oracle`, `censuses`, and
+  the fetching jobs in `coverage.yml` and `external-validation.yml` set it too. Some suites skip
+  and report PASS when their bulk data is absent. That variable turns the skip into a failure.
+  Set it locally when you have the data. `scripts/run_conformance_axis.sh` runs one
+  manifest-backed axis.
 - `test-oracle`: the suite with `FERRO_ASSERT_IDEMPOTENT`, `FERRO_ASSERT_REPARSE` and
   `FERRO_ASSERT_IN_BOUNDS` set, without the spec-corpus census modules that those oracles would
   silence. `FERRO_ASSERT_IDEMPOTENT=1` on a bare `cargo nextest run` is always red on `main`.
