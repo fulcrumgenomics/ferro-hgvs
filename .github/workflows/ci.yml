@@ -174,99 +174,18 @@ env:
   # single test's time. That, not a number, is why the carve-out exists.
   ORACLE_ONLY_FILTER: >-
     test(merge::tests::direction_symmetry)
-  # The spec-corpus modules, excluded from `test-oracle` ONLY. They run in full
-  # in the plain `test` job; this is not a coverage exemption, it is a statement
-  # about which instrument may be armed while another is measuring.
-  #
-  # WHY, REASON 1: the corpus COUNTS non-idempotent outputs (4 at 3', 4 at 5' as
-  # pinned in `spec_conformance_axis.rs`) as a burn-down figure.
-  # `FERRO_ASSERT_IDEMPOTENT` PANICS
-  # on exactly that condition. The two agree perfectly about ferro — the oracle
-  # fires on precisely the rows the corpus classifies — but a panic returns no
-  # value, so the harness's `catch_unwind` files the row under `declined` and its
-  # output never reaches the family's output set.
-  #
-  # That does not merely re-bucket a counter, it DESTROYS EVIDENCE, and in the
-  # flattering direction: the non-idempotent output is the one that disagreed
-  # with its siblings, so removing it makes the family look unanimous.
-  #
-  # RE-MEASURED on `main` @ 1dd8148d, armed against the committed pins, both
-  # directions. The previous figures here were taken at `main` @ 35de96c8 and
-  # were stale in three places — #1599 re-blessed 3' `non_idempotent_outputs`
-  # 7 -> 4 and #1536 re-blessed `converged`/`split_two`, both recorded in
-  # `spec_conformance_axis.rs`'s own doc, so "still the pinned figures" had
-  # stopped being true:
-  #
-  #   3': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
-  #       converged 9141 -> 9145, split_two 2440 -> 2436
-  #   5': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
-  #       converged 8944 -> 8948, split_two 2706 -> 2702
-  #
-  # So CI would report FOUR more converged families than converge, in each
-  # direction — not the seven this comment used to claim, which was the figure
-  # before #1599 lowered the count it is derived from.
-  #
-  # WHY, REASON 2 — simpler, and not covered by the paragraphs above. Five tests
-  # in these modules used to not merely count the defect but ASSERT it: the four
-  # in `defect_non_idempotent_outputs` and
-  # `spec_corpus_regressions::an_insertion_at_the_cds_end_is_a_fixed_point`
-  # pinned `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` as a known
-  # non-fixed point. A test that pins a defect and an oracle that aborts on it
-  # cannot both run, whatever the census does.
-  #
-  # #1650 CLOSED that class. The chain is now `c.*1delinsCTT` ->
-  # `c.72delinsCCT` in one pass, `non_idempotent_outputs` reads 0 in both
-  # directions, and all five tests assert the fixed point instead — which is why
-  # the fifth is now named `..._is_a_fixed_point`. REASON 2 therefore no longer
-  # holds for `FERRO_ASSERT_IDEMPOTENT`, and the exclusion rests on REASON 1
-  # (the censuses count what the oracle would turn into `declined`) plus the
-  # denoted-sequence rows named below. It is deliberately NOT narrowed here:
-  # these modules build their own references and sweep them, so an armed run
-  # that began panicking mid-sweep would EMPTY a sweep rather than redden it,
-  # and establishing that it would not needs its own measurement with
-  # `tests/it/oracle_exclude_invariant.rs` updated in the same change.
-  #
-  # `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IN_BOUNDS` each contribute 0, and a
-  # prepared reference changes nothing (these modules are `MockProvider`-backed).
-  #
-  # Locally, `scripts/run_oracle_suite.sh` applies this same exclusion, reading
-  # it from here rather than copying it.
-  #
-  # The corpus loses nothing by running un-armed: it measures idempotency itself,
-  # and more precisely than the oracle does (a count and a classification, versus
-  # a panic). `tests/it/oracle_exclude_invariant.rs` keeps this list honest in
-  # both directions.
-  #
-  # `corpus_prohibited_inputs` is here for a related but NOT identical reason,
-  # and the difference is worth stating rather than letting the comment above be
-  # read as covering it. That module measures REFUSAL over the corpus's
-  # prohibited and conflicting strata, and it does not wrap normalization in
-  # `catch_unwind` — so an armed oracle firing on one of its rows reddens the
-  # module rather than flattering it. What it would redden is a claim about
-  # whether ferro refuses a shape, decided by an assertion about idempotency at
-  # a seam the module is not measuring. Excluded so the two instruments stay
-  # separate, in the same spirit; it still runs in full in the plain `test` job.
-  #
-  # `issue_1715_rna_alignment_symbol_reach` is here for a THIRD reason, weaker
-  # than either of the two above, and it is listed rather than argued away
-  # because `oracle_exclude_invariant` scans imports and cannot tell the
-  # difference. That module touches the corpus exactly once — to assert that the
-  # generator builds no `r.` row at all, so its zero for this axis is STRUCTURAL
-  # — and it never normalizes a corpus row, so it cannot flatter or redden a
-  # confluence figure. It is excluded to keep the invariant's rule simple ("a
-  # module that reads the corpus is not run with the oracles armed") rather than
-  # to protect a measurement; it runs in full in the plain `test` job, where its
-  # own refusal assertions are the coverage that matters.
-  #
-  # `conformance_census_instrument` is here for the FIRST reason, arriving by a
-  # route the import scan could not see until #2063's review widened it: it runs
-  # the very same census as `spec_conformance_axis`, but reaches it through
-  # `conformance::census` (the library module the axis was extracted into) rather
-  # than through `conformance::spec_corpus`. Armed, its census reads better than
-  # the truth in exactly the way this whole block is about — and since the oracle
-  # refusal moved inside `run_census`, it does not even get that far: the census
-  # refuses, so the module would simply be red here. Either way it belongs out of
-  # the armed job and in the plain `test` job, where it already runs in full.
+  # The spec-corpus modules, excluded from `test-oracle` ONLY. They run unarmed
+  # in the plain `test` job, so this is not a coverage exemption. It states which
+  # instrument may be armed while another measures. Some rows count a defect an
+  # armed oracle would panic on, so an armed run would flatter the count. Others
+  # pin a defect the oracle fires on. `tests/it/oracle_exclude_invariant.rs` keeps
+  # the list honest in both directions. Three rows join for a different reason:
+  # `corpus_prohibited_inputs` measures refusal, so an armed oracle reddens it
+  # instead of flattering it; `issue_1715_rna_alignment_symbol_reach` only asserts
+  # the generator builds no `r.` row, so its zero is structural;
+  # `conformance_census_instrument` reaches the same census through
+  # `conformance::census` and refuses once a flag is set. See docs/ORACLES.md,
+  # section "What CI arms, and where".
   ORACLE_EXCLUDE: >-
     test(spec_conformance_axis) + test(spec_corpus_regressions)
     + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
@@ -275,50 +194,14 @@ env:
     + test(issue_1715_rna_alignment_symbol_reach)
     + test(conformance_census_instrument)
     + test(conformance_census_runs)
-  # Withheld from the DENOTED-SEQUENCE oracle and from nothing else.
-  #
-  # `test-oracle` arms `FERRO_ASSERT_SEQUENCE` as of #1815. These are the rows
-  # that stopped it being armed before, each named with the OPEN issue that
-  # retires it. Re-measured on `origin/main` @ 1aecc93a, that job's four flags
-  # over its own `-E` with no `--partition`, bulk fixtures present
-  # (`FERRO_REQUIRE_BULK_FIXTURES=1`, zero `Skipping:` lines):
-  #
-  #   without this filter: 11202 tests run: 11199 passed, 3 failed   EXIT=100
-  #   with    this filter: 11197 tests run: 11197 passed, 0 failed   EXIT=0
-  #
-  #   * `stranded_identity_member` (2 of its 4 tests) — a GENUINE fire, of
-  #     #1281's "denotes no sequence" shape, on a module whose purpose is to PIN
-  #     a defect (**#1655**, 132 of 132 non-confluent). That is exactly the class
-  #     `ORACLE_EXCLUDE` documents: a test that pins a defect and an oracle that
-  #     aborts on it cannot both run.
-  #   * `the_render_time_reference_matches_what_the_pipeline_was_given` (1 test,
-  #     in `examples/dump_normalized_corpus.rs`) — also a genuine fire, and the
-  #     module's other 55 tests stay armed because this names the TEST, not the
-  #     module. #2051 added this gate on 2026-08-16; it re-normalizes each corpus
-  #     row ITSELF, outside the `catch_unwind` `dump`'s own pass uses, so a row
-  #     that trips an oracle takes the test with it. 47 corpus inputs fire:
-  #     **#2140** (38 inputs — a minted repeat tract widened across the CDS start
-  #     into the 5'UTR swallows its sibling), **#1983** (8 — the authored-repeat
-  #     form of the same collision) and **#2139** (1 — an adjacent-junction
-  #     insertion pair straddling the CDS start).
-  #
-  # THIS LIST IS TEMPORARY AND MUST SHRINK, and its composition has already moved
-  # TWICE IN THREE DAYS — which is the reason to re-measure it rather than trust
-  # the figures above. It held `issue_1487_canonical_window_overflow` until #1990
-  # closed #1690 (2026-08-15), and gained the render-time gate when #2051 landed
-  # (2026-08-16). Both times the stale reading was the *flattering* one.
-  #
-  # NOTHING IS TRADED AWAY FOR IT. A nextest `-E` is one expression, so negating
-  # this filter in the armed step would also withdraw these rows from
-  # `FERRO_ASSERT_IDEMPOTENT`, `_REPARSE` and `_IN_BOUNDS`, which they pass —
-  # trading three oracles for one, the swap the `sweeps` job's comment refuses to
-  # make for `issue_1615_denoted_sequence_oracle`. The step after the armed one
-  # re-runs precisely these rows under those three, so this file's oracle
-  # coverage is a strict superset of what it was.
-  #
-  # Kept separate from `ORACLE_EXCLUDE` rather than added to it: that list is a
-  # permanent statement about instruments that destroy each other, this one is a
-  # debt with three issue numbers on it.
+  # Withheld from the DENOTED-SEQUENCE oracle and from nothing else. Each row
+  # carries the open issue that retires it. `stranded_identity_member` is a
+  # genuine fire on a module that pins a defect (#1655). The render-time gate,
+  # `the_render_time_reference_matches_what_the_pipeline_was_given`, fires on
+  # its corpus rows (#2140, #1983, #2139). The `test-oracle` compensating step
+  # re-runs these rows under the other three oracles, so this file's oracle
+  # coverage grows and trades nothing. This list is a debt and must shrink. See
+  # docs/ORACLES.md, section "What CI arms, and where".
   SEQUENCE_ORACLE_EXCLUDE: >-
     test(stranded_identity_member)
     + test(the_render_time_reference_matches_what_the_pipeline_was_given)
@@ -1690,181 +1573,11 @@ jobs:
           name: bulk-fixtures
           path: tests/fixtures/
       - name: Run Rust tests with the normalization self-checks
-        # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
-        # assertion that `norm(norm(x)) == norm(x)`. The gate is
+        # This step arms all four `FERRO_ASSERT_*` flags over this job's whole
+        # selection MINUS `SEQUENCE_ORACLE_EXCLUDE`. The gate is
         # `#[cfg(debug_assertions)]`, on in the test profile even with
         # `CARGO_PROFILE_TEST_DEBUG=0` (that strips debuginfo, not assertions).
-        # See src/normalize/mod.rs::normalize.
-        #
-        # `FERRO_ASSERT_REPARSE` asserts the other half: that the normalized
-        # description is one `parse_hgvs` accepts, when normalization is what
-        # broke it. It exempts the `0`/`?` whole-allele outputs the entry point
-        # rejects standalone, and any input that does not itself re-parse (a
-        # parse/display round-trip asymmetry, not a normalization defect).
-        # Separate from the above because neither subsumes the other, and the
-        # idempotency oracle has a blind spot this one covers — it verifies by
-        # re-normalizing its own output, which it cannot do for an output that
-        # will not parse.
-        #
-        # `FERRO_ASSERT_IN_BOUNDS` is the third: no coordinate an output names may
-        # be past the end of its own sequence (#1353). Neither of the other two
-        # asks that question — `parse_hgvs` holds no provider, so an out-of-range
-        # position is well-formed to it, and while a bad coordinate sometimes
-        # perturbs idempotency it need not. The class had been found by hand three
-        # times (#1274, #1343, #1307) before it was asserted here.
-        #
-        # `FERRO_ASSERT_SEQUENCE` — the fourth oracle at this same seam (#1615) —
-        # IS set here as of #1815, so this job is no longer the one place the set
-        # is incomplete. It runs over this job's whole selection MINUS
-        # `SEQUENCE_ORACLE_EXCLUDE`, whose rows and their open issues are
-        # documented on that variable; the step after this one re-runs those rows
-        # under the other three oracles, so nothing is traded away.
-        #
-        # EVERYTHING BELOW IS KEPT AS HISTORY, because the exclusion has to be
-        # read against it: three times a "the rows I know about are green" reading
-        # was taken for "it can be armed", and three times a selection-wide run
-        # found rows that reading could not reach. It used to fire on two rows of
-        # this job's own selection, and both were real disagreements rather than
-        # noise to be suppressed:
-        #
-        #   * #1618 — `NC_TEST.1:g.262TG[6]` -> `g.259_262GT[6]`
-        #     (`repeat_tract_maximization`). `hgvs_to_spdi` read the anchored
-        #     spelling as 6 copies replacing a 1-copy tract and the normalizer's
-        #     output as 6 copies replacing a 2-copy tract — 14 bases against 12.
-        #     CLOSED before 6116f84a.
-        #   * #1619 — `NM_033517.1:c.4818dupC` -> `c.4818dup`
-        #     (`normalize_tests`). `hgvs_to_spdi` resolved the c. position by
-        #     WALKING the exon list while the normalizer indexes the FLAT
-        #     transcript, so the two disagreed across any transcript-coordinate
-        #     gap: the input applied `C` and the output `T` at transcript
-        #     position 4877. CLOSED — `CoordinateMapper::cds_to_tx` /
-        #     `tx_to_cds` are flat sequence-axis conversions and no longer read
-        #     the exon table; genome<->transcript mapping is unchanged and stays
-        #     exon- and CIGAR-aware.
-        #
-        #   Both rows are green. THE SELECTION-WIDE RUN THIS COMMENT USED TO ASK
-        #   FOR HAS NOW BEEN DONE, and it is RED — so the two closures were
-        #   necessary and not sufficient. Measured on `origin/main` @ 674e9c8b,
-        #   this job's then-three flags plus `FERRO_ASSERT_SEQUENCE=1`, over the
-        #   selection THIS JOB HAD AT THAT COMMIT — two `env:` filters, not the
-        #   four below — with them expanded and no `--partition`:
-        #
-        #     Summary [87.5s] 10383 tests run: 10378 passed, 5 failed, 289 skipped
-        #
-        #   FIVE failures, in two classes, NEITHER of them #1618 or #1619 and
-        #   neither reachable by the two-row check this comment used to rest on:
-        #
-        #   * 3x `issue_1487_canonical_window_overflow` — NOT an oracle fire.
-        #     `attempt to add with overflow` at `src/convert/mapper.rs:114`.
-        #     Arming the flag routes the output through `hgvs_to_spdi`, which
-        #     reaches `cds_to_tx`'s unchecked `cds_start as i64 + pos.base - 1`
-        #     on an `i64::MAX`-adjacent `c.` coordinate. That module already
-        #     records the measurement and names the site; the open issue is
-        #     **#1690**, since CLOSED — see the re-measurement below. The three
-        #     are
-        #     `a_lone_member_at_an_extreme_coordinate_…`,
-        #     `an_extreme_coordinate_…` and
-        #     `two_adjacent_members_at_the_top_of_the_range_…`.
-        #   * 2x `stranded_identity_member` — a genuine fire, of #1281's
-        #     "denotes no sequence" shape, on that module's own sweep:
-        #       input  TEMPLATE:g.[10_11insAT;11_12inv;12_13insA]
-        #       output TEMPLATE:g.[11_12insTA;11_12=;12_13insA]
-        #     The output pairs an insertion at interbase 11|12 with an identity
-        #     claiming 11..12, so it denotes nothing. That module exists to PIN
-        #     a defect (#1655's stranded derived identity, 132 of 132
-        #     non-confluent), which puts it in exactly the class `ORACLE_EXCLUDE`
-        #     documents above — a test that pins a defect and an oracle that
-        #     aborts on it cannot both run.
-        #
-        #   Two further notes from the same measurement, so it is not re-run to
-        #   rediscover them. With `FERRO_MANIFEST` also set — which this job does
-        #   NOT set, so CI does not see these — six `mutalyzer_normalize_tests`
-        #   axis tests failed too, on real `NG_` geometry, e.g.
-        #   `NG_012337.1(NM_012459.2):c.4_5insGTA` -> `c.5_6insTAG`, where the
-        #   input applies `GTAA` and the output `ATAG` over `[34, 35)`: an
-        #   insertion shifted 3' past a base its first payload base does not
-        #   match. Those axes early-return without the manifest, which is why
-        #   they read as 11 failures with it and 5 without.
-        #
-        #   THAT HALF IS ALSO STALE as of #1990. Re-run at `c9207d7e` with the
-        #   manifest armed: `10901 passed, 3 failed`. All six
-        #   `mutalyzer_normalize_tests` axes now PASS. The extra row over the
-        #   manifest-less run is `multi_member_cis_axis::axis_normalized`, which
-        #   is NOT an oracle fire — it fails identically with
-        #   `FERRO_ASSERT_SEQUENCE` UNSET (measured), on a census pin that reads
-        #   `unwindowed: 89` against a pinned 90 while `sequence_changed` stays
-        #   0. That is the HEAD-drift this repo already documents for that pin,
-        #   and it is orthogonal to arming this flag.
-        #
-        #   And the proof the
-        #   flag is not a no-op over this selection is
-        #   `issue_1615_denoted_sequence_oracle::the_seam_compares_when_the_flag_is_set`,
-        #   which is IN this selection and asserts the oracle's `compared`
-        #   counter is non-zero; it skips by design when the flag is unset.
-        #
-        #   RE-MEASURED once #1690 closed (#1990), same selection and flags, no
-        #   `--partition` and no `FERRO_MANIFEST`, on `c9207d7e`:
-        #
-        #     Summary [179.827s] 10904 tests run: 10902 passed, 2 failed, 306 skipped
-        #
-        #   The three `issue_1487_canonical_window_overflow` rows are GONE — all
-        #   8 tests in that module pass — and NOTHING NEW fired. The 2 survivors
-        #   are both `stranded_identity_member`, on the row quoted above:
-        #   `every_stranded_identity_is_non_confluent_with_its_surviving_member`
-        #   and `the_wider_multi_member_census_is_what_the_header_says`.
-        #
-        #   That put arming it as blocked on a home for
-        #   `stranded_identity_member` and on that alone — #1690 is closed and is
-        #   no longer a blocker.
-        #
-        #   RE-MEASURED AGAIN FOR #1815, on `origin/main` @ 1aecc93a, same recipe:
-        #
-        #     Summary [128.560s] 11202 tests run: 11199 passed, 3 failed, 321 skipped
-        #
-        #   THREE, not two — and the third is a module the two readings above could
-        #   not have named, because it did not exist when either was taken.
-        #   `dump_normalized_corpus`'s
-        #   `the_render_time_reference_matches_what_the_pipeline_was_given` landed
-        #   with #2051 on 2026-08-16 and re-normalizes each corpus row outside
-        #   `catch_unwind`, so 47 corpus inputs abort it: #2140, #1983 and #2139.
-        #   It passes UNARMED in the same tree (measured, EXIT=0), so it is an
-        #   oracle fire and not a pre-existing red.
-        #
-        #   The two `stranded_identity_member` rows are UNCHANGED, and are still
-        #   `every_stranded_identity_is_non_confluent_with_its_surviving_member`
-        #   and `the_wider_multi_member_census_is_what_the_header_says` — verified
-        #   by removing that row from the filter and reading the names off the red
-        #   run, not by matching them against this comment. The module has 4 tests
-        #   and the other 2 pass armed; `SEQUENCE_ORACLE_EXCLUDE` names the MODULE
-        #   anyway, because the module's whole purpose is pinning the defect, and
-        #   names a single TEST only where the surrounding module is innocent (the
-        #   render-time gate, whose other 55 tests stay armed).
-        #
-        #   READ THE PATTERN, NOT THE COUNT: 5 -> 2 -> 3 in three days, changing in
-        #   BOTH directions. Re-measure before trusting any figure in this comment.
-        #
-        #     This row replaced an earlier one on the same issue
-        #     (`NM_000492.4:c.1520_1522del` -> `c.1521_1523del`), and the swap is
-        #     the point rather than a detail. That one rode on a FIXTURE DEFECT —
-        #     `normalization_transcripts.json` held cdot's exon table with every
-        #     `end` decremented by one, giving a 1-base hole at every junction, a
-        #     shape that occurs nowhere in 474,818 real builds. Repairing the
-        #     fixture removed it. This row rides on cdot's own annotation:
-        #     `NM_033517.1` genuinely has a 39-base hole between exon 10 and exon
-        #     11, one of the 58 gapped builds in cdot-0.2.32.refseq.GRCh38. So
-        #     #1619 is now demonstrated on real geometry rather than on an
-        #     artifact, which makes it a STRONGER reason to keep the flag out of
-        #     this job, not a weaker one — and it is the reproducer the issue had
-        #     otherwise lost. See `CDOT_GAP_JUNCTIONS` in
-        #     `tests/it/normalization_transcripts_exon_contract.rs`.
-        #
-        # Suppressing a row AT THE SEAM would hollow out the oracle, which is why
-        # none of these is exempted there. The exclusion is a SELECTION TERM in
-        # this file instead — visible, measured, and carrying the open issue that
-        # retires it — and the distinction is the whole reason
-        # `SEQUENCE_ORACLE_EXCLUDE` exists as its own variable. The flag also runs
-        # in `sweeps` below, over the cis-allele space every one of the eight
-        # defects it was built for came from, and non-gating in the nightly.
+        # See docs/ORACLES.md, section "What CI arms, and where".
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
@@ -1877,23 +1590,21 @@ jobs:
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/10 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER) and not ($SEQUENCE_ORACLE_EXCLUDE)"
-      # The other half of the trade, and the reason arming the flag above costs no
-      # coverage: the rows `SEQUENCE_ORACLE_EXCLUDE` withholds from the armed step
-      # still run under the three oracles they pass, exactly as they did before
-      # #1815. Without this step, negating that filter would withdraw them from all
-      # four — three oracles surrendered to gain one.
+      # This step re-runs the rows `SEQUENCE_ORACLE_EXCLUDE` withholds from the
+      # armed step above, under the three oracles those rows pass. See
+      # docs/ORACLES.md, section "What CI arms, and where".
       #
-      # Runs on ONE shard and UN-partitioned, deliberately. It selects 5 tests, so
-      # `--partition hash:K/10` would leave some shards selecting none, and neither
-      # answer to that is acceptable: `--no-tests=fail` would redden a shard for
-      # doing its job, and `--no-tests=pass` would be a step that goes green having
+      # Runs on ONE shard and UN-partitioned, deliberately. It selects the named
+      # rows, so `--partition hash:K/10` would leave some shards selecting none, and
+      # neither answer to that is acceptable: `--no-tests=fail` would redden a shard
+      # for doing its job, and `--no-tests=pass` would be a step that goes green having
       # run nothing — the vacuous pass this repository keeps meeting. Un-partitioned
       # on ONE shard with `--no-tests=fail` instead, so a rename that empties the
       # filter is loud rather than silent. These rows ran exactly once per CI run
       # before this change too, spread across the shards, so nothing runs twice and
       # nothing runs less.
       #
-      # It rides shard 3, not shard 1: this ~27s step stacks onto whichever shard
+      # It rides shard 3, not shard 1: this short step stacks onto whichever shard
       # runs it, so it belongs on a light one rather than adding to a heavy one and
       # becoming the oracle's straggler. Shard 3 is a historically light partition;
       # the choice is not load-bearing (the whole-run wall is bounded by the release
@@ -1902,7 +1613,7 @@ jobs:
       #
       # It carries no `if: always()`, so a red armed step on shard 3 skips it. That
       # is the intended reading: the job is already failing and the useful signal is
-      # the armed step's own failure, not a further confirmation that five withheld
+      # the armed step's own failure, not a further confirmation that the withheld
       # rows still pass. Nothing here can turn a red job green — the concern the
       # `.github/workflows/**` review rule raises about a skipped step is coverage
       # lost on a PASSING run, and on a passing run this step always executes.
@@ -2156,32 +1867,13 @@ jobs:
   # `censuses-plain` job below, split out so the two halves run in PARALLEL
   # rather than as two serial steps of one job (see that job's header for the
   # wall-time measurement). They are split because the modules do not agree
-  # about the oracles:
-  #
-  #   * ARMED (here) runs what `test-oracle` ran, with the same three flags and
-  #     no fourth. An armed run strictly subsumes the un-armed one — the oracles
-  #     add assertions at `normalize_core_checked`'s exit and change no
-  #     behaviour — which is the same argument `sweeps` makes, so dropping the
-  #     plain-`test` copy of these modules loses nothing.
-  #   * UN-ARMED (`censuses-plain`) runs `spec_conformance_axis`, which is in
-  #     `ORACLE_EXCLUDE` and must stay that way: it COUNTS the non-idempotent
-  #     outputs `FERRO_ASSERT_IDEMPOTENT` panics on, and a panicking row is filed
-  #     `declined` and never reaches the family's output set — which does not
-  #     redden the census, it FLATTERS it. That module ran only in the plain
-  #     `test` job before, so `censuses-plain` reproduces it exactly.
-  #
-  # `FERRO_ASSERT_SEQUENCE` is set by NEITHER job, which is what makes this a
-  # move rather than a change of instrument. `sweeps` does set it, so these
-  # modules could not simply be appended there.
-  #
-  # #1815 armed that flag in `test-oracle`, so this job's armed flag set no
-  # longer mirrors that job's — it is now a strict SUBSET of it, deliberately.
-  # Arming a fourth oracle here would be exactly the change of instrument the
-  # paragraph above refuses, and it has NOT been measured over
-  # `ORACLE_ONLY_FILTER`'s modules. Do not "restore parity" by copying the flag
-  # down here without taking that measurement first: `test-oracle`'s own comment
-  # records what a selection-wide armed run cost each of the three times one was
-  # taken, and the answer changed every time.
+  # about the oracles. This armed step arms three of the four `test-oracle`
+  # flags and not `FERRO_ASSERT_SEQUENCE`, deliberately. An armed oracle would
+  # file `spec_conformance_axis`'s counted defect as `declined` and flatter the
+  # census, so it stays un-armed in `censuses-plain`. Do not restore parity by
+  # copying `FERRO_ASSERT_SEQUENCE` down here without first
+  # measuring it over `ORACLE_ONLY_FILTER`'s modules. See docs/ORACLES.md,
+  # section "What CI arms, and where".
   #
   # No `submodules: true`: none of the three modules names a path under
   # `assets/` (the spec worked-examples citation gate, which does, stays in
