@@ -1,29 +1,17 @@
 //! Liveness check for the pairing between the spec corpus and CI's armed job.
 //!
-//! `ci.yml`'s `test-oracle` job runs the suite with `FERRO_ASSERT_IDEMPOTENT`,
-//! `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IN_BOUNDS` set. Those oracles
-//! **panic** at the normalization seam. The spec-corpus modules **count** the
-//! same defects as pinned figures, and a panic returns no value — so a row the
-//! oracle fires on never reaches the family's output set, and the census reads
-//! better than the truth.
+//! Every module that measures over the spec corpus must be named in
+//! `ORACLE_EXCLUDE`, and every name there must still measure over the corpus.
+//! The tests below check that pairing in both directions.
 //!
-//! Measured on `main` at 35de96c8, both directions, all 11 affected families:
-//! the non-idempotent output is in every case the one that disagreed with its
-//! siblings, so dropping it makes the family look unanimous. Confluence reads
-//! 9147 converged / 2428 split-2 armed, against a true 9140 / 2435.
+//! The failure mode is the flattering kind. A corpus module added later and not
+//! named in `ORACLE_EXCLUDE` does not go red; it reports a better census, which
+//! reads as progress rather than as the lost evidence it is.
 //!
-//! **The failure mode is the flattering kind.** A corpus module added later and
-//! not named in `ORACLE_EXCLUDE` does not go red — it reports a *better* census,
-//! which reads as progress rather than as the lost evidence it is. That is the
-//! same shape as #1460 and #1478, where a corpus that could not build a thing
-//! reported its absence as a zero.
+//! This is not a coverage exemption. The corpus modules run unarmed in the plain
+//! `test` job, and the corpus measures idempotency itself.
 //!
-//! This is not a coverage exemption. Both modules run in full in the plain
-//! `test` job, and the corpus measures idempotency itself — a count and a
-//! classification, where the oracle offers only a panic.
-//!
-//! Modelled on `sweep_filter_invariant.rs`, which makes the same class of silent
-//! config rot loud for the sweep-seed knob.
+//! See docs/ORACLES.md, section "What CI arms, and where".
 
 use std::path::PathBuf;
 
@@ -314,29 +302,26 @@ const LOCAL_RUNNER: &str = "scripts/run_oracle_suite.sh";
 /// which scopes to the window between that job's step `name:` and its `run:`.
 /// This one bounds the whole `test-oracle:` job by indentation and keys on the
 /// quoted `: "1"` value. A second opinion that shares the other's derivation is
-/// not a second opinion — it is the same reading written twice, and this repo
+/// not a second opinion: it is the same reading written twice, and this repo
 /// has already shipped a defect that way (`check_changelog_grouping.py`'s
 /// rationale).
 ///
 /// Comment lines are skipped for the reason the awk skips them: the job's
-/// comment block *mentions* every flag in prose, including the history of why
-/// `FERRO_ASSERT_SEQUENCE` used to be absent. A scan that read prose as a
+/// comment block *mentions* every flag in prose. A scan that read prose as a
 /// setting would demand the runner arm oracles CI does not, and the rows that
 /// prose names would then be red locally and green in CI.
 ///
-/// **Scoped to the ARMED step, and that scoping is load-bearing as of #1815.**
-/// That change gave `test-oracle` a *second* step — the compensating run that
-/// re-executes `SEQUENCE_ORACLE_EXCLUDE`'s rows under the other three oracles —
-/// which sets three of the same keys. A whole-job scan therefore returns seven
-/// entries with three duplicated, against the awk's four, and this guard fails
-/// on a correctly-wired file. (It did, when the step was first added; that is
-/// how this scoping came to exist.)
+/// **Scoped to the ARMED step, and that scoping is load-bearing: `test-oracle`
+/// carries two nextest steps (#1815).** The compensating step re-executes
+/// `SEQUENCE_ORACLE_EXCLUDE`'s rows under the other three oracles, and it sets
+/// three of the same keys. A whole-job scan would report those three keys
+/// twice, so this guard reads only the armed step.
 ///
 /// The discriminator is deliberately **not** the step's `name:`, which is what
 /// [`LOCAL_RUNNER`]'s awk anchors on: the armed step is the one that
 /// `--partition`s the suite, and the compensating step is un-partitioned by
 /// design. Keying on the `run:` body rather than on the label keeps the two
-/// derivations independent — a renamed step breaks one of them and not the
+/// derivations independent: a renamed step breaks one of them and not the
 /// other, which is the whole point of having two.
 fn test_oracle_job_flags() -> Vec<String> {
     let armed = test_oracle_steps()
@@ -362,9 +347,9 @@ struct OracleStep {
 
 /// The `test-oracle:` job's steps, split on the `- name:` at step indent.
 ///
-/// Exists because #1815 made that job carry two nextest steps with overlapping
-/// flag sets, so "the flags of `test-oracle`" stopped being a well-formed
-/// question — every guard below has to say *which* step it means.
+/// Exists because `test-oracle` carries two nextest steps with overlapping
+/// flag sets (#1815), so "the flags of `test-oracle`" is not a well-formed
+/// question: every guard below has to say *which* step it means.
 fn test_oracle_steps() -> Vec<OracleStep> {
     let mut steps: Vec<OracleStep> = Vec::new();
     let mut in_run = false;
@@ -445,9 +430,10 @@ fn test_oracle_job_lines() -> Vec<String> {
 /// here.
 fn ci_oracle_selection() -> String {
     // The ARMED step's selection, identified by `--partition` rather than by
-    // position. #1815 gave this job a second nextest step, and "the first `-E` in
-    // the job" is a positional accident rather than a statement about which step
-    // is meant — reordering them would silently retarget this whole comparison.
+    // position. `test-oracle` carries two nextest steps (#1815), so "the first
+    // `-E` in the job" is a positional accident, not a statement about which
+    // step is meant. Reordering the steps would silently retarget this
+    // comparison.
     let template = test_oracle_steps()
         .into_iter()
         .find(|step| step.runs.contains("--partition"))
@@ -579,22 +565,21 @@ fn the_local_oracle_runner_selects_exactly_what_ci_selects() {
 /// `not (…)` wrapper instead.
 ///
 /// **Asserting that each module is merely NAMED in the selection would be
-/// vacuous**, and that was this test's first form. The selection is built *by
-/// substituting those two filters' values into* the template, so every module
-/// they name is guaranteed to appear as a `test(<module>)` substring however
-/// the template is spelled — including a template that had dropped the `not`.
-/// Dropping it is not hypothetical: `and ($SWEEP_FILTER)` in place of
-/// `and not ($SWEEP_FILTER)` inverts the job from "the suite minus the three
-/// sweeps" to "only the three sweeps", i.e. ~8,900 tests down to ~30, which is
-/// the quiet-narrowing failure the runner's own header warns about.
+/// vacuous.** The selection is built *by substituting those two filters'
+/// values into* the template, so every module they name is guaranteed to
+/// appear as a `test(<module>)` substring however the template is spelled,
+/// including a template that had dropped the `not`. Dropping it is not
+/// hypothetical: `and ($SWEEP_FILTER)` in place of `and not ($SWEEP_FILTER)`
+/// inverts the job from "the suite minus the three sweeps" to "only the
+/// three sweeps", the quiet-narrowing failure the runner's own header warns
+/// about.
 /// **Its name may not contain `proptest`, and that is not cosmetic.** `test()`
 /// is a substring predicate over the whole test name, so a function carrying
-/// that token is selected by the `soak` job's `-E 'test(proptest)'` and negated
-/// by `test` and `test-oracle` — which used to mean this assertion about
-/// `ci.yml` ran only inside the 1M-case soak, and now that the soak archive
-/// holds only the modules `tests-soak/tests/soak/main.rs` compiles, would mean
-/// it ran nowhere at all. `tests/it/soak_package_membership.rs` fails on any
-/// such name.
+/// that token is selected by the `soak` job's `-E 'test(proptest)'` and
+/// negated by `test` and `test-oracle`. This file compiles into `tests/it`,
+/// not into `tests-soak`, so a name carrying `proptest` here would not run
+/// under `soak` either: negated everywhere it is named, selected nowhere it
+/// exists. `tests/it/soak_package_membership.rs` fails on any such name.
 #[test]
 fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_modules() {
     let selection = ci_oracle_selection();
@@ -629,18 +614,9 @@ fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_
 /// Arming **more** makes the runner red on rows no PR caused, which teaches the
 /// operator to ignore it.
 ///
-/// `FERRO_ASSERT_SEQUENCE` was the live candidate for the second failure until
-/// #1815, and its history is the argument for keeping this guard: armed over this
-/// selection it read red at 5 tests (`674e9c8b`), 2 (`c9207d7e`, after #1990
-/// closed #1690) and 3 (`1aecc93a`, after #2051 added a gate that fires) — so a
-/// runner that had armed it ahead of the job would have been red on every PR for
-/// months, at a count that moved in both directions. It is armed in both places
-/// now, and the runner did not have to be changed to follow: it reads the flag
-/// set out of the job.
-///
-/// The candidate has not gone away, it has moved. `censuses`' armed step now
-/// arms three where this job arms four, deliberately and unmeasured — see that
-/// job's header — so the next plausible "restore parity" edit is there.
+/// `censuses` arms three flags where `test-oracle` arms four, deliberately and
+/// unmeasured, so the next plausible "restore parity" edit is there. See
+/// docs/ORACLES.md, section "What CI arms, and where".
 #[test]
 fn the_local_oracle_runner_arms_exactly_the_flags_test_oracle_arms() {
     let runner_flags = local_runner_selection().flags;
@@ -773,13 +749,13 @@ fn collect_rust_sources(dir: &std::path::Path, into: &mut String) {
 /// The rows withheld from the denoted-sequence oracle must still run under the
 /// other three.
 ///
-/// This is the guard that makes arming the fourth oracle a **superset** of what
-/// `test-oracle` ran before #1815 rather than a trade. A nextest `-E` is one
-/// expression, so the armed step's `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws
-/// those rows from all four oracles at once; the compensating step is what puts
-/// three of them back. Delete that step and the change quietly becomes "three
-/// oracles surrendered to gain one" — with nothing red, which is why it is
-/// asserted rather than left to the comment beside it.
+/// This is the guard that keeps arming the fourth oracle a **superset**, not a
+/// trade. A nextest `-E` is one expression, so the armed step's
+/// `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws those rows from all four
+/// oracles at once; the compensating step (#1815) puts three of them back.
+/// Delete that step and the change quietly becomes "three oracles surrendered
+/// to gain one", with nothing red, which is why it is asserted rather than
+/// left to the comment beside it.
 ///
 /// Three things are checked, and the third is the one a reader would omit:
 ///
