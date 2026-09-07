@@ -1,103 +1,29 @@
 #!/usr/bin/env bash
-# Runs the seam-oracle suite locally the way `ci.yml`'s `test-oracle` job runs
-# it: the oracle flags that job sets, over that job's selection.
+# Runs the seam-oracle suite locally the way `ci.yml`'s `test-oracle` armed step
+# runs it: that step's flags, over that step's selection. It does not reproduce
+# the job's compensating step (the SEQUENCE_ORACLE_EXCLUDE debt rows under the
+# other three oracles), which runs only in CI — so a local run does not cover
+# those rows.
 #
-# WHY THIS EXISTS. The obvious local command --
-#
-#     FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
-#
-# -- CANNOT PASS on `main`, and has not been able to for as long as the spec
-# corpus has existed. The failures are in modules `ci.yml` names in
-# `ORACLE_EXCLUDE` precisely so that the armed job never runs them. The count was
-# 7 before #1650 closed the idempotency half; it is not restated here as a number
-# because it is a moving figure that nothing checks -- read it off a run.
-#
-#   * defect_non_idempotent_outputs and
-#     spec_corpus_regressions::an_insertion_at_the_cds_end_is_a_fixed_point
-#     USED TO ASSERT the non-idempotency the oracle PANICS on:
-#     `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` was a pinned defect,
-#     and a test that pins it and an oracle that aborts on it cannot both run.
-#     #1650 FIXED that class -- the chain collapses to
-#     `c.*1delinsCTT` -> `c.72delinsCCT`, `non_idempotent_outputs` reads 0 in
-#     both directions, and both tests now assert the fixed point. So this bullet
-#     no longer describes a reason to exclude those two.
-#
-#     THE EXCLUSION IS KEPT ANYWAY, and deliberately: `spec_corpus_regressions`
-#     still pins rows the DENOTED-SEQUENCE oracle aborts on (see the note at the
-#     end of this header), and both modules build their own references and sweep
-#     them, so an armed run that started panicking mid-sweep would EMPTY the
-#     sweep rather than redden it -- the same instrument-destroys-instrument
-#     failure, differently sourced. Narrowing it needs that measured, with
-#     `tests/it/oracle_exclude_invariant.rs` updated in the same change.
-#   * spec_conformance_axis's two censuses COUNT it. The corpus wraps
-#     normalization in `catch_unwind`, so a panicking row is filed `declined`
-#     and its output never reaches the family's output set -- which does not
-#     redden the census, it FLATTERS it. Measured on `main` @ 1dd8148d, both
-#     directions, armed against the committed pins:
-#
-#       3': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
-#           converged 9141 -> 9145, split_two 2440 -> 2436
-#       5': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
-#           converged 8944 -> 8948, split_two 2706 -> 2702
-#
-#     Four families read as converged in each direction that do not converge.
-#
-# So a bare armed run is not a coverage gap to be closed by running it anyway;
-# it is a measurement taken with two instruments that destroy each other. This
-# script applies the same exclusion CI does, so a local armed run is a signal
-# rather than a known-red wall.
-#
-# THE SELECTION AND THE FLAGS ARE READ FROM `ci.yml`, NEVER COPIED. That means
-# the WHOLE `-E` expression, not just `ORACLE_EXCLUDE`: `test-oracle` also
-# negates `test(proptest)` and `SWEEP_FILTER`, so a run that dropped either
-# would execute tests that job does not while claiming to mirror it. A second
-# copy of any of it would drift, and a drifted exclusion here fails in the
-# flattering direction -- it would exclude a module CI runs, so a local run
-# would go green on a defect CI is red on.
-# `tests/it/oracle_exclude_invariant.rs` invokes `--print-selection` below and
-# compares this extraction against one derived independently in Rust, so a
-# `ci.yml` restructure that breaks the awk fails loudly instead of yielding an
-# empty filter.
+# Do not arm a flag by hand over the whole suite. That command is red on `main`,
+# and not because of a coverage gap. This script applies the same exclusion CI
+# does, so a local armed run is a signal rather than a known-red wall. For why,
+# see docs/ORACLES.md, section "Running the oracles locally".
 #
 # Usage:
 #   scripts/run_oracle_suite.sh                    # run it
 #   scripts/run_oracle_suite.sh --print-selection  # print what it would run, and stop
 #   scripts/run_oracle_suite.sh -E 'test(foo)'     # extra args go through to nextest
 #
-# The denoted-sequence oracle (`FERRO_ASSERT_SEQUENCE`) IS among the flags this
-# mirrors as of #1815, and this script needed no change to start arming it:
-# `oracle_flags` below READS the flag set out of that job, so it armed the fourth
-# oracle on the day the job did. What #1815 did have to teach it is the third
-# negated filter, `SEQUENCE_ORACLE_EXCLUDE` -- see the refusal on it below, and
-# note that a run which arms the flag WITHOUT negating that filter is red by
-# construction on the rows named there.
-#
-# The figure this header used to quote -- "5 further failures, all in
-# `spec_corpus_regressions`" -- was about `ORACLE_EXCLUDE`'s modules, which this
-# selection does not run, so it never described what it claimed to. Measured
-# over THIS selection instead, on `origin/main` @ 674e9c8b: 5 failures, none of
-# them in `spec_corpus_regressions` -- 3 in `issue_1487_canonical_window_overflow`
-# (an `i64` overflow at `src/convert/mapper.rs:114`, issue #1690) and 2 in
-# `stranded_identity_member` (a real fire on a module that PINS a defect). The
-# blocking rows are no longer #1618/#1619, both of which are closed and green;
-# see `test-oracle`'s own comment in `ci.yml` for the full triage.
-#
-# RE-MEASURED on `c9207d7e` once #1690 closed (#1990), same selection and flags:
-# `10904 tests run: 10902 passed, 2 failed, 306 skipped`. The 3
-# `issue_1487_canonical_window_overflow` rows are GONE and nothing new fired, so
-# the remaining blocker at that point was `stranded_identity_member` alone --
-# #1690 is closed and is no longer one.
-#
-# RE-MEASURED AGAIN for #1815 on `origin/main` @ 1aecc93a: `11202 tests run:
-# 11199 passed, 3 failed, 321 skipped`. THREE, not two -- #2051 had since added
-# `the_render_time_reference_matches_what_the_pipeline_was_given`, which
-# re-normalizes each corpus row outside `catch_unwind` and so aborts on 47 corpus
-# inputs (#2140, #1983, #2139). Those rows plus `stranded_identity_member` are what
-# `SEQUENCE_ORACLE_EXCLUDE` names, and with it negated the same selection is
-# `11197 passed, 0 failed`.
-#
-# The figure has now been taken three times in three days and read 5 / 2 / 3 --
-# it moves in BOTH directions, so READ IT OFF A RUN rather than off this header.
+# The selection and the flag set are read from `ci.yml`, never copied. The
+# script reads the WHOLE `-E` expression, not one filter, so a local run cannot
+# execute tests `test-oracle` does not. A second copy of any of it would drift,
+# and a drifted exclusion here fails in the flattering direction: it would
+# exclude a module CI runs armed, so a local run would go green on a defect CI
+# is red on. `tests/it/oracle_exclude_invariant.rs` invokes `--print-selection`
+# below and compares this extraction against one derived independently in Rust,
+# so a `ci.yml` restructure that breaks the awk fails loudly instead of yielding
+# an empty filter.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -203,7 +129,7 @@ while IFS= read -r flag; do
 done < <(oracle_flags)
 
 # Refuse a vacuous extraction rather than running something weaker than CI.
-# An empty exclusion would run the 7 known-red tests; an empty flag list would
+# An empty exclusion would run the known-red tests; an empty flag list would
 # run the whole suite with no oracle armed at all and report it as an oracle
 # pass, which is the worse of the two.
 if [[ -z "$EXCLUDE" ]]; then
@@ -224,7 +150,7 @@ fi
 # `CENSUS_FILTER`'s modules moved to the `censuses` job, which runs them on the
 # optimized archive; `test-oracle` negates them. An empty read here would put
 # them back into a local armed run -- not a known-red wall like an empty
-# `ORACLE_EXCLUDE`, but ~9 minutes of debug-profile census this script is not
+# `ORACLE_EXCLUDE`, but a long debug-profile census this script is not
 # meant to run, which reads as a hang rather than as a misconfiguration.
 if [[ -z "$CENSUSES" ]]; then
     echo "error: could not read CENSUS_FILTER from $CI_YML." >&2
