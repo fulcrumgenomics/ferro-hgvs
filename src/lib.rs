@@ -48,6 +48,10 @@ pub mod liftover;
 pub mod mave;
 pub mod normalize;
 pub mod parallel;
+/// Neutral, arm-facing partitioner layer (design §7). The ruled core is
+/// production-wired as of the step-9 flip; the bake-off layer inside it
+/// (`arm`/`arms`/`registry`/`strategy`) stays `#[cfg(feature = "dev")]`.
+pub mod partition;
 /// Performance-comparison table types + rendering (used by the
 /// `generate_perf_tables` example and its tests).
 #[cfg(feature = "dev")]
