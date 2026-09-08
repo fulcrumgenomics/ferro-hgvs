@@ -68,6 +68,8 @@ impl FerroService {
             error_config: ErrorConfig::new(error_mode),
             window_size: 100,       // Keep default
             prevent_overlap: false, // Keep default
+            #[cfg(feature = "dev")]
+            partitioner: None, // No typed override; read FERRO_PARTITION/default
         };
 
         // Create normalizer
