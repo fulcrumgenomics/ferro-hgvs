@@ -38,8 +38,9 @@
 //! verbatim duplication of the full path, and misses the natural spelling
 //! entirely.
 //!
-//! Concretely: `test(direction_symmetry)` added to `ORACLE_EXCLUDE` is the
-//! spelling every entry there already uses. nextest then excludes
+//! Concretely: `test(direction_symmetry)` added to the `oracle` profile's
+//! first exclusion in `.config/nextest.toml` is the spelling every entry there
+//! already uses. nextest then excludes
 //! `normalize::merge::tests::direction_symmetry::…` from `test-oracle`, `test`
 //! already negates it here, and the census runs **nowhere** — while
 //! `"…test(direction_symmetry)…".contains("merge::tests::direction_symmetry")`
@@ -175,6 +176,66 @@ fn required_terms_in(key: &str) -> Vec<String> {
     terms
 }
 
+/// The `oracle` profile's `default-filter`, read from `.config/nextest.toml`.
+fn oracle_profile_default_filter() -> String {
+    let path = repo_root().join(".config/nextest.toml");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let config: toml::Value =
+        toml::from_str(&text).expect(".config/nextest.toml is not valid TOML");
+    config
+        .get("profile")
+        .and_then(|profile| profile.get("oracle"))
+        .and_then(|oracle| oracle.get("default-filter"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| {
+            panic!("`.config/nextest.toml` has no `[profile.oracle]` default-filter")
+        })
+        .to_string()
+}
+
+/// The `test(...)` terms of the `oracle` profile's FIRST `not (...)` clause —
+/// the modules withheld from the armed run.
+///
+/// A small paren-depth scan rather than a filterset parser: the filter is a
+/// multi-line TOML literal string, and the clause body is everything between
+/// `not (` and its matching `)`.
+fn oracle_profile_first_exclusion_terms() -> Vec<String> {
+    let filter = oracle_profile_default_filter();
+    let body_start = filter.find("not (").unwrap_or_else(|| {
+        panic!("`[profile.oracle]` default-filter has no `not (...)` clause: {filter:?}")
+    }) + "not (".len();
+
+    let mut depth: usize = 1;
+    let mut end = None;
+    for (i, c) in filter[body_start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(body_start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.unwrap_or_else(|| {
+        panic!(
+            "`[profile.oracle]` default-filter's first `not (...)` clause never closes: {filter:?}"
+        )
+    });
+
+    let terms = terms_in(&filter[body_start..end]);
+    assert!(
+        !terms.is_empty(),
+        "the `oracle` profile's first exclusion yields no test(...) terms; \
+         `.config/nextest.toml`'s formatting changed and this guard is checking nothing"
+    );
+    terms
+}
+
 /// Every `.rs` file under a directory, recursively.
 fn rust_sources_under(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
@@ -226,9 +287,10 @@ fn the_test_job_negates_the_oracle_only_filter() {
 /// Assertion 3, the one that matters: `test-oracle` still runs them.
 ///
 /// The saving is only legitimate because an armed run subsumes an un-armed one.
-/// If `test-oracle` ever negates this filter too — or excludes it through
-/// `ORACLE_EXCLUDE`, which is the same thing by another spelling — the census
-/// runs nowhere, both shards go green, and both get *faster*.
+/// If `test-oracle` ever negates this filter too — or excludes it through the
+/// `oracle` profile's first exclusion in `.config/nextest.toml`, which is the
+/// same thing by another spelling — the census runs nowhere, both shards go
+/// green, and both get *faster*.
 #[test]
 fn the_test_oracle_job_still_runs_what_the_test_job_dropped() {
     let selections = selections_in("test-oracle");
@@ -247,31 +309,45 @@ fn the_test_oracle_job_still_runs_what_the_test_job_dropped() {
     // The same deletion, spelled through the other exclusion mechanism.
     //
     // Compared TERM against TERM and in both directions, because `test(P)` is a
-    // substring predicate on the test's name: an `ORACLE_EXCLUDE` entry spelled
-    // `test(direction_symmetry)` — the spelling every entry there already uses —
-    // excludes this module without ever containing its full path. See the module
-    // doc comment.
-    assert_terms_do_not_overlap("ORACLE_EXCLUDE", |ours, theirs| {
-        format!(
-            "`{ours}` (ORACLE_ONLY_FILTER) and `{theirs}` (ORACLE_EXCLUDE) select \
-             overlapping tests: `test(P)` matches any test whose name CONTAINS P, \
-             so one of these terms subsumes the other. Those tests are negated \
-             from `test` by ORACLE_ONLY_FILTER and excluded from `test-oracle` by \
-             ORACLE_EXCLUDE — they run NOWHERE, both shards go green, and both get \
-             faster. That is the failure this file exists to catch."
-        )
-    });
+    // substring predicate on the test's name: an entry in the `oracle` profile's
+    // first exclusion spelled `test(direction_symmetry)` — the spelling every
+    // entry there already uses — excludes this module without ever containing
+    // its full path. See the module doc comment.
+    assert_terms_do_not_overlap(
+        oracle_profile_first_exclusion_terms(),
+        "the `oracle` profile's first exclusion",
+        |ours, theirs| {
+            format!(
+                "`{ours}` (ORACLE_ONLY_FILTER) and `{theirs}` (the `oracle` profile's first \
+                 exclusion in `.config/nextest.toml`) select overlapping tests: `test(P)` \
+                 matches any test whose name CONTAINS P, so one of these terms subsumes the \
+                 other. Those tests are negated from `test` by ORACLE_ONLY_FILTER and excluded \
+                 from `test-oracle` by that exclusion — they run NOWHERE, both shards go green, \
+                 and both get faster. That is the failure this file exists to catch."
+            )
+        },
+    );
 }
 
-/// Assertions 3b and 4, which differ only in the filter they read.
+/// Assertions 3b and 4, which differ only in the foreign terms they compare
+/// against — the caller reads its own source (`ci.yml` or `.config/nextest.toml`)
+/// and supplies the terms directly.
 ///
-/// For every term of `ORACLE_ONLY_FILTER` and every term of the foreign filter,
-/// neither may contain the other. Containment either way means nextest's
-/// substring predicate selects overlapping tests, which is what the two callers'
-/// messages then explain the consequence of.
-fn assert_terms_do_not_overlap(foreign_key: &str, message: impl Fn(&str, &str) -> String) {
+/// For every term of `ORACLE_ONLY_FILTER` and every term of `theirs`, neither
+/// may contain the other. Containment either way means nextest's substring
+/// predicate selects overlapping tests, which is what the two callers'
+/// messages then explain the consequence of. `label` names the foreign side
+/// for the emptiness guard below.
+fn assert_terms_do_not_overlap(
+    theirs: Vec<String>,
+    label: &str,
+    message: impl Fn(&str, &str) -> String,
+) {
+    assert!(
+        !theirs.is_empty(),
+        "{label} yields no test(...) terms; the check reading it would be vacuous"
+    );
     let ours = required_terms_in("ORACLE_ONLY_FILTER");
-    let theirs = required_terms_in(foreign_key);
     for our_term in &ours {
         for their_term in &theirs {
             assert!(
@@ -294,16 +370,20 @@ fn assert_terms_do_not_overlap(foreign_key: &str, message: impl Fn(&str, &str) -
 /// notice because the step's other terms still match.
 #[test]
 fn no_oracle_only_test_is_also_claimed_by_the_censuses_job() {
-    assert_terms_do_not_overlap("CENSUS_FILTER", |ours, theirs| {
-        format!(
-            "`{ours}` (ORACLE_ONLY_FILTER) and `{theirs}` (CENSUS_FILTER) select \
-             overlapping tests — `test(P)` matches any test whose name CONTAINS P. \
-             CENSUS_FILTER is negated from both shards and selected off the soak \
-             archive, which contains no `src/` unit tests, so those tests are \
-             negated everywhere and selected nowhere. `--no-tests=fail` does not \
-             notice, because the step's other terms still match."
-        )
-    });
+    assert_terms_do_not_overlap(
+        required_terms_in("CENSUS_FILTER"),
+        "CENSUS_FILTER",
+        |ours, theirs| {
+            format!(
+                "`{ours}` (ORACLE_ONLY_FILTER) and `{theirs}` (CENSUS_FILTER) select \
+                 overlapping tests — `test(P)` matches any test whose name CONTAINS P. \
+                 CENSUS_FILTER is negated from both shards and selected off the soak \
+                 archive, which contains no `src/` unit tests, so those tests are \
+                 negated everywhere and selected nowhere. `--no-tests=fail` does not \
+                 notice, because the step's other terms still match."
+            )
+        },
+    );
 }
 
 /// Assertion 5: the filter still names something that exists.

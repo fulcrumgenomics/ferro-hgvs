@@ -98,6 +98,49 @@ command = 'scripts/pregenerate-spec-fixtures.sh'
 # than from a round number.
 
 # ---------------------------------------------------------------------------
+# `oracle` and `oracle-rerun`: the armed run's exclusions and flags.
+# CI's `test-oracle` job and `scripts/run_oracle_suite.sh` both select `--profile
+# oracle`, so an edit here changes both. Do not add the sweep, census or proptest
+# negations here: they belong on the job's own `-E`, which nextest intersects with
+# this filter. Filters and scripts only; no timeout, retries or fail-fast (the
+# `[profile.ci]` note above says why).
+#
+# First clause: every module that imports the spec corpus, and nothing else.
+# `tests/it/oracle_exclude_invariant.rs` enforces both directions.
+# Second clause: rows the denoted-sequence oracle fires on for a bug still open. A
+# row stays only while its issue is open: the first row pins #1655, the second
+# fires on #2140, #1983 and #2139. When an issue closes, remove its row here and
+# from `oracle-rerun`, which must select exactly this clause. Filtersets cannot
+# reference each other, so the list is spelled twice; the invariant test checks
+# the two agree.
+# Why the lists exist: docs/ORACLES.md, section "What the oracle profile excludes".
+[profile.oracle]
+default-filter = '''
+not (test(spec_conformance_axis) + test(spec_corpus_regressions)
+  + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
+  + test(lenient_overlap_and_projection_split)
+  + test(defect_non_idempotent_outputs)
+  + test(issue_1715_rna_alignment_symbol_reach)
+  + test(conformance_census_instrument)
+  + test(conformance_census_runs))
+and not (test(stranded_identity_member) + test(the_render_time_reference_matches_what_the_pipeline_was_given))
+'''
+
+[profile.oracle-rerun]
+default-filter = 'test(stranded_identity_member) + test(the_render_time_reference_matches_what_the_pipeline_was_given)'
+
+[scripts.setup.arm-oracles]
+command = 'scripts/arm-oracles.sh'
+
+[[profile.oracle.scripts]]
+filter = 'all()'
+setup = 'arm-oracles'
+
+[[profile.oracle-rerun.scripts]]
+filter = 'all()'
+setup = 'arm-oracles'
+
+# ---------------------------------------------------------------------------
 # `nightly-xfail`: the nightly reference-aware run's machine-readable channel.
 #
 # `nightly-mutalyzer.yml` runs `REFERENCE_AWARE_SELECTION` with this profile so
