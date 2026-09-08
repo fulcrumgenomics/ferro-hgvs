@@ -8919,7 +8919,7 @@ fn payload_embeds_as_subsequence(reference: &[u8], result: &[u8]) -> bool {
 ///
 /// Raising this is a representation change: it merges blocks that are currently
 /// spelled as separate members. Measure before moving it.
-const COALESCE_MISMATCH_BUDGET: usize = 1;
+pub(crate) const COALESCE_MISMATCH_BUDGET: usize = 1;
 
 /// Widest run of unchanged reference bases the coalesce pass will merge across.
 ///
@@ -8995,7 +8995,7 @@ const COALESCE_MISMATCH_BUDGET: usize = 1;
 /// 1,562), while the 78 coincidental splits it correctly rejoined on ClinVar sat
 /// a median of **2** apart (p90 3, max 8). The two populations barely overlap,
 /// and separation is what separates them.
-const COALESCE_MAX_SEPARATION: usize = 8;
+pub(crate) const COALESCE_MAX_SEPARATION: usize = 8;
 
 /// Whether `payload` can be read out of `span` by deleting bases and
 /// substituting at most `budget` of them.
