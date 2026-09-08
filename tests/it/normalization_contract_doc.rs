@@ -217,11 +217,23 @@ fn kebab_case(variant: &str) -> String {
     out
 }
 
-/// The arm names `PARTITION_RULE_NAMES` declares, read from the same source.
+/// The declaration of the arm list a release build compiles. `merge.rs` declares
+/// `PARTITION_RULE_NAMES` twice — a `dev` array carrying the bake-off arms, then
+/// this one — so the shipped list is found by its `cfg`, never by textual order.
+const SHIPPED_PARTITION_RULE_NAMES_DECL: &str =
+    "#[cfg(not(feature = \"dev\"))]\nconst PARTITION_RULE_NAMES";
+
+/// The arm names the SHIPPED (`#[cfg(not(feature = "dev"))]`)
+/// `PARTITION_RULE_NAMES` declares, read from the same source.
 fn declared_partition_rule_names(source: &str) -> Vec<String> {
     let literal = source
-        .split_once("const PARTITION_RULE_NAMES")
-        .unwrap_or_else(|| panic!("no `PARTITION_RULE_NAMES` in {PARTITION_SOURCE_RELATIVE_PATH}"))
+        .split_once(SHIPPED_PARTITION_RULE_NAMES_DECL)
+        .unwrap_or_else(|| {
+            panic!(
+                "no `#[cfg(not(feature = \"dev\"))]` `PARTITION_RULE_NAMES` in \
+                 {PARTITION_SOURCE_RELATIVE_PATH}"
+            )
+        })
         .1;
     // `= [` rather than `[`: the declaration's type annotation (`[&str; 4]`)
     // comes first, and splitting on the bare bracket reads that instead — which
@@ -742,12 +754,23 @@ fn the_published_default_partition_arm_is_derived_from_the_code() {
     );
 
     let source = read(PARTITION_SOURCE_RELATIVE_PATH);
-    let names = declared_partition_rule_names(&source);
+    // The parser reads the release build's array, so the dev-only bake-off arms
+    // (`op-extract` and siblings, which a release build refuses by name and this
+    // contract deliberately omits) are absent by construction rather than by a
+    // name filter. `ruled` is in it: as of the step-9 flip it is the shipped
+    // default ([`DEFAULT_PARTITION_RULE`]). Adding a sixth *shipped* arm trips
+    // this, and so is a prose change to the preamble.
+    let shipped = declared_partition_rule_names(&source);
     assert_eq!(
-        names.len(),
-        4,
-        "`PARTITION_RULE_NAMES` declares {names:?}; this document's preamble describes a knob \
-         with the four arms that set has always had, so a change in arity is a prose change too"
+        shipped.len(),
+        5,
+        "the shipped `PARTITION_RULE_NAMES` declares {shipped:?}; this document's preamble \
+         describes a knob with the five shipped arms it has had since the step-9 flip \
+         promoted `ruled` to the default, so a change in arity is a prose change too"
+    );
+    assert!(
+        shipped.iter().all(|name| !name.starts_with("op-extract")),
+        "a dev-only bake-off arm is declared in the shipped list: {shipped:?}"
     );
 }
 
