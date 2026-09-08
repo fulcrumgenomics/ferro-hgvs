@@ -14,7 +14,7 @@ before that.
 
 # Ferro's normalization contract
 
-**38 adjudication records — 35 decided, 3 open.**
+**44 adjudication records — 41 decided, 3 open.**
 
 ## What this document is
 
@@ -68,7 +68,7 @@ about whether their ruling is already live in shipped output or is implemented o
 candidate arm, so the answer depends on the default — and that default is currently in motion.
 
 **As generated, the shipped default — what `FERRO_PARTITION` unset selects — is
-`canonical-coalesced`.** That sentence is not written by hand: the generator reads the arm out of
+`ruled`.** That sentence is not written by hand: the generator reads the arm out of
 `src/normalize/merge.rs`, so a change to the default fails this document's own test until it
 is regenerated, and cannot leave a stale claim behind. See
 [Comparing normalization rules](src/guide/comparing-rules.md#comparing-normalization-rules-ferro_partition)
@@ -93,7 +93,10 @@ for the knob and its traps.
 - [`canonical-form-choice-when-both-legal`](#canonical-form-choice-when-both-legal)
 - [`cds-unknown-position-is-refused-at-conversion`](#cds-unknown-position-is-refused-at-conversion)
 - [`coding-axis-merges-are-a-disclosed-general-34-deviation`](#coding-axis-merges-are-a-disclosed-general-34-deviation)
+- [`codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair`](#codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair)
 - [`codon-carve-out-shape-restriction`](#codon-carve-out-shape-restriction)
+- [`codon-exception-reaches-the-termination-codon`](#codon-exception-reaches-the-termination-codon)
+- [`codon-exception-vs-coincidence-carve-out-precedence`](#codon-exception-vs-coincidence-carve-out-precedence)
 - [`conflicting-member-geometry-refusal-scope`](#conflicting-member-geometry-refusal-scope)
 - [`confluence-gate-is-apply-equality-on-every-determined-axis`](#confluence-gate-is-apply-equality-on-every-determined-axis)
 - [`contiguous-insertion-split-by-a-blocked-derivation`](#contiguous-insertion-split-by-a-blocked-derivation)
@@ -110,11 +113,14 @@ for the knob and its traps.
 - [`inversion-vs-two-delins-76-83`](#inversion-vs-two-delins-76-83)
 - [`inverted-duplication-is-derived-as-ins-range-inv`](#inverted-duplication-is-derived-as-ins-range-inv)
 - [`past-cds-end-coordinate-is-non-conformant`](#past-cds-end-coordinate-is-non-conformant)
+- [`payload-coincidence-separation-and-budget-are-house-choices`](#payload-coincidence-separation-and-budget-are-house-choices)
 - [`projection-codon-exception-is-decided-by-the-rendered-axis`](#projection-codon-exception-is-decided-by-the-rendered-axis)
+- [`pure-tandem-expansion-insertion-is-not-repartitioned`](#pure-tandem-expansion-insertion-is-not-repartitioned)
 - [`rna-axis-alignment-only-symbol-reach`](#rna-axis-alignment-only-symbol-reach)
 - [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
 - [`separation-is-a-property-of-the-spelling-not-of-the-variant`](#separation-is-a-property-of-the-spelling-not-of-the-variant)
 - [`separation-rule-force-modal-or-negation`](#separation-rule-force-modal-or-negation)
+- [`separation-zero-dup-member-is-preserved-not-merged`](#separation-zero-dup-member-is-preserved-not-merged)
 - [`spdi-n-unit-repeat-refusal`](#spdi-n-unit-repeat-refusal)
 - [`unchanged-is-read-over-every-minimal-alignment`](#unchanged-is-read-over-every-minimal-alignment)
 - [`unequal-length-block-a-placed-gap-is-not-a-separation`](#unequal-length-block-a-placed-gap-is-not-a-separation)
@@ -677,6 +683,28 @@ WHAT IS AND IS NOT DECIDED BY THIS BLOCK. The measurement is made, and the popul
 
 HOW THIS WAS ALLOWED TO HAPPEN, RECORDED BECAUSE IT WAS PREDICTED IN TERMS AND THE PREDICTION WAS NOT ACTED ON. `spec_conformance_axis.rs:593-600` warned, while #1835 was in review: '#1616 is concurrently re-pinning this same counter to 8, under a separate operator ruling ... Two open PRs moving one counter to different values is a semantic conflict no textual check sees — the constants live on different lines, so `merge-tree` reports no conflict between the two branches. Whichever lands second must re-measure this figure on the merged tree rather than keeping its own.' #1899, the #1616 lineage, landed second and kept its own figure. The warning was written, was correct, named the right remedy, and was not followed — so the failure is not that the hazard was unknown but that nothing enforced it. A prose figure in a ledger record has no guard; that is the general lesson, and it is the same one `:602-611` already draws about #1698 removing 119 of 122 rows with no test failing.
 
+#### `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair`
+
+**Status:** decided
+
+**The question.** Does the codon exception (`delins.md:18`) reach a compensated zero-width pair — a point insertion and a nearby single-base deletion that share one codon and are net-length-preserving but sit two positions apart — or does the gap-one antecedent exclude it?
+
+**Governing clause.**
+
+- `docs/recommendations/DNA/delins.md:17`
+  > two variants separated by one or more nucleotides should be described individually and **not** as a "delins".
+
+**Also cited.**
+
+- `docs/recommendations/DNA/delins.md:18`
+  > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
+
+**The ruling.**
+
+KEEP THE GUARD — the pair is described individually. `:18`'s exception is scoped to variants 'separated by ONE nucleotide', an explicit threshold; the compensated pair `Ins(k,k)+Del(k+2,k+3)` is separated by TWO positions, so it falls OUTSIDE `:18`'s antecedent and the parent rule `:17` — 'separated by one or more nucleotides should be described individually' — governs it. This is close to a rule-1 spec reading, since the text states the threshold in as many words.
+
+The fragmentation counter — 'but the pair shares one codon and is net-0, so keep it whole for confluence' — fails on its own terms. The same `(reference, resulting)` presents position-wise as two ADJACENT substitutions (one delins, no gap, the codon exception irrelevant), so widening C1 to gap-2 would NOT restore confluence — it would mint a THIRD spelling, a three-wide delins against the two-wide one, and make convergence worse. Cross-presentation convergence at this locus is owned by the equal-length / #2174 mechanism and the L1 choice, not by C1's guard. Declining a merge is sound and stable by construction, so there is no round-trip or idempotence exposure. Resolves the M4 candidate (the zero-width gap-2 hole in `within_one_codon`, which passes both the net-0 gate and `within_one_codon`'s codon test at gap 2) as DECIDED-KEEP rather than a lingering open question. Surfaced 2026-08-24 (M4 / fork F3); decided after adversarial review.
+
 #### `codon-carve-out-shape-restriction`
 
 **Status:** decided
@@ -716,6 +744,61 @@ IMPLEMENTATION, AND WHICH HALF OF IT #1599 IS. PR #1599 implements this ruling's
 CORRECTION (2026-08-11): the paragraph above read "all split -> merge" when it landed with #1623, which is backwards, and the error is worth recording because it is not clerical. THIS RULING's own direction is a WIDENING — lifting `apply_coding_codon_exception`'s `[Sub@p; Identity@p+1; Sub@p+2]` restriction admits more merges and would move rows split -> merge — but that half is NOT implemented: `apply_coding_codon_exception` still matches only that triplet. #1599 moves the OTHER pass, the OTHER way. Reasoning from the ruling's direction to its implementation's is what produced the wrong sign; the two are opposite and both belong on the record. #1599's own trailer, its `delins-codon-carve-out-gap-one` measurement and its conformance rows all say `merge -> split` — `NM_000143.3:c.44_47delinsATC` stops merging and is described individually — so the ledger was the only place carrying the wrong sign.
 
 WHAT #1599 DOES NOT IMPLEMENT. It does not implement the first of the two constraints above. The predicate is the merged span's codon membership and nothing else — edit type is deliberately excluded — so a pair whose net length change is not a multiple of three can still merge when its span lies inside one codon (`NM_004006.2:c.4375_4376delinsAGTT`, both positions in codon 1459, still merges). Whether "together affecting one amino acid" should additionally exclude such a pair, on the reading that a frameshift affects every downstream residue, is left open — a frameshift test is the same proxy pointed the other way. `tests/it/coding_frame_merge_axis_asymmetry.rs` measures that class; its rows merge a span of a SINGLE reference position, so the codon predicate does not move them and its assert-then-flip pins stand unchanged.
+
+#### `codon-exception-reaches-the-termination-codon`
+
+**Status:** decided
+
+**The question.** Does the codon exception (`delins.md:18`, 'together affecting one amino acid') apply when the affected codon is the termination (stop) codon, given Ter is not literally an amino acid?
+
+**Governing clause.**
+
+- `docs/recommendations/DNA/delins.md:18`
+  > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
+
+**Also cited.**
+
+- `docs/recommendations/DNA/delins.md:19`
+  > this prevents tools predicting the consequences of a variant to make conflicting and incorrect predictions of two different substitutions at one position
+
+**The ruling.**
+
+INCLUDE, UNSCOPED. `:18`'s antecedent 'together affecting one amino acid' reads on the DESCRIBED RESIDUE POSITION of the protein-level change, and Ter IS a residue position in HGVS protein nomenclature: a stop-loss renders as a change AT the Ter position carrying an extension modifier — one described change, whatever its downstream extent. The competing 'count the downstream residues a stop-loss affects' reading imports consequence-prediction into a partitioning antecedent, and it runs backwards — by it an ordinary missense would qualify while a stop-loss never could.
+
+Decisively, `:18`'s own NOTE rationale (`:19`) — preventing tools from making conflicting per-substitution protein predictions at one position — applies MAXIMALLY at the stop codon, and the spec ITSELF illustrates the rationale with a stop prediction: `:19`'s worked split gives per-substitution predictions one of which is a stop (Ter), the `[Lys79*;Lys79Asn]` case. Two substitutions inside a termination codon (e.g. TAA with its first and third base changed) yield conflicting per-substitution predictions — a silent Ter (no change) from one, a stop-loss extension from the other — the exact pathology the exception exists to prevent. (These are protein-level CONSEQUENCES cited to motivate the DNA/RNA-axis merge; the record rules on the coding nucleotide axes, never on a protein description.)
+
+The rejected alternative, a carve-out excluding only the stop-loss case, would require the partitioner to TRANSLATE the resulting codon to decide a merge, and would drop precisely the case where the rationale is strongest. Scoped to a DNA/RNA coding axis (the codon exception requires a rendered frame, `projection-codon-exception-is-decided-by-the-rendered-axis`); the zone model (fork D2) places the stop codon inside the CDS interval, `c.*1` numbering starting only after it, so no `within_one_codon` change is needed. Corrects the weaker 'Ter could itself become an amino acid' potentiality reading offered in review. Surfaced 2026-08-24 by the coding-axis bake-off design; decided after adversarial review (fork F1).
+
+#### `codon-exception-vs-coincidence-carve-out-precedence`
+
+**Status:** decided
+
+**The question.** On a coding axis, when the codon exception (`delins.md:18`) and the payload-coincidence carve-out (`delins.md:47`) both reach the same derived pieces and prescribe different merges of them, which composes first?
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 6 where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** COINCIDENCE-FIRST — swallow the codon pair into one wider spanning delins. Rejected on three grounds, none of which is the spec compelling it. (1) SPECIFICITY: the codon exception is the strictly narrower rule — gap exactly one, one codon, net-length-preserving — against the carve-out's broad coincidence licence, so codon-first is the more specific carve-out firing first. (2) SHARED RATIONALE: both clauses cite protein-prediction fidelity (`:18`'s NOTE and `:47`), and codon-first keeps the amino-acid unit that rationale exists to protect intact, leaving the carve-out free to fire on the residual when its own census still licenses it. (3) A STRUCTURAL SIGNAL, weighted as one ground among three, NOT as normativity: the codon exception is stated as a Notes-section RULE (`:17`/`:18`) while the coincidence carve-out appears only inside a worked example's NOTE (`:44-47`); but neither is RFC-2119 normative and `:47` carries its own bolded 'is recommended', so document position cannot rank them by itself. Decisive is that NEITHER text addresses composition ORDER at all — the spec is silent on what happens when both antecedents are satisfied — so this is a choice between two conformant spellings under `README.md` rule 6, never a spec reading.
+
+**Also cited.**
+
+- `docs/recommendations/DNA/delins.md:17`
+  > two variants separated by one or more nucleotides should be described individually and **not** as a "delins".
+- `docs/recommendations/DNA/delins.md:18`
+  > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
+- `docs/recommendations/DNA/delins.md:46`
+  > parts of the inserted sequence "align" with the reference sequence, giving an alternative description
+- `docs/recommendations/DNA/delins.md:47`
+  > **The "delins" format is recommended**: it is simpler and prevents software tools making incorrect predictions for the consequences on protein level.
+
+**The ruling.**
+
+On a coding axis a single run of derived members can satisfy TWO decided carve-outs over overlapping pieces. The codon exception (`delins.md:18`, decided as `delins-codon-carve-out-gap-one`, widened by `codon-carve-out-shape-restriction`) merges members within one codon that together affect one amino acid. The payload-coincidence carve-out (`delins.md:47`, decided as `delins-merge-vs-individual-gap-two-or-more` and scoped to net deletions by `delins-recommendation-reach-when-the-input-arrives-split`) merges a net-deletion run carrying a gap-bearing insert into one wider spanning delins.
+
+They claim the SAME pieces and prescribe DIFFERENT merges, so at most one applies: the codon merge is net-length-preserving, so it absorbs the gap-bearing member the coincidence carve-out keys on into a non-gap-bearing delins. Codon-exception-first therefore yields a codon-scoped delins plus the residual members, and the coincidence carve-out then declines; coincidence-carve-out-first swallows the codon pair into one wider spanning delins. Both descriptions are conformant and both reconstruct the identical resulting sequence — this is a spelling choice governed by composition order.
+
+DECIDED CODON-FIRST, as a `README.md` rule-6 house choice — the maintainers choosing among conformant forms, NOT the spec mandating one. THE SPEC IS SILENT ON COMPOSITION ORDER: no clause says what happens when both antecedents hold, and the tempting 'the exception is a rule and the carve-out is only an example, so the rule wins' argument does not decide it alone. That fact-check is TRUE — `:17`/`:18` are Notes-section prose and the coincidence carve-out lives only in the `:44-47` example NOTE — but neither clause is RFC-2119 normative (uppercase keywords appear only twice outside `style.md`), and `:47` carries its own bolded 'The "delins" format is recommended', as rule-like a phrasing as `:18`'s 'should'. So document position is ONE ground among three, evidence of the spec's intent hierarchy, never a normativity ranking. The grounds that carry the choice are specificity (C1's antecedent is strictly narrower), the shared protein-prediction rationale (codon-first preserves the amino-acid unit both clauses protect, and the carve-out still fires on the residual), and that structural signal — spelled out under `house_choice.considered_and_rejected`. Composition order is `adjudication-precedence-order`'s domain, and for a spec-silent choice among conformant forms that register lands on rule 6.
+
+SCOPE: reaches only a coding axis, because the codon exception requires a reading frame (`projection-codon-exception-is-decided-by-the-rendered-axis`); off a coding axis `:47` governs unopposed. Measured on the designed cis corpus, 25 coding rows re-spell under the sequential order, every one toward MORE members (the codon merge turning the coincidence merge off), none a ratified case, all round-trip-exact. A row that gains a changed member outside one codon leaves the set, so the affected population is a set to re-derive, not a constant to defend. Surfaced 2026-08-24 by the partitioner bake-off's Dial-B composition restructure (M4); decided 2026-08-24 after adversarial review (fork F2).
 
 #### `conflicting-member-geometry-refusal-scope`
 
@@ -1557,6 +1640,45 @@ REFUSED AT NORMALIZE, NOT PARSE, LIKE `c-description-against-an-unresolvable-cds
 
 REPRESENTATION IMPACT: strict newly REFUSES cis alleles carrying a past-`cds_end` `c.` member that it previously remapped and normalized; lenient/silent move no output (the repaired `*N` form was already emitted) but now DISCLOSE the correction as `W4004`. The lone-position path is unchanged. Quantified by the implementing PR against the synthetic corpus.
 
+#### `payload-coincidence-separation-and-budget-are-house-choices`
+
+**Status:** decided
+
+**The question.** The payload-coincidence carve-out (`delins.md:47`) merges a net-deletion run only when its members sit within `max_separation` unchanged bases of each other and its merged payload reads out of the span within `mismatch_budget` substitutions. What fixes those two numbers, and on what ground?
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 6 where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** PRODUCTION'S (8, 1) — adopt production's shipped constants wholesale. Rejected for `max_separation`: 8 over-reaches the spec's own floor of 5 with no adjudicated witness anywhere in the [6, 13] band and no confluence signal to prefer it, so it would pin a wider merge reach than anything the project can currently justify from clause or corpus; production itself concedes the value has no source. Accepted for `mismatch_budget`: production's 1 coincides with the value the codon-first precedence and the budget-0 degeneracy independently force, so it is adopted on those grounds, not on production's authority. MISMATCH_BUDGET >= 2 — rejected: it violates the decided codon-first precedence `codon-exception-vs-coincidence-carve-out-precedence` on any coding-axis arm carrying C2. A CONFLUENCE-PLATEAU SELECTION, as the pre-sweep disclosure's settlement criterion anticipated — rejected as inapplicable: confluence is measured saturated across the grid and supplies no plateau; the ground for `max_separation` is the spec floor, not the confluence surface.
+
+**Also cited.**
+
+- `docs/recommendations/DNA/delins.md:17`
+  > two variants separated by one or more nucleotides should be described individually and **not** as a "delins".
+- `docs/recommendations/DNA/delins.md:18`
+  > **exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a "delins"
+- `docs/recommendations/DNA/delins.md:44`
+  > `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`
+- `docs/recommendations/DNA/delins.md:46`
+  > parts of the inserted sequence "align" with the reference sequence, giving an alternative description like `c.[850_869del;874_881del;887_897del;901_902insG]`.
+- `docs/recommendations/DNA/delins.md:47`
+  > **The "delins" format is recommended**: it is simpler and prevents software tools making incorrect predictions for the consequences on protein level.
+- `docs/recommendations/general.md:33`
+  > two variants separated by one or more nucleotides should be described individually and **not** as a "delins".
+
+**The ruling.**
+
+The payload-coincidence carve-out is the bounded-gap, embed-tolerance net-deletion merge: a run merges when it is gap-bearing, a net deletion, its members are separated by at most `max_separation` unchanged bases, and its merged payload embeds in the span within `mismatch_budget` substitutions. The MECHANISM is licensed per-merge by decided records — `delins-merge-vs-individual-gap-two-or-more` (the carve-out exists) and `delins-recommendation-reach-when-the-input-arrives-split` (it reaches net deletions, not pure ones). THE TWO NUMBERS are licensed by no clause; this record fixes them.
+
+DECIDED as a `README.md` rule-6 house choice — the maintainers choosing among conformant forms, NOT the spec mandating one. Every value swept here reproduces the identical resulting sequence, so this is a spelling choice, never a conformance finding. The ground is the partitioner bake-off's constrained sweep and its ratified-correctness feasibility check, operator-ratified 2026-08-25 — never production (whose (8, 1) is a self-conceded no-source house choice, `merge.rs:9024-9028`), never spec silence.
+
+`max_separation` = 5 — THE SPEC'S OWN FLOOR, not a free choice. `delins.md:44`'s worked example `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` gives the alternative split `c.[850_869del;874_881del;887_897del;901_902insG]` (`:46`), whose interior gaps are 4, 5 and 3 unchanged bases. Reproducing the spec's OWN recommended single delins (`:47`, 'The "delins" format is recommended') therefore requires bridging the widest gap, 5. Any `max_separation` < 5 fails to merge the spec's worked example and is measured infeasible on the bake-off's ratified corpus: the witnesses cd-coincidence-gap5 (coding) and gd-coincidence-gap5 (genomic) both flip incorrect->correct exactly at 5 on the production-winning arm (trim-only / op-extract / ledger). The carve-out is DNA-general since #2155 (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`'s 2026-08-17 widening onto `c./g./m./n.`), so the floor is measured on BOTH a coding and a genomic axis and holds identically. Production's 8 over-reaches this floor with no adjudicated benefit.
+
+THE VALUE ABOVE THE FLOOR HAS NO SOURCE, AND THAT ABSENCE IS DISCLOSED, NOT PAPERED OVER. The spec fixes the floor (5) and is silent on any upper bound. The bake-off's confluence objective — the fraction of presentation-equivalence classes that converge to one partition, which the decided rulings already make the project's goal — is measured SATURATED across the entire swept `max_separation` grid: it does not discriminate the parameter (the placement families are parameter-insensitive), so it supplies no plateau to select a value from. And no corpus, real or synthetic, yet carries a witness of the genuine gap-bearing carve-out above the floor: the real cis corpus's wide-gap stratum — the '47 of 568 coding rows still split at gaps 9-13' the carve-out record measures — is verified 568/568 PURE deletions, which `delins-recommendation-reach-when-the-input-arrives-split` keeps split (the carve-out does not reach pure deletions), so those rows neither exercise nor argue the parameter. With the floor spec-grounded, no confluence signal above it, and no adjudicated witness above it, the ratified value is set AT the floor, 5, rather than above it. This is NOT an adjudication that 6 or more is wrong; it is the absence of any reason to go higher. Raising it later requires a witness first: a net-deletion run with a gap-bearing member and an interior gap of 6-13. Recorded as the standing open item.
+
+`mismatch_budget` = 1 — forced from both sides to the single feasible interior value. ABOVE: `mismatch_budget` < 2 on any coding-axis arm carrying C2, because at budget >= 2 the coincidence merge re-absorbs C1's own merged codon-delins once the embed test admits it (a substitution-pair codon merge contributes >= 2 mismatches), violating the decided codon-first precedence `codon-exception-vs-coincidence-carve-out-precedence` (fork F2). That bound is separation-independent and not arm-conditional — it holds for any coding-axis arm carrying C2, pure Dial-B included — and is pinned by `bakeoff_spine::codon_first_is_enforced_by_the_embed_budget_not_the_pass_order`. BELOW: budget 0 is a degenerate, inert C2 column — the embed test then admits only an exact substring, collapsing the very tolerance the mechanism exists to provide. So budget is pinned at 1. Note the spec's own `850_901` example has zero substitutions in its gaps (pure deletions plus one insertion), so it gives NO lower bound above 0; the lower bound at 1 is the mechanism's, disclosed as such, not the spec's.
+
+SCOPE. The `max_separation` floor and the DNA-general reach follow #2155; the `mismatch_budget` codon-first bound reaches only a coding axis, because off a coding axis there is no reading frame and `codon-exception-vs-coincidence-carve-out-precedence` does not fire — there the budget is bounded below by the degeneracy argument alone, which still lands at 1. Surfaced by the partitioner bake-off's Dial-B restructure (M4); the interim disclosure was filed pre-sweep and this record settles it against the sweep result and the operator ratification, per its own settlement criterion — never against production, never against the spec's silence on the upper bound.
+
 #### `projection-codon-exception-is-decided-by-the-rendered-axis`
 
 **Status:** decided
@@ -1598,6 +1720,55 @@ SCOPE, STATED NARROWLY. This record rules on DNA axes only, because `DNA/delins.
 COUNTERWEIGHT RECORDED. The exception SENTENCE at `:18` carries no axis restriction of its own - it sits in a generic Notes block repeated verbatim in six DNA files - so the scope is inferred from its antecedent, its rationale at `:19` ("prevents tools predicting the consequences of a variant to make conflicting and incorrect predictions") and its examples, rather than being stated. Measured against that inference, and the measurement is thinner than a raw count of eleven suggests: of the eleven occurrences of "amino acid" across `DNA/*.md`, SEVEN sit with no description at all - the six verbatim copies of the exception sentence itself (`delins.md:18`, `deletion.md:19`, `substitution.md:17`, `insertion.md:20`, `inversion.md:21`, `duplication.md:23`) plus the Q&A prose at `delins.md:81`, which says only "unless they together affect one amino acid". Only FOUR sit with a description, and all four are `c.`: `delins.md:42` and `substitution.md:37` (both `c.[145C>T;147C>G]`), `deletion.md:145` (`NM_000492.3:c.1521_1523del`) and `insertion.md:66` (`NM_004006.2:c.(222_226)insG`). NONE sits with a `g.`, `n.` or `m.` one, in a document set that otherwise uses `g.` freely - `DNA/delins.md` alone carries four genomic worked examples. So the axis inference rests on four rows, not on eleven, and the seven silent ones are what the counterweight is about.
 
 COST RECORDED, AND IT IS NOT A MOVEMENT. This ruling DECLINES a merge, so it moves no row: `ProjectionSplitsSingleMember` stays at 9 and `ProjectionPinned` at 1168, byte-identical to `main`. The cost is that the two `LRG_199t1` rows KEEP sitting in `ProjectionSplitsSingleMember`, so a reader of that budget alone sees two rows parked in a divergence status indefinitely. That is the ruling and not a regression. Implementing #1664's request is what would move them - to 7 and 1170 - and that direction is what is refused; do not read the pair 7/1170 anywhere as a shipped before-state, since no such state exists on `main`. #1664's title complaint - that a single-member description projects to the form `:42` calls "not correct" - is answered on the axes `:42` reaches, and declined on the one it does not.
+
+#### `pure-tandem-expansion-insertion-is-not-repartitioned`
+
+**Status:** decided
+
+**The question.** When the resulting sequence's minimal derivation is a single pure insertion that is itself a tandem copy-number change of the reference (a repeat expansion `A` -> `AAA`, or a clean single-copy dup), may the ruled partitioner's Part-B peel re-partition it into `[sub; dup]` by exposing a different tandem copy beside a substitution of a base every minimal alignment leaves unchanged?
+
+**House choice.** This ruling is the project's own, made under `README.md` rule 6 where the recommendations do not decide. It cites no governing clause and must never be quoted as conformance.
+
+**Considered and rejected.** THREE ALTERNATIVES. (1) KEEP PART B AND CONVERGE ONTO `[sub;dup]`. Rejected because it is unreachable without a far larger change: `canonicalize_from_sequence` declines a lone repeat by design (`merge.rs:4812-4819`, citing `open-issues.md:89-90`), so `g.264A[3]` and `g.264_265insAA` are fixed points at `g.264A[3]` while `g.[265T>A;266_267dup]` re-derives to itself -- two fixed points for one variant (measured 2026-09-07 on s02-g-m2-sep0-p2-rot3, 3'). Converging the other way means re-deriving every lone repeat in every corpus and trading a spelling the spec leaves open for another, which that comment refuses on its own grounds. (2) CITE `duplication-must-ranks-the-label-not-the-partition` AS VIOLATED. Rejected: its 2026-08-19 #2175 extension ratifies exposing a multi-base dup beside a substitution that the minimal alignment does not contain -- #2175's own seed is `[27_28insC;28_29insC]` and the ratified Part-B witness (`c7_2175_insertion_exposes_the_dup_under_plusk_only`, `AAACACGAAA -> AAACACATGAAA`, `insAT` -> `[CA dup;5C>T]`) is a pure insertion re-derived with a manufactured substitution. An argument that Part B violates that record proves too much; that record is left exactly as extended. (3) CITE `unchanged-is-read-over-every-minimal-alignment` AS GOVERNING. Rejected for the same reason: it is true that the substituted base (ref offset 8 in s02) is unchanged in every minimal alignment, but the #2175 extension already tolerates a substitution on such a base for the dup-beside-change family, so that record cannot be what decides here without also indicting #2175. It is cited as supporting context only. (4) A RENDER-KEYED GUARD (defer only when `insertion_to_repeat` would emit `unit[N]`). Rejected as measured: the `c.` codon gate (`repeated.md:21-22`) returns no repeat for a 1- or 2-base unit, so the guard would not fire on `c.`, `NM_015120.4:c.46_47insGGG` would stay `c.[47A>G;75_77dup]`, and the same sequence change would be `g.264A[3]` on `g.` and `c.[9T>A;10_11dup]` on `c.`. The predicate is therefore keyed on the reference tract (frameless), never on the emitted form.
+
+**Also cited.**
+
+- `docs/recommendations/DNA/duplication.md:21`
+  > when more than one additional copies are inserted directly 3' of the original copy, the change is indicated using the format for
+- `docs/recommendations/DNA/duplication.md:17`
+  > by definition, duplication may only be used when the additional copy is **directly 3'-flanking** of the original copy (a "tandem duplication")
+- `docs/recommendations/DNA/duplication.md:18`
+  > when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion
+- `docs/recommendations/DNA/repeated.md:21`
+  > a repeated sequence variant description can be used only for repeat units with a length which is a multiple of 3
+- `docs/recommendations/DNA/repeated.md:22`
+  > use `NM_024312.4:c.1741_1742insTATATATA` and **not**
+- `docs/recommendations/general.md:55`
+  > **prioritisation**: when a description is possible according to several types, the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion.
+- `docs/consultation/open-issues.md:89-90`
+  > The format overlaps with the format to describe deletions and duplications/insertions. This means that e.g., both `g.186_191del` and `g.123_191CAG[21]` are correct following current HGVS recommendations.
+
+**The ruling.**
+
+HOUSE CHOICE, `README.md` RULE 6, 2026-09-07. NOT CONFORMANCE. Both forms are conformant and no clause ranks a one-member repeat expansion against a two-member `[sub; dup]` of the same bases: `open-issues.md:89-90` records that the repeat format overlaps the del/dup/ins formats and that both are correct, and `general.md:55` ranks single-description TYPES, which `adjudication-precedence-order` E1 holds cannot settle a merge-versus-split question.
+
+THE SHAPE. The ruled seed is a single zero-width piece (`Seed::canonical`, direction-identical) -- s02: `TAAAATTATATTTATTATTT -> TAAAATTAAATATTTATTATTT` seeds `insAA` at offset 8. `TandemDupRun` runs `peel_tandem_dup_beside_change` under `PeelReach::PlusK`, whose Part B admits the zero-width hull and re-derives it as `[8T>A; AT dup at 11]`: a substitution on a base every minimal alignment leaves unchanged, manufactured so that a different copy can be labelled `dup`. The one-mismatch search is tract-widened and 3'-most-first, so in low-complexity sequence the dup lands far from the sub: `NM_015120.4:c.46_47insGGG` (GAG tract) -> `c.[47A>G;75_77dup]`, 28 nt apart.
+
+WHAT THE RECOMMENDATIONS DO SAY, AND WHY IT IS NOT `governing`. `duplication.md:21` reaches the change as minimally derived: two additional copies of `A` inserted directly 3' of the original copy are 'indicated using the format for Repeated sequences' -- `g.264A[3]`. `repeated.md:21-22` gives the coding-axis form of the same change as a literal insertion (`c.1741_1742insTATATATA`, not `TA[6]`). Neither clause ranks that form AGAINST a `[sub;dup]` re-partition, and `duplication.md:17-18` reach the re-partition once it has been chosen. So the clauses describe each competitor and rank neither; the choice between them is the project's, and a house choice may not name a governing clause.
+
+THE DIRECTION IS FORCED BY A DECIDED RECORD. `confluence-gate-is-apply-equality-on-every-determined-axis` requires one output per class. Measured on s02-g-m2-sep0-p2-rot3 under the ruled default (3'): `g.[265T>A;266_267dup]` and `g.[266_267dup;265T>A]` -> `g.[265T>A;266_267dup]`; `g.265_267delinsAATAT`, `g.264_265insAA` and `g.264A[3]` -> `g.264A[3]`. Two fixed points. The lone-repeat spelling cannot be moved -- `canonicalize_from_sequence` declines a lone repeat on purpose (`merge.rs:4812-4819`) -- so the gate can be satisfied only by the `[sub;dup]` inputs landing on the repeat. Under `FERRO_PARTITION=canonical-coalesced` every spelling on both axes already lands there (`g.264A[3]` / `c.8_9insAA`), so this restores the pre-flip form; stability is a tiebreaker only (`adjudication-precedence-order`) and is not the ground.
+
+AXIS UNIFORMITY. Under the ruled default the `c.` class converges -- on `c.[9T>A;10_11dup]`, for all five spellings including `c.8_9insAA` and `c.8A[3]`, because the codon gate renders the lone expansion as a literal `ins`, which the lone-repeat decline does not protect, so it is re-derived. The guard is therefore keyed on the reference tract with the codon gate OFF (`is_coding = false`, `cds_span = None`), so the same sequence change is one member on every axis: `g.264A[3]`, `c.8_9insAA`.
+
+BOUNDARY WITH `duplication-must-ranks-the-label-not-the-partition` -- READ BEFORE CITING EITHER. That record's 2026-08-19 #2175 extension (a multi-base motif, net-longer, exposed beside a change) is NOT disturbed: #2175's seed `[27_28insC;28_29insC]` has a non-zero hull and never reaches Part B; c7-g-2188 (`6delinsTAA`) is Part A; and the pure-insertion witness c7-g-2175 (`insAT`, no abutting `AT` tract) still peels to `[CA dup; C>T]`. What this record removes is exactly the case where the pure insertion is ALREADY a tandem copy-number change: there is nothing hidden to expose, so `:18` has nothing to rank. The extension's own discriminator ('a member duplicating a MULTI-BASE reference motif') is untouched -- the guard does not test unit length at all, it tests whether the seed is a repeat expansion or a clean dup of its own tract.
+
+WHY `unchanged-is-read-over-every-minimal-alignment` IS SUPPORTING, NOT GOVERNING. It is true and relevant that ref offset 8 (`T`) is unchanged in every minimal alignment and the peel asserts `8T>A`. But the #2175 extension already tolerates precisely that for the dup-beside-change family, so it cannot be what decides this record without also un-deciding that one. Cited as context for the phrase 'a base every minimal alignment leaves unchanged'; nothing here rests on it.
+
+A SECOND FINDING RECORDED SO IT IS NOT MISREAD AS CONVERGENCE. In the 5' direction s02-g appeared to converge on `g.264A[3]`. It does not converge through the partition: `place_only`'s whole-unit 5' stepping (`bridge.rs:324-335`) moves the minted `AT` dup from interbase 11 to 9, whose source `[7,9)` lies under the `8T>A` piece; `dup_source_overlaps_prior_piece` is then true (measured), the render refuses the dup, and `canonicalize_from_sequence_with_rule` falls back to the per-member pipeline -- the s05 leak mechanism, which happens to give `A[3]`. The `ff58efba` guard runs before placement and does not see it. That is a separate defect (tracked as a follow-up) and this guard removes its natural witness, so a direct-construction witness test is kept.
+
+REPRESENTATION IMPACT: the R7 disclosure (2,031 dup-beside-change rows over 9,949,738) shrinks by the subset whose pre-flip form was a lone repeat/`ins`/`dup` tandem expansion; that subset reverts to the pre-flip string EXACTLY by construction -- the guard leaves the seed whole, so the shape falls out of the ruled cut into the same lone repeat/`ins`/`dup` the pre-flip arm already emits, never a third form. The corpus-wide count is owed by the flip's Representation-Change disclosure and is not restated here. `examples/dump_normalized_corpus.rs` is structurally blind to this shape (its `repeat_expansion` family builds a lone ranged repeat, which the lone-repeat decline keeps out of the ruled cut), so a dump zero is structural and is reported as such.
+
+FALSIFIER. A pure-insertion seed that is a genuine tandem expansion AND whose `[sub;dup]` re-partition the operator would prefer over the one-member repeat -- none has been produced; the existing `dup_plus_sub` family (a real substitution, non-zero hull) is not one.
 
 #### `rna-axis-alignment-only-symbol-reach`
 
@@ -1821,6 +1992,45 @@ WHAT THIS DOES NOT LICENSE. Rule 2 is a rule. The ruleset states that a preferen
 WHAT WAS REFUTED, RECORDED SO IT IS NOT RE-DERIVED. Two readings were argued at length before this ruling and both are WITHDRAWN. (1) That the bolded “not” in `general.md:33` is prohibition force under ruleset rule 1's “prose force rather than keyword casing” clause — refuted by the complement argument above and by `delins.md:81`. (2) That the clause splits, rule 2 on the positive half and rule 1 on the negative — refuted by the same complement argument; the split reading requires the alternatives NOT to exhaust the space, which is the `duplication.md:18` shape and not this one.
 
 SCOPE. This record rules on the FORCE of the separation rule, and on the reading of “and not” generally. It does not decide which form ferro emits where several remain legal — that is `canonical-form-choice-when-both-legal`; nor the reach of the codon exception — that is `projection-codon-exception-is-decided-by-the-rendered-axis`; nor `delins.md:47`'s carve-out — that is `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. Nor does it disturb `delins-merge-vs-individual-gap-two-or-more`, which scopes WHEN `:33` yields to `delins.md:44-47`; this record is about how strongly `:33` speaks when it does apply.
+
+#### `separation-zero-dup-member-is-preserved-not-merged`
+
+**Status:** decided
+
+**The question.** When re-derivation from the resulting sequence exposes a tandem duplication adjacent (separation zero) to another change, and the spec's worked example for that exact sequence publishes a merged delins, does ferro merge (destroying the dup) or keep the dup?
+
+**Governing clause.**
+
+- `docs/recommendations/DNA/duplication.md:18`
+  > when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion
+
+**Deviates from.**
+
+- `docs/recommendations/DNA/delins.md:88`
+  > The correct description of this variant is `NM_007294.3:c.2077delinsATA`.
+
+**Also cited.**
+
+- `docs/recommendations/DNA/duplication.md:17`
+  > by definition, duplication may only be used when the additional copy is **directly 3'-flanking** of the original copy
+- `docs/recommendations/DNA/delins.md:89`
+  > the answer was modified, i.e. the addition "However, since the variant is likely a combination of two other variants, it is acceptable to describe it as <code class="invalid">NM_007294.3:c.[2077G>A;2077_2078insTA]</code>." was removed.
+- `docs/recommendations/DNA/delins.md:83`
+  > First, the two variants may have been reported (or might occur) individually.
+
+**The ruling.**
+
+KEEP THE DUP, GOVERNED BY `duplication.md:18`, DEVIATING FROM `delins.md:88`. This decides the dup limb that `delins-adjacent-members-when-both-consume-reference` left explicitly open: its own rationale ends "Where either member is a `dup` ... the ruling does not reach, because `duplication.md:18` requires a variant describable as a duplication to be described as one, and merging would destroy it. That is a real second conflict and it is left open."
+
+THE EXPOSURE IS RULE 6, NOT THIS RECORD. The ruled arm derives from the resulting sequence (`canonical-form-choice-when-both-legal`) and emits what falls out; that is what surfaces the tandem dup. This record does not decide whether to re-derive -- it decides what to do with the dup once re-derivation has surfaced it.
+
+GROUND 1 -- `duplication.md:18` REACHES IT, UNIFORMLY. For the BRCA1 worked example W43 (`NM_007294.3:c.[2077G>A;2077_2078insTA]`), after the `2077G>A` the inserted `TA` is a directly 3'-flanking copy of the two bases 5' of it (`duplication.md:17`), so it is describable as a duplication, so `:18`'s must applies -- to W43 and to the 2,031 real-corpus dup-beside-change rows alike (the step-9 R7 disclosure). Merging to a delins destroys that dup, which `:18` forbids.
+
+GROUND 2 -- UNIFORMITY: NOTHING IN THE SEQUENCE ISOLATES THE ONE WORKED EXAMPLE FROM THE CLASS (measured, step-9 F3). W43 and the `NM_CTX.1` sibling are, in their bases, identical in shape to the ~2,031 real dup-beside-change rows that carry no worked example. The ONLY thing that singles W43 out is that the spec happened to DOCUMENT it -- a curation/reporting fact, not a sequence property -- and keying on it to merge W43 while keeping the class is exactly the kind of provenance the decided rulings forbid as a canonicalization input. So consistency requires one rule for the class, and `:18` is that rule.
+
+WHAT `delins.md:88` DOES AND DOES NOT REST ON -- READ THIS BEFORE CITING PROVENANCE. The spec's CURRENT answer for W43 is unconditional: `:88` states the merge is correct and `:89` records the committee REMOVED the permission to split. So `:88` does NOT rest on provenance. `delins.md:83`'s provenance -- "the two variants may have been reported ... individually" -- was the rationale for the SPLIT form the committee deleted; it argues, if anything, for FOLLOWING the spec's merge default, not against it. This record therefore does NOT justify the deviation by provenance-unrecoverability (an earlier draft did, backwards); the deviation rests on GROUND 1 and GROUND 2 only. `:83` is cited to record what the spec's discarded split rationale was, and to name the exact kind of information (provenance/curation) GROUND 2 refuses to key on.
+
+DISCLOSED AS A RULE-2 DEVIATION. `delins.md:88` is an explicit worked example, unusually strong (it addresses this exact sequence and `:89` removed the split-permission); read alone it is close to dispositive for the delins. Deviating is graded rule 2 by `separation-rule-force-modal-or-negation` (`delins.md:81` "preferably"), so it is a deviation to disclose and pin with a tripwire, not a rule-1 defect. THE FALSIFIER: a peel- or render-time geometry that isolates a worked-example row from the class WITHOUT reading provenance/curation would flip this record -- none has been found. Pinned by the two guard tests (W43 as a `DIVERGENT` row and the `NM_CTX.1` witness), so the record is not a set of one synthetic transcript.
 
 #### `spdi-n-unit-repeat-refusal`
 

@@ -730,11 +730,25 @@ fn the_published_default_partition_arm_is_derived_from_the_code() {
 
     let source = read(PARTITION_SOURCE_RELATIVE_PATH);
     let names = declared_partition_rule_names(&source);
+    // `op-extract` (and its `op-extract-v2` sibling) are the dev-only bake-off
+    // measurement winners: a release build refuses those names and this published
+    // contract — which describes shipped behaviour — deliberately omits them. The
+    // parser reads the `#[cfg(feature = "dev")]` array, so filter them out before
+    // pinning the SHIPPED arity. `ruled` is NOT filtered: as of the step-9 flip it
+    // is the shipped default ([`DEFAULT_PARTITION_RULE`]) and a release build
+    // resolves it by name, so it is a shipped arm. Adding a sixth *shipped* arm
+    // still trips this, and so is still a prose change to the preamble.
+    let shipped: Vec<&String> = names
+        .iter()
+        .filter(|n| !n.starts_with("op-extract"))
+        .collect();
     assert_eq!(
-        names.len(),
-        4,
-        "`PARTITION_RULE_NAMES` declares {names:?}; this document's preamble describes a knob \
-         with the four arms that set has always had, so a change in arity is a prose change too"
+        shipped.len(),
+        5,
+        "the shipped `PARTITION_RULE_NAMES` declares {shipped:?} (dev-only `op-extract*` \
+         excluded); this document's preamble describes a knob with the five shipped arms it \
+         has had since the step-9 flip promoted `ruled` to the default, so a change in arity \
+         is a prose change too"
     );
 }
 
