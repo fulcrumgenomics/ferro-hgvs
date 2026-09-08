@@ -18,6 +18,25 @@ use crate::reference::ReferenceProvider;
 use crate::sequence::complement_base;
 use smol_str::SmolStr;
 
+// The neutral partitioner surface these legacy-rule wrappers implement (Task 3,
+// design §5 Direction 1 / §8). Dev-gated, matching `crate::partition` and this
+// module's own bake-off accessors — none of it compiles into a shipped build, so
+// the shipped default is byte-identical by construction.
+#[cfg(feature = "dev")]
+use crate::partition::arm::Monolithic;
+// `BlockCtx` / `PartitionError` are production types (the ruled arm's `BlockCtx`
+// construction and its decline type) as of the step-9 flip, so they compile in
+// every build; the rest of the partition imports here serve the dev-only bake-off
+// adapters and stay gated.
+use crate::partition::block_ctx::BlockCtx;
+#[cfg(feature = "dev")]
+use crate::partition::block_ctx::FrameContext;
+#[cfg(feature = "dev")]
+use crate::partition::output::{EditKind, Member, Partition};
+use crate::partition::partitioner::PartitionError;
+#[cfg(feature = "dev")]
+use crate::partition::partitioner::{validate_sound, Partitioner};
+
 /// Coordinate-system region used as the merge-eligibility key.
 ///
 /// Adjacency in the merge pass requires both ends to share a region, so we
@@ -102,6 +121,20 @@ enum AnchorForm {
     /// The span is duplicated in tandem. `alt` is empty and unused: a `dup`
     /// names only the source bases, which the span already gives.
     Duplication,
+    /// The span is replaced by its own reverse complement. `alt` is empty and
+    /// unused: an `inv` names only its span, which already gives the bases.
+    ///
+    /// Deliberately **dev-only** (Task 4's Direction-2 adapter, `anchor_for_member`).
+    /// The shipping merge pass never sets it — see this enum's doc for why an `inv`
+    /// form is absent from the production path, and why re-introducing one there
+    /// would be a back door into the `delins-adjacent-members-…` ruling. The
+    /// Direction-2 adapter is a *different* consumer: it honors an arm's DECLARED
+    /// `EditKind::Inv` rather than re-deriving a merge, so it must be able to emit
+    /// the form the arm chose. Gating the variant on `dev` keeps the non-dev build
+    /// byte-identical (the variant does not exist, and [`build_naedit`]'s arm for
+    /// it is compiled out).
+    #[cfg(feature = "dev")]
+    Inversion,
 }
 
 /// Anchor for a single sub-variant.
@@ -533,6 +566,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
     provider: &P,
+    direction: ShuffleDirection,
 ) -> Vec<HgvsVariant> {
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return variants;
@@ -710,6 +744,38 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     else {
         return variants;
     };
+
+    // Two-surface fix, Option C (`specs/2026-09-05-two-surface-fix-design.md`). The
+    // group is now admissible — genuinely mixed, contiguous, order-unambiguous, in
+    // range — i.e. exactly a group this collapse would fold. Under the ruled arm,
+    // consult the partitioner instead of the dup guard + spanning-delins fold below:
+    // that fold's `dup_extends_reference_tandem` is a THIRD hand-synced copy of the
+    // peel's narrow tract reach, which folds a `[dup;sub]` the ruled cut correctly
+    // exposes (e.g. `c7-g-2188` once step 8 widens the reach) back to a `delins`.
+    // Placed AFTER every admissibility refusal (a consult on a refused group re-cuts
+    // shapes the collapse deliberately leaves alone and was unsound) and BEFORE the
+    // dup guard (so the ruled cut, not the reach copy, decides the `[dup;sub]`). Fall
+    // through to the legacy body on a decline, so no group loses the fold. Dev + ruled
+    // only → default byte-identical; step 9 deletes this consult and the fold below
+    // together, leaving the partitioner the one authority.
+    #[cfg(feature = "dev")]
+    if partition_rule() == PartitionRule::Ruled {
+        // `keep_if_canonical: true` — the partitioner is the authority here, so
+        // when it confirms the members are already canonical (its re-derivation
+        // equals them), keep them rather than letting the legacy dup-guard + fold
+        // below destroy a `dup` the partitioner just ratified (c7-g-2188). A
+        // genuine refusal still returns `None` and falls through to the fold.
+        if let Some(members) = canonicalize_from_sequence_with_rule(
+            &variants,
+            AllelePhase::Cis,
+            provider,
+            direction,
+            PartitionRule::Ruled,
+            true,
+        ) {
+            return members;
+        }
+    }
 
     // A MULTI-BASE tandem duplication that EXTENDS A REFERENCE TANDEM, standing
     // beside a single substitution, must not be folded into the spanning `delins`
@@ -1855,6 +1921,27 @@ fn build_naedit<P>(
     // payload, a `del`); it is never a one-nucleotide substitution and never a
     // boundary insertion, both of which sit within a single zone.
     let straddles = merged.region != merged.end_region;
+    // Direction-2 adapter (dev-only): an arm that DECLARED an inversion states a
+    // form the two lengths cannot express (an `inv`'s span and its revcomp have
+    // equal length, which would otherwise read as a `delins`). Honor the declared
+    // form directly, before the length ladder can re-type it. Compiled out of the
+    // non-dev build with the `AnchorForm::Inversion` variant itself, so the shipping
+    // renderer is byte-identical.
+    #[cfg(feature = "dev")]
+    if merged.form == AnchorForm::Inversion {
+        // Canonical `inv` states neither bases nor length; the span names them.
+        let edit = NaEdit::Inversion {
+            sequence: None,
+            length: None,
+        };
+        // A declared `inv` spans two or more bases in one zone (`start <= end`,
+        // `region == end_region`), so no swap and no straddle handling apply.
+        let interval = Interval::new(
+            to_pos(merged.region, merged.start),
+            to_pos(merged.end_region, merged.end),
+        );
+        return (interval, edit);
+    }
     // A duplication is decided by the *builder*, from the reference, not by the
     // two span lengths below — `dup` and the `ins` of the same bases have the
     // same lengths and `duplication.md:18` says only one of them is allowed.
@@ -2748,7 +2835,7 @@ const MIN_SEPARATION_NO_FRAME: u32 = 1;
 /// axis regardless of how widely the DNA scope itself is drawn.
 /// [`AxisFrame::is_dna`] is the predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CoincidenceCarveOut {
+pub(crate) enum CoincidenceCarveOut {
     /// A DNA axis (`c./g./m./n.`): a coincidental separation may be disbelieved.
     InReach,
     /// The RNA axis, `r.`: `general.md:34` governs and the split stands.
@@ -2776,10 +2863,10 @@ impl CoincidenceCarveOut {
 ///
 /// A pure insertion has `ref_start == ref_end` (a zero-width span at the gap).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Piece {
-    ref_start: usize,
-    ref_end: usize,
-    alt: Vec<u8>,
+pub(crate) struct Piece {
+    pub(crate) ref_start: usize,
+    pub(crate) ref_end: usize,
+    pub(crate) alt: Vec<u8>,
 }
 
 impl Piece {
@@ -2926,6 +3013,48 @@ enum PartitionRule {
     /// **This is the default** — see [`DEFAULT_PARTITION_RULE`] for why, and
     /// [`Self::Live`] for how to get the previous one back.
     CanonicalCoalesced,
+    /// The partitioner-bake-off **winner** — `TrimOnlyL1` × `OperatorExtractL2`
+    /// (`new(4, 2, 2)`) — re-expressed as a production block rule so its
+    /// real-corpus impact against [`Self::CanonicalCoalesced`] can be measured
+    /// through the ordinary `canonicalize_from_sequence` pipeline. Selectable as
+    /// `FERRO_PARTITION=op-extract`; **never the default**.
+    ///
+    /// Op-extract emits a fixed structural precedence (whole-span inv → inv
+    /// anchor → pure leaves → dup anchor → equal-length split → forced-unchanged
+    /// structural leaf); [`partition_block_op_extract`] maps its typed members to
+    /// [`Piece`] geometry and the existing pipeline types, 3'-shifts and clamps
+    /// them — so the shipped rule is *axis-safe* where the raw bake-off arm was
+    /// not, at the cost of not being byte-identical to the arm on designed data.
+    ///
+    /// **Dev-only.** The whole [`crate::partition`] module (and so
+    /// `OperatorExtractL2`) is `#[cfg(feature = "dev")]`; this rule reuses it
+    /// directly rather than re-porting its subtle inv/dup/leaf logic, which keeps
+    /// the measured behaviour faithful to the winning arm by construction. In a
+    /// release build [`partition_rule_from_env`] refuses the name, so the variant
+    /// is never constructed and its dispatch arm is unreachable.
+    ///
+    /// `allow(dead_code)` only in a non-`dev` build: there the name is refused so
+    /// the variant is genuinely never constructed, which is intended, not a
+    /// forgotten wiring. Under `dev` it *is* constructed, so the lint stays live.
+    #[cfg_attr(not(feature = "dev"), allow(dead_code))]
+    OpExtract,
+    /// The R2 tournament primary winner `trim-only/op-extract-v2/ledger-r5`
+    /// (`src/partition/arms/r2_winner.rs`): the `op-extract-v2` typer plus the
+    /// `ledger-r5` Dial-B config. Dev-only and non-shipping, exactly like
+    /// [`PartitionRule::OpExtract`]; wired here so the winner the bake-off
+    /// actually graded can be measured through the full normalize pipeline
+    /// (the block-level bake-off arm is otherwise unreachable from `normalize`).
+    #[cfg_attr(not(feature = "dev"), allow(dead_code))]
+    OpExtractV2,
+    /// The ruled cut (design §10 step 1): `Seed::canonical` plus the nine migrated
+    /// rules single-pass in this pipeline's order (`crate::partition::driver`).
+    /// **This is the shipped default as of the step-9 flip** — see
+    /// [`DEFAULT_PARTITION_RULE`] — and is selectable by name (`FERRO_PARTITION=ruled`)
+    /// in every build, since the ruled core is production-wired (unlike the dev-only
+    /// [`Self::OpExtract`]). Under it the shipping chain still runs, as the fallback
+    /// for a declined block AND, under `dev`, as a per-block shadow oracle
+    /// ([`ruled_counts`]).
+    Ruled,
 }
 
 /// Every `FERRO_PARTITION` value this build recognises, in the order the
@@ -2934,7 +3063,38 @@ enum PartitionRule {
 /// Named rather than spelled inline so the error message, the `normalize --help`
 /// text and the tests cannot drift apart — an arm added to [`PartitionRule`]
 /// without a name here is an arm the diagnostic would not offer.
-const PARTITION_RULE_NAMES: [&str; 4] = ["live", "shadow", "canonical", "canonical-coalesced"];
+///
+/// The dev-only `op-extract` bake-off winner ([`PartitionRule::OpExtract`]) is
+/// advertised only under `dev`: the [`crate::partition`] module it reuses does
+/// not exist in a release build, so [`partition_rule_from_env`] refuses the name
+/// there and it must not appear in the diagnostic's list of accepted values.
+///
+/// The ruled cut ([`PartitionRule::Ruled`], design §10 step 1) IS advertised
+/// here as of the step-9 flip: it is now [`DEFAULT_PARTITION_RULE`], the shipped
+/// arm, so it must be selectable by its own name for the same reason
+/// `canonical-coalesced` still is — the contract document publishes the default,
+/// and the published default has to be a name a reader can reproduce. This
+/// reverses the pre-flip decision (it used to be a scaffold arm, shadowed per
+/// block and deliberately unlisted). The `op-extract-v2` winner
+/// ([`PartitionRule::OpExtractV2`]) remains selectable-but-unadvertised — it is
+/// still a non-shipping measurement arm, so it is not in this list.
+#[cfg(feature = "dev")]
+const PARTITION_RULE_NAMES: [&str; 6] = [
+    "live",
+    "shadow",
+    "canonical",
+    "canonical-coalesced",
+    "op-extract",
+    "ruled",
+];
+#[cfg(not(feature = "dev"))]
+const PARTITION_RULE_NAMES: [&str; 5] = [
+    "live",
+    "shadow",
+    "canonical",
+    "canonical-coalesced",
+    "ruled",
+];
 
 /// The rule an unset (or empty) `FERRO_PARTITION` selects — the shipped default.
 ///
@@ -2963,7 +3123,7 @@ const PARTITION_RULE_NAMES: [&str; 4] = ["live", "shadow", "canonical", "canonic
 /// [`PartitionRule::Live`] is unchanged and still selectable by name, which is
 /// what makes the flip measurable after it ships: `FERRO_PARTITION=live`
 /// reproduces the pre-flip output exactly.
-const DEFAULT_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoalesced;
+const DEFAULT_PARTITION_RULE: PartitionRule = PartitionRule::Ruled;
 
 impl PartitionRule {
     /// Whether this arm cuts blocks with [`partition_block_canonical`], and so
@@ -2993,8 +3153,20 @@ impl PartitionRule {
     /// assertion beside [`DERIVED_BLOCK_PARTITION_RULE`].
     const fn cuts_with_canonical(self) -> bool {
         match self {
-            PartitionRule::Live | PartitionRule::Shadow => false,
-            PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => true,
+            // `OpExtract` does its own peeling and merging, so it is not cut by
+            // `partition_block_canonical` and must not take the canonical repair
+            // passes — same family as `Live`/`Shadow` for that question.
+            PartitionRule::Live
+            | PartitionRule::Shadow
+            | PartitionRule::OpExtract
+            | PartitionRule::OpExtractV2 => false,
+            // `Ruled` seeds with `partition_block_canonical`, so it is in the
+            // canonical family and takes the canonical repair passes. It only ever
+            // reaches the pass gates remapped to `CanonicalCoalesced`, but declaring
+            // it here keeps this exhaustive match total.
+            PartitionRule::Canonical | PartitionRule::CanonicalCoalesced | PartitionRule::Ruled => {
+                true
+            }
         }
     }
 }
@@ -3064,7 +3236,7 @@ impl PartitionRule {
 /// **Unstable, like the switch it shares a vocabulary with.** `FERRO_PARTITION`
 /// is expected to be removed once the normalization rule is settled; what this
 /// constant states outlives it, but its spelling may not.
-const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoalesced;
+const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::Ruled;
 
 /// The pin above must name an arm that genuinely cuts with
 /// [`partition_block_canonical_within`], because
@@ -3075,6 +3247,65 @@ const DERIVED_BLOCK_PARTITION_RULE: PartitionRule = PartitionRule::CanonicalCoal
 /// render" for "this surface does not serve that arm" is the misattribution
 /// [`BlockDecline`]'s own doc records having already cost a diagnosis once.
 const _: () = assert!(DERIVED_BLOCK_PARTITION_RULE.cuts_with_canonical());
+
+// The registry-key counterpart of this pin lives in
+// `crate::partition::registry::DERIVED_BLOCK_PARTITION_KEY` (design §8), kept in
+// lockstep with this enum by
+// `partition_rule_knob::the_two_surfaces_agree_on_a_pinned_registry_key`.
+
+/// Which rule the derivation surface ([`derive_block_members`]) cuts with under
+/// the `FERRO_PARTITION` migration switch (design §T3, Option E1).
+///
+/// The default — `FERRO_PARTITION` unset, the only shipping configuration — is
+/// the pinned [`DERIVED_BLOCK_PARTITION_RULE`], so the shipped derivation is
+/// unchanged. Under `FERRO_PARTITION=ruled` (dev only) it returns
+/// [`PartitionRule::Ruled`], so the derive surface routes to the ruled driver
+/// exactly as the normalization surface does through [`partition_rule`]. The two
+/// surfaces then move together under the one switch, which is what step 9's flip
+/// to a single partition authority requires.
+///
+/// It mirrors **only** the `Ruled` arm: every other `FERRO_PARTITION` value
+/// leaves the derivation pinned, because the pre-flip migration keeps the DEFAULT
+/// derivation byte-identical (design §10) and the derive chain is a deliberately
+/// different pipeline whose non-`Ruled` arms are not part of the bake-off. The
+/// `#[cfg]` is what makes that hold in a release build, where the whole `Ruled`
+/// limb compiles out and this is a `const`-equivalent read of the pin.
+fn derived_block_partition_rule() -> PartitionRule {
+    #[cfg(feature = "dev")]
+    if partition_rule() == PartitionRule::Ruled {
+        return PartitionRule::Ruled;
+    }
+    DERIVED_BLOCK_PARTITION_RULE
+}
+
+/// The stable registry name for a [`PartitionRule`] — the inverse of
+/// [`partition_rule_from_env`]'s mapping.
+///
+/// Exhaustive with no wildcard for the same reason
+/// [`PartitionRule::cuts_with_canonical`] is: a new arm must land here rather
+/// than take a silent default name.
+#[cfg(all(test, feature = "dev"))]
+const fn partition_rule_name(rule: PartitionRule) -> &'static str {
+    match rule {
+        PartitionRule::Live => "live",
+        PartitionRule::Shadow => "shadow",
+        PartitionRule::Canonical => "canonical",
+        PartitionRule::CanonicalCoalesced => "canonical-coalesced",
+        PartitionRule::OpExtract => "op-extract",
+        PartitionRule::OpExtractV2 => "op-extract-v2",
+        PartitionRule::Ruled => "ruled",
+    }
+}
+
+/// The registry key the shipped **runtime default** resolves to — the string
+/// counterpart of [`DEFAULT_PARTITION_RULE`], used by the generalized two-surface
+/// pin. Env-independent (it names the default constant, not a read of
+/// `FERRO_PARTITION`), so it states the shipped choice regardless of how a
+/// measurement process was launched.
+#[cfg(all(test, feature = "dev"))]
+fn default_partition_key() -> &'static str {
+    partition_rule_name(DEFAULT_PARTITION_RULE)
+}
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
@@ -3123,6 +3354,21 @@ fn partition_rule_from_env(value: Option<&str>) -> Result<PartitionRule, String>
         Some("shadow") => Ok(PartitionRule::Shadow),
         Some("canonical") => Ok(PartitionRule::Canonical),
         Some("canonical-coalesced") => Ok(PartitionRule::CanonicalCoalesced),
+        // Dev-only: the `OperatorExtractL2` typer it reuses lives behind
+        // `#[cfg(feature = "dev")]`, so a release build has no `op-extract` rule
+        // and this name falls through to the refusal below — which is correct,
+        // the bake-off winner is not shippable to release until the flip.
+        #[cfg(feature = "dev")]
+        Some("op-extract") => Ok(PartitionRule::OpExtract),
+        #[cfg(feature = "dev")]
+        Some("op-extract-v2") => Ok(PartitionRule::OpExtractV2),
+        // Shipped as of the step-9 flip: the ruled driver (`crate::partition::driver`
+        // and the rest of the ruled core) is production-wired — NOT behind
+        // `#[cfg(feature = "dev")]` — so a release build resolves this name. It is
+        // the runtime default ([`DEFAULT_PARTITION_RULE`]); accepting it by name too
+        // keeps it selectable for A/B exactly as the pre-flip `canonical-coalesced`
+        // default is. Only the bake-off measurement arms (`op-extract*`) stay dev-only.
+        Some("ruled") => Ok(PartitionRule::Ruled),
         Some(other) => Err(format!(
             "FERRO_PARTITION={other:?} is not a partitioner this build has. \
              This build's arms are: {}. \
@@ -3302,6 +3548,20 @@ fn partition_rule() -> PartitionRule {
     partition_rule_from_outcome(partition_rule_outcome(), PARTITION_SWITCH_MAY_ABORT)
 }
 
+/// Whether the ruled cut ([`PartitionRule::Ruled`]) is the active arm.
+///
+/// The migration switch reduced to the one question the normalization surface's
+/// rederive gate asks (design §T4): under the ruled arm the second block
+/// partition is the ruled driver, whose move-set [`repartition_gate`]'s
+/// "sub/del/ins/dup is a fixed point" premise was never measured against — that
+/// premise was established for the `CanonicalCoalesced` pair — so the gate is
+/// bypassed there in favour of a full re-partition. Always `false` in a release
+/// build, where `partition_rule_from_env` refuses `FERRO_PARTITION=ruled`, so
+/// the shipped rederive gate is unchanged.
+pub(crate) fn ruled_arm_active() -> bool {
+    partition_rule() == PartitionRule::Ruled
+}
+
 /// How often a sequence-first arm was asked to partition a block, and how often
 /// it declined and the caller served [`partition_block`] instead.
 ///
@@ -3362,6 +3622,150 @@ pub fn partition_decline_counts() -> PartitionDeclineCounts {
     }
 }
 
+/// The ruled arm's per-process census (dev-only, unstable like `FERRO_PARTITION`).
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuledCounts {
+    /// Blocks handed to the ruled driver.
+    pub attempted: u64,
+    /// Of those, blocks whose seed declined (grid/span cap) — the shipping chain answered.
+    pub grid_fallbacks: u64,
+    /// Of those, blocks with an intermediate no `Cut` could hold — the shipping chain answered.
+    pub unrenderable_fallbacks: u64,
+    /// Blocks where the ruled pieces were compared against the shipping chain's.
+    pub compared: u64,
+    /// Of those, blocks where they differed (the ruled pieces were emitted).
+    pub disagreed: u64,
+    /// Of the blocks whose ruled pieces were adopted, those the FINAL round-trip
+    /// then refused (`collect_canonical_edits`/`apply_edits_to_window` declined),
+    /// so the per-member pipeline answered instead. Distinct from
+    /// `unrenderable_fallbacks`, which is the earlier driver-decline seam: there
+    /// the driver never produced a `Cut`; here the ruled cut WAS adopted and only
+    /// the render round-trip discarded it. That discard is silent and types each
+    /// input spelling's own members, so it is the seam behind the
+    /// `s05-c-m4-sep1-p1-all-ins` confluence hole. Kept as a counter so the class
+    /// is detectable rather than rediscovered one variant at a time.
+    pub roundtrip_refused: u64,
+}
+
+#[cfg(feature = "dev")]
+static RULED_ATTEMPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static RULED_GRID_FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static RULED_UNRENDERABLE_FALLBACKS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static RULED_COMPARED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static RULED_DISAGREED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static RULED_ROUNDTRIP_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// This process's ruled-arm census. Relaxed, like [`partition_decline_counts`].
+#[cfg(feature = "dev")]
+pub fn ruled_counts() -> RuledCounts {
+    use std::sync::atomic::Ordering::Relaxed;
+    RuledCounts {
+        attempted: RULED_ATTEMPTED.load(Relaxed),
+        grid_fallbacks: RULED_GRID_FALLBACKS.load(Relaxed),
+        unrenderable_fallbacks: RULED_UNRENDERABLE_FALLBACKS.load(Relaxed),
+        compared: RULED_COMPARED.load(Relaxed),
+        disagreed: RULED_DISAGREED.load(Relaxed),
+        roundtrip_refused: RULED_ROUNDTRIP_REFUSED.load(Relaxed),
+    }
+}
+
+/// Partition the canonical window with the ruled driver, as pieces in window
+/// coordinates — or `None` when the driver declined and the shipping chain must
+/// answer. Builds the `BlockCtx` from the pipeline's own axis facts: the frame
+/// through the inverse of the adapters' `w_lo` reconstruction, the molecule the way
+/// `bakeoff_arm_override_pieces` derives it.
+fn ruled_pieces(
+    ref_bytes: &[u8],
+    result: &[u8],
+    frame: &AxisFrame,
+    w_lo: i64,
+    cds_end_axis: Option<i64>,
+    direction: ShuffleDirection,
+) -> Option<Vec<Piece>> {
+    use crate::partition::block_ctx::Molecule;
+    let molecule = if AxisFrame::is_dna(frame.kind) {
+        Molecule::Dna
+    } else {
+        Molecule::Rna
+    };
+    ruled_pieces_over_window(
+        ref_bytes,
+        result,
+        frame.carries_translated_frame(),
+        w_lo,
+        cds_end_axis,
+        molecule,
+        direction,
+    )
+}
+
+/// The shared `BlockCtx` builder behind both ruled surfaces (design §T3).
+///
+/// Partitions `reference`→`resulting` with the ruled driver over the WHOLE
+/// window, returning window-relative pieces, or `None` when the driver declined
+/// — counted in the `RULED_*` fallback census, so a decline is distinguishable
+/// from agreement — and the caller's own chain must answer.
+///
+/// The normalization surface reaches it through [`ruled_pieces`], which derives
+/// the frame facts from an [`AxisFrame`]; the derivation surface
+/// ([`derive_block_members`]) calls it directly with the genomic frame it always
+/// has (`reading_frame = false`, [`Molecule::Dna`], no `cds_end_axis`). Both
+/// pass the full window and get window-relative pieces back — the driver trims
+/// common flanks itself — so neither adds a block offset. Factoring it here is
+/// what keeps the two surfaces' `Ruled` arm a single `BlockCtx` construction
+/// rather than two that can drift.
+///
+/// Production-wired at the step-9 flip: it compiles in every build (the ruled
+/// core is no longer `dev`-gated). The `RULED_*` decline census is a dev-only
+/// measurement, so its `fetch_add`s stay `#[cfg(feature = "dev")]` — the shipped
+/// path must not grow a per-block atomic to serve a bake-off counter.
+fn ruled_pieces_over_window(
+    reference: &[u8],
+    resulting: &[u8],
+    reading_frame: bool,
+    w_lo: i64,
+    cds_end_axis: Option<i64>,
+    molecule: crate::partition::block_ctx::Molecule,
+    direction: ShuffleDirection,
+) -> Option<Vec<Piece>> {
+    use crate::partition::adapters::frame_context_for_axis_origin;
+    use crate::partition::block_ctx::Provenance;
+    use crate::partition::bridge::cut_to_pieces;
+    use crate::partition::driver::partition_ruled;
+
+    #[cfg(feature = "dev")]
+    RULED_ATTEMPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let frame_ctx = frame_context_for_axis_origin(reading_frame, w_lo, cds_end_axis);
+    let provenance = Provenance::none();
+    let ctx = BlockCtx {
+        reference,
+        resulting,
+        frame: &frame_ctx,
+        molecule,
+        provenance: &provenance,
+    };
+    match partition_ruled(&ctx, direction) {
+        Ok(cut) => Some(cut_to_pieces(&cut)),
+        Err(PartitionError::GridTooLarge { .. }) => {
+            #[cfg(feature = "dev")]
+            RULED_GRID_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+        Err(_) => {
+            #[cfg(feature = "dev")]
+            RULED_UNRENDERABLE_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 /// Blocks this process has cut, on whichever arm `FERRO_PARTITION` selected.
 ///
 /// The **denominator** [`partition_decline_counts`] deliberately does not
@@ -3408,6 +3812,17 @@ fn partition_block_for_rule(
 ) -> Vec<Piece> {
     use std::sync::atomic::Ordering;
 
+    // Dev-only sweep override (design §8, generalised): when a bake-off arm handle
+    // is pinned on this thread, EVERY block is partitioned by that arm regardless of
+    // `rule`. This lets a driver push ANY of the ~720 L1×L2×Dial-B grid arms through
+    // the full normalize pipeline (not just the handful wired as named `PartitionRule`s)
+    // via `set_bakeoff_arm_override`. Off (`None`) in every normal path, so it cannot
+    // move the default.
+    #[cfg(feature = "dev")]
+    if let Some(pieces) = bakeoff_arm_override_pieces(reference, result, carve_out) {
+        return pieces;
+    }
+
     // Before the arm split, so `Live` is counted too — see `partition_blocks_cut`.
     #[cfg(debug_assertions)]
     PARTITION_BLOCKS_CUT.fetch_add(1, Ordering::Relaxed);
@@ -3416,11 +3831,65 @@ fn partition_block_for_rule(
         // The pre-flip rule, now reached only by `FERRO_PARTITION=live`. It has
         // no decline path, so it is not counted.
         PartitionRule::Live => return partition_block(reference, result, carve_out),
+        // The dev-only bake-off winner. Like `Live`, it always produces pieces
+        // (no sequence-first decline), so it returns directly and is not
+        // counted through the `SEQFIRST_*` census. In a release build the name
+        // is refused by `partition_rule_from_env`, so this variant is never
+        // constructed and the arm is unreachable.
+        PartitionRule::OpExtract => {
+            #[cfg(feature = "dev")]
+            {
+                use crate::partition::block_ctx::Molecule;
+                // `carve_out` carries the only axis fact op-extract's Dial-B C2/C3
+                // need: DNA vs RNA. `InReach` is a DNA axis (`c./g./m./n.`),
+                // `OutOfReach` is `r.` — the same split `CoincidenceCarveOut`
+                // encodes for the payload-coincidence question.
+                let molecule = if carve_out.may_disbelieve_a_separation() {
+                    Molecule::Dna
+                } else {
+                    Molecule::Rna
+                };
+                return partition_block_op_extract(reference, result, molecule);
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                unreachable!(
+                    "PartitionRule::OpExtract is dev-only; partition_rule_from_env \
+                     refuses `op-extract` in a release build"
+                )
+            }
+        }
+        // The R2 primary winner `trim-only/op-extract-v2/ledger-r5`. Same shape as
+        // `OpExtract` (always produces pieces, returns directly, uncounted); differs
+        // only in the v2 typer and the ledger-r5 Dial-B config.
+        PartitionRule::OpExtractV2 => {
+            #[cfg(feature = "dev")]
+            {
+                use crate::partition::block_ctx::Molecule;
+                let molecule = if carve_out.may_disbelieve_a_separation() {
+                    Molecule::Dna
+                } else {
+                    Molecule::Rna
+                };
+                return partition_block_op_extract_v2(reference, result, molecule);
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                unreachable!(
+                    "PartitionRule::OpExtractV2 is dev-only; partition_rule_from_env \
+                     refuses `op-extract-v2` in a release build"
+                )
+            }
+        }
         PartitionRule::Shadow => partition_block_sequence_first(reference, result, min_separation),
         // `CanonicalCoalesced` is identical to `Canonical` here on purpose: the
         // `delins.md:44-47` merge is applied *after* the downstream passes, not
         // as part of partitioning — see `coalesce_payload_alignment_split`.
-        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => {
+        // `Ruled` seeds with `partition_block_canonical` too; it only reaches this
+        // dispatch remapped to `CanonicalCoalesced` (the ruled arm computes its own
+        // pieces up front and then runs the shipping chain as fallback + shadow), so
+        // this arm is total rather than `unreachable!`.
+        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced | PartitionRule::Ruled => {
             partition_block_canonical(reference, result)
         }
     };
@@ -3455,6 +3924,637 @@ fn partition_block_for_rule(
         }];
     }
     pieces
+}
+
+#[cfg(feature = "dev")]
+thread_local! {
+    /// A bake-off arm pinned as the block partitioner for THIS thread, bypassing the
+    /// named `PartitionRule`. See [`set_bakeoff_arm_override`] and the check at the top
+    /// of [`partition_block_for_rule`]. Sweep/driver use only; `None` in normal paths.
+    static BAKEOFF_ARM_OVERRIDE: std::cell::RefCell<
+        Option<std::sync::Arc<dyn Partitioner + Send + Sync>>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Pin (or clear, with `None`) a bake-off arm as the block partitioner for the current
+/// thread, bypassing `FERRO_PARTITION`/the named rule. Lets a driver run any constructed
+/// `Partitioner` (e.g. a full L1×L2×Dial-B grid arm not in the registry) through the whole
+/// normalize pipeline. Dev/sweep-only.
+#[cfg(feature = "dev")]
+pub fn set_bakeoff_arm_override(arm: Option<std::sync::Arc<dyn Partitioner + Send + Sync>>) {
+    BAKEOFF_ARM_OVERRIDE.with(|slot| *slot.borrow_mut() = arm);
+}
+
+/// If a bake-off arm is pinned on this thread, partition the trimmed block with it and
+/// adapt its `Partition` to `Vec<Piece>` (mirroring [`partition_block_op_extract`]).
+/// Returns `None` when no override is active (caller uses the normal rule dispatch). When
+/// the arm DECLINES a block (hard-errors on soundness), this falls back to the shipped
+/// block partition for that block rather than aborting — so the sweep never fabricates a
+/// result, at the cost of understating an unsound arm's divergence on that block.
+#[cfg(feature = "dev")]
+fn bakeoff_arm_override_pieces(
+    reference: &[u8],
+    result: &[u8],
+    carve_out: CoincidenceCarveOut,
+) -> Option<Vec<Piece>> {
+    use crate::partition::block_ctx::{BlockCtx, Molecule, Provenance};
+    use crate::partition::output::EditKind;
+
+    let arm = BAKEOFF_ARM_OVERRIDE.with(|slot| slot.borrow().clone())?;
+    let molecule = if carve_out.may_disbelieve_a_separation() {
+        Molecule::Dna
+    } else {
+        Molecule::Rna
+    };
+    let provenance = Provenance::none();
+    let ctx = BlockCtx {
+        reference,
+        resulting: result,
+        frame: &FrameContext::NonCoding,
+        molecule,
+        provenance: &provenance,
+    };
+    let partition = match arm.partition(&ctx) {
+        Ok(p) => p,
+        // Arm declined this block — use the shipped block partition, same fallback the
+        // sequence-first arms take, so one unsound block cannot abort the whole normalize.
+        Err(_) => return Some(partition_block(reference, result, carve_out)),
+    };
+    let mut pieces: Vec<Piece> = partition
+        .members
+        .into_iter()
+        .filter(|m| m.kind != EditKind::Identity)
+        .map(|m| {
+            let alt = match m.kind {
+                EditKind::Inv => op_extract_revcomp(&reference[m.ref_start..m.ref_end]),
+                _ => m.inserted,
+            };
+            Piece {
+                ref_start: m.ref_start,
+                ref_end: m.ref_end,
+                alt,
+            }
+        })
+        .collect();
+    pieces.sort_by_key(|p| (p.ref_start, p.ref_end));
+    Some(pieces)
+}
+
+/// Cut a trimmed block with the bake-off winner `OperatorExtractL2::new(4, 2, 2)`
+/// (the `trim-only/op-extract/ledger` arm's typer) and return its geometry as
+/// [`Piece`]s for the ordinary [`canonicalize_from_sequence_with_rule`] pipeline
+/// to type, 3'-shift and clamp.
+///
+/// # Why this reuses the typer rather than re-porting it
+///
+/// The winner's value is the *cut* it makes — where the inv/dup anchors sit and
+/// where the forced-unchanged structural leaf splits — and those decisions are
+/// carried faithfully by the piece boundaries. Re-expressing them in this module
+/// would mean re-porting the inv-anchor rendered-cost tiebreak, the
+/// majority-identity veto and, in the general case, `AllAlignmentSplitL1`'s
+/// forced-unchanged-column segmentation; a port that diverged on any of those
+/// would measure a *different* arm than the one the bake-off selected. Calling
+/// the in-crate typer keeps the measured behaviour identical to the winner by
+/// construction. That ties the rule to the `#[cfg(feature = "dev")]`
+/// [`crate::partition`] module — acceptable because this rule exists to be
+/// *measured* (against [`PartitionRule::CanonicalCoalesced`], through the dev-only
+/// `measure_flip_corpus_impact` instrument), never shipped to release as-is.
+///
+/// # Dial-B, split between here and the pipeline
+///
+/// The bake-off winner is op-extract typing **plus `merge_back` at
+/// `ledger_current`** (Dial-B), which is three passes: C1 (coding-frame codon
+/// merge), C2 (net-deletion payload-coincidence merge) and C3 (unequal-length
+/// placed-gap merge). C1 is **frame**-gated; C2/C3 are **molecule**-gated (DNA),
+/// not frame-gated (`apply_dial_b`'s module doc).
+///
+/// This function applies **C2/C3 only** — `merge_back` with a
+/// [`FrameContext::NonCoding`] frame (so C1 is skipped) and the block's
+/// `molecule` (so C2/C3 fire on a DNA axis). **C1 is deliberately left to the
+/// production pipeline's [`coalesce_coding_frame_separation`]**, which runs
+/// unconditionally on every arm's pieces downstream and which Dial-B's own C1 is
+/// documented to mirror (`projection-codon-exception-is-decided-by-the-rendered-
+/// axis`). Applying C1 here as well would double it; skipping it here and taking
+/// the pipeline's is what keeps op-extract on the **same** place/3'-shift/clamp
+/// path as every other arm — which is what makes it sound (an earlier attempt to
+/// apply full Dial-B *and* bypass that path broke the round-trip).
+///
+/// `TrimOnlyL1` — the winner's L1 — is the identity on an already-trimmed block,
+/// which is exactly what this function receives, so the whole block is one
+/// op-extract segment.
+///
+/// # Member → Piece mapping
+///
+/// Op-extract's non-`Identity` members are the changed runs, with unchanged
+/// reference implied between them — the same model [`Piece`]s use (see
+/// [`Piece`]'s doc on the zero-width insertion convention). An `Inv` member
+/// empties its `inserted` (the bake-off `output` convention), so its `Piece`'s
+/// `alt` is materialised as the reverse complement of the span — which is what
+/// [`anchor_for_piece`]'s `is_inversion` re-detects, relabelling it `inv`. Every
+/// other kind keeps `inserted` verbatim, and a `Del`'s empty `inserted` is its
+/// empty `alt`. So the piece list reconstructs to exactly what op-extract typed.
+#[cfg(feature = "dev")]
+fn partition_block_op_extract(
+    reference: &[u8],
+    result: &[u8],
+    molecule: crate::partition::block_ctx::Molecule,
+) -> Vec<Piece> {
+    use crate::partition::arm::{DialBConfig, L2Typer, MergeContext};
+    use crate::partition::arms::op_extract::OperatorExtractL2;
+    use crate::partition::block_ctx::Provenance;
+    use crate::partition::output::{EditKind, Segment};
+
+    let typer = OperatorExtractL2::new(4, 2, 2, "op-extract");
+    let seg = Segment {
+        ref_start: 0,
+        ref_end: reference.len(),
+        res_start: 0,
+        res_end: result.len(),
+    };
+    // Dial-A: op-extract's structural typing (`type_segment` ignores the frame).
+    let members = typer.type_segment(&seg, reference, result, &FrameContext::NonCoding);
+    // Dial-B C2/C3: the winner's molecule-gated payload-coincidence merges. The
+    // `NonCoding` frame skips C1 (the pipeline supplies it — see this function's
+    // doc); `molecule` gates C2/C3 to a DNA axis. `merge_back` is round-trip exact
+    // (`member_content` is `RefApplier`'s inverse), so the mapped pieces still
+    // reconstruct `result`.
+    let provenance = Provenance::none();
+    let ctx = MergeContext {
+        frame: &FrameContext::NonCoding,
+        molecule,
+        provenance: &provenance,
+    };
+    let members = typer.merge_back(
+        members,
+        reference,
+        result,
+        &ctx,
+        &DialBConfig::ledger_current(),
+    );
+    let mut pieces: Vec<Piece> = members
+        .into_iter()
+        .filter(|m| m.kind != EditKind::Identity)
+        .map(|m| {
+            let alt = match m.kind {
+                EditKind::Inv => op_extract_revcomp(&reference[m.ref_start..m.ref_end]),
+                _ => m.inserted,
+            };
+            Piece {
+                ref_start: m.ref_start,
+                ref_end: m.ref_end,
+                alt,
+            }
+        })
+        .collect();
+    // The pipeline expects pieces in reference order; op-extract emits them in
+    // peel order (an inv anchor recurses its flanks after pushing the inv).
+    pieces.sort_by_key(|p| (p.ref_start, p.ref_end));
+    pieces
+}
+
+/// The R2 primary winner `trim-only/op-extract-v2/ledger-r5`, block level. Byte
+/// identical to [`partition_block_op_extract`] except for the two dials that
+/// distinguish the graded winner from the older `op-extract`: the `v2` typer
+/// (`OperatorExtractL2::v2(4, 2, …)`) and the `ledger-r5` Dial-B config. The
+/// trim-only L1 is implicit here (the pipeline hands this fn an already
+/// flank-trimmed block, i.e. one Segment over `0..len`), matching the winner's L1.
+#[cfg(feature = "dev")]
+fn partition_block_op_extract_v2(
+    reference: &[u8],
+    result: &[u8],
+    molecule: crate::partition::block_ctx::Molecule,
+) -> Vec<Piece> {
+    use crate::partition::arm::{DialBConfig, L2Typer, MergeContext};
+    use crate::partition::arms::op_extract::OperatorExtractL2;
+    use crate::partition::block_ctx::Provenance;
+    use crate::partition::output::{EditKind, Segment};
+
+    let typer = OperatorExtractL2::v2(4, 2, "op-extract-v2");
+    let seg = Segment {
+        ref_start: 0,
+        ref_end: reference.len(),
+        res_start: 0,
+        res_end: result.len(),
+    };
+    let members = typer.type_segment(&seg, reference, result, &FrameContext::NonCoding);
+    let provenance = Provenance::none();
+    let ctx = MergeContext {
+        frame: &FrameContext::NonCoding,
+        molecule,
+        provenance: &provenance,
+    };
+    let members = typer.merge_back(members, reference, result, &ctx, &DialBConfig::ledger_r5());
+    let mut pieces: Vec<Piece> = members
+        .into_iter()
+        .filter(|m| m.kind != EditKind::Identity)
+        .map(|m| {
+            let alt = match m.kind {
+                EditKind::Inv => op_extract_revcomp(&reference[m.ref_start..m.ref_end]),
+                _ => m.inserted,
+            };
+            Piece {
+                ref_start: m.ref_start,
+                ref_end: m.ref_end,
+                alt,
+            }
+        })
+        .collect();
+    pieces.sort_by_key(|p| (p.ref_start, p.ref_end));
+    pieces
+}
+
+/// Reverse complement with `OperatorExtractL2`'s own alphabet handling — DNA and
+/// RNA bases mapped, every other byte left as-is — so a materialised `inv`
+/// payload is byte-identical to the resulting bases op-extract typed as the
+/// inversion. Kept local rather than routed through [`reverse_complement_bytes`],
+/// which returns `None` on a non-ACGT byte where op-extract maps it to itself.
+#[cfg(feature = "dev")]
+fn op_extract_revcomp(bases: &[u8]) -> Vec<u8> {
+    bases
+        .iter()
+        .rev()
+        .map(|c| match c {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            b'a' => b'u',
+            b'u' => b'a',
+            b'c' => b'g',
+            b'g' => b'c',
+            other => *other,
+        })
+        .collect()
+}
+
+// ----------------------------------------------------------------------------
+// Direction-1 adapter + legacy-rule `Monolithic`/`Partitioner` wrappers (Task 3)
+// ----------------------------------------------------------------------------
+
+/// Relabel one production [`Piece`] as a typed bake-off [`Member`] (design §5,
+/// Direction 1).
+///
+/// This is the "thin relabeling pass" the design describes: it reuses the SAME
+/// geometry detectors production's own [`anchor_for_piece`] dispatch consults —
+/// [`is_tandem_duplication`] (the `duplication.md:18` MUST, tried first for a pure
+/// insertion), [`is_inversion`] (`inversion.md:5`, which [`build_naedit`] never
+/// labels), and [`Piece::is_substitution`] — and records their verdict as a
+/// [`Member::kind`] rather than building an [`Anchor`]. The coordinate/region
+/// machinery `anchor_for_piece` also carries is a *rendering* concern (Direction
+/// 2), orthogonal to typing, and is not needed here.
+///
+/// # Why this is lossless for the equivalence gate
+///
+/// The inverse map (used by the byte-identity test) reconstructs a piece's `alt`
+/// from the member, and every kind round-trips exactly:
+///
+/// * `Inv` empties `inserted` (the revcomp payload is implied, [`output`]'s
+///   convention), and [`is_inversion`] fires only when `alt == revcomp(span)`, so
+///   the payload is recoverable from the reference span — no information is lost.
+/// * `Del` empties `inserted`, and is chosen only when `alt` is already empty.
+/// * every other kind keeps `inserted == piece.alt` verbatim.
+///
+/// So `Member`-list equality is exactly `Piece`-list equality, which is what lets
+/// the gate compare the typed members instead of the private `Piece`s.
+#[cfg(feature = "dev")]
+fn piece_to_member(piece: &Piece, reference: &[u8]) -> Member {
+    let ref_start = piece.ref_start;
+    let ref_end = piece.ref_end;
+    let ref_len = ref_end - ref_start;
+    // Zero-width with no payload: an identity (matches `build_naedit`'s own
+    // identity arm). A partition should not emit one, but type it faithfully.
+    if ref_len == 0 && piece.alt.is_empty() {
+        return Member {
+            kind: EditKind::Identity,
+            ref_start,
+            ref_end,
+            inserted: Vec::new(),
+        };
+    }
+    // A pure insertion: `dup` first (the `duplication.md:18` MUST that
+    // `anchor_for_piece` tries ahead of everything else), else a plain `ins`.
+    if ref_start == ref_end && !piece.alt.is_empty() {
+        let kind = if is_tandem_duplication(piece, reference) {
+            EditKind::Dup
+        } else {
+            EditKind::Ins
+        };
+        return Member {
+            kind,
+            ref_start,
+            ref_end,
+            inserted: piece.alt.clone(),
+        };
+    }
+    // A whole-span reverse complement: `inv`, payload implied.
+    if is_inversion(piece, reference) {
+        return Member {
+            kind: EditKind::Inv,
+            ref_start,
+            ref_end,
+            inserted: Vec::new(),
+        };
+    }
+    // One base for one base: a substitution.
+    if piece.is_substitution() {
+        return Member {
+            kind: EditKind::Sub,
+            ref_start,
+            ref_end,
+            inserted: piece.alt.clone(),
+        };
+    }
+    // A pure deletion: payload empty.
+    if piece.alt.is_empty() {
+        return Member {
+            kind: EditKind::Del,
+            ref_start,
+            ref_end,
+            inserted: Vec::new(),
+        };
+    }
+    // Everything else is a `delins`.
+    Member {
+        kind: EditKind::Delins,
+        ref_start,
+        ref_end,
+        inserted: piece.alt.clone(),
+    }
+}
+
+/// Partition `(reference, resulting)` under `rule` and relabel each piece as a
+/// typed [`Member`] — the shared core of every legacy-rule wrapper AND of the
+/// [`legacy_partition_members`] accessor, so the registry path and the raw
+/// dispatch are byte-identical *by construction* and the equivalence gate is
+/// checking only that the registry HARNESS (validate/fold/reattach) is
+/// transparent.
+///
+/// Molecule-blind, like every [`Monolithic`] arm (see the trait's residual note):
+/// `carve_out` is pinned to [`CoincidenceCarveOut::InReach`] (the DNA reading),
+/// matching the DNA-only bake-off corpus. `coding` selects `min_separation`, the
+/// one reading-frame fact the frame carries.
+#[cfg(feature = "dev")]
+fn legacy_rule_partition_members(
+    rule: PartitionRule,
+    reference: &[u8],
+    resulting: &[u8],
+    coding: bool,
+) -> Vec<Member> {
+    let pieces = partition_block_for_rule(
+        rule,
+        reference,
+        resulting,
+        axis_min_separation(coding),
+        CoincidenceCarveOut::InReach,
+    );
+    pieces
+        .iter()
+        .map(|piece| piece_to_member(piece, reference))
+        .collect()
+}
+
+/// A legacy `FERRO_PARTITION` rule wrapped as a [`Monolithic`] arm (and, so it can
+/// be pinned into a typed [`crate::normalize::NormalizeConfig`], a [`Partitioner`]
+/// in its own right).
+///
+/// Per Q1 (operator-confirmed): these wrappers keep the internal decline-to-`live`
+/// fallback [`partition_block_for_rule`] already applies, and their partition is
+/// always sound (a legacy dispatch is a partition of the real edit, so it
+/// round-trips), so `Partitioner::partition` always returns `Ok`. The
+/// "hard-error, no silent fallback" rule is for Task 4's new bake-off arms, not
+/// for these.
+///
+/// `cuts_with_canonical` is stored **explicitly** rather than derived from
+/// `rule.cuts_with_canonical()`, so the completeness test
+/// (`legacy_arms_match_partition_rule_coalesce_eligibility`) is a genuine
+/// cross-check against [`PartitionRule::cuts_with_canonical`] rather than a
+/// tautology (Fable review #4).
+#[cfg(feature = "dev")]
+#[derive(Clone, Copy)]
+pub struct LegacyRuleArm {
+    name: &'static str,
+    rule: PartitionRule,
+    cuts_with_canonical: bool,
+}
+
+#[cfg(feature = "dev")]
+impl LegacyRuleArm {
+    fn members(&self, reference: &[u8], resulting: &[u8], frame: &FrameContext) -> Vec<Member> {
+        let coding = matches!(frame, FrameContext::Coding { .. });
+        legacy_rule_partition_members(self.rule, reference, resulting, coding)
+    }
+}
+
+#[cfg(feature = "dev")]
+impl Monolithic for LegacyRuleArm {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn partition(&self, reference: &[u8], resulting: &[u8], frame: &FrameContext) -> Partition {
+        Partition {
+            members: self.members(reference, resulting, frame),
+        }
+    }
+
+    fn cuts_with_canonical(&self) -> bool {
+        self.cuts_with_canonical
+    }
+}
+
+#[cfg(feature = "dev")]
+impl Partitioner for LegacyRuleArm {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn partition(&self, ctx: &BlockCtx) -> Result<Partition, PartitionError> {
+        let partition = Partition {
+            members: self.members(ctx.reference, ctx.resulting, ctx.frame),
+        };
+        // Trivially sound (a legacy dispatch partitions the real edit), but run
+        // the gate anyway so this impl obeys the trait contract Task 4's arms do.
+        validate_sound(ctx, partition)
+    }
+
+    fn cuts_with_canonical(&self) -> bool {
+        self.cuts_with_canonical
+    }
+}
+
+/// The four legacy-rule arms, in [`PARTITION_RULE_NAMES`] order, each carrying its
+/// stable name and its **asserted** canonical-coalesce eligibility.
+///
+/// The registry (`crate::partition::registry`) wraps each as a `Strategy::Mono`;
+/// the typed-config handle Arc-wraps one directly. Both key on the same name, so
+/// there is one source of truth for the four arms.
+#[cfg(feature = "dev")]
+pub fn legacy_rule_arms() -> [LegacyRuleArm; 4] {
+    [
+        LegacyRuleArm {
+            name: "live",
+            rule: PartitionRule::Live,
+            cuts_with_canonical: false,
+        },
+        LegacyRuleArm {
+            name: "shadow",
+            rule: PartitionRule::Shadow,
+            cuts_with_canonical: false,
+        },
+        LegacyRuleArm {
+            name: "canonical",
+            rule: PartitionRule::Canonical,
+            cuts_with_canonical: true,
+        },
+        LegacyRuleArm {
+            name: "canonical-coalesced",
+            rule: PartitionRule::CanonicalCoalesced,
+            cuts_with_canonical: true,
+        },
+    ]
+}
+
+/// The legacy-dispatch side of the Task 3 byte-identity gate: partition
+/// `(reference, resulting)` under the rule `name` selects and relabel each piece
+/// via [`piece_to_member`], `None` for an unknown name.
+///
+/// This funnels through the same [`legacy_rule_partition_members`] the registry
+/// arm uses, so it is exactly `piece_to_member ∘ partition_block_for_rule`. It is
+/// `pub` (dev-gated) purely so `tests/it/partition_registry_equivalence.rs` can
+/// drive it without touching the cached `FERRO_PARTITION` read; it exposes no new
+/// shipping behaviour.
+#[cfg(feature = "dev")]
+pub fn legacy_partition_members(
+    name: &str,
+    reference: &[u8],
+    resulting: &[u8],
+    coding: bool,
+) -> Option<Vec<Member>> {
+    let rule = partition_rule_from_env(Some(name)).ok()?;
+    Some(legacy_rule_partition_members(
+        rule, reference, resulting, coding,
+    ))
+}
+
+/// [`canonicalize_from_sequence`], with the partitioner taken from a typed config
+/// handle rather than from `FERRO_PARTITION` (design §8).
+///
+/// `None` reproduces [`canonicalize_from_sequence`] exactly (reads
+/// [`partition_rule`]); `Some(handle)` resolves the handle's registry NAME to the
+/// legacy [`PartitionRule`] and runs the identical
+/// [`canonicalize_from_sequence_with_rule`] path — so the shipped default
+/// (unset env, `None` handle) is byte-identical, and the typed knob is genuinely
+/// consulted. For Task 3 only the four legacy names resolve; a future bake-off
+/// name falls safe to [`partition_rule`], matching
+/// [`partition_rule_from_outcome`]'s discipline.
+#[cfg(feature = "dev")]
+pub(crate) fn canonicalize_from_sequence_with_partitioner<P: ReferenceProvider>(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+    provider: &P,
+    direction: ShuffleDirection,
+    partitioner: Option<&(dyn Partitioner + Send + Sync)>,
+) -> Option<Vec<HgvsVariant>> {
+    match partitioner {
+        // Byte-identical to the shipped path: this IS what every non-dev build
+        // calls, so `None` cannot move the default.
+        None => canonicalize_from_sequence(variants, phase, provider, direction),
+        Some(handle) => {
+            // Only legacy-rule handles resolve on this shipped-shaped path:
+            // `partition_rule_from_env` knows the four legacy names, not the bake-off
+            // arms (those are reachable only through `normalize_block_via_arm`). A
+            // bake-off handle pinned into config cannot be honored here, so fail loudly
+            // in dev rather than silently substituting the default — the branch's
+            // no-silent-fallback-for-bake-off-arms ethos. `partitioner_handle` only
+            // mints legacy handles, so this never fires in practice.
+            let rule = match partition_rule_from_env(Some(handle.name())) {
+                Ok(rule) => rule,
+                Err(_) => {
+                    debug_assert!(
+                        false,
+                        "partitioner handle '{}' is not a legacy rule; bake-off arms are \
+                         not selectable through NormalizeConfig.partitioner",
+                        handle.name(),
+                    );
+                    partition_rule()
+                }
+            };
+            canonicalize_from_sequence_with_rule(variants, phase, provider, direction, rule, false)
+        }
+    }
+}
+
+/// Bake-off accessor (dev-gated, read-only): partition `(reference, result)` under
+/// a named ferro rule — mirroring what [`canonicalize_from_sequence`] does (trim
+/// the common flanks, then cut the trimmed block with [`partition_block_for_rule`]
+/// at the axis-appropriate `min_separation` and carve-out) — and additionally run
+/// the two post-partition content-aware passes ([`peel_tandem_dup_beside_change`]
+/// then [`coalesce_solid_run`], in the shipping order — see the
+/// `cuts_with_canonical()` call site) over the pieces before returning them. Each
+/// piece is `(absolute_ref_start, absolute_ref_end, alt_bytes)`; an empty vec means
+/// no net change and `None` an unknown rule name.
+///
+/// This exposes the CONTENT-AWARE partition geometry: the spans a run-coalesce L1
+/// would emit, with a tandem `dup` peeled out of a run it abuts. It reuses ferro's
+/// own passes rather than reimplementing the peel arithmetic, so the geometry is
+/// faithful by construction. Track-0 Experiment 1 feeds these peel-corrected spans
+/// to the plain ladder (via `crate::bakeoff::coalesce_peel::RunCoalescePeel`) to ask
+/// whether the typer ALONE reaches `[dup; sub]` — i.e. whether the L1×L2 split
+/// survives once L1 is content-aware, or whether peel is an irreducibly joint
+/// geometry+type operation. It changes no shipping behaviour and is not reachable
+/// from any release build. DNA-only, matching the corpus and the shipping gate.
+// Orphaned by the Option-C bakeoff drop (its only consumer was
+// `crate::bakeoff::coalesce_peel`, which does not ship in this tree); retained
+// rather than removed so this file's ruled/partition logic stays byte-identical
+// to the source branch — re-adding the bakeoff module reactivates it.
+#[allow(dead_code)]
+pub(crate) fn bakeoff_partition_pieces_peeled(
+    rule_name: &str,
+    reference: &[u8],
+    result: &[u8],
+    coding: bool,
+) -> Option<Vec<(usize, usize, Vec<u8>)>> {
+    let rule = match rule_name {
+        "live" => PartitionRule::Live,
+        "shadow" => PartitionRule::Shadow,
+        "canonical" => PartitionRule::Canonical,
+        "canonical-coalesced" => PartitionRule::CanonicalCoalesced,
+        _ => return None,
+    };
+    let (lo, hi_ref, hi_alt) = trim_common_flanks(reference, result);
+    if lo == hi_ref && lo == hi_alt {
+        return Some(Vec::new());
+    }
+    let carve_out = CoincidenceCarveOut::InReach;
+    // Pieces are in TRIMMED coordinates, so peel/coalesce see the trimmed slice;
+    // the `lo +` offset is re-applied only in the final map, matching the sibling.
+    let trimmed_ref = &reference[lo..hi_ref];
+    let mut pieces = partition_block_for_rule(
+        rule,
+        trimmed_ref,
+        &result[lo..hi_alt],
+        axis_min_separation(coding),
+        carve_out,
+    );
+    // Reproduce the shipping `place_pieces` preamble that peel depends on (the
+    // `canonicalize_from_sequence` call site): 3'-normalize, coalesce adjacent
+    // pieces, shrink each to its true difference — so a spread duplication
+    // (`[insC;insC]`) is shifted into the tandem position and merged before peel
+    // scans for it. Without this, peel never sees the dup and the spans are the
+    // raw insertions, not `[dup; change]`. The payload/inversion coalesces in
+    // `place_pieces` are cis-kind-gated and irrelevant to the dup shape, so they
+    // are omitted here.
+    shift_pieces(&mut pieces, trimmed_ref, ShuffleDirection::ThreePrime);
+    coalesce_adjacent_pieces(&mut pieces);
+    shrink_pieces_to_differences(&mut pieces, trimmed_ref);
+    peel_tandem_dup_beside_change(&mut pieces, trimmed_ref, PeelReach::TractOnly);
+    coalesce_solid_run(&mut pieces, trimmed_ref);
+    Some(
+        pieces
+            .into_iter()
+            .map(|p| (lo + p.ref_start, lo + p.ref_end, p.alt))
+            .collect(),
+    )
 }
 
 /// Cut a trimmed block for [`derive_block_members`] under `rule`, within a
@@ -3589,7 +4689,14 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     provider: &P,
     direction: ShuffleDirection,
 ) -> Option<Vec<HgvsVariant>> {
-    canonicalize_from_sequence_with_rule(variants, phase, provider, direction, partition_rule())
+    canonicalize_from_sequence_with_rule(
+        variants,
+        phase,
+        provider,
+        direction,
+        partition_rule(),
+        false,
+    )
 }
 
 /// [`canonicalize_from_sequence`], with the partitioner named rather than read
@@ -3620,6 +4727,7 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     provider: &P,
     direction: ShuffleDirection,
     rule: PartitionRule,
+    keep_if_canonical: bool,
 ) -> Option<Vec<HgvsVariant>> {
     if variants.is_empty() || (variants.len() > 1 && phase != AllelePhase::Cis) {
         return None;
@@ -3846,6 +4954,28 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     if lo == hi_ref && lo == hi_alt {
         return None; // no net change; leave it to the existing pipeline.
     }
+
+    // The ruled arm (design §10 step 1). Computed BEFORE the shipping chain and
+    // compared against it after: under `ruled` the chain below is both the fallback
+    // for a declined block and the per-block shadow oracle. `rule` is then remapped
+    // to the arm the ruled driver reproduces, so every gate below
+    // (`payload_coalesce_applies`, `cuts_with_canonical`) reads as it does for the
+    // shipped default.
+    // Production-wired at the step-9 flip: `ruled_pieces` compiles in every build,
+    // so the ruled arm is reachable in release. `partition_rule_from_env` still
+    // refuses `ruled` by name in a release build, but `DEFAULT_PARTITION_RULE`
+    // (once flipped) selects it without going through the env — which is why the
+    // old `unreachable!()` release arm is gone.
+    let ruled: Option<Vec<Piece>> = if rule == PartitionRule::Ruled {
+        ruled_pieces(&ref_bytes, &result, &frame, w_lo, cds_end_axis, direction)
+    } else {
+        None
+    };
+    let rule = if rule == PartitionRule::Ruled {
+        PartitionRule::CanonicalCoalesced
+    } else {
+        rule
+    };
 
     // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
     // that ships — takes the `CanonicalCoalesced` arm ([`DEFAULT_PARTITION_RULE`]),
@@ -4224,7 +5354,7 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         // Same scope as the sibling above (canonical arms, DNA axis).
         if rule.cuts_with_canonical() && AxisFrame::is_dna(kind) {
             coalesce_by_run(pieces, &ref_bytes, |run, reference| {
-                peel_tandem_dup_beside_change(run, reference);
+                peel_tandem_dup_beside_change(run, reference, PeelReach::TractOnly);
                 coalesce_solid_run(run, reference);
             });
         }
@@ -4258,6 +5388,39 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // The member count is a property of the sequence, so it may not depend on
     // which way the placement ran (#1542).
     place_direction_symmetrically(&mut pieces, direction, place_pieces);
+
+    // RULED_SHADOW: the ruled pieces against the shipping chain's, per block. The
+    // ruled pieces are what is emitted whenever the ruled arm is active (the corpus
+    // dump sees any disagreement); the per-block comparison census that names it is
+    // dev-only measurement. The substitution itself is production-wired at the
+    // step-9 flip — `ruled_pieces` compiles in every build (see its call above), so
+    // a release build whose `DEFAULT_PARTITION_RULE` is `Ruled` emits the ruled
+    // cut, not the shipping chain's. That is what makes the flip real in release
+    // rather than a no-op that computes the ruled pieces and discards them.
+    //
+    // Read at the round-trip seam below to attribute a refusal there to the ruled
+    // arm: when these adopted pieces fail the final round-trip the block falls
+    // back to the per-member pipeline silently, which is the confluence hole.
+    #[cfg(feature = "dev")]
+    let adopted_ruled_cut = ruled.is_some();
+    if let Some(ruled) = ruled {
+        #[cfg(feature = "dev")]
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            RULED_COMPARED.fetch_add(1, Relaxed);
+            if ruled != pieces {
+                RULED_DISAGREED.fetch_add(1, Relaxed);
+                log::debug!(
+                    "RULED_SHADOW ref={} alt={} ruled={:?} pipeline={:?}",
+                    String::from_utf8_lossy(&ref_bytes[lo..hi_ref]),
+                    String::from_utf8_lossy(&result[lo..hi_alt]),
+                    DebugPieces(&ruled),
+                    DebugPieces(&pieces),
+                );
+            }
+        }
+        pieces = ruled;
+    }
 
     // A veto stood here that refused the whole group whenever any derived piece
     // was an inversion. It was not an input-relative gate — it read only the
@@ -4350,7 +5513,15 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
         cds_end_axis,
     )?;
     if rebuilt == variants {
-        return None;
+        // The re-derivation confirms the input is ALREADY the canonical partition.
+        // For the normal caller (`sequence_first_pass`) `None` means "no change,
+        // keep the input" — correct. But the collapse's ruled consult must not read
+        // that `None` as "declined" and fall through to the legacy fold: the
+        // partitioner just confirmed these members (e.g. c7's `[4_5dup;6C>A]`) are
+        // canonical, and the fold would destroy the `dup`. So it asks for the
+        // members back instead. A GENUINE refusal below (round-trip failure) still
+        // returns `None` for both callers.
+        return keep_if_canonical.then_some(rebuilt);
     }
     // Never let canonicalization change what the variant means. This is a
     // *runtime* refusal, not a debug assertion: the whole point of #1234 is that
@@ -4373,9 +5544,27 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // cannot serve. Collapsing all three into one boolean would hide that case
     // among the other two, so it gets a `debug_assert` of its own — loud in
     // tests and development, with the runtime refusal still carrying release.
-    let rebuilt_edits =
-        collect_canonical_edits(&rebuilt, kind, body, &template_accession, extended)?;
-    let reapplied = apply_edits_to_window(&rebuilt_edits, &ref_bytes, w_lo)?;
+    // The two silent declines: a rebuilt form that will not lower back to edits,
+    // or edits that will not re-apply. Both return `None` (in dev and release
+    // alike) and the per-member pipeline stands. When the discarded pieces were
+    // the ruled arm's, count it -- an adopted-then-refused ruled cut is exactly
+    // the silent seam that leaks the per-member fallback and breaks confluence.
+    let Some(rebuilt_edits) =
+        collect_canonical_edits(&rebuilt, kind, body, &template_accession, extended)
+    else {
+        #[cfg(feature = "dev")]
+        if adopted_ruled_cut {
+            RULED_ROUNDTRIP_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return None;
+    };
+    let Some(reapplied) = apply_edits_to_window(&rebuilt_edits, &ref_bytes, w_lo) else {
+        #[cfg(feature = "dev")]
+        if adopted_ruled_cut {
+            RULED_ROUNDTRIP_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return None;
+    };
     debug_assert_eq!(
         reapplied, result,
         "sequence-first canonicalization changed the resulting sequence"
@@ -5744,7 +6933,7 @@ fn canonical_base_byte(base: u8) -> u8 {
 /// Trim the common prefix and suffix of the reference and result blocks.
 ///
 /// Returns `(prefix_len, ref_end, alt_end)` as offsets into the two slices.
-fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) {
+pub(crate) fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) {
     let mut lo = 0;
     while lo < reference.len() && lo < result.len() && reference[lo] == result[lo] {
         lo += 1;
@@ -6544,7 +7733,7 @@ fn denoted_by(parts: &[Piece], ref_start: usize, ref_end: usize, ref_bytes: &[u8
 /// spelling — and the block is what two spellings of one variant have in common.
 /// The number of pieces is likewise a function of the block, so even the
 /// `pieces.len() > 1` scoping is spelling-independent.
-fn split_concealed_separations(
+pub(crate) fn split_concealed_separations(
     pieces: &mut Vec<Piece>,
     reading_frame: bool,
     length_changing: bool,
@@ -6739,7 +7928,7 @@ const MIN_MANUFACTURED_SPLIT_MEMBERS: usize = 3;
 /// the canonical rule the pieces are a function of the denoted sequence. A
 /// deterministic function of a spelling-independent object is spelling
 /// independent, so two spellings that converged still converge.
-fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
+pub(crate) fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if pieces.len() < MIN_MANUFACTURED_SPLIT_MEMBERS {
         return;
     }
@@ -6908,12 +8097,44 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     }
 }
 
+/// How far [`peel_tandem_dup_beside_change`] reaches for a duplication source.
+///
+/// - `TractOnly` — the shipped behaviour: the search window widens only across a
+///   reference tandem tract abutting the hull, and a pure insertion (zero-width
+///   hull) is rejected. This is what every default-arm caller passes, so the
+///   shipped output is unchanged.
+/// - `PlusK` — the widened reach: the window is extended at least `k` bases beyond
+///   the hull even without a tract (Part A), and a zero-width hull is admitted
+///   (Part B), so a single-copy dup source adjacent to a change — and a pure
+///   insertion that folds a `[dup; sub]` — become visible. Under `PlusK` the
+///   homopolymer artifact gate is armed (see the search loop). The ruled
+///   partitioner's `TandemDupRun` adapter passes this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeelReach {
+    TractOnly,
+    PlusK,
+}
+
 /// Reconstruct a block's reference hull `[start, end)` and the payload the
 /// `pieces` denote over it (each piece's `alt`, with the untouched reference
 /// between them spliced back in). `None` for a malformed piece list.
-fn block_hull_and_payload(pieces: &[Piece], reference: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+///
+/// A zero-width hull (`start == end`) is a pure insertion. With `allow_insertion`
+/// false it is rejected (the tract-only peel requires a changed reference column);
+/// with it true it is admitted, so the widened peel can re-derive a `[dup; sub]`
+/// whose substitution the minimal edit folded into a pure insertion.
+fn block_hull_and_payload(
+    pieces: &[Piece],
+    reference: &[u8],
+    allow_insertion: bool,
+) -> Option<(usize, usize, Vec<u8>)> {
     let (start, end) = (pieces.first()?.ref_start, pieces.last()?.ref_end);
-    if start >= end || end > reference.len() {
+    let degenerate = if allow_insertion {
+        start > end
+    } else {
+        start >= end
+    };
+    if degenerate || end > reference.len() {
         return None;
     }
     let mut payload = Vec::new();
@@ -6946,19 +8167,81 @@ fn block_hull_and_payload(pieces: &[Piece], reference: &[u8]) -> Option<(usize, 
 /// is not clean, so that hypothesis is rejected. It denotes the same sequence by
 /// construction — the pure-dup payload with one base restored to what the input
 /// denotes.
-fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
+/// A unit is a homopolymer when it is two or more bases and every base equals the
+/// first (its minimal tiling period is 1) — `AA`, `TTT`. A single base is not one:
+/// the peel never proposes a one-base unit (`k >= 2`). ASCII-case-insensitive so a
+/// lower-case reference base does not read as a distinct symbol.
+fn is_homopolymer(unit: &[u8]) -> bool {
+    unit.len() >= 2 && unit.iter().all(|b| b.eq_ignore_ascii_case(&unit[0]))
+}
+
+pub(crate) fn peel_tandem_dup_beside_change(
+    pieces: &mut Vec<Piece>,
+    reference: &[u8],
+    reach: PeelReach,
+) {
     // A duplication abutting a change reaches this pass in either of two shapes:
     // spread across several insertions (`[27_28insC;28_29insC]`), or already
     // collapsed into one net-insertion `delins` (`g.15delinsAGA` for the
     // `AG[2]->AG[3]` + sub case). Both re-derive to `[dup; change]`, so a single
-    // piece is admitted; `block_hull_and_payload` still rejects a pure insertion
-    // (zero-width hull) and the `k == 0` gate rejects a lone substitution.
+    // piece is admitted; under `PeelReach::TractOnly` `block_hull_and_payload`
+    // rejects a pure insertion (zero-width hull) and the `k == 0` gate rejects a
+    // lone substitution. Under `PeelReach::PlusK` the pure insertion is admitted
+    // too (Part B) and re-derived as `[dup; sub]` when a genuine source exists.
     if pieces.is_empty() {
         return;
     }
-    let Some((hs, he, hull_payload)) = block_hull_and_payload(pieces, reference) else {
+    let wide = reach == PeelReach::PlusK;
+    let Some((hs, he, hull_payload)) = block_hull_and_payload(pieces, reference, wide) else {
         return;
     };
+    // Part B admission guard (`pure-tandem-expansion-insertion-is-not-repartitioned`,
+    // README rule 6, 2026-09-07).
+    //
+    // A zero-width hull (`hs == he`) is a pure insertion. When that insertion is
+    // ITSELF a tandem copy-number change of the reference — a repeat expansion
+    // (`A` -> `AAA`, `duplication.md:21`) or a clean single-copy dup
+    // (`duplication.md:17`) — there is nothing hidden for Part B to expose: every
+    // `[dup; sub]` it could mint substitutes a base every minimal alignment leaves
+    // unchanged, in order to re-spell a change the recommendations already give a
+    // one-member form. Leaving the seed whole converges every spelling onto that
+    // one member (the pre-flip form), which the decided confluence gate requires
+    // and the lone-repeat decline (`canonicalize_from_sequence`) makes the only
+    // reachable direction. Witnesses: s02 (`insAA` -> `[8T>A; AT dup]`) and
+    // `NM_015120.4:c.46_47insGGG` -> `c.[47A>G;75_77dup]`, the dup 28 nt away.
+    //
+    // Keyed on the reference TRACT, never on what the renderer would emit: the
+    // `c.` codon gate (`repeated.md:21-22`) turns the same expansion into a literal
+    // `ins`, and the guard must fire there too — hence `is_coding = false`,
+    // `cds_span = None`. With the codon gate off, `insertion_to_repeat`'s Some/None
+    // is direction-invariant (the #1389 split lives in that gate alone), so the
+    // derivation's own 3' direction is used. `PlusK` only: `TractOnly` never admits
+    // a zero-width hull. The #2175 extension is untouched — its seeds are non-zero
+    // hulls (`[insC;insC]`) or Part A, never a pure tandem expansion.
+    //
+    // Part B requires exactly one mismatch to peel `[dup; sub]`, so a seed that is
+    // ALREADY a clean single-copy dup (zero mismatch) is skipped by Part B itself
+    // and needs no guard here — only the multi-copy expansion, which Part B would
+    // otherwise re-partition, does.
+    if wide && hs == he {
+        // `hs - 1` is the base immediately 5' of the insertion point
+        // (`insertion_to_repeat`'s `pos` contract). `hs == 0` has nothing 5' to
+        // expand from and is left to Part B.
+        let is_repeat_expansion = hs.checked_sub(1).is_some_and(|five_prime_base| {
+            crate::normalize::rules::insertion_to_repeat(
+                reference,
+                five_prime_base as u64,
+                &hull_payload,
+                false,
+                None,
+                ShuffleDirection::ThreePrime,
+            )
+            .is_some()
+        });
+        if is_repeat_expansion {
+            return;
+        }
+    }
     // Extend the comparison window 5' and 3' across any reference tandem tract
     // that abuts the hull. The minimal-edit block covers only the columns that
     // actually changed, so a duplication whose *source* copies sit in unchanged
@@ -6986,8 +8269,24 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if k < 2 {
         return;
     }
-    let ws = tandem_tract_start(reference, hs);
-    let we = tandem_tract_end(reference, he);
+    // `TractOnly` widens only across a reference tandem tract abutting the hull.
+    // `PlusK` (Part A) also extends at least `k` bases each side even without a
+    // tract, so a duplication whose single source copy sits in unchanged reference
+    // immediately beside the change — `TA` 5' of the `C>A` in c7-g-2188, present
+    // once rather than as a tandem — becomes visible. The extra flanks are still
+    // unchanged reference added equally to `span` and `payload`, so `k` is
+    // unchanged and the widened payload denotes the same sequence.
+    let (ws, we) = if wide {
+        (
+            tandem_tract_start(reference, hs).min(hs.saturating_sub(k)),
+            tandem_tract_end(reference, he).max((he + k).min(reference.len())),
+        )
+    } else {
+        (
+            tandem_tract_start(reference, hs),
+            tandem_tract_end(reference, he),
+        )
+    };
     let span = &reference[ws..we];
     let mut payload = Vec::with_capacity(we - ws);
     payload.extend_from_slice(&reference[ws..hs]);
@@ -7033,8 +8332,40 @@ fn peel_tandem_dup_beside_change(pieces: &mut Vec<Piece>, reference: &[u8]) {
         if m >= insert && m < insert + k {
             continue;
         }
+        // The source-corruption gate (widened reach only). The dup's source is
+        // the `k` reference bases immediately 5' of the insertion,
+        // `span[insert - k..insert]`. A substitution INSIDE that source changes
+        // what the copy is a copy OF: in the resulting sequence the bases
+        // immediately 5' of the insertion no longer equal `unit`, so it is not a
+        // genuine duplication and must not be split out. c12-g-1884
+        // (`AAAGTAAA`, `4_5insCA`) has its only candidate a `TA` dup whose `5T>C`
+        // substitution sits inside the `TA` source, so the plain insertion is
+        // kept (`R1`). Narrow reach never reaches a pure insertion, and its
+        // non-zero-hull dups place the substitution outside the source, so the
+        // shipped arm is unaffected; armed under `PlusK` only.
+        if wide && m >= insert - k && m < insert {
+            continue;
+        }
         // Map the substituted payload column back to its reference offset.
         let ref_offset = if m < insert { m } else { m - k };
+        // The homopolymer artifact gate (widened reach only). A run of one base
+        // makes the one-mismatch test degenerate — any window shift "matches" —
+        // so a foreign base inserted beside the run (`GT` beside the `TTT` of c18)
+        // is re-labelled a copy of the run plus a coincidental substitution of a
+        // run base. The tell is that the "substitution" lands on a reference base
+        // equal to the run: `T>G` inside a `T` run. A GENUINE homopolymer dup
+        // beside a real change has its substitution on a DISTINCT base (`C>A`
+        // beside an `A` run — the `dup_plus_sub` corpus family), so it is exposed.
+        // So skip only a homopolymer unit whose substituted reference base is the
+        // run base, and try the next candidate. This keeps the pure insertion
+        // whole (`contiguous-insertion-split-by-a-blocked-derivation`) without
+        // suppressing a genuine duplication
+        // (`duplication-must-ranks-the-label-not-the-partition`). Narrow reach
+        // never reaches this shape (it rejects the zero-width hull), so the gate
+        // is armed under `PlusK` only and leaves the shipped arm untouched.
+        if wide && is_homopolymer(unit) && span[ref_offset] == unit[0] {
+            continue;
+        }
         let dup_piece = Piece {
             ref_start: ws + insert,
             ref_end: ws + insert,
@@ -7147,11 +8478,11 @@ const TANDEM_TRACT_SCAN_CAP: usize = MAX_CANONICAL_WINDOW as usize;
 /// `peel_tandem_dup_beside_change` handles. The net-shorter direction was probed
 /// (#2193) and already renders as a spanning `delins`, so no coincidental-tandem
 /// guard is needed on any length.
-fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
+pub(crate) fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if pieces.len() < 2 {
         return;
     }
-    let Some((start, end, payload)) = block_hull_and_payload(pieces, reference) else {
+    let Some((start, end, payload)) = block_hull_and_payload(pieces, reference, false) else {
         return;
     };
     let span = &reference[start..end];
@@ -7248,7 +8579,7 @@ fn coalesce_solid_run(pieces: &mut Vec<Piece>, reference: &[u8]) {
 /// cannot rescue it (it is identical to a scrambled equal-length block that
 /// *should* stay whole, e.g. `(+2,-1,+1,-2)`); isolating it needs the byte content
 /// the profile cannot see, which is deferred rather than guessed here.
-fn coalesce_by_run(
+pub(crate) fn coalesce_by_run(
     pieces: &mut Vec<Piece>,
     reference: &[u8],
     pass: impl Fn(&mut Vec<Piece>, &[u8]),
@@ -7332,7 +8663,7 @@ fn coalesce_by_run(
                 let mut probe = current.clone();
                 probe.push(piece.clone());
                 let unfolded = probe.clone();
-                peel_tandem_dup_beside_change(&mut probe, reference);
+                peel_tandem_dup_beside_change(&mut probe, reference, PeelReach::TractOnly);
                 if probe != unfolded {
                     wall = false;
                 }
@@ -7492,7 +8823,7 @@ const INVERSION_RUN_MAX_PIECES: usize = 256;
 /// built **once**, so a window test is a slice comparison against precomputed
 /// bytes with no allocation. Window count is bounded by
 /// [`INVERSION_RUN_MAX_PIECES`].
-fn coalesce_inversion_runs(
+pub(crate) fn coalesce_inversion_runs(
     pieces: &mut Vec<Piece>,
     ref_bytes: &[u8],
     block_lo: usize,
@@ -7725,7 +9056,7 @@ fn inversion_gate_admits(pieces: &[Piece]) -> bool {
 /// `inversion.md:16`) and the whole `result_block` equals `revcomp(ref_block)`. The
 /// resulting piece denotes `result_block` verbatim, so it is sequence-preserving by
 /// construction.
-fn whole_span_reverse_complement(
+pub(crate) fn whole_span_reverse_complement(
     ref_block: &[u8],
     result_block: &[u8],
     block_lo: usize,
@@ -8046,7 +9377,12 @@ impl<'a> RunScan<'a> {
             return false;
         };
         let (a, b) = self.window_span(i, j);
-        if first.ref_start != a || last.ref_end != b {
+        // The members must lie WITHIN the window's hull; they need not reach its
+        // edges, because the exact route now emits the window's difference hull
+        // and a placement's unchanged margin stays reference (#2161). That
+        // margin is rebuilt from the reference below, so a member list that
+        // stopped short of a base the window actually changed still fails.
+        if first.ref_start < a || last.ref_end > b {
             return false;
         }
         let mut rebuilt = Vec::with_capacity(self.denoted_by(i, j).len());
@@ -8064,6 +9400,10 @@ impl<'a> RunScan<'a> {
             rebuilt.extend_from_slice(&member.alt);
             cursor = member.ref_end;
         }
+        let Some(tail) = self.ref_bytes.get(cursor..b) else {
+            return false;
+        };
+        rebuilt.extend_from_slice(tail);
         rebuilt == self.denoted_by(i, j)
     }
 
@@ -8087,16 +9427,36 @@ impl<'a> RunScan<'a> {
             return None;
         }
         let denoted = self.denoted_by(i, j);
-        // Exact: the window denotes the reverse complement of its own hull.
-        // Multi-piece only, because a single piece that is already a whole
-        // reverse complement is typed `inv` by `crate::normalize::rules` and
-        // needs nothing from this pass.
-        if window.len() >= 2 && denoted.len() == span && denoted == self.revcomp_of(a, b) {
-            return Some(vec![Piece {
-                ref_start: a,
-                ref_end: b,
-                alt: denoted.to_vec(),
-            }]);
+        // Exact: the window denotes the reverse complement of its own
+        // DIFFERENCE hull. Multi-piece only, because a single piece that is
+        // already a whole reverse complement is typed `inv` by
+        // `crate::normalize::rules` and needs nothing from this pass.
+        //
+        // Read off the window's difference hull, not its placed hull (#2161).
+        // An equal-length window's column string is a function of the sequence,
+        // but its HULL is a function of where `shift_pieces` parked the pure
+        // indels at its edges: `[42_42insG; 47_48del]` (3') and
+        // `[42_42insG; 46_47del]` (5') denote the same `GTTAAC`/`GTTAA` over
+        // `TTAACC`/`TTAAC`, and only the 5' hull is the exact reverse complement
+        // of `TTAAC`. The retired direction mirror found it by running the chain
+        // twice; step 7 places once, so the predicate must not read the
+        // placement. Trimming the hull to its difference hull — exactly what
+        // `Seed::canonical` / `whole_span_reverse_complement` do at the block
+        // level — makes the answer the same under every placement, since the
+        // margin a placement adds is by construction an unchanged column.
+        if window.len() >= 2 && denoted.len() == span {
+            let hull_ref = &self.ref_bytes[a..b];
+            let (t_lo, t_hi, _) = trim_common_flanks(hull_ref, denoted);
+            let core = &denoted[t_lo..t_hi];
+            // `inversion.md:5,16` again, on the core: a one-column core is a
+            // substitution, and an empty one is no change.
+            if t_hi - t_lo >= 2 && core == self.revcomp_of(a + t_lo, a + t_hi) {
+                return Some(vec![Piece {
+                    ref_start: a + t_lo,
+                    ref_end: a + t_hi,
+                    alt: core.to_vec(),
+                }]);
+            }
         }
         // Same restriction as [`block_inversion`]'s flanked shape, for the same
         // measured reason: a window holding more than one piece states a
@@ -8743,7 +10103,7 @@ fn partition_block_sequence_first(
 /// latter the shipped default since #1835 — and from the `dump_partitions`
 /// example. So it decides **every** shipped result except the blocks it declines
 /// on (an oversized grid or span, above), which fall back to [`partition_block`].
-fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+pub(crate) fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
     partition_block_canonical_within(reference, result, MAX_SEQFIRST_GRID_CELLS)
 }
 
@@ -9453,7 +10813,7 @@ fn compensating_gap_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool
 /// independent, so two spellings that converged still converge. The block-level
 /// version of this pass did *not* have that property, which is what the 427-class
 /// measurement above records.
-fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
+pub(crate) fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     if pieces.len() < 2 {
         return;
     }
@@ -9953,7 +11313,7 @@ fn piece_renders_as_delins(piece: &Piece, reference: &[u8]) -> bool {
 /// it is neither a placed gap in a net-deletion block nor a `delins`, and
 /// admitting it would reach the compensating-gap geometry this rule says
 /// nothing about.
-fn split_is_a_placed_gap_coincidence(
+pub(crate) fn split_is_a_placed_gap_coincidence(
     pieces: &[Piece],
     reference: &[u8],
     result: &[u8],
@@ -10454,7 +11814,7 @@ fn pieces_from_columns(columns: &[Column], reference: &[u8], result: &[u8]) -> V
 /// Two passes, two directions. The 5' answer was also simply wrong on the first
 /// pass, independently of the idempotency: a caller asking for a 5' shuffle got
 /// a 3'-shifted merged allele.
-fn shift_pieces(pieces: &mut [Piece], ref_bytes: &[u8], direction: ShuffleDirection) {
+pub(crate) fn shift_pieces(pieces: &mut [Piece], ref_bytes: &[u8], direction: ShuffleDirection) {
     for i in 0..pieces.len() {
         if !pieces[i].is_pure_indel() {
             continue;
@@ -10552,7 +11912,7 @@ fn shift_pieces(pieces: &mut [Piece], ref_bytes: &[u8], direction: ShuffleDirect
 /// input members; without this the re-derivation would split such a delins
 /// straight back apart, leaving the two spellings converging in opposite
 /// directions.
-fn apply_coding_codon_exception(
+pub(crate) fn apply_coding_codon_exception(
     pieces: &mut Vec<Piece>,
     reading_frame: bool,
     w_lo: i64,
@@ -10843,7 +12203,7 @@ fn split_codon_incompatible_triplets(
 /// Closing it means running the rule a second time after the shift. Left undone
 /// deliberately: none of the four failures this pass was written for is in that
 /// class.
-fn coalesce_coding_frame_separation(
+pub(crate) fn coalesce_coding_frame_separation(
     pieces: &mut Vec<Piece>,
     reading_frame: bool,
     length_changing: bool,
@@ -10911,7 +12271,7 @@ fn coalesce_coding_frame_separation(
 /// Two or more consecutive changed nucleotides are one delins
 /// (`delins.md:16`), so once a shift closes the gap the pieces must combine —
 /// this is what turns #1234's clamped `5_7del` plus `8A>T` into `5_8delinsT`.
-fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
+pub(crate) fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
     let mut i = 1;
     while i < pieces.len() {
         debug_assert!(
@@ -11088,8 +12448,11 @@ fn merge_coincident_insertions(pieces: &mut Vec<Piece>) {
 /// directions and every downstream pass then sees identical input. A single
 /// piece likewise has no gap to close. Both are cheap to test and neither can
 /// hide a case.
-fn place_direction_symmetrically<F>(pieces: &mut Vec<Piece>, direction: ShuffleDirection, place: F)
-where
+pub(crate) fn place_direction_symmetrically<F>(
+    pieces: &mut Vec<Piece>,
+    direction: ShuffleDirection,
+    place: F,
+) where
     F: Fn(&mut Vec<Piece>, ShuffleDirection),
 {
     if pieces.len() <= 1 || !pieces.iter().any(Piece::is_pure_indel) {
@@ -11156,7 +12519,7 @@ fn opposite_direction(direction: ShuffleDirection) -> ShuffleDirection {
 /// this exists to narrow are the only ones narrowed. Growing a run back to a
 /// `dup` or a repeat spelling is a rendering decision made downstream, on the
 /// narrowed member.
-fn shrink_pieces_to_differences(pieces: &mut [Piece], ref_bytes: &[u8]) {
+pub(crate) fn shrink_pieces_to_differences(pieces: &mut [Piece], ref_bytes: &[u8]) {
     for piece in pieces.iter_mut() {
         let (lo, hi_ref, hi_alt) =
             trim_common_flanks(&ref_bytes[piece.ref_start..piece.ref_end], &piece.alt);
@@ -11349,145 +12712,182 @@ pub(crate) fn derive_block_members(
         return Err(too_large());
     }
 
-    // The rule is this surface's pin, not `partition_rule()`'s reading of
-    // `FERRO_PARTITION` — see `DERIVED_BLOCK_PARTITION_RULE` and this
-    // function's doc.
-    //
-    // The budget is threaded through rather than left to the callee's default:
-    // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
-    // silently overridden there, and the refusal surfaced as a render failure
-    // naming ferro rather than the knob the caller had just raised.
-    let mut pieces = partition_block_for_derivation(
-        DERIVED_BLOCK_PARTITION_RULE,
-        block_ref,
-        block_alt,
-        max_grid_cells,
-    )
-    .ok_or(BlockDecline::WouldNotRender)?;
-    for piece in &mut pieces {
-        piece.ref_start += lo;
-        piece.ref_end += lo;
-    }
+    // T3 (design §T3, Option E1): the ruled arm on the derivation surface. Under
+    // `FERRO_PARTITION=ruled` the ruled driver is the whole derivation — it
+    // trims, cuts, places and coalesces internally over the caller's window — so
+    // it returns window-relative pieces and the pinned mirror-and-coalesce chain
+    // in the `else` below is skipped (design: "already window-relative; skip the
+    // `+= lo` and the mirror"). On decline it counts the fallback (the `RULED_*`
+    // census inside `ruled_pieces_over_window`) and the pinned chain answers. The
+    // default (`DERIVED_BLOCK_PARTITION_RULE`) path is the `else` arm verbatim, so
+    // the shipped derivation is byte-identical. The grid pre-check above still
+    // bounds both arms by the caller's `max_grid_cells` (design §12 risk 2: the
+    // driver's own cap applies internally; measured in the T3 disclosure).
+    // Production-wired at the step-9 flip: `ruled_pieces_over_window` compiles in
+    // every build, and `derived_block_partition_rule()` reads `Ruled` from the
+    // (flipped) `DERIVED_BLOCK_PARTITION_RULE` pin in release too — so the genomic
+    // derivation emits the ruled cut in every build, not only under `dev`.
+    let ruled_derived: Option<Vec<Piece>> =
+        if derived_block_partition_rule() == PartitionRule::Ruled {
+            ruled_pieces_over_window(
+                reference,
+                observed,
+                false, // genomic derivation: no reading frame
+                w_lo,
+                None, // no `cds_end_axis` on the `g.`/`m.` derive surface
+                crate::partition::block_ctx::Molecule::Dna,
+                direction,
+            )
+        } else {
+            None
+        };
 
-    // The placement-and-coalesce chain, run as ONE unit in both shuffle
-    // directions and reconciled to the member-count-minimal result — exactly
-    // the shape `canonicalize_from_sequence_with_rule` runs at its own
-    // `place_direction_symmetrically` call. Each pass here matches the
-    // canonicalizer's order:
-    //
-    //  1. `shift_pieces` — the 3'/5' placement, bounded by the caller's window
-    //     (NOT the reference-anchored shift `normalize` performs: `reference` is
-    //     all the sequence this path has, so nothing may move outside it).
-    //  2. `coalesce_adjacent_pieces`, `shrink_pieces_to_differences`.
-    //  3. `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task
-    //     3c) — same two gates (`payload_coalesce_applies`,
-    //     `compensating_gap_coalesce_applies`), same order, against this
-    //     surface's pinned rule (`DERIVED_BLOCK_PARTITION_RULE`). Gated on the
-    //     template's axis: `from_sequences` only ever builds a `Genome`/`Mt`
-    //     template, so this reaches exactly `g.`/`m.`.
-    //  4. `coalesce_inversion_runs` (#2161 Path 1) — flanked/interior inversion
-    //     typing, ungated as in the canonicalizer, reading the ORIGINAL
-    //     trim-bounded block (`block_ref`/`block_alt`, direction-independent),
-    //     exactly as the canonicalizer passes `&ref_bytes[lo..hi_ref]` /
-    //     `&result[lo..hi_alt]`.
-    //
-    // # Why the whole chain is mirrored, not just the inversion pass
-    //
-    // A flanked inversion's `[del;dup]` fragmentation only aligns to the block
-    // under ONE of the two placements. Under the 3' shift the `dup` rolls one
-    // base past `hi_ref` into the trailing common run, and
-    // `coalesce_inversion_runs` cannot see a `revcomp` off a hull shifted off
-    // the block by even one base; under the 5' shift it stays in-block and the
-    // inversion types. `canonicalize_from_sequence` closes this by trying both
-    // directions and keeping the member-minimal (its own doc's worked example is
-    // `21_24delinsCATGC` → three members at 3', `22_24inv` at 5'); this surface
-    // shifted a SINGLE direction and so saw only the placement that hid the
-    // inversion. #1542's rule governs: the shuffle direction may move a member's
-    // placement, it may not change how many members there are.
-    //
-    // Mirroring the chain rather than adding the inversion pass ahead of the
-    // shift is load-bearing. Running the inversion typing before the payload
-    // merge types an `inv` where a small-separation sibling should have merged
-    // into a spanning `delins` first (`g.[13_17inv;19del]` → `g.13_19delins…`),
-    // which `place_direction_symmetrically` gets right for free: both directions
-    // merge identically, the member counts match, and the requested placement is
-    // kept without a spurious `inv`. Measured over the geometry corpus in
-    // `issue_2161_from_sequences_inversion_converge`, the mirror closes ~5,900
-    // flanked-inversion divergences and — unlike the before-shift call — opens
-    // none.
-    //
-    // The convergence this buys is pinned by
-    // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
-    // (the payload half) and
-    // `issue_2161_from_sequences_inversion_converge` (the inversion half): both
-    // assert `from_sequences`'s output equals `Normalizer::normalize`'s on the
-    // affected block. If a future edit moves these passes out of step with
-    // `canonicalize_from_sequence`'s own order, those guards catch it.
-    let place_pieces = |pieces: &mut Vec<Piece>, direction: ShuffleDirection| {
-        shift_pieces(pieces, reference, direction);
-        coalesce_adjacent_pieces(pieces);
-        shrink_pieces_to_differences(pieces, reference);
-        if let Some(kind) = cis_kind_of(template) {
-            if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
-                coalesce_payload_alignment_split(pieces, reference);
-            }
-            if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
-                coalesce_compensating_gap_split(pieces, reference);
-            }
-        }
-        coalesce_inversion_runs(pieces, reference, lo, block_ref, block_alt);
-        // Re-close any flush-adjacent (separation-zero) split
-        // `coalesce_inversion_runs` opened. Its flanked route reads a
-        // net-deletion delins `block_inversion` finds a reverse-complement
-        // inside — e.g. `g.13_15delinsTC` on `GAT` — and returns it as
-        // `[13_14inv;15del]`, two members abutting at separation zero. But
-        // `delins-adjacent-members-when-both-consume-reference` governs that
-        // shape: two adjacent members both consuming reference bases are one
-        // `delins`, so the split is not the canonical form —
-        // `Normalizer::normalize` re-merges it (measured:
-        // `normalize(g.[13_14inv;15del]) == g.13_15delinsTC`). The derivation
-        // surface must reach the same fixed point, so `coalesce_adjacent_pieces`
-        // (the `delins.md:16` enforcement point) runs once more here, after the
-        // inversion pass rather than only before it. A genuinely flanked
-        // inversion — one separated from its sibling by an unchanged base, like
-        // `g.[14del;21_23inv]` — is NOT flush-adjacent and is left as the `inv`.
-        // Without this re-close the geometry corpus regresses ~520
-        // separation-zero rows from `delins` to a split `inv`; with it, none.
-        coalesce_adjacent_pieces(pieces);
-        shrink_pieces_to_differences(pieces, reference);
-        // #2175 then #2174: peel a tandem dup abutting a change, then collapse the
-        // residual solid run into one `delins`. Same scope as the sibling at
-        // `canonicalize_from_sequence`, minus its `rule.cuts_with_canonical()`
-        // conjunct: this path has no `FERRO_PARTITION` rule to consult — it is the
-        // canonical derivation itself — so the DNA-axis gate is the whole of it.
+    let mut pieces = if let Some(pieces) = ruled_derived {
+        // Window-relative already; the pinned `+= lo` offset and the mirror chain
+        // in the `else` are the ruled driver's own job and are skipped here.
+        pieces
+    } else {
+        // The rule is this surface's pin, not `partition_rule()`'s reading of
+        // `FERRO_PARTITION` — see `DERIVED_BLOCK_PARTITION_RULE` and this
+        // function's doc.
         //
-        // Ordered LAST — after the inversion re-close above — and this is where the
-        // derivation surface deliberately departs from `canonicalize_from_sequence`
-        // (which peels before the inversion pass and has no trailing
-        // `coalesce_adjacent_pieces`). Peel manufactures a `dup` from the reference
-        // tandem and leaves it flush against the abutting change, so any
-        // `coalesce_adjacent_pieces` running after it re-merges the two back into
-        // one `delins` — which `duplication-must-ranks-the-label-not-the-partition`
-        // says to keep as the `dup`. Placing peel after the inversion re-close is
-        // the only order on this surface where both survive: the flanked inversion
-        // is closed and the tandem dup is kept (#2175 /
-        // issue_2175_dup_abutting_change, plus the #2161 inversion corpus).
-        if let Some(kind) = cis_kind_of(template) {
-            if AxisFrame::is_dna(kind) {
-                coalesce_by_run(pieces, reference, |run, reference| {
-                    peel_tandem_dup_beside_change(run, reference);
-                    coalesce_solid_run(run, reference);
-                });
-            }
+        // The budget is threaded through rather than left to the callee's default:
+        // without it a `max_grid_cells` raised above `MAX_SEQFIRST_GRID_CELLS` was
+        // silently overridden there, and the refusal surfaced as a render failure
+        // naming ferro rather than the knob the caller had just raised.
+        let mut pieces = partition_block_for_derivation(
+            DERIVED_BLOCK_PARTITION_RULE,
+            block_ref,
+            block_alt,
+            max_grid_cells,
+        )
+        .ok_or(BlockDecline::WouldNotRender)?;
+        for piece in &mut pieces {
+            piece.ref_start += lo;
+            piece.ref_end += lo;
         }
-        // Last: fold any two insertions the peel/coalesce chain left on one
-        // interbase into a single insertion (#2201). Runs inside the closure, so
-        // `place_direction_symmetrically` compares member counts on the repaired
-        // partition and does not favour a direction only because the other left a
-        // coincident-insertion pair unfolded.
-        merge_coincident_insertions(pieces);
+
+        // The placement-and-coalesce chain, run as ONE unit in both shuffle
+        // directions and reconciled to the member-count-minimal result — exactly
+        // the shape `canonicalize_from_sequence_with_rule` runs at its own
+        // `place_direction_symmetrically` call. Each pass here matches the
+        // canonicalizer's order:
+        //
+        //  1. `shift_pieces` — the 3'/5' placement, bounded by the caller's window
+        //     (NOT the reference-anchored shift `normalize` performs: `reference` is
+        //     all the sequence this path has, so nothing may move outside it).
+        //  2. `coalesce_adjacent_pieces`, `shrink_pieces_to_differences`.
+        //  3. `DNA/delins.md:44-47`'s payload-coincidence re-spelling (#2155 task
+        //     3c) — same two gates (`payload_coalesce_applies`,
+        //     `compensating_gap_coalesce_applies`), same order, against this
+        //     surface's pinned rule (`DERIVED_BLOCK_PARTITION_RULE`). Gated on the
+        //     template's axis: `from_sequences` only ever builds a `Genome`/`Mt`
+        //     template, so this reaches exactly `g.`/`m.`.
+        //  4. `coalesce_inversion_runs` (#2161 Path 1) — flanked/interior inversion
+        //     typing, ungated as in the canonicalizer, reading the ORIGINAL
+        //     trim-bounded block (`block_ref`/`block_alt`, direction-independent),
+        //     exactly as the canonicalizer passes `&ref_bytes[lo..hi_ref]` /
+        //     `&result[lo..hi_alt]`.
+        //
+        // # Why the whole chain is mirrored, not just the inversion pass
+        //
+        // A flanked inversion's `[del;dup]` fragmentation only aligns to the block
+        // under ONE of the two placements. Under the 3' shift the `dup` rolls one
+        // base past `hi_ref` into the trailing common run, and
+        // `coalesce_inversion_runs` cannot see a `revcomp` off a hull shifted off
+        // the block by even one base; under the 5' shift it stays in-block and the
+        // inversion types. `canonicalize_from_sequence` closes this by trying both
+        // directions and keeping the member-minimal (its own doc's worked example is
+        // `21_24delinsCATGC` → three members at 3', `22_24inv` at 5'); this surface
+        // shifted a SINGLE direction and so saw only the placement that hid the
+        // inversion. #1542's rule governs: the shuffle direction may move a member's
+        // placement, it may not change how many members there are.
+        //
+        // Mirroring the chain rather than adding the inversion pass ahead of the
+        // shift is load-bearing. Running the inversion typing before the payload
+        // merge types an `inv` where a small-separation sibling should have merged
+        // into a spanning `delins` first (`g.[13_17inv;19del]` → `g.13_19delins…`),
+        // which `place_direction_symmetrically` gets right for free: both directions
+        // merge identically, the member counts match, and the requested placement is
+        // kept without a spurious `inv`. Measured over the geometry corpus in
+        // `issue_2161_from_sequences_inversion_converge`, the mirror closes ~5,900
+        // flanked-inversion divergences and — unlike the before-shift call — opens
+        // none.
+        //
+        // The convergence this buys is pinned by
+        // `issue_2155_from_sequences_collapse::from_sequences_converges_with_normalize_on_the_same_block`
+        // (the payload half) and
+        // `issue_2161_from_sequences_inversion_converge` (the inversion half): both
+        // assert `from_sequences`'s output equals `Normalizer::normalize`'s on the
+        // affected block. If a future edit moves these passes out of step with
+        // `canonicalize_from_sequence`'s own order, those guards catch it.
+        let place_pieces = |pieces: &mut Vec<Piece>, direction: ShuffleDirection| {
+            shift_pieces(pieces, reference, direction);
+            coalesce_adjacent_pieces(pieces);
+            shrink_pieces_to_differences(pieces, reference);
+            if let Some(kind) = cis_kind_of(template) {
+                if payload_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+                    coalesce_payload_alignment_split(pieces, reference);
+                }
+                if compensating_gap_coalesce_applies(DERIVED_BLOCK_PARTITION_RULE, kind) {
+                    coalesce_compensating_gap_split(pieces, reference);
+                }
+            }
+            coalesce_inversion_runs(pieces, reference, lo, block_ref, block_alt);
+            // Re-close any flush-adjacent (separation-zero) split
+            // `coalesce_inversion_runs` opened. Its flanked route reads a
+            // net-deletion delins `block_inversion` finds a reverse-complement
+            // inside — e.g. `g.13_15delinsTC` on `GAT` — and returns it as
+            // `[13_14inv;15del]`, two members abutting at separation zero. But
+            // `delins-adjacent-members-when-both-consume-reference` governs that
+            // shape: two adjacent members both consuming reference bases are one
+            // `delins`, so the split is not the canonical form —
+            // `Normalizer::normalize` re-merges it (measured:
+            // `normalize(g.[13_14inv;15del]) == g.13_15delinsTC`). The derivation
+            // surface must reach the same fixed point, so `coalesce_adjacent_pieces`
+            // (the `delins.md:16` enforcement point) runs once more here, after the
+            // inversion pass rather than only before it. A genuinely flanked
+            // inversion — one separated from its sibling by an unchanged base, like
+            // `g.[14del;21_23inv]` — is NOT flush-adjacent and is left as the `inv`.
+            // Without this re-close the geometry corpus regresses ~520
+            // separation-zero rows from `delins` to a split `inv`; with it, none.
+            coalesce_adjacent_pieces(pieces);
+            shrink_pieces_to_differences(pieces, reference);
+            // #2175 then #2174: peel a tandem dup abutting a change, then collapse the
+            // residual solid run into one `delins`. Same scope as the sibling at
+            // `canonicalize_from_sequence`, minus its `rule.cuts_with_canonical()`
+            // conjunct: this path has no `FERRO_PARTITION` rule to consult — it is the
+            // canonical derivation itself — so the DNA-axis gate is the whole of it.
+            //
+            // Ordered LAST — after the inversion re-close above — and this is where the
+            // derivation surface deliberately departs from `canonicalize_from_sequence`
+            // (which peels before the inversion pass and has no trailing
+            // `coalesce_adjacent_pieces`). Peel manufactures a `dup` from the reference
+            // tandem and leaves it flush against the abutting change, so any
+            // `coalesce_adjacent_pieces` running after it re-merges the two back into
+            // one `delins` — which `duplication-must-ranks-the-label-not-the-partition`
+            // says to keep as the `dup`. Placing peel after the inversion re-close is
+            // the only order on this surface where both survive: the flanked inversion
+            // is closed and the tandem dup is kept (#2175 /
+            // issue_2175_dup_abutting_change, plus the #2161 inversion corpus).
+            if let Some(kind) = cis_kind_of(template) {
+                if AxisFrame::is_dna(kind) {
+                    coalesce_by_run(pieces, reference, |run, reference| {
+                        peel_tandem_dup_beside_change(run, reference, PeelReach::TractOnly);
+                        coalesce_solid_run(run, reference);
+                    });
+                }
+            }
+            // Last: fold any two insertions the peel/coalesce chain left on one
+            // interbase into a single insertion (#2201). Runs inside the closure, so
+            // `place_direction_symmetrically` compares member counts on the repaired
+            // partition and does not favour a direction only because the other left a
+            // coincident-insertion pair unfolded.
+            merge_coincident_insertions(pieces);
+        };
+        place_direction_symmetrically(&mut pieces, direction, place_pieces);
+        pieces
     };
-    place_direction_symmetrically(&mut pieces, direction, place_pieces);
 
     // Contig-start escape: rescue the pure insertion the 5'-shuffle rolled to
     // interbase 0 from the one window where the anchor genuinely does not exist.
@@ -11783,6 +13183,312 @@ fn anchor_for_piece(
     })
 }
 
+/// Why the Direction-2 adapter ([`anchor_for_member`]) refused to render a typed
+/// member.
+///
+/// The inverse-direction sibling of [`BlockDecline`]: where the shipping
+/// [`anchor_for_piece`] *re-derives* an edit's kind from the two lengths and the
+/// reference, the adapter HONORS the kind an arm already chose and only checks that
+/// the member's geometry can support it. Its refusals are therefore about a member
+/// whose declared kind its bytes cannot back — most importantly a `Dup` whose
+/// payload is not the 5' reference flank, which must be REFUSED, never silently
+/// demoted to an insertion (the finding this whole task exists to prevent).
+#[cfg(feature = "dev")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberRenderError {
+    /// A `Dup` member whose payload does not equal the reference bases immediately
+    /// 5' of its insertion point (or whose source span reaches into a preceding
+    /// member's). Refused rather than demoted to an `Insertion`.
+    NotADuplication,
+    /// A member whose geometry contradicts its declared kind — a `Sub` not spanning
+    /// exactly one base for one or whose reference base is unreadable (out of window
+    /// or non-IUPAC), a `Del`/`Inv` spanning none, an `Ins`/`Dup` spanning reference,
+    /// an `Inv` carrying an explicit payload, a spanning `Identity` — or a payload
+    /// with a non-IUPAC byte.
+    KindGeometryMismatch,
+}
+
+/// Direction-2 of the neutral↔HGVS bridge (Task 4): turn a typed [`Member`] an arm
+/// produced into a rendered [`Anchor`], **dispatching on the declared
+/// [`EditKind`]** rather than re-deriving it from the sequences.
+///
+/// This is the mirror of [`anchor_for_piece`], and it exists because the two
+/// directions answer different questions. `anchor_for_piece` is a *typer*: it has a
+/// `Piece` (a raw `(span, payload)`) and reads the reference to decide whether it is
+/// a `dup`, a boundary `delins`, a substitution, and so on. `anchor_for_member`
+/// takes a member whose kind an arm **already decided** and must not overturn it —
+/// so an arm that typed a block `Delins` renders as `delins`, and is never promoted
+/// by the geometry ladder into `inv`/`dup`. Per-kind it does only the minimal
+/// validity check the kind implies, then builds the anchor whose [`AnchorForm`]
+/// (plus, for `Sub`, its `ref_base`) makes [`build_naedit`] emit exactly that kind:
+///
+/// * **Sub** — one reference base replaced by one alternative; the reference base
+///   is read off the window so `build_naedit` renders `X>Y`, not a one-base
+///   `delins`.
+/// * **Del** — a span with no payload.
+/// * **Ins** — a zero-width payload. Reuses the same terminal-insertion escapes
+///   `anchor_for_piece` does ([`boundary_delins_anchor`], [`cds_end_delins_anchor`])
+///   but **skips** [`duplication_anchor`]: an arm that said `Ins` chose not to call
+///   it a `dup`, and re-promoting it here would be the very override this bridge
+///   exists to prevent.
+/// * **Dup** — a zero-width payload that copies the 5' reference flank. If it does
+///   not, [`Err`]`(`[`MemberRenderError::NotADuplication`]`)` — refuse, do not demote.
+/// * **Inv** — a span whose bases are implied (payload empty); built with
+///   [`AnchorForm::Inversion`] so `build_naedit` emits `inv` directly rather than a
+///   `delins` of the reverse complement.
+/// * **Delins** — the general span-plus-payload; the one kind that renders `delins`.
+/// * **Identity** — a zero-width no-op (a Step-5 examined re-attachment).
+///
+/// The adapter's output is the pipeline's FINAL answer for its block: it must not
+/// re-enter the generic per-member re-typing pass, which is exactly where the
+/// override would reappear.
+#[cfg(feature = "dev")]
+fn anchor_for_member(
+    member: &Member,
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
+    previous_ref_end: usize,
+    cds_end_axis: Option<i64>,
+) -> Result<Anchor, MemberRenderError> {
+    let span = member
+        .ref_end
+        .checked_sub(member.ref_start)
+        .ok_or(MemberRenderError::KindGeometryMismatch)?;
+    // Decode the payload once; a non-IUPAC byte is refused rather than mangled,
+    // exactly as `anchor_for_piece` does.
+    let alt: Vec<Base> = member
+        .inserted
+        .iter()
+        .filter_map(|b| Base::from_char(*b as char))
+        .collect();
+    if alt.len() != member.inserted.len() {
+        return Err(MemberRenderError::KindGeometryMismatch);
+    }
+    let start = w_lo + member.ref_start as i64;
+    let end = w_lo + member.ref_end as i64 - 1;
+    let replacement = |alt: Vec<Base>, ref_base: Option<Base>| Anchor {
+        region: body,
+        end_region: body,
+        start,
+        end,
+        alt,
+        form: AnchorForm::Replacement,
+        ref_base,
+    };
+    match member.kind {
+        EditKind::Sub => {
+            if span != 1 || alt.len() != 1 {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            // Read the replaced base so `build_naedit` renders `X>Y` (`delins.md:12`).
+            // A `Sub` whose reference base is unreadable — `ref_start` out of window,
+            // or a non-IUPAC byte — must be REFUSED, not passed on as `None`: with no
+            // reference base `build_naedit` silently falls through to a one-base
+            // `delins`, the exact kind override this adapter exists to prevent. On the
+            // seam path the soundness gate guarantees `ref_start` is in bounds, but not
+            // IUPAC-clean, and `render_member_via_adapter` reaches here with neither
+            // guarantee, so the refusal is structural rather than corpus-dependent.
+            let ref_base = ref_bytes
+                .get(member.ref_start)
+                .copied()
+                .and_then(|byte| Base::from_char(byte as char))
+                .ok_or(MemberRenderError::KindGeometryMismatch)?;
+            Ok(replacement(alt, Some(ref_base)))
+        }
+        EditKind::Del => {
+            if span == 0 || !alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            Ok(replacement(Vec::new(), None))
+        }
+        EditKind::Ins => {
+            if span != 0 || alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            let piece = Piece {
+                ref_start: member.ref_start,
+                ref_end: member.ref_end,
+                alt: member.inserted.clone(),
+            };
+            // Same terminal-insertion escapes as `anchor_for_piece` — but NOT
+            // `duplication_anchor`: the arm declared `Ins`, so it does not become a
+            // `dup` here.
+            if let Some(anchor) = boundary_delins_anchor(&piece, &alt, body, w_lo, ref_bytes, ends)
+            {
+                return Ok(anchor);
+            }
+            if let Some(anchor) =
+                cds_end_delins_anchor(&piece, &alt, body, w_lo, ref_bytes, cds_end_axis)
+            {
+                return Ok(anchor);
+            }
+            // Plain insertion anchor: an empty range at the boundary (`start == end + 1`).
+            Ok(Anchor {
+                region: body,
+                end_region: body,
+                start,
+                end: start - 1,
+                alt,
+                form: AnchorForm::Replacement,
+                ref_base: None,
+            })
+        }
+        EditKind::Dup => {
+            if span != 0 || alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            let piece = Piece {
+                ref_start: member.ref_start,
+                ref_end: member.ref_end,
+                alt: member.inserted.clone(),
+            };
+            // The payload must copy the 5' reference flank (and its source span must
+            // clear the preceding member). If not, REFUSE — a `Dup` whose bytes are
+            // not a duplication is never rendered as the insertion it superficially
+            // resembles (design §4).
+            duplication_anchor(&piece, body, w_lo, ref_bytes, previous_ref_end)
+                .ok_or(MemberRenderError::NotADuplication)
+        }
+        EditKind::Inv => {
+            // A whole-span reverse complement: the payload is implied by the span,
+            // so `inserted` must be empty. Built with `AnchorForm::Inversion` so it
+            // renders `inv`, not a `delins` of the reverse complement.
+            if span <= 1 || !alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            Ok(Anchor {
+                region: body,
+                end_region: body,
+                start,
+                end,
+                alt: Vec::new(),
+                form: AnchorForm::Inversion,
+                ref_base: None,
+            })
+        }
+        EditKind::Delins => {
+            // The one kind that renders `delins`. `ref_base` is deliberately left
+            // `None` even for a one-base span, so a member the arm typed `Delins`
+            // is NOT collapsed to a substitution by `build_naedit`'s `X>Y` arm.
+            if span == 0 || alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            Ok(replacement(alt, None))
+        }
+        EditKind::Identity => {
+            // A zero-width identity (an examined re-attachment). Rendered as an empty
+            // insertion-shaped anchor, which `build_naedit` turns into `=`.
+            if span != 0 || !alt.is_empty() {
+                return Err(MemberRenderError::KindGeometryMismatch);
+            }
+            Ok(Anchor {
+                region: body,
+                end_region: body,
+                start,
+                end: start - 1,
+                alt: Vec::new(),
+                form: AnchorForm::Replacement,
+                ref_base: None,
+            })
+        }
+    }
+}
+
+/// Render a single typed [`Member`] through the Direction-2 adapter to an HGVS edit
+/// string on the genomic axis — the dev/bake-off surface for [`anchor_for_member`].
+///
+/// `reference` is the window the member's offsets index. The genomic body and
+/// `SequenceEnds::INTERIOR` are assumed (the member's context is a changed block,
+/// never a sequence edge here), and `previous_ref_end` is `0` — a lone member has
+/// no predecessor to collide a `dup` source span against. Returns the rendered
+/// `g.<pos><edit>` string, or the adapter's [`MemberRenderError`].
+#[cfg(feature = "dev")]
+pub fn render_member_via_adapter(
+    member: &Member,
+    reference: &[u8],
+) -> Result<String, MemberRenderError> {
+    let anchor = anchor_for_member(
+        member,
+        Region::Genome,
+        1,
+        reference,
+        SequenceEnds::INTERIOR,
+        0,
+        None,
+    )?;
+    let (interval, edit) = build_naedit(anchor, |_, pos| GenomePos::new(pos as u64));
+    Ok(format!("g.{interval}{edit}"))
+}
+
+/// Partition a changed block `(reference, resulting)` under the registered arm
+/// `name` and render each typed member through the Direction-2 adapter — the seam
+/// that carries an arm's soundness verdict out to a caller.
+///
+/// This is the block-level counterpart of [`canonicalize_from_sequence`] for the
+/// bake-off arms: it drives the named arm through [`Partitioner::partition`], which
+/// runs the round-trip soundness gate, so an UNSOUND partition surfaces as
+/// [`Err`]`(`[`PartitionError::Unsound`]`)` here — never a wrong string and never a
+/// silent fallback to the shipped rule (the hard-error rule for the bake-off arms).
+/// A sound partition is rendered honoring each member's declared kind; a member the
+/// adapter cannot render (e.g. a `Dup` that is not a duplication) is reported as
+/// [`PartitionError::Unrenderable`]. An unknown arm name is likewise `Unrenderable`.
+///
+/// Genomic axis, DNA molecule, ∅ provenance — matching the DNA bake-off corpus. Not
+/// reachable from any release build.
+#[cfg(feature = "dev")]
+pub fn normalize_block_via_arm(
+    name: &str,
+    reference: &[u8],
+    resulting: &[u8],
+) -> Result<String, PartitionError> {
+    use crate::partition::block_ctx::{BlockCtx, FrameContext, Molecule, Provenance};
+
+    let frame = FrameContext::NonCoding;
+    let provenance = Provenance::none();
+    let ctx = BlockCtx {
+        reference,
+        resulting,
+        frame: &frame,
+        molecule: Molecule::Dna,
+        provenance: &provenance,
+    };
+    let arm = crate::partition::registry::arm(name).ok_or(PartitionError::Unrenderable)?;
+    // The soundness gate lives here: `Err(Unsound)` propagates unchanged.
+    let partition = arm.partition(&ctx)?;
+    render_partition_via_adapter(&partition, reference)
+}
+
+/// Render a sound [`Partition`] to a `g.[…]`-style string, member by member, through
+/// the Direction-2 adapter. Split out of [`normalize_block_via_arm`] so a caller
+/// with a partition already in hand can render it the same way. A member the adapter
+/// cannot render is [`PartitionError::Unrenderable`].
+#[cfg(feature = "dev")]
+pub fn render_partition_via_adapter(
+    partition: &Partition,
+    reference: &[u8],
+) -> Result<String, PartitionError> {
+    let mut parts = Vec::with_capacity(partition.members.len());
+    let mut previous_ref_end = 0usize;
+    for member in &partition.members {
+        let anchor = anchor_for_member(
+            member,
+            Region::Genome,
+            1,
+            reference,
+            SequenceEnds::INTERIOR,
+            previous_ref_end,
+            None,
+        )
+        .map_err(|_| PartitionError::Unrenderable)?;
+        previous_ref_end = member.ref_end;
+        let (interval, edit) = build_naedit(anchor, |_, pos| GenomePos::new(pos as u64));
+        parts.push(format!("{interval}{edit}"));
+    }
+    Ok(format!("g.[{}]", parts.join(";")))
+}
+
 /// The `dup` anchor for a piece that is a tandem duplication, or `None`.
 ///
 /// `duplication.md:18` — "when a variant can be described as a duplication, it
@@ -11981,7 +13687,12 @@ fn cds_end_delins_anchor(
 /// A piece is an inversion when its replacement is the reverse complement of
 /// its own span and spans more than one nucleotide (`inversion.md:5,16` — a
 /// 1-nt "inversion" is a substitution).
-fn is_inversion(piece: &Piece, ref_bytes: &[u8]) -> bool {
+// `pub(crate)` so the ruled-cut adapters (`src/partition/adapters.rs`) can set the
+// `Inv`/`Dup` labels on exactly the geometry the render stage recognises — the same
+// predicate `anchor_for_piece` uses — rather than keeping a second copy of the test
+// (design §4.8: the render never re-derives a kind it was handed, and the recogniser
+// that sets the label must be the recogniser the renderer trusts).
+pub(crate) fn is_inversion(piece: &Piece, ref_bytes: &[u8]) -> bool {
     let span = &ref_bytes[piece.ref_start..piece.ref_end];
     span.len() > 1
         && span.len() == piece.alt.len()
@@ -11990,7 +13701,10 @@ fn is_inversion(piece: &Piece, ref_bytes: &[u8]) -> bool {
 
 /// A piece is a tandem duplication when it is a pure insertion whose bases
 /// repeat the reference immediately 5' of the insertion point.
-fn is_tandem_duplication(piece: &Piece, ref_bytes: &[u8]) -> bool {
+///
+/// `pub(crate)` for the same reason as [`is_inversion`]: the ruled-cut `TandemDupRun`
+/// adapter labels a peeled dup with the render stage's own recogniser.
+pub(crate) fn is_tandem_duplication(piece: &Piece, ref_bytes: &[u8]) -> bool {
     if piece.ref_start != piece.ref_end || piece.alt.is_empty() {
         return false;
     }
@@ -11998,6 +13712,44 @@ fn is_tandem_duplication(piece: &Piece, ref_bytes: &[u8]) -> bool {
         return false;
     };
     ref_bytes[source_start..piece.ref_start].eq_ignore_ascii_case(&piece.alt)
+}
+
+/// Whether `pieces` contains a tandem-duplication piece whose source copy a
+/// prior piece overwrites — the exact geometry the render seam refuses.
+///
+/// `duplication_anchor` refuses a dup when `source_start < previous_ref_end`
+/// (the highest reference offset a preceding piece claimed): the `k` reference
+/// bases 5' of the insertion that the dup is supposedly a copy of have already
+/// been consumed by a sibling edit, so in the *resulting* sequence they no
+/// longer equal the copied unit and it is not a duplication. When the render
+/// refuses it, `collect_canonical_edits` returns `None`,
+/// `canonicalize_from_sequence_with_rule` falls back to the per-member pipeline,
+/// and — because that fallback types each input spelling's own members — two
+/// spellings of one variant leak apart (the `s05-c-m4-sep1-p1-all-ins`
+/// confluence loss the ruled flip introduced).
+///
+/// The ruled `TandemDupRun` peel can mint such a dup because its own
+/// source-corruption gate ([`peel_tandem_dup_beside_change`] "Gate A") sees only
+/// the run it is cutting, not a sibling piece. This predicate re-derives the
+/// renderer's own refusal so the peel can decline **before** minting a label the
+/// renderer will throw away — fires iff the render would refuse, so it never
+/// suppresses a peel that would actually render (e.g. #2175's disjoint-source
+/// `[dup;sub]`). `pieces` must be in ascending `(ref_start, ref_end)` order, as
+/// the peel leaves them and as the renderer requires.
+pub(crate) fn dup_source_overlaps_prior_piece(pieces: &[Piece], reference: &[u8]) -> bool {
+    let mut previous_ref_end = 0usize;
+    for piece in pieces {
+        if is_tandem_duplication(piece, reference) {
+            // `is_tandem_duplication` already proved this `checked_sub` succeeds.
+            if let Some(source_start) = piece.ref_start.checked_sub(piece.alt.len()) {
+                if source_start < previous_ref_end {
+                    return true;
+                }
+            }
+        }
+        previous_ref_end = piece.ref_end;
+    }
+    false
 }
 
 /// Reverse complement of a byte slice, uppercased, or `None` on a non-IUPAC
@@ -15372,6 +17124,124 @@ mod tests {
     /// leaving it implicit is how it was lost.
     pub(super) const NO_AXIS: CoincidenceCarveOut = CoincidenceCarveOut::OutOfReach;
 
+    /// Reconstruct the resulting sequence from a piece list, so a test can assert
+    /// a partition is SOUND (round-trips). Pieces are the changed runs with
+    /// unchanged reference implied between them.
+    fn reconstruct_from_pieces(reference: &[u8], pieces: &[Piece]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut cursor = 0usize;
+        for p in pieces {
+            out.extend_from_slice(&reference[cursor..p.ref_start]);
+            out.extend_from_slice(&p.alt);
+            cursor = p.ref_end;
+        }
+        out.extend_from_slice(&reference[cursor..]);
+        out
+    }
+
+    /// The `op-extract` bake-off winner is selectable by name only under `dev`
+    /// (the [`crate::partition`] module it reuses is `dev`-gated), and it must be
+    /// listed for the diagnostic exactly where it resolves.
+    #[test]
+    fn op_extract_is_a_selectable_rule_under_dev() {
+        assert_eq!(
+            partition_rule_from_env(Some("op-extract")),
+            Ok(PartitionRule::OpExtract),
+            "`op-extract` must resolve to the winner rule under dev"
+        );
+        assert!(
+            PARTITION_RULE_NAMES.contains(&"op-extract"),
+            "the diagnostic's accepted-value list must advertise `op-extract`"
+        );
+        // It is not the default, and it does not cut with `partition_block_canonical`.
+        assert_ne!(DEFAULT_PARTITION_RULE, PartitionRule::OpExtract);
+        assert!(!PartitionRule::OpExtract.cuts_with_canonical());
+    }
+
+    /// The ruled cut is the shipped default as of the step-9 flip, and — since it
+    /// seeds with `partition_block_canonical` — is in the canonical family. The
+    /// pre-flip default, `canonical-coalesced`, stays selectable by name so the flip
+    /// is measurable: `FERRO_PARTITION=canonical-coalesced` reproduces the pre-flip
+    /// output exactly.
+    #[cfg(feature = "dev")]
+    #[test]
+    fn ruled_is_the_default_and_the_pre_flip_arm_is_still_selectable() {
+        assert_eq!(DEFAULT_PARTITION_RULE, PartitionRule::Ruled);
+        assert!(PartitionRule::Ruled.cuts_with_canonical());
+        assert_eq!(partition_rule_name(PartitionRule::Ruled), "ruled");
+        assert_eq!(
+            partition_rule_from_env(Some("ruled")),
+            Ok(PartitionRule::Ruled)
+        );
+        // The pre-flip default remains reachable by name for A/B measurement.
+        assert_eq!(
+            partition_rule_from_env(Some("canonical-coalesced")),
+            Ok(PartitionRule::CanonicalCoalesced)
+        );
+        assert_ne!(DEFAULT_PARTITION_RULE, PartitionRule::CanonicalCoalesced);
+    }
+
+    /// [`partition_block_op_extract`] must be SOUND on every shape — every piece
+    /// list reconstructs the resulting sequence — and its member→piece mapping
+    /// must materialise an `inv` payload correctly (the one non-verbatim case).
+    #[test]
+    fn op_extract_pieces_are_sound_across_shapes() {
+        // (reference, result) covering the precedence ladder's leaves.
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"ACGT", b"ACGT"),             // no change -> no pieces
+            (b"ACGTACGT", b"ACGAACGT"),     // one substitution
+            (b"ACGTACGT", b"ACGTACT"),      // a deletion
+            (b"ACGTACGT", b"ACGTTTACGT"),   // an insertion / tandem dup
+            (b"CAGCAG", b"CAGCAGCAG"),      // exact tandem duplication
+            (b"ACGTT", b"CGTTT"),           // a genuine edge inversion (op_extract's own case)
+            (b"GACTGACT", b"GAATGGCT"),     // two separated substitutions (multi-member)
+            (b"ACGTACGTAC", b"ACTTACATAC"), // scattered subs -> equal-length split
+            (b"TTTTTTTT", b"TTTAATTTTT"),   // net insertion in low-complexity content
+        ];
+        for (reference, result) in cases {
+            let pieces = partition_block_op_extract(
+                reference,
+                result,
+                crate::partition::block_ctx::Molecule::Dna,
+            );
+            assert_eq!(
+                &reconstruct_from_pieces(reference, &pieces),
+                result,
+                "op-extract partition of {}->{} must reconstruct the result; got {pieces:?}",
+                String::from_utf8_lossy(reference),
+                String::from_utf8_lossy(result),
+            );
+        }
+    }
+
+    /// The `inv` materialisation specifically: `ACGTT -> CGTTT` is `ACG`
+    /// inverted with a clean 3' flank, so op-extract types one `inv`. Its piece's
+    /// `alt` must be the reverse complement of the reference span (empty
+    /// `inserted` on the bake-off member would otherwise reconstruct wrong), so
+    /// [`anchor_for_piece`]'s `is_inversion` re-detects it.
+    #[test]
+    fn op_extract_inv_member_materialises_its_revcomp_payload() {
+        let (reference, result): (&[u8], &[u8]) = (b"ACGTT", b"CGTTT");
+        let pieces = partition_block_op_extract(
+            reference,
+            result,
+            crate::partition::block_ctx::Molecule::Dna,
+        );
+        let inv = pieces
+            .iter()
+            .find(|p| {
+                p.ref_end - p.ref_start >= 2
+                    && p.alt == op_extract_revcomp(&reference[p.ref_start..p.ref_end])
+            })
+            .unwrap_or_else(|| panic!("expected a materialised inv piece; got {pieces:?}"));
+        assert_eq!(
+            inv.alt,
+            op_extract_revcomp(&reference[inv.ref_start..inv.ref_end]),
+            "the inv piece's alt must be revcomp(span)"
+        );
+        assert_eq!(reconstruct_from_pieces(reference, &pieces), result);
+    }
+
     /// The coding DNA axis, `c.` — one of the axes `DNA/delins.md:44-47`
     /// reaches. The carve-out was originally scoped to `c.` alone and was
     /// superseded (2026-08-17, #2155) to reach every DNA axis (`c./g./m./n.`);
@@ -15774,7 +17644,12 @@ mod tests {
                 .iter()
                 .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
                 .collect();
-            let collapsed = collapse_overlapping_cis_edits(parsed, AllelePhase::Cis, &provider);
+            let collapsed = collapse_overlapping_cis_edits(
+                parsed,
+                AllelePhase::Cis,
+                &provider,
+                ShuffleDirection::ThreePrime,
+            );
             let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
             assert_eq!(
                 rendered,
@@ -15799,48 +17674,70 @@ mod tests {
         }
     }
 
-    /// The other half of the case above: where the `-1` anchor would name no
-    /// nucleotide, the collapse refuses the group instead of naming it (#2037).
+    /// The other half of the case above, at the true 5' edge: `n.1`'s net 5'
+    /// anchor falls off the transcript, and `n.` has no negative zone at all
+    /// (`numbering.md:52`/`:54`), so the pre-#2037 answer `n.-1_1insA` was
+    /// non-conformant as well as out of range (#2037).
     ///
-    /// The refusal is decided on the **sequence** coordinate — the axis
-    /// coordinate plus the frame's `delta` — never on the rendered spelling, so
-    /// the two `c.`/`r.` rows in the test above, whose `-1` is transcript base
-    /// 12 on this same fixture, are untouched. That pairing is the point:
-    /// asserting only the refusal would be satisfied by a guard that had
-    /// swallowed the whole 5' edge.
+    /// Under the ruled partitioner the cis collapse re-derives this group from
+    /// its resulting sequence directly, to the single-position ON-sequence
+    /// `delins` `NM_TEST.1:n.1delinsAG` (`n.1` `G` replaced by `AG`). That is the
+    /// same end-to-end form the canonical arm reaches one step later through
+    /// `canonicalize_from_sequence`'s [`boundary_delins_anchor`], and the form
+    /// `issue_1796_base_zero_names_no_nucleotide` pins — the ruled arm just
+    /// reaches it at the collapse rather than deferring to the per-member ladder.
     ///
-    /// Refusing is not a loss of the merge. The group goes back to the
-    /// per-member ladder, where `canonicalize_from_sequence`'s
-    /// [`boundary_delins_anchor`] re-spells a payload resting on a sequence
-    /// bound as the single-position `delins` HGVS can express — end to end this
-    /// input becomes `NM_TEST.1:n.1delinsAG`, which
-    /// `issue_1796_base_zero_names_no_nucleotide` pins.
+    /// What #2037 guarantees is unchanged either way, and is what this pins: the
+    /// coordinate names a base the transcript has, never the off-sequence `n.-1`.
+    /// It is decided on the **sequence** coordinate — the axis coordinate plus
+    /// the frame's `delta` — never the rendered spelling, so the `c.`/`r.` rows
+    /// in the test above, whose `-1` is transcript base 12 on this same fixture,
+    /// are untouched: this is not a guard that swallowed the whole 5' edge.
     #[test]
-    fn a_five_prime_edge_anchor_off_the_sequence_is_refused() {
+    fn a_five_prime_edge_anchor_collapses_to_an_on_sequence_delins() {
         let provider = bounds_transcript_provider();
         // `n.1` is transcript base 1, so the interbase 5' of it is off the
-        // transcript. `n.` also has no negative zone at all
-        // (`numbering.md:52`/`:54`), which is why the pre-#2037 answer
-        // `n.-1_1insA` was non-conformant as well as out of range.
+        // transcript, and `n.` has no negative zone (`numbering.md:52`/`:54`) —
+        // the pre-#2037 collapse named the off-sequence `n.-1_1insA`. The ruled
+        // cis collapse instead re-derives the group to the on-sequence
+        // single-position `delins` below (sequence-preserving; the seam's
+        // denoted-sequence oracle confirms it).
         let members = ["NM_TEST.1:n.1G>A", "NM_TEST.1:n.1dup"];
         let parsed: Vec<_> = members
             .iter()
             .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
             .collect();
-        let collapsed = collapse_overlapping_cis_edits(parsed.clone(), AllelePhase::Cis, &provider);
+        let collapsed = collapse_overlapping_cis_edits(
+            parsed,
+            AllelePhase::Cis,
+            &provider,
+            ShuffleDirection::ThreePrime,
+        );
         let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
         assert_eq!(
             rendered,
-            parsed.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
-            "the group must be handed back untouched, not named on a coordinate \
-             NM_TEST.1 does not have",
+            vec!["NM_TEST.1:n.1delinsAG".to_string()],
+            "the 5' edge must collapse to the on-sequence single-position delins, \
+             never the off-sequence n.-1 the pre-#2037 collapse named",
         );
     }
 
-    /// The same geometry away from the axis origin is untouched — the fix
-    /// remaps the single coordinate that names no nucleotide and nothing else.
+    /// The same geometry away from the axis origin keeps an ON-SEQUENCE anchor —
+    /// #2037 remaps the single coordinate that names no nucleotide and nothing
+    /// else, so an interior anchor is never pushed off the sequence the way the
+    /// pre-#2037 `n.-1` was.
+    ///
+    /// The rendered SPELLING may still differ by arm, and that is not what this
+    /// pins: under the ruled partitioner the cis collapse re-derives from the
+    /// resulting sequence, so `n.13`'s `[sub;dup]` — which makes a `GG` tandem at
+    /// `n.12`/`n.13` (`n.12` is `G`, `n.13 A>G`) — is dup-labelled to `n.12dup` at
+    /// the collapse step (`duplication-must-ranks-the-label-not-the-partition`),
+    /// while `c.2` forms no tandem and stays the `ins` spelling until a later
+    /// pass. Both are on-sequence, and both reach a `dup` end to end
+    /// (`c.2dup`/`n.12dup`); the collapse just reaches n.13's sooner. What this
+    /// test guards is the coordinate, not the label.
     #[test]
-    fn an_interior_insertion_anchor_is_unchanged() {
+    fn an_interior_anchor_is_not_remapped_off_sequence() {
         let provider = bounds_transcript_provider();
         let cases = [
             (
@@ -15849,7 +17746,7 @@ mod tests {
             ),
             (
                 ["NM_TEST.1:n.13A>G", "NM_TEST.1:n.13dup"],
-                "NM_TEST.1:n.12_13insG",
+                "NM_TEST.1:n.12dup",
             ),
         ];
         for (members, expected) in cases {
@@ -15857,7 +17754,12 @@ mod tests {
                 .iter()
                 .map(|m| parse_hgvs(m).unwrap_or_else(|e| panic!("fixture {m} must parse: {e}")))
                 .collect();
-            let collapsed = collapse_overlapping_cis_edits(parsed, AllelePhase::Cis, &provider);
+            let collapsed = collapse_overlapping_cis_edits(
+                parsed,
+                AllelePhase::Cis,
+                &provider,
+                ShuffleDirection::ThreePrime,
+            );
             let rendered: Vec<String> = collapsed.iter().map(|v| v.to_string()).collect();
             assert_eq!(rendered, vec![expected.to_string()], "{members:?}");
         }
@@ -16260,6 +18162,74 @@ mod tests {
         assert!(
             duplication_anchor(&piece, Region::Genome, 1, ref_bytes, 4).is_none(),
             "a dup whose source span overlaps the preceding piece must decline",
+        );
+    }
+
+    /// [`dup_source_overlaps_prior_piece`] is the batch form of the refusal the
+    /// test above pins on `duplication_anchor`: over a whole pieces vec it must
+    /// flag exactly the geometry the renderer refuses. `TandemDupRun`'s recut
+    /// declines on this predicate, so drift between the two would re-open the
+    /// `s05-c-m4-sep1-p1-all-ins` confluence hole — the peel minting a dup the
+    /// render then throws away, leaking the per-member fallback.
+    #[test]
+    fn dup_source_overlaps_prior_piece_matches_the_render_refusal() {
+        // Same window and dup as `a_duplication_reaching_into_a_preceding_piece_declines`:
+        // a `CAG` dup at offset 6 whose source span is [3, 6).
+        let ref_bytes = b"AAACAG";
+        let dup = Piece {
+            ref_start: 6,
+            ref_end: 6,
+            alt: b"CAG".to_vec(),
+        };
+        assert!(
+            is_tandem_duplication(&dup, ref_bytes),
+            "fixture must be a dup, or the test proves nothing"
+        );
+
+        // A preceding piece ending at 3 leaves the source span [3, 6) clear.
+        let clear = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 3,
+                alt: b"AAA".to_vec(),
+            },
+            dup.clone(),
+        ];
+        assert!(
+            !dup_source_overlaps_prior_piece(&clear, ref_bytes),
+            "a disjoint source span renders, so it must not be flagged",
+        );
+
+        // A preceding piece ending at 4 reaches one base into the source span.
+        let clobbered = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 4,
+                alt: b"AAAC".to_vec(),
+            },
+            dup.clone(),
+        ];
+        assert!(
+            dup_source_overlaps_prior_piece(&clobbered, ref_bytes),
+            "a source span the preceding piece overwrites must be flagged",
+        );
+
+        // A pieces vec carrying no duplication is never flagged.
+        let no_dup = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 4,
+                alt: b"AAAC".to_vec(),
+            },
+            Piece {
+                ref_start: 4,
+                ref_end: 6,
+                alt: b"TT".to_vec(),
+            },
+        ];
+        assert!(
+            !dup_source_overlaps_prior_piece(&no_dup, ref_bytes),
+            "no dup, nothing to refuse",
         );
     }
 
@@ -18141,24 +20111,602 @@ mod tests {
             );
             assert_eq!(
                 (partition_rule(), DERIVED_BLOCK_PARTITION_RULE),
-                (
-                    PartitionRule::CanonicalCoalesced,
-                    PartitionRule::CanonicalCoalesced
-                ),
+                (PartitionRule::Ruled, PartitionRule::Ruled),
                 "the two surfaces' partition rules moved apart without being \
-                 re-pinned together -- `normalize` cuts with the first and \
-                 `from_sequences` with the second, and #1834 is the record of \
-                 what that costs. RIGHT MOVED Canonical -> CanonicalCoalesced \
-                 with #2155 task 3c, which wired `derive_block_members` to run \
-                 the same payload-coincidence coalesce passes \
-                 `canonicalize_from_sequence` runs, gated on this constant; the \
-                 left value is unchanged. The two surfaces now converge on a \
-                 payload-coincidence g./m. block \
-                 (`issue_2155_from_sequences_collapse`), but #1834's wider gap \
-                 -- every other pass `derive_block_members` still omits -- is \
-                 untouched. Re-measure that gap rather than carrying its \
-                 32/79 and 36/79 figures over"
+                 re-pinned together. As of the step-9 flip both cut with the \
+                 ruled arm: `normalize` cuts with the first (the runtime default) \
+                 and `from_sequences` with the second (the derivation pin), and \
+                 they must stay in lockstep. #1834 remains the record of what a \
+                 split between the two surfaces costs."
             );
+        }
+
+        /// The derivation surface tracks its pin, which as of the step-9 flip is
+        /// the ruled arm.
+        ///
+        /// `derive_block_members` selects its rule through
+        /// [`derived_block_partition_rule`], which returns the pinned
+        /// [`DERIVED_BLOCK_PARTITION_RULE`] whenever `FERRO_PARTITION` is not
+        /// `ruled` — and unset is the shipped case. Post-flip that pin is `Ruled`,
+        /// so the default derivation cuts with the ruled arm. This guard keeps the
+        /// selector in lockstep with the pin: were it to return a *different* arm
+        /// than [`DERIVED_BLOCK_PARTITION_RULE`] with the switch unset, the default
+        /// `--surface derivation` dump would diverge from what the pin advertises.
+        ///
+        /// Sabotage-proven: returning any arm other than
+        /// [`DERIVED_BLOCK_PARTITION_RULE`] from [`derived_block_partition_rule`]
+        /// with the switch unset turns this red.
+        #[test]
+        fn the_derivation_surface_tracks_its_pin_by_default() {
+            assert!(
+                std::env::var_os("FERRO_PARTITION").is_none(),
+                "this pin is the shipped default's; FERRO_PARTITION must be unset"
+            );
+            assert_eq!(
+                derived_block_partition_rule(),
+                DERIVED_BLOCK_PARTITION_RULE,
+                "the derivation surface's rule selector moved off its pin with \
+                 `FERRO_PARTITION` unset -- the DEFAULT derivation is no longer \
+                 byte-identical, which the pre-flip migration (design §10) \
+                 forbids. The ruled arm (T3) must be reachable ONLY under \
+                 `FERRO_PARTITION=ruled`."
+            );
+        }
+
+        /// The rederive gate runs the ruled arm by default, as of the step-9 flip.
+        ///
+        /// `normalize_for_recommended_form` asks [`ruled_arm_active`] whether to
+        /// bypass [`repartition_gate`] and always run `RepartitionMode::Full`.
+        /// With `FERRO_PARTITION` unset — the shipped case — that is now `true`,
+        /// because the shipped default IS the ruled arm. Measured before the flip:
+        /// gated == full under the ruled arm over the corpus (0 rows move), so the
+        /// bypass changes no rederive output — it re-derives the same variant. The
+        /// pre-flip `Gated` path is reachable under
+        /// `FERRO_PARTITION=canonical-coalesced`.
+        ///
+        /// Sabotage-proven: returning `false` unconditionally from
+        /// [`ruled_arm_active`] turns this red.
+        #[test]
+        fn the_rederive_gate_runs_the_ruled_arm_by_default() {
+            assert!(
+                std::env::var_os("FERRO_PARTITION").is_none(),
+                "this pin is the shipped default's; FERRO_PARTITION must be unset"
+            );
+            assert!(
+                ruled_arm_active(),
+                "the ruled arm is NOT active with `FERRO_PARTITION` unset -- the \
+                 step-9 flip makes the ruled arm the shipped default, so the \
+                 rederive gate must run its full-repartition path by default."
+            );
+        }
+
+        #[cfg(feature = "dev")]
+        /// The generalized two-surface pin, in the registry-KEY vocabulary
+        /// (design §8): the shipped runtime default and the derivation surface's
+        /// pinned key must agree, and both must be `"ruled"` as of the step-9 flip.
+        ///
+        /// The string counterpart of
+        /// [`the_two_surfaces_cut_with_a_pinned_pair_of_rules`], kept live
+        /// alongside it (the enum pin still guards `derive_block_members`'s
+        /// lib-live rule). It ties three things together so none can drift: the
+        /// runtime default's key ([`default_partition_key`], the string of
+        /// [`DEFAULT_PARTITION_RULE`]), the derivation key
+        /// ([`crate::partition::registry::DERIVED_BLOCK_PARTITION_KEY`]), and the
+        /// enum pin ([`DERIVED_BLOCK_PARTITION_RULE`]) via
+        /// [`partition_rule_name`]. Env-independent, so unlike its enum sibling
+        /// it needs no `FERRO_PARTITION` guard.
+        #[test]
+        fn the_two_surfaces_agree_on_a_pinned_registry_key() {
+            use crate::partition::registry::DERIVED_BLOCK_PARTITION_KEY;
+            assert_eq!(
+                default_partition_key(),
+                DERIVED_BLOCK_PARTITION_KEY,
+                "the shipped runtime default and the derivation pin disagree in \
+                 the registry-key vocabulary"
+            );
+            assert_eq!(DERIVED_BLOCK_PARTITION_KEY, "ruled");
+            assert_eq!(
+                DERIVED_BLOCK_PARTITION_KEY,
+                partition_rule_name(DERIVED_BLOCK_PARTITION_RULE),
+                "the registry key and the enum pin name different arms"
+            );
+        }
+
+        #[cfg(feature = "dev")]
+        /// The registry's legacy arms declare exactly the coalesce-eligibility
+        /// [`PartitionRule::cuts_with_canonical`] does — the WRONG-answer guard
+        /// (Fable review #4) that replaces enum exhaustiveness (design §11
+        /// tripwire 6).
+        ///
+        /// The no-default `Partitioner::cuts_with_canonical` already makes a
+        /// MISSING answer a compile error; this catches a *wrong* one by
+        /// asserting each registered arm's value AGAINST
+        /// [`PartitionRule::cuts_with_canonical`] directly, so the wrapper's
+        /// hand-declared value (stored explicitly on `LegacyRuleArm`, not derived
+        /// from the enum) cannot silently disagree with the enum it mirrors.
+        #[test]
+        fn legacy_arms_match_partition_rule_coalesce_eligibility() {
+            use crate::partition::registry::{arm, registry};
+            for (name, rule) in [
+                ("live", PartitionRule::Live),
+                ("shadow", PartitionRule::Shadow),
+                ("canonical", PartitionRule::Canonical),
+                ("canonical-coalesced", PartitionRule::CanonicalCoalesced),
+            ] {
+                let registered = arm(name).unwrap_or_else(|| panic!("registry lacks `{name}`"));
+                assert_eq!(
+                    registered.cuts_with_canonical(),
+                    rule.cuts_with_canonical(),
+                    "registry `{name}` coalesce-eligibility disagrees with PartitionRule"
+                );
+            }
+            assert!(
+                registry().len() >= 4,
+                "the four legacy names must be registered"
+            );
+        }
+
+        #[cfg(feature = "dev")]
+        /// The typed `NormalizeConfig.partitioner` handle is genuinely consulted
+        /// end-to-end (design §8; Fable review D — the field needs one non-`None`
+        /// exercise).
+        ///
+        /// Two properties, together enough to prove the knob is wired and not
+        /// merely present:
+        ///
+        /// * **Routing exactness.** A handle resolves to *exactly* its named rule:
+        ///   `canonicalize_from_sequence_with_partitioner(Some(handle))` equals
+        ///   `canonicalize_from_sequence_with_rule(that rule)`, and `None` equals
+        ///   the shipped default. The corpus is required to contain at least one
+        ///   input on which `live` and `canonical-coalesced` genuinely diverge, so
+        ///   those equalities are not vacuous — if the handle were ignored the two
+        ///   would collapse to one answer.
+        /// * **Flow-through.** Pinning the default arm through a full
+        ///   `Normalizer` reproduces the unset default byte-for-byte, proving the
+        ///   config field threads through `sequence_first_pass` without
+        ///   perturbing output.
+        #[test]
+        fn the_typed_partitioner_config_is_consulted_end_to_end() {
+            use crate::normalize::{NormalizeConfig, Normalizer};
+            use crate::partition::registry::partitioner_handle;
+
+            let live = partitioner_handle("live").expect("`live` handle");
+            let coalesced =
+                partitioner_handle("canonical-coalesced").expect("`canonical-coalesced` handle");
+
+            // Periodic flanks so a pure indel at a block edge has somewhere to
+            // roll (the direction_symmetry rationale). A `core -> payload`
+            // spanning delins whose payload differs in length from the core is
+            // the shape that reaches the re-partitioner, which is where `live`
+            // and `canonical-coalesced` can disagree.
+            const PAD: &str = "ACGTACGTACGTACGTACGT";
+            let base = PAD.len() + 1;
+            let words = |n: usize| -> Vec<String> {
+                let mut out = vec![String::new()];
+                for _ in 0..n {
+                    out = out
+                        .iter()
+                        .flat_map(|w| {
+                            ["A", "C", "G", "T"]
+                                .into_iter()
+                                .map(move |b| format!("{w}{b}"))
+                        })
+                        .collect();
+                }
+                out
+            };
+
+            // Search a small grid for one input on which the two rules genuinely
+            // diverge, and prove the handle routing on it. The routing equalities
+            // hold for ANY input; the divergence is what makes them non-vacuous.
+            // The winning `(input, sequence)` is kept for the flow-through half.
+            let mut diverging: Option<(String, String)> = None;
+            'search: for core in words(4) {
+                let sequence = format!("{PAD}{core}{PAD}");
+                let mut provider = MockProvider::new();
+                provider.add_genomic_sequence("NC_TEST.1", sequence.clone());
+                let hi = base + core.len() - 1;
+                for payload in words(3) {
+                    let input = format!("NC_TEST.1:g.{base}_{hi}delins{payload}");
+                    let Ok(variant) = parse_hgvs(&input) else {
+                        continue;
+                    };
+                    let members = [variant];
+                    let run_rule = |rule| {
+                        canonicalize_from_sequence_with_rule(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            ShuffleDirection::ThreePrime,
+                            rule,
+                            false,
+                        )
+                    };
+                    let live_out = run_rule(PartitionRule::Live);
+                    let coalesced_out = run_rule(PartitionRule::CanonicalCoalesced);
+                    if live_out == coalesced_out {
+                        continue;
+                    }
+                    let run_handle = |handle| {
+                        canonicalize_from_sequence_with_partitioner(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            ShuffleDirection::ThreePrime,
+                            handle,
+                        )
+                    };
+                    // Routing exactness on a divergent input: the handle's NAME
+                    // selects exactly its rule, and `None` the shipped default.
+                    assert_eq!(
+                        run_handle(Some(live.as_ref())),
+                        live_out,
+                        "the `live` handle must route to PartitionRule::Live for {input}",
+                    );
+                    assert_eq!(
+                        run_handle(Some(coalesced.as_ref())),
+                        coalesced_out,
+                        "the `canonical-coalesced` handle must route to its rule for {input}",
+                    );
+                    assert_eq!(
+                        run_handle(None),
+                        canonicalize_from_sequence(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            ShuffleDirection::ThreePrime,
+                        ),
+                        "a None handle must reproduce the shipped default for {input}",
+                    );
+                    diverging = Some((input, sequence.clone()));
+                    break 'search;
+                }
+            }
+            let (diverging_input, sequence) = diverging.expect(
+                "no grid input distinguished `live` from `canonical-coalesced`, so the \
+                 routing equalities would be vacuous",
+            );
+
+            // Flow-through: pinning the default arm through a real `Normalizer`
+            // (config field -> `sequence_first_pass`) must equal the unset default
+            // byte for byte, on the very block that exercised the routing above.
+            let variant = parse_hgvs(&diverging_input).expect("valid input");
+            let make = || {
+                let mut provider = MockProvider::new();
+                provider.add_genomic_sequence("NC_TEST.1", sequence.clone());
+                provider
+            };
+            let default_out = Normalizer::new(make())
+                .normalize(&variant)
+                .expect("default normalizes")
+                .to_string();
+            let pinned_out = Normalizer::with_config(
+                make(),
+                NormalizeConfig::default().with_partitioner(coalesced.clone()),
+            )
+            .normalize(&variant)
+            .expect("pinned normalizes")
+            .to_string();
+            assert_eq!(
+                pinned_out, default_out,
+                "pinning the default arm via the typed config must match the unset default",
+            );
+        }
+
+        /// Step 7 (design §10) retired the direction mirror on the ruled arm, so it
+        /// is **no longer byte-identical** to `canonical-coalesced`: through step 5
+        /// this grid saw zero disagreements, and now the ruled cut re-places a member
+        /// to its true 3'/5'-most position where `canonical-coalesced`'s mirror left
+        /// it adopted from the opposite direction (e.g. `g.21_24delinsAGT` 5' →
+        /// ruled `[21del;23_24delinsGT]` vs coalesced `[22del;…]`). This pins that
+        /// the divergence EXISTS (the step-7 change actually happened), that the
+        /// per-block shadow counts it, and that the lift seam is never hit. The
+        /// divergences are base-preserving respells — established over the whole
+        /// corpus by the `dump_normalized_corpus --verify-spdi` lane (0 base-changes
+        /// introduced), not re-derived here. nextest is process-per-test, so the
+        /// counter deltas are this test's.
+        #[cfg(feature = "dev")]
+        #[test]
+        fn the_ruled_arm_diverges_from_canonical_coalesced_by_placement_over_the_delins_grid() {
+            const PAD: &str = "ACGTACGTACGTACGTACGT";
+            let base = PAD.len() + 1;
+            let words = |n: usize| -> Vec<String> {
+                let mut out = vec![String::new()];
+                for _ in 0..n {
+                    out = out
+                        .iter()
+                        .flat_map(|w| {
+                            ["A", "C", "G", "T"]
+                                .into_iter()
+                                .map(move |b| format!("{w}{b}"))
+                        })
+                        .collect();
+                }
+                out
+            };
+            let before = ruled_counts();
+            let mut answered = 0usize;
+            let mut diverged = 0usize;
+            for core in words(4) {
+                let mut provider = MockProvider::new();
+                provider.add_genomic_sequence("NC_TEST.1", format!("{PAD}{core}{PAD}"));
+                let hi = base + core.len() - 1;
+                for payload in words(3) {
+                    let input = format!("NC_TEST.1:g.{base}_{hi}delins{payload}");
+                    let Ok(variant) = parse_hgvs(&input) else {
+                        continue;
+                    };
+                    let members = [variant];
+                    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                        let run = |rule| {
+                            canonicalize_from_sequence_with_rule(
+                                &members,
+                                AllelePhase::Cis,
+                                &provider,
+                                direction,
+                                rule,
+                                false,
+                            )
+                        };
+                        let shipped = run(PartitionRule::CanonicalCoalesced);
+                        let ruled = run(PartitionRule::Ruled);
+                        if ruled != shipped {
+                            diverged += 1;
+                        }
+                        if shipped.is_some() {
+                            answered += 1;
+                        }
+                    }
+                }
+            }
+            let after = ruled_counts();
+            assert!(
+                answered > 0,
+                "non-vacuity: the grid must reach the re-derivation"
+            );
+            assert!(
+                after.compared > before.compared,
+                "the shadow compared nothing"
+            );
+            assert!(
+                diverged > 0,
+                "step 7 retired the mirror, so the ruled arm must diverge from \
+                 canonical-coalesced somewhere on the delins grid",
+            );
+            assert!(
+                after.disagreed > before.disagreed,
+                "the per-block shadow must count the step-7 divergences",
+            );
+            assert_eq!(
+                after.unrenderable_fallbacks, before.unrenderable_fallbacks,
+                "lift seam hit on the grid; record the block"
+            );
+            assert_eq!(
+                after.roundtrip_refused, before.roundtrip_refused,
+                "a ruled cut was adopted then refused at the round-trip seam on the \
+                 grid: the block fell back to the per-member pipeline silently, which \
+                 types each spelling's own members and breaks confluence. Record the \
+                 block rather than let it be rediscovered one variant at a time.",
+            );
+        }
+
+        /// Two-surface fix, T1 (`specs/2026-09-05-two-surface-fix-design.md`). Pins
+        /// the mechanism the fix targets, arm-independently: the member-merge collapse
+        /// (`collapse_overlapping_cis_edits` → `dup_extends_reference_tandem`, a third
+        /// hand-synced copy of the peel's narrow tract reach) folds a `[dup;sub]`
+        /// whose source has no adjacent copy back to a spanning `delins`. On
+        /// `GGGTACGGG`, `4_5dup`'s source `TA` has no adjacent copy, so the DEFAULT-arm
+        /// normalize of the split form returns the delins. This is why the c7-g-2188
+        /// row is ARM-MISS: the ruled cut can expose the dup (once step 8 widens the
+        /// peel reach), but the collapse folds it back. Option C makes the ruled arm's
+        /// collapse consult the partitioner instead of this reach copy; step 9 deletes
+        /// the collapse body and this default fold with it. The fold is deliberately
+        /// pinned on the DEFAULT arm so it stays true through every ruled-arm step and
+        /// flips only at step 9.
+        #[cfg(feature = "dev")]
+        #[test]
+        fn the_default_preserves_a_dup_abutting_a_change() {
+            use crate::normalize::{NormalizeConfig, Normalizer};
+            let mut provider = MockProvider::new();
+            provider.add_genomic_sequence("NC_TEST", "GGGTACGGG".to_string());
+            let normalizer = Normalizer::with_config(provider, NormalizeConfig::default());
+            let exposed = parse_hgvs("NC_TEST:g.[4_5dup;6C>A]").expect("parse");
+            // As of the step-9 flip the default (ruled) arm PRESERVES a dup abutting
+            // a change instead of folding it to a spanning delins. This is the
+            // dup-beside-change exposure that drives the R7 disclosure (2031 of 2064
+            // real-corpus moves are this shape). The pre-flip member-merge collapse,
+            // which folded this to `g.6delinsTAA` because the source `TA` has no
+            // adjacent copy, is reachable under `FERRO_PARTITION=canonical-coalesced`
+            // — which is what keeps the flip measurable.
+            assert_eq!(
+                normalizer
+                    .normalize(&exposed)
+                    .expect("normalize")
+                    .to_string(),
+                "NC_TEST:g.[4_5dup;6C>A]",
+                "the ruled default must preserve a dup abutting a change (R7 exposure)",
+            );
+        }
+
+        /// The coding and RNA axes end to end: the frame inverse and the molecule
+        /// limb. Uses `bounds_transcript_provider`'s 35-base transcript (CDS 13..=24,
+        /// codons ATG AAA CCC TAA). Each cis allele is passed as its member variants,
+        /// parsed standalone — the byte-identity of the two arms holds on any input.
+        #[cfg(feature = "dev")]
+        #[test]
+        fn the_ruled_arm_is_byte_identical_on_the_coding_and_rna_axes() {
+            let provider = super::bounds_transcript_provider();
+            let alleles: [&[&str]; 8] = [
+                &["NM_TEST.1:c.4A>G", "NM_TEST.1:c.6A>T"], // two subs one base apart in codon 2
+                &["NM_TEST.1:c.2T>A", "NM_TEST.1:c.4A>G"], // different codons -> stays split
+                &["NM_TEST.1:c.4del", "NM_TEST.1:c.6A>T"], // length-changing, gap one, one codon
+                &["NM_TEST.1:c.7C>A", "NM_TEST.1:c.9C>G"], // codon 3
+                &["NM_TEST.1:c.10T>C", "NM_TEST.1:c.12A>G"], // the termination codon
+                &["NM_TEST.1:c.5_6del", "NM_TEST.1:c.9C>G"], // net deletion, separation 2
+                &["NM_TEST.1:r.4a>g", "NM_TEST.1:r.6a>u"], // RNA axis: codon exception on RNA's authority
+                &["NM_TEST.1:r.5_6del", "NM_TEST.1:r.9c>g"], // RNA axis: DnaOnly rules must not fire
+            ];
+            let before = ruled_counts();
+            let mut answered = 0usize;
+            for members_str in alleles {
+                let members: Vec<HgvsVariant> = members_str
+                    .iter()
+                    .map(|s| parse_hgvs(s).unwrap_or_else(|e| panic!("{s}: {e}")))
+                    .collect();
+                for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                    let run = |rule| {
+                        canonicalize_from_sequence_with_rule(
+                            &members,
+                            AllelePhase::Cis,
+                            &provider,
+                            direction,
+                            rule,
+                            false,
+                        )
+                    };
+                    let shipped = run(PartitionRule::CanonicalCoalesced);
+                    assert_eq!(
+                        run(PartitionRule::Ruled),
+                        shipped,
+                        "{members_str:?} {direction:?}"
+                    );
+                    if shipped.is_some() {
+                        answered += 1;
+                    }
+                }
+            }
+            let after = ruled_counts();
+            assert!(
+                answered > 0,
+                "non-vacuity: some coding allele must re-derive"
+            );
+            assert_eq!(after.disagreed, before.disagreed);
+        }
+
+        /// Design §10 step 3: each rule's declared [`Scope`] reproduces the shipping
+        /// gate it replaced, on every [`CisKind`].
+        ///
+        /// This pins what the corpus byte-identity gate structurally cannot. The
+        /// representation corpus has **no `r.` blocks**
+        /// (`rna-axis-alignment-only-symbol-reach`: `RefShape::all()` has no RNA
+        /// shape), so those 70,818 blocks never exercise the `DnaOnly` scope's RNA
+        /// refusal — a corpus zero that is a claim about the corpus, not the code.
+        /// Here the DNA and RNA contexts are built **directly from the molecule**,
+        /// not via [`AxisFrame::is_dna`], so a rule refusing RNA is a genuine property
+        /// of the [`Scope`] machinery rather than a tautology, and it is then anchored
+        /// to the shipping predicate the rule replaced.
+        ///
+        /// Anti-drift: the shipping axis scope collapsed to one predicate long ago
+        /// (`payload_coalesce_applies`'s own doc: "not a second copy of it"). The
+        /// ruled arm's [`Scope`] is the fifth place that question is answered, and
+        /// this is the guard that it can never disagree with the other four.
+        #[cfg(feature = "dev")]
+        #[test]
+        fn each_rule_scope_reproduces_the_shipping_gate_it_replaced() {
+            use crate::partition::adapters::{
+                CodonException, CodonFrameSeparation, CompensatingGaps, PayloadCoincidence,
+                PlacedGap, TandemDupRun,
+            };
+            use crate::partition::block_ctx::{BlockCtx, FrameContext, Molecule, Provenance};
+            use crate::partition::ruled::{FrameScope, MoleculeScope, Rule};
+
+            let noncoding = FrameContext::NonCoding;
+            let coding = FrameContext::coding(0, Some(0), None);
+            let prov = Provenance::none();
+            // Explicit bindings, not a closure: a closure returning a `BlockCtx` that
+            // borrows its own parameter trips the borrow checker (the T4 lifetime bug).
+            // Built from the molecule directly, so `admits` refusing RNA is real. The
+            // block is a **net deletion** (`ACG -> AG`) so the direction limb of the
+            // `NetDeletion`-scoped rules (`PayloadCoincidence`, `PlacedGap`) admits it
+            // and this test isolates the molecule limb from the direction one.
+            let dna = BlockCtx {
+                reference: b"ACG",
+                resulting: b"AG",
+                frame: &noncoding,
+                molecule: Molecule::Dna,
+                provenance: &prov,
+            };
+            let rna = BlockCtx {
+                molecule: Molecule::Rna,
+                ..dna
+            };
+            let coding_dna = BlockCtx {
+                frame: &coding,
+                ..dna
+            };
+
+            // --- Molecule limb: the four axis-scoped rules. ---
+            // PlacedGap wraps `may_disbelieve_a_separation` (== InReach == is_dna);
+            // PayloadCoincidence/CompensatingGaps/TandemDupRun the `_applies`/inline
+            // gates, all `… && AxisFrame::is_dna(kind)`. Every one is `DnaOnly` and
+            // must admit DNA, refuse `r.`.
+            let dna_scoped: [&dyn Rule; 4] = [
+                &PayloadCoincidence,
+                &CompensatingGaps,
+                &TandemDupRun,
+                &PlacedGap,
+            ];
+            for rule in dna_scoped {
+                assert_eq!(
+                    rule.scope().molecule,
+                    MoleculeScope::DnaOnly,
+                    "{} declares the axis scope",
+                    rule.id()
+                );
+                assert!(rule.scope().admits(&dna), "{} admits a DNA axis", rule.id());
+                assert!(
+                    !rule.scope().admits(&rna),
+                    "{} refuses the r. axis",
+                    rule.id()
+                );
+            }
+
+            // Anchor to the shipping gates: `is_dna` is the single predicate all four
+            // reduce to. True on every DNA `CisKind`, false only on `Rna` — and the
+            // `_applies` wrappers agree for the arm the ruled driver reproduces.
+            for kind in [CisKind::Genome, CisKind::Mt, CisKind::Cds, CisKind::Tx] {
+                assert!(AxisFrame::is_dna(kind), "{kind:?} is a DNA axis");
+                assert!(payload_coalesce_applies(
+                    PartitionRule::CanonicalCoalesced,
+                    kind
+                ));
+                assert!(compensating_gap_coalesce_applies(
+                    PartitionRule::CanonicalCoalesced,
+                    kind
+                ));
+            }
+            assert!(!AxisFrame::is_dna(CisKind::Rna));
+            assert!(!payload_coalesce_applies(
+                PartitionRule::CanonicalCoalesced,
+                CisKind::Rna
+            ));
+            assert!(!compensating_gap_coalesce_applies(
+                PartitionRule::CanonicalCoalesced,
+                CisKind::Rna
+            ));
+
+            // --- Frame limb: the two codon rules replaced the `carries_translated_frame`
+            // gate. They declare `NeedsCodingFrame`, admit a frame carrying a codon
+            // grid, and refuse one that does not. ---
+            let codon_scoped: [&dyn Rule; 2] = [&CodonFrameSeparation, &CodonException];
+            for rule in codon_scoped {
+                assert_eq!(
+                    rule.scope().frame,
+                    FrameScope::NeedsCodingFrame,
+                    "{} declares the coding-frame scope",
+                    rule.id()
+                );
+                assert!(
+                    rule.scope().admits(&coding_dna),
+                    "{} admits a coding frame",
+                    rule.id()
+                );
+                assert!(
+                    !rule.scope().admits(&dna),
+                    "{} refuses a non-coding frame",
+                    rule.id()
+                );
+            }
         }
 
         /// The derivation seam really cuts with the rule it names.
@@ -18256,11 +20804,25 @@ mod tests {
         /// rather than at somebody's bake-off.
         #[test]
         fn every_advertised_arm_name_resolves() {
+            // Mirrors `PARTITION_RULE_NAMES`, which advertises the dev-only
+            // `op-extract` winner and the ruled default only where the
+            // `partition` module (and so their typers) exists.
+            #[cfg(feature = "dev")]
             let expected = [
                 ("live", PartitionRule::Live),
                 ("shadow", PartitionRule::Shadow),
                 ("canonical", PartitionRule::Canonical),
                 ("canonical-coalesced", PartitionRule::CanonicalCoalesced),
+                ("op-extract", PartitionRule::OpExtract),
+                ("ruled", PartitionRule::Ruled),
+            ];
+            #[cfg(not(feature = "dev"))]
+            let expected = [
+                ("live", PartitionRule::Live),
+                ("shadow", PartitionRule::Shadow),
+                ("canonical", PartitionRule::Canonical),
+                ("canonical-coalesced", PartitionRule::CanonicalCoalesced),
+                ("ruled", PartitionRule::Ruled),
             ];
             assert_eq!(
                 expected.map(|(name, _)| name),
@@ -18356,11 +20918,27 @@ mod tests {
         /// new arm cannot be added without landing here too.
         #[test]
         fn every_arm_declares_whether_it_cuts_canonically() {
+            // The dev-only `op-extract` winner and the ruled default are present
+            // only where the rule resolves, keeping the length tie to
+            // `PARTITION_RULE_NAMES` exact in both builds. `op-extract` does its
+            // own peeling, so it does not cut canonically; the ruled cut seeds
+            // with `partition_block_canonical`, so it does.
+            #[cfg(feature = "dev")]
             let arms = [
                 (PartitionRule::Live, false),
                 (PartitionRule::Shadow, false),
                 (PartitionRule::Canonical, true),
                 (PartitionRule::CanonicalCoalesced, true),
+                (PartitionRule::OpExtract, false),
+                (PartitionRule::Ruled, true),
+            ];
+            #[cfg(not(feature = "dev"))]
+            let arms = [
+                (PartitionRule::Live, false),
+                (PartitionRule::Shadow, false),
+                (PartitionRule::Canonical, true),
+                (PartitionRule::CanonicalCoalesced, true),
+                (PartitionRule::Ruled, true),
             ];
             assert_eq!(
                 arms.len(),
@@ -21364,6 +23942,53 @@ mod tests {
             );
         }
 
+        /// #2161: the exact-window route reads the window's DIFFERENCE hull, so
+        /// its answer cannot depend on where `shift_pieces` parked an edge indel.
+        ///
+        /// `43_47inv` beside `50G>T` (1-based) on the inverted-repeat contig: the
+        /// block `TTAACCGG -> GTTAACGT` is cut by the DAG as `[insG@42; del one C;
+        /// G>T]`, and the deleted C sits at `[47,48)` 3'-placed or `[46,47)`
+        /// 5'-placed. Only the 5' hull `[42,47)` is the exact reverse complement
+        /// of its own span; the 3' hull `[42,48)` carries one unchanged trailing
+        /// column, and the hull-reading route declined it — which the retired
+        /// direction mirror papered over by running the chain twice. Both
+        /// placements must now yield the same `[42_47inv; 49_50T]`.
+        #[test]
+        fn an_exact_sub_span_inversion_is_found_under_either_placement_of_its_edge_indel() {
+            let reference = b"AACCGGTTAATCGATCGATTGCACGTACGTGCAATCGATCGATTAACCGGTTAACCGGTTAACCGG";
+            let core = rc(&reference[42..47]);
+            assert_ne!(
+                core,
+                reference[42..47].to_vec(),
+                "the span is a real inversion"
+            );
+            let mut result = reference.to_vec();
+            result[42..47].copy_from_slice(&core);
+            result[49] = b'T';
+            let (block_ref, block_alt) = (&reference[42..50], &result[42..50]);
+            let want = vec![piece(42, 47, &core), piece(49, 50, b"T")];
+            for del_at in [47usize, 46] {
+                let mut scanned = vec![
+                    piece(42, 42, b"G"),
+                    piece(del_at, del_at + 1, b""),
+                    piece(49, 50, b"T"),
+                ];
+                coalesce_inversion_runs(&mut scanned, reference, 42, block_ref, block_alt);
+                assert_eq!(scanned, want, "with the deleted C placed at {del_at}");
+            }
+            // Negative control, same geometry: a window whose difference hull is
+            // NOT a reverse complement is left exactly as it arrived. `insA` in
+            // place of `insG` denotes `ATTAAC` over `TTAACC`, whose core `ATTAA`
+            // is not `revcomp(TTAAC) = GTTAA`.
+            let mut result = reference.to_vec();
+            result[42..48].copy_from_slice(b"ATTAAC");
+            let (block_ref, block_alt) = (&reference[42..48], &result[42..48]);
+            let before = vec![piece(42, 42, b"A"), piece(47, 48, b"")];
+            let mut scanned = before.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 42, block_ref, block_alt);
+            assert_eq!(scanned, before, "a non-revcomp core does not type");
+        }
+
         /// #1230's `GATG -> CATC`, the substitution split #1230 pinned. Now one
         /// `inv`, per `rulings[whole-span-reverse-complement-types-as-inv]`,
         /// which overturns #1230.
@@ -21789,6 +24414,220 @@ mod tests {
         }
     }
 
+    /// The widened peel reach ([`PeelReach::PlusK`]) and its homopolymer artifact
+    /// gate, driven directly with hand-built `(pieces, reference)` for the corpus
+    /// rows the step-8 widening turns on. `TractOnly` reproduces the shipped
+    /// behaviour; `PlusK` exposes a single-copy dup source (Part A) and admits a
+    /// pure insertion (Part B), with the gate keeping a spurious homopolymer
+    /// coincidence whole while still exposing a genuine homopolymer duplication.
+    #[cfg(test)]
+    mod peel_wide_reach {
+        use super::*;
+
+        fn piece(start: usize, end: usize, alt: &[u8]) -> Piece {
+            Piece {
+                ref_start: start,
+                ref_end: end,
+                alt: alt.to_vec(),
+            }
+        }
+
+        /// The homopolymer predicate itself (period 1 vs the five rows' units).
+        #[test]
+        fn is_homopolymer_keys_on_the_minimal_tiling_period() {
+            for unit in [b"AA".as_slice(), b"TT", b"GG", b"CCC", b"tt", b"Aa"] {
+                assert!(is_homopolymer(unit), "{:?} is a homopolymer", unit);
+            }
+            for unit in [b"TA".as_slice(), b"AG", b"CA", b"AC", b"AT"] {
+                assert!(!is_homopolymer(unit), "{:?} is not a homopolymer", unit);
+            }
+            assert!(!is_homopolymer(b"A"));
+            assert!(!is_homopolymer(b""));
+        }
+
+        /// c7-g-2188 `GGGTACGGG -> GGGTATAAGGG`, minimal `6delinsTAA` (non-zero
+        /// hull). `TractOnly` cannot see the single `TA` source and leaves the
+        /// delins; `PlusK`'s Part-A reach exposes `[4_5dup; 6C>A]`
+        /// (`duplication-must-ranks-the-label-not-the-partition`).
+        #[test]
+        fn c7_2188_delins_exposes_the_dup_under_plusk_only() {
+            let reference = b"GGGTACGGG";
+            let mut narrow = vec![piece(5, 6, b"TAA")];
+            peel_tandem_dup_beside_change(&mut narrow, reference, PeelReach::TractOnly);
+            assert_eq!(
+                narrow,
+                vec![piece(5, 6, b"TAA")],
+                "tract-only leaves the delins"
+            );
+
+            let mut wide = vec![piece(5, 6, b"TAA")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(5, 5, b"TA"), piece(5, 6, b"A")],
+                "Part A exposes the `TA` dup beside the `C>A` substitution",
+            );
+        }
+
+        /// c7-g-2175 `AAACACGAAA -> AAACACATGAAA`, minimal `6_7insAT` (ZERO-width
+        /// hull, a pure insertion). `TractOnly` rejects the zero-width hull;
+        /// `PlusK`'s Part B admits it and exposes `[4_5dup; 6C>T]` — the unit
+        /// `CA` is not a homopolymer, so the gate does not fire.
+        #[test]
+        fn c7_2175_insertion_exposes_the_dup_under_plusk_only() {
+            let reference = b"AAACACGAAA";
+            let mut narrow = vec![piece(6, 6, b"AT")];
+            peel_tandem_dup_beside_change(&mut narrow, reference, PeelReach::TractOnly);
+            assert_eq!(
+                narrow,
+                vec![piece(6, 6, b"AT")],
+                "tract-only rejects the pure insertion"
+            );
+
+            let mut wide = vec![piece(6, 6, b"AT")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(5, 5, b"CA"), piece(5, 6, b"T")],
+                "Part B admits the insertion; the `CA` dup is exposed",
+            );
+        }
+
+        /// s02 `TAAAATTATATTTATTATTT -> TAAAATTAAATATTTATTATTT`, minimal `insAA` at
+        /// offset 8 (ZERO-width hull). The insertion is a tandem expansion of the
+        /// lone `A` at offset 7 (`A[1] -> A[3]`), so Part B must NOT re-partition it
+        /// into `[8T>A; AT dup]`
+        /// (`pure-tandem-expansion-insertion-is-not-repartitioned`, rule 6). Kept
+        /// whole, it renders as the repeat `A[3]`. The `c7_2175` test above is the
+        /// negative control: a pure insertion that is NOT a tandem expansion of its
+        /// tract still peels, so the guard fires selectively rather than disabling
+        /// Part B.
+        #[test]
+        fn s02_tandem_expansion_insertion_stays_whole_under_plusk() {
+            let reference = b"TAAAATTATATTTATTATTT";
+            let mut wide = vec![piece(8, 8, b"AA")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(8, 8, b"AA")],
+                "a pure tandem-repeat expansion is not re-partitioned into [sub; dup]",
+            );
+        }
+
+        /// c18-g-1286 `TTTCTTT -> TTTCGTTTT`, minimal `4_5insGT` (pure insertion
+        /// beside a `T` homopolymer). The gate keeps it whole under `PlusK`: the
+        /// only candidate is a `TT` copy with the foreign `G` re-labelled a
+        /// substitution of a run `T` — the spurious homopolymer artifact
+        /// (`contiguous-insertion-split-by-a-blocked-derivation`).
+        #[test]
+        fn c18_1286_homopolymer_insertion_stays_whole_under_plusk() {
+            let reference = b"TTTCTTT";
+            let mut wide = vec![piece(4, 4, b"GT")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(4, 4, b"GT")],
+                "the homopolymer artifact is gated"
+            );
+        }
+
+        /// c18-g-1290 `AAATAAA -> AAATGAAAA`, minimal `4_5insGA` — the `A`-run
+        /// sibling of c18-1286. Also gated whole.
+        #[test]
+        fn c18_1290_homopolymer_insertion_stays_whole_under_plusk() {
+            let reference = b"AAATAAA";
+            let mut wide = vec![piece(4, 4, b"GA")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(4, 4, b"GA")],
+                "the homopolymer artifact is gated"
+            );
+        }
+
+        /// c12-g-1884 `AAAGTAAA -> AAAGCATAAA`, minimal `4_5insCA` (pure insertion,
+        /// non-homopolymer). The only wide candidate is a `TA` dup whose `5T>C`
+        /// substitution falls INSIDE the `TA` source, so the source-corruption
+        /// gate keeps the insertion whole (`R1`). This is the class the
+        /// homopolymer gate alone does not catch — the unit is not a homopolymer.
+        #[test]
+        fn c12_1884_source_corrupting_split_is_gated_whole_under_plusk() {
+            let reference = b"AAAGTAAA";
+            let mut wide = vec![piece(4, 4, b"CA")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(4, 4, b"CA")],
+                "a source-corrupting split is gated"
+            );
+        }
+
+        /// The gate's discriminating conjunct: a GENUINE homopolymer duplication
+        /// beside a substitution on a DISTINCT reference base is still exposed.
+        /// Same `AA` unit as c18, but the substitution lands on the `C` (not a run
+        /// base), so `span[ref_offset] != unit[0]` and the gate lets it through —
+        /// the `dup_plus_sub` corpus family the plain homopolymer check wrongly
+        /// suppressed (`duplication-must-ranks-the-label-not-the-partition`).
+        #[test]
+        fn a_genuine_homopolymer_dup_beside_a_distinct_sub_is_exposed() {
+            let reference = b"AAAAC";
+            let mut wide = vec![piece(4, 5, b"AAA")];
+            peel_tandem_dup_beside_change(&mut wide, reference, PeelReach::PlusK);
+            assert_eq!(
+                wide,
+                vec![piece(4, 4, b"AA"), piece(4, 5, b"A")],
+                "a real `AA` dup beside a `C>A` sub is exposed, not gated",
+            );
+        }
+    }
+
+    /// The `keep_if_canonical` parameter of
+    /// [`canonicalize_from_sequence_with_rule`]: when the re-derivation confirms
+    /// the input is ALREADY the canonical partition (`rebuilt == variants`),
+    /// `false` drops it (`None`, "no change" — the `sequence_first_pass`
+    /// contract), while `true` returns the members. The collapse's ruled consult
+    /// passes `true` so an already-ratified `[dup; sub]` is kept rather than folded
+    /// by the legacy path — the c7-g-2188 routing fix.
+    #[cfg(test)]
+    mod keep_if_canonical_param {
+        use super::*;
+        use crate::reference::MockProvider;
+
+        /// A lone substitution in a non-repetitive context is trivially already
+        /// canonical: the re-derivation is itself, so it reaches `rebuilt ==
+        /// variants` and the flag decides the return.
+        #[test]
+        fn an_already_canonical_group_is_dropped_or_kept_by_the_flag() {
+            let mut provider = MockProvider::new();
+            provider.add_genomic_sequence("NC_TEST.1", "TTTTATTTT".to_string());
+            let members = [parse_hgvs("NC_TEST.1:g.5A>G").expect("parses")];
+
+            let dropped = canonicalize_from_sequence_with_rule(
+                &members,
+                AllelePhase::Cis,
+                &provider,
+                ShuffleDirection::ThreePrime,
+                PartitionRule::CanonicalCoalesced,
+                false,
+            );
+            assert_eq!(dropped, None, "false drops an already-canonical group");
+
+            let kept = canonicalize_from_sequence_with_rule(
+                &members,
+                AllelePhase::Cis,
+                &provider,
+                ShuffleDirection::ThreePrime,
+                PartitionRule::CanonicalCoalesced,
+                true,
+            );
+            assert_eq!(
+                kept.as_deref(),
+                Some(&members[..]),
+                "true returns the already-canonical members",
+            );
+        }
+    }
+
     /// The shuffle direction may move a member's placement; it may not change
     /// how many members there are — **on every arm** (#1542).
     ///
@@ -21915,6 +24754,7 @@ mod tests {
                             &provider,
                             ShuffleDirection::ThreePrime,
                             rule,
+                            false,
                         );
                         let five = canonicalize_from_sequence_with_rule(
                             &members,
@@ -21922,6 +24762,7 @@ mod tests {
                             &provider,
                             ShuffleDirection::FivePrime,
                             rule,
+                            false,
                         );
                         compared += 1;
                         // A row one direction re-derives and the other declines
