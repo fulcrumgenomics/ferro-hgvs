@@ -7152,7 +7152,7 @@ fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveO
 /// `it::issue_1316_coincident_tract_repeats::the_seeds_deletion_survives_the_combination`,
 /// `it::spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`
 /// and
-/// `it::weight_bound_worked_examples::one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split`.
+/// `it::weight_bound_worked_examples::one_variant_normalizes_to_one_string_although_a_span_outweighs_its_split`.
 /// On the shipped default the same sabotage costs exactly **one** assertion of
 /// 11 321 — the unit test above, which reads `partition_block` directly.
 ///
