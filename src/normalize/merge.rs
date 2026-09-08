@@ -568,6 +568,11 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     provider: &P,
     direction: ShuffleDirection,
 ) -> Vec<HgvsVariant> {
+    // `direction` is consumed only by the dev-gated ruled-ratification shortcut below;
+    // acknowledge it in a non-`dev` build so `clippy --release -- -D warnings` (ci.yml)
+    // does not flag it as unused. See the `#[cfg(feature = "dev")]` block further down.
+    #[cfg(not(feature = "dev"))]
+    let _ = &direction;
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return variants;
     }
@@ -3026,7 +3031,7 @@ enum PartitionRule {
     /// them — so the shipped rule is *axis-safe* where the raw bake-off arm was
     /// not, at the cost of not being byte-identical to the arm on designed data.
     ///
-    /// **Dev-only.** The whole [`crate::partition`] module (and so
+    /// **Dev-only.** The bake-off arm layer (`crate::partition::arms`, and so
     /// `OperatorExtractL2`) is `#[cfg(feature = "dev")]`; this rule reuses it
     /// directly rather than re-porting its subtle inv/dup/leaf logic, which keeps
     /// the measured behaviour faithful to the winning arm by construction. In a
@@ -3258,7 +3263,7 @@ const _: () = assert!(DERIVED_BLOCK_PARTITION_RULE.cuts_with_canonical());
 ///
 /// The default — `FERRO_PARTITION` unset, the only shipping configuration — is
 /// the pinned [`DERIVED_BLOCK_PARTITION_RULE`], so the shipped derivation is
-/// unchanged. Under `FERRO_PARTITION=ruled` (dev only) it returns
+/// unchanged. Under `FERRO_PARTITION=ruled` (selectable by name in any build) it returns
 /// [`PartitionRule::Ruled`], so the derive surface routes to the ruled driver
 /// exactly as the normalization surface does through [`partition_rule`]. The two
 /// surfaces then move together under the one switch, which is what step 9's flip
@@ -3555,9 +3560,10 @@ fn partition_rule() -> PartitionRule {
 /// partition is the ruled driver, whose move-set [`repartition_gate`]'s
 /// "sub/del/ins/dup is a fixed point" premise was never measured against — that
 /// premise was established for the `CanonicalCoalesced` pair — so the gate is
-/// bypassed there in favour of a full re-partition. Always `false` in a release
-/// build, where `partition_rule_from_env` refuses `FERRO_PARTITION=ruled`, so
-/// the shipped rederive gate is unchanged.
+/// bypassed there in favour of a full re-partition. `Ruled` is the shipped
+/// [`DEFAULT_PARTITION_RULE`], so with `FERRO_PARTITION` unset this returns `true`
+/// in every build, release included; it is `false` only when a different arm is
+/// selected by name.
 pub(crate) fn ruled_arm_active() -> bool {
     partition_rule() == PartitionRule::Ruled
 }
@@ -4962,9 +4968,9 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // (`payload_coalesce_applies`, `cuts_with_canonical`) reads as it does for the
     // shipped default.
     // Production-wired at the step-9 flip: `ruled_pieces` compiles in every build,
-    // so the ruled arm is reachable in release. `partition_rule_from_env` still
-    // refuses `ruled` by name in a release build, but `DEFAULT_PARTITION_RULE`
-    // (once flipped) selects it without going through the env — which is why the
+    // so the ruled arm is reachable in release. `partition_rule_from_env` resolves
+    // `FERRO_PARTITION=ruled` in every build, and `DEFAULT_PARTITION_RULE` selects
+    // it with the env unset — which is why the
     // old `unreachable!()` release arm is gone.
     let ruled: Option<Vec<Piece>> = if rule == PartitionRule::Ruled {
         ruled_pieces(&ref_bytes, &result, &frame, w_lo, cds_end_axis, direction)

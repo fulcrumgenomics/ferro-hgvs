@@ -94,8 +94,10 @@ pub use merge::{
 // measurement uses, and a census that exists only in some builds is one a run can
 // forget to read. See `PartitionDeclineCounts`.
 pub use merge::{partition_decline_counts, PartitionDeclineCounts};
-// The ruled arm's census (design §10 step 1). Dev-only: `RuledCounts` and the
-// `ruled` arm exist only under the `dev` feature (the `crate::partition` driver does).
+// The ruled arm's census (design §10 step 1). Dev-only: `RuledCounts` and this
+// `ruled_counts` accessor exist only under the `dev` feature. The `ruled` arm and the
+// `crate::partition` driver themselves are production-wired (the flip); only this
+// census is dev-gated.
 #[cfg(feature = "dev")]
 pub use merge::{ruled_counts, RuledCounts};
 
@@ -3480,9 +3482,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // ruled driver, whose move-set `repartition_gate`'s "sub/del/ins/dup is a
         // fixed point" premise was never measured against — that premise was
         // established for the `CanonicalCoalesced` pair. So bypass the gate and
-        // run the full re-partition under Ruled. The default arm keeps the shipped
-        // `REDERIVE_SKIPS_REPARTITION` gating, byte-identically (`ruled_arm_active`
-        // is `false` there and in every release build).
+        // run the full re-partition under Ruled. `ruled_arm_active` is `true`
+        // whenever `Ruled` is the arm — the shipped default — so the release build
+        // takes the `Full` branch here; `REDERIVE_SKIPS_REPARTITION` gating applies
+        // only when a different arm is selected by name.
         let mode = if merge::ruled_arm_active() {
             RepartitionMode::Full
         } else if REDERIVE_SKIPS_REPARTITION {
