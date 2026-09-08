@@ -1914,7 +1914,9 @@
       "question": "Does the codon exception (`delins.md:18`, 'together affecting one amino acid') apply when the affected codon is the termination (stop) codon, given Ter is not literally an amino acid?",
       "status": "decided",
       "guard": {
-        "none": "Enforcement lands with the coding-axis zone model — the bake-off's `FrameContext::Coding` CDS-boundary extension (Step 6), which places the stop codon inside `[cds_start, cds_end)` so `within_one_codon` reaches it unchanged. Recorded now, decided, so the scope is fixed before the zone model is built and the corpus's stop-codon rows have an answer to assert against."
+        "tests": [
+          "tests/it/issue_1536_cds_boundary_delins.rs::a_pair_inside_the_stop_codon_is_one_delins"
+        ]
       },
       "clauses": [
         {
@@ -2072,6 +2074,13 @@
         "tests": [
           "src/normalize/merge.rs::s02_tandem_expansion_insertion_stays_whole_under_plusk",
           "src/normalize/merge.rs::c7_2175_insertion_exposes_the_dup_under_plusk_only",
+          "src/normalize/merge.rs::ng_034246_clean_single_copy_dup_is_not_repartitioned_under_plusk",
+          "src/normalize/merge.rs::nm_002247_clean_codon_dup_is_not_repartitioned_under_plusk",
+          "src/normalize/merge.rs::an_insertion_with_no_clean_placement_still_peels_under_plusk",
+          "tests/it/clean_dup_not_repartitioned.rs::ng_034246_clean_dup_stays_one_dup",
+          "tests/it/clean_dup_not_repartitioned.rs::nm_002247_clean_codon_dup_stays_one_dup",
+          "tests/it/clean_dup_not_repartitioned.rs::the_sub_dup_spelling_converges_to_the_clean_dup",
+          "tests/it/clean_dup_not_repartitioned.rs::an_insertion_with_no_clean_placement_still_becomes_dup_plus_sub",
           "tests/it/normalize_tests.rs::test_insertion_becomes_repeat",
           "tests/it/cis_confluence_axis.rs::three_prime_confluence_census_slices_tile_the_pin"
         ]
