@@ -2,9 +2,9 @@
 //! declared canonical-coalesce eligibility — plus the round-trip soundness gate
 //! every arm's output must clear before it can be returned as `Ok` (design §3/§6).
 //!
-//! This module is purely additive: nothing here is wired into production, and no
-//! shipped behavior changes. It gives Task 3's legacy-rule wrappers and Task 4's
-//! registry a common interface to implement against.
+//! `Partitioner`/`validate_sound` are production-wired via the ruled core
+//! (`crate::partition::ruled`); Task 3's legacy-rule wrappers and Task 4's registry
+//! (dev-gated) implement the same interface for the bake-off.
 
 use crate::partition::block_ctx::BlockCtx;
 use crate::partition::metrics::{is_renderable, round_trips, RefApplier};

@@ -136,8 +136,9 @@ pub struct NormalizeConfig {
     /// [`crate::parallel::parse_and_normalize_streaming`], which requires
     /// `NormalizeConfig: Sync`, which an `Arc<dyn … + Sync>` (without `Send`) is
     /// not. `#[serde(skip)]` — a live arm object has no serialized form; a
-    /// deserialized config gets `None`. Dev-gated, matching
-    /// [`crate::partition`], its only source of arms today.
+    /// deserialized config gets `None`. Dev-gated because the arm implementations it
+    /// holds come from the dev-gated arm layer (`crate::partition::arms`); the
+    /// `crate::partition` module itself is production-wired.
     #[cfg(feature = "dev")]
     #[serde(skip)]
     pub partitioner: Option<std::sync::Arc<dyn crate::partition::Partitioner + Send + Sync>>,

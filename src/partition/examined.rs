@@ -23,6 +23,12 @@
 //! ∅ (empty) examined ⟹ the pass is a no-op, so a corpus that supplies no
 //! provenance is byte-identical with and without it.
 
+// The re-attach helpers below are consumed only by the dev-gated arm layer / bakeoff
+// analog; the production ruled core uses a subset. In a non-`dev` build the rest is
+// dead, which the required `cargo clippy --release -- -D warnings` job (ci.yml) rejects
+// — allow it only there. A genuinely-dead item is still caught by the `dev` clippy pass.
+#![cfg_attr(not(feature = "dev"), allow(dead_code))]
+
 use crate::partition::block_ctx::ExaminedRegion;
 use crate::partition::output::{EditKind, Member, Partition};
 
