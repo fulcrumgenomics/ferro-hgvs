@@ -13,6 +13,7 @@
 
 mod adjacency_confluence;
 mod adjacency_confluence_proptest;
+mod coding_frame_merge_sub_ins_sibling;
 mod common;
 mod copy_range_payload_corpus;
 mod five_prime_boundary_delins_unification;
@@ -63,6 +64,13 @@ mod issue_2174_contiguous_run_delins;
 mod issue_2175_dup_abutting_change;
 mod issue_2193_dup_anchored_outside_changed_span;
 mod issue_2201_rederive_roundtrip_collision;
+#[cfg(feature = "dev")]
+mod partition_adapter_kind_directed;
+#[cfg(feature = "dev")]
+mod partition_critical_pair_census;
+#[cfg(feature = "dev")]
+mod partition_registry_equivalence;
+mod partition_relocation;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;

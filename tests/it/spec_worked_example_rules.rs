@@ -405,19 +405,12 @@ const WORKED: &[Worked] = &[
         why: "a 24-nt block shifted 8 nt by the 3' rule — the claimed `c.1_24dup` \
               is the same variant spelled 5'-most",
     },
-    Worked {
-        id: "W43",
-        clause: "recommendations/DNA/delins.md:88",
-        quote: "The correct description of this variant is `NM_007294.3:c.2077delinsATA`.",
-        input: "NM_SPECW43.1:c.[2077G>A;2077_2078insTA]",
-        published: "NM_007294.3:c.2077delinsATA",
-        answer: "NM_SPECW43.1:c.2077delinsATA",
-        rebase: Rebase::Accession,
-        fixture: Fixture::Coding,
-        why: "abutting members merge unconditionally — `delins.md:89` records that \
-              the sentence permitting the two-member spelling was removed by the \
-              committee",
-    },
+    // W43 moved WORKED -> DIVERGENT by the step-9 flip: the ruled arm re-derives
+    // `c.[2075_2076dup;2077G>A]`, keeping the tandem dup per `duplication.md:18`
+    // rather than the spec's published `c.2077delinsATA`. See `DIVERGENT` and
+    // `rulings[separation-zero-dup-member-is-preserved-not-merged]`. W44 (the RNA
+    // restatement) stays WORKED: `TandemDupRun` is `DnaOnly`, so the `r.` axis
+    // keeps the delins.
     Worked {
         id: "W44",
         clause: "recommendations/RNA/delins.md:70",
@@ -986,15 +979,10 @@ const PARTITIONS: &[Partition] = &[
               shape `delins.md:16` does not reach, because the two changes are not \
               asserted to be on one molecule",
     },
-    Partition {
-        id: "W43",
-        clause: "recommendations/DNA/delins.md:88",
-        quote: "The correct description of this variant is `NM_007294.3:c.2077delinsATA`.",
-        input: "NM_SPECW43.1:c.[2077G>A;2077_2078insTA]",
-        members: &[(2077, 2077)],
-        fixture: Fixture::Coding,
-        why: "an abutting substitution and insertion collapse to one member",
-    },
+    // W43's spec partition (one delins member) is no longer what ferro produces:
+    // the ruled arm diverges to `c.[2075_2076dup;2077G>A]` (two members). The
+    // divergence is recorded in `DIVERGENT`, so W43 is not a spec-asserted
+    // partition here. See `rulings[separation-zero-dup-member-is-preserved-not-merged]`.
     Partition {
         id: "W45",
         clause: "recommendations/DNA/substitution.md:37",
@@ -1223,10 +1211,38 @@ const DIVERGENT: &[Divergence] = &[
               whether W58 still diverges: 'together affecting one amino acid' is \
               a question about the resulting sequence, and nobody has asked it \
               of this pair.\n\n\
-              **This is the only registered divergence from a published worked \
-              example, and it must stay a set of one unless another is ruled.** \
-              Promoting a second row here without a ledger record naming it is the \
+              **A divergence from a published worked example must be named by a \
+              ledger record.** W58 is named by \
+              `rulings[delins-recommendation-reach-when-the-input-arrives-split]`; \
+              W43 (added by the step-9 flip) is named by \
+              `rulings[separation-zero-dup-member-is-preserved-not-merged]`. \
+              Promoting a THIRD row here without a ledger record naming it is the \
               failure this registry exists to make visible",
+    },
+    Divergence {
+        id: "W43",
+        clause: "recommendations/DNA/delins.md:88",
+        quote: "The correct description of this variant is `NM_007294.3:c.2077delinsATA`.",
+        input: "NM_SPECW43.1:c.[2077G>A;2077_2078insTA]",
+        spec_answer: "NM_SPECW43.1:c.2077delinsATA",
+        ferro_answer: "NM_SPECW43.1:c.[2075_2076dup;2077G>A]",
+        fixture: Fixture::Coding,
+        why: "**Ruled, not discovered.** `rulings[separation-zero-dup-member-is-preserved-not-merged]` \
+              (decided) resolves the dup case `delins-adjacent-members-when-both-consume-reference` \
+              (decided) put out of its scope. The ruled arm derives from the resulting sequence \
+              (`canonical-form-choice-when-both-legal`), which exposes a tandem dup: after the \
+              `2077G>A`, the inserted `TA` is a directly-3'-flanking copy of the two bases 5' of it, \
+              so `duplication.md:17` makes it a duplication and `duplication.md:18` says it **must** \
+              be described as one — keeping `c.[2075_2076dup;2077G>A]`. The spec's published \
+              `c.2077delinsATA` (`delins.md:88`, its split-permission removed at `:89`) is deviated \
+              from on two grounds: `duplication.md:18` requires the exposed dup be kept, and W43 is \
+              base-indistinguishable from the ~2,031 real-corpus dup-beside-change rows carrying no \
+              worked example (R7) — the only thing singling W43 out is that the spec DOCUMENTED it, \
+              a curation fact not in the sequence. NOT justified by provenance: `delins.md:88` does \
+              not itself rest on it, and `delins.md:83`'s provenance was the rationale for the split \
+              the committee removed. Disclosed as a rule-2 deviation per \
+              `separation-rule-force-modal-or-negation`. W44, the RNA restatement, stays in WORKED: \
+              `TandemDupRun` is `DnaOnly`, so the `r.` axis keeps the delins",
     },
     Divergence {
         id: "W53",
@@ -2509,8 +2525,14 @@ fn the_unexecutable_census_is_pinned() {
         // canonical derivation. This is the ruling being recorded, not a table
         // edit — which is exactly the distinction the message below demands, and
         // the reason this pin fired rather than letting the move pass silently.
+        //
+        // 3 -> 4 by the step-9 flip, recorded as
+        // `rulings[separation-zero-dup-member-is-preserved-not-merged]` (decided):
+        // W43 moved `WORKED` -> `DIVERGENT` because the ruled arm keeps the tandem
+        // dup (`c.[2075_2076dup;2077G>A]`) per `duplication.md:18` rather than the
+        // spec's published `c.2077delinsATA`. Again a ruling, not a table edit.
         (DIVERGENT.len(), PARSE_GAPS.len()),
-        (3, 1),
+        (4, 1),
         "the set of rows ferro does not satisfy changed. Each of these two tables \
          is an adjudication — a divergence with a competing clause, or a parser \
          defect — so a change here is a ruling, not a fixture edit. The third \

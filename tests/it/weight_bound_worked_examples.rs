@@ -158,9 +158,11 @@
 //! span    29_33delinsAACACATACTG max(5,11) = 11    total 11
 //! ```
 //!
-//! `11 > 9`, so the bound refuses the span. Both spellings are therefore fixed
-//! points, and one variant has two normalized representations — which is the
-//! non-confluence reported as #1421.
+//! `11 > 9`, so the bound refuses the span. That once left both spellings as
+//! fixed points — one variant with two normalized representations, the
+//! non-confluence reported as #1421. Both now converge on one form re-derived
+//! from the resulting sequence; see
+//! [`one_variant_normalizes_to_one_string_although_a_span_outweighs_its_split`].
 //!
 //! # Assert-then-flip
 //!
@@ -243,8 +245,8 @@ fn the_two_spellings_denote_the_same_sequence() {
     assert_eq!(
         span, split,
         "{SPANNING_DELINS} and {SEPARATED_MEMBERS} must denote one sequence — \
-         that is what makes their two normalized forms a confluence defect \
-         rather than two different variants"
+         that is what makes any divergence between their normalized forms a \
+         confluence defect rather than two different variants"
     );
 }
 
@@ -286,9 +288,9 @@ fn the_two_spellings_denote_the_same_sequence() {
 /// `canonical-form-choice-when-both-legal` requires: the answer is derived from
 /// the resulting sequence, and neither authored spelling survives it.
 #[test]
-fn one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split() {
+fn one_variant_normalizes_to_one_string_although_a_span_outweighs_its_split() {
     /// What both spellings now reach. Neither authored form.
-    const CONVERGED: &str = "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]";
+    const CONVERGED: &str = "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]";
 
     let from_span = oracle::normalize(SEQ, SPANNING_DELINS);
     let from_split = oracle::normalize(SEQ, SEPARATED_MEMBERS);
