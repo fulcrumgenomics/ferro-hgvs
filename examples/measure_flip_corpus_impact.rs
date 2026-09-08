@@ -79,8 +79,8 @@
 //! FERRO_MANIFEST=<manifest> cargo run --features dev \
 //!   --example measure_flip_corpus_impact -- --stride 100 --output a.tsv
 //!
-//! # arm B — the behaviour from before the flip
-//! FERRO_PARTITION=live FERRO_MANIFEST=<manifest> cargo run --features dev \
+//! # arm B — the behaviour from before the flip (`live` for the earlier one)
+//! FERRO_PARTITION=canonical-coalesced FERRO_MANIFEST=<manifest> cargo run --features dev \
 //!   --example measure_flip_corpus_impact -- --stride 100 --output b.tsv
 //!
 //! # the diff
@@ -404,8 +404,8 @@ impl Row {
 /// self-describing and still a TSV a consumer can `grep -v '^#'`.
 #[derive(Debug, Serialize, Deserialize)]
 struct Header {
-    /// The raw `FERRO_PARTITION` value this process ran under. `canonical-coalesced`
-    /// when unset, which is the shipped default since the flip.
+    /// The raw `FERRO_PARTITION` value this process ran under. `ruled` when unset,
+    /// which is the shipped default (`DEFAULT_PARTITION_RULE`) since the step-9 flip.
     arm: String,
     /// Whether `partition_blocks_cut` existed in this build.
     blocks_cut_available: bool,
@@ -510,7 +510,7 @@ fn measure(cli: &Cli) -> anyhow::Result<()> {
     let arm = std::env::var("FERRO_PARTITION")
         .ok()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "canonical-coalesced".to_string());
+        .unwrap_or_else(|| "ruled".to_string());
 
     let mut corpus_totals = BTreeMap::new();
     let mut work: Vec<(String, Vec<String>)> = Vec::new();
