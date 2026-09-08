@@ -703,7 +703,7 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1421-n1/split",
         input: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         // MOVED BY THE PARTITION DEFAULT FLIP. Both spellings of `1421-n1` now
-        // converge on `TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]`, a form
+        // converge on `TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]`, a form
         // NEITHER authored — which `rulings[canonical-form-choice-when-both-legal]`
         // (decided) licenses: ferro derives from the resulting sequence and
         // emits what falls out, and does not preserve the input's spelling. So
@@ -712,8 +712,8 @@ const REPORTED_ROWS: &[Row] = &[
         // `NeitherReaches`. Whether THIS form is the right one is the
         // `:47`/`:34` question the sibling record leaves open and this PR does
         // not answer.
-        output: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
-        five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        output: "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]",
+        five_prime: "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecExplicit,
@@ -737,8 +737,8 @@ const REPORTED_ROWS: &[Row] = &[
         // `wanted`, so both rows are `Gap` and the pair is `NeitherReaches`.
         // Whether THIS form is right is the `:47`/`:34` question the record
         // leaves open and this PR does not answer.
-        output: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
-        five_prime: "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        output: "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]",
+        five_prime: "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         authority: Authority::SpecExplicit,
