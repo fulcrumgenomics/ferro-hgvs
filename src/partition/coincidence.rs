@@ -18,6 +18,13 @@
 //! (`IndividuationPolicy::suppresses_coincidence_collapse`). A per-wrapper guard
 //! is exactly the drift the shared core exists to prevent (decision #1).
 
+// The `CoincidencePiece` view and several predicates below are consumed only by the
+// dev-gated arm layer (`arms`/`dial_b`); the production ruled core uses a subset. In a
+// non-`dev` build the rest is dead, which the required `cargo clippy --release -- -D
+// warnings` job (ci.yml) rejects — allow it only there. A genuinely-dead item (dead in
+// every build) is still caught by the `dev` clippy pass, so this masks nothing new.
+#![cfg_attr(not(feature = "dev"), allow(dead_code))]
+
 use crate::partition::block_ctx::IndividuationPolicy;
 
 /// Maximum unchanged-base separation C2's payload-coincidence merge reaches — the
