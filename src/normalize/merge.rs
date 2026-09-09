@@ -22248,6 +22248,112 @@ mod tests {
             assert!(!payload_embeds_within_budget(b"ACGT", b"TA", 0));
         }
 
+        /// `codon-exception-vs-coincidence-carve-out-precedence`: C1 must compose
+        /// FIRST when it and the payload-coincidence carve-out both reach the same
+        /// derived pieces — not because of pass order (`apply_coding_codon_exception`
+        /// runs LAST in `canonicalize_from_sequence`, after
+        /// `coalesce_payload_alignment_split`), but because
+        /// `COALESCE_MISMATCH_BUDGET < 2` keeps C2 from ever absorbing a
+        /// substitution-pair codon merge, on either side of it.
+        ///
+        /// The block: `c.[4C>G;6C>G]` inside one codon (CDS 4-6, `w_lo = 1`) with
+        /// its shared unchanged base at `c.5`, standing beside an unrelated
+        /// gap-bearing net-deletion member at `c.1_3` (`AAA` -> `A`). Taken as one
+        /// block, BOTH antecedents are live: C1's (gap exactly one, one codon,
+        /// net-length-preserving) and C2's (a gap-bearing member present, net
+        /// deletion overall, separation within `COALESCE_MAX_SEPARATION`) — exactly
+        /// the "both reach the same derived pieces" shape the ruling decides. C2
+        /// declines anyway: the whole-block payload `AGCG` needs 2 substitutions to
+        /// embed in the whole-block span `AAACCC` (neither `G` occurs in the span),
+        /// one over the shipped budget of 1.
+        #[test]
+        fn codon_exception_composes_first_regardless_of_pass_order() {
+            let reference = b"AAACCC";
+            let original = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 3,
+                    alt: b"A".to_vec(),
+                }, // AAA -> A: gap-bearing net deletion
+                Piece {
+                    ref_start: 3,
+                    ref_end: 4,
+                    alt: b"G".to_vec(),
+                }, // c.4 C>G
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: b"G".to_vec(),
+                }, // c.6 C>G, one unchanged base (c.5) away
+            ];
+            let codon_first = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 3,
+                    alt: b"A".to_vec(),
+                },
+                Piece {
+                    ref_start: 3,
+                    ref_end: 6,
+                    alt: b"GCG".to_vec(),
+                }, // c.4_6delinsGCG
+            ];
+
+            assert!(
+                split_carries_a_gap_bearing_insert(&original),
+                "precondition: the first member is gap-bearing"
+            );
+            assert!(
+                b"AGCG".len() < reference.len(),
+                "precondition: the whole block is a net deletion"
+            );
+
+            // Production order: C2 then C1.
+            let mut forward = original.clone();
+            coalesce_payload_alignment_split(&mut forward, reference);
+            assert_eq!(
+                forward, original,
+                "C2 must decline the whole block at the shipped budget of 1 -- the \
+                 codon pair's two substituted bases cost 2 mismatches to embed"
+            );
+            apply_coding_codon_exception(&mut forward, true, 1, reference, None);
+            assert_eq!(
+                forward, codon_first,
+                "C1 must then merge the codon pair on its own authority"
+            );
+
+            // Reversed order: C1 then C2. If codon-first were an artifact of pass
+            // order rather than the budget, this would diverge from `forward`.
+            let mut backward = original.clone();
+            apply_coding_codon_exception(&mut backward, true, 1, reference, None);
+            assert_eq!(backward, codon_first, "C1 fires identically run first");
+            coalesce_payload_alignment_split(&mut backward, reference);
+            assert_eq!(
+                backward, codon_first,
+                "C2 must not re-absorb C1's own merged codon-delins: the merged \
+                 piece contributes the same 2 mismatches, so the whole-block embed \
+                 test still fails at budget 1"
+            );
+        }
+
+        /// The exact boundary the precedence rests on: a substitution-pair codon
+        /// merge's payload needs 2 substituted positions to embed in its span, one
+        /// over the shipped budget and exactly the floor a raised budget would need
+        /// to clear to violate the ruling.
+        #[test]
+        fn a_substitution_pair_codon_merge_needs_two_mismatches_to_embed() {
+            let span = b"AAACCC";
+            let payload = b"AGCG"; // same span/payload the Piece list above denotes
+            assert!(
+                !payload_embeds_within_budget(span, payload, COALESCE_MISMATCH_BUDGET),
+                "shipped budget (1) must refuse a substitution-pair codon merge"
+            );
+            assert!(
+                payload_embeds_within_budget(span, payload, 2),
+                "budget 2 would admit it -- the exact boundary the ruling cites"
+            );
+        }
+
         /// A deterministic, seeded byte drawn from a small alphabet.
         ///
         /// Not `rand`: the table must enumerate the *same* cases on every run, or
