@@ -10340,8 +10340,13 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
     let m = payload.len();
     let mut best = vec![UNREACHABLE; m + 1];
     best[m] = 0;
+    // Two reused buffers swapped each step, not a fresh `vec!` per span base: the
+    // DP is O(span·payload) and the per-byte allocation made it O(span) heap
+    // allocations of size `payload + 1`. Every `next[j]` for `j in 0..m` is fully
+    // recomputed each iteration from `best`, and `next[m]` is set to 0, so the
+    // reused buffer carries no stale state (nothing reads an unwritten cell).
+    let mut next = vec![UNREACHABLE; m + 1];
     for &span_base in span.iter().rev() {
-        let mut next = vec![UNREACHABLE; m + 1];
         // Deleting every remaining span base is always available and free.
         next[m] = 0;
         for j in (0..m).rev() {
@@ -10349,7 +10354,7 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
             let consumed = best[j + 1].saturating_add(u32::from(span_base != payload[j]));
             next[j] = deleted.min(consumed);
         }
-        best = next;
+        std::mem::swap(&mut best, &mut next);
     }
     best[0] as usize <= budget
 }
