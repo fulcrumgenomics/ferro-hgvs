@@ -99,7 +99,7 @@ pub use merge::{partition_decline_counts, PartitionDeclineCounts};
 // `crate::partition` driver themselves are production-wired (the flip); only this
 // census is dev-gated.
 #[cfg(feature = "dev")]
-pub use merge::{ruled_counts, RuledCounts};
+pub use merge::{ruled_counts, ruled_memo_hits, RuledCounts};
 // Measurement hook for `benches/ruled_partitioner.rs`: empties this thread's ruled
 // memo so a repeated-input benchmark times the partitioner, not a memo hit. Not
 // dev-gated because benches build with the default feature set.
