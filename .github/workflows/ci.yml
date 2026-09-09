@@ -1507,6 +1507,17 @@ jobs:
       # `src/`; the integration tree is already compiled featureless by `test-build-soak`.
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
+      # Featureless RUN, deliberately (`--no-run` above is a build-only guard).
+      # `src/normalize/merge.rs`'s ruled dup-preservation consult was
+      # `#[cfg(feature = "dev")]`-gated on the default path, so the shipped
+      # release binary folded a `[dup;sub]` the dev gate preserved — a
+      # dev/release divergence no `--features dev` job can see, because the
+      # regression test for it shared the bug's own predicate. This runs the
+      # public-API guard `tests/release_dup_preservation.rs` with the DEFAULT
+      # feature set, where re-gating the consult behind any feature the release
+      # binary lacks turns it red. One inline-provider test, no reference data.
+      - name: Release-path dup preservation runs featureless
+        run: cargo test --test release_dup_preservation
 
   # The release build + binary-size guard, and the ONE place the merge-queue
   # gating contract is stated (other comments point here). Runs in the merge
