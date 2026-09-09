@@ -19,8 +19,29 @@
 //!   # ...make a change...
 //!   cargo bench --bench ruled_partitioner -- --baseline pre-opt
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use ferro_hgvs::normalize::clear_ruled_memo;
+use ferro_hgvs::{parse_hgvs, HgvsVariant, MockProvider, Normalizer};
+
+/// Time one `normalize` of `v` with the per-thread ruled memo emptied first, in the
+/// untimed setup. Every case here re-normalizes the SAME input, so without the clear
+/// every timed call after the first is an exact-content memo hit and the bench would
+/// measure the memo lookup instead of the ruled partitioner it exists to guard.
+///
+/// `PerIteration`, not a batched size: criterion runs a batch's setups ALL before
+/// timing its routines, so under `SmallInput` only the first call in each batch would
+/// miss the memo and the rest would be hits again.
+fn normalize_cold(
+    b: &mut criterion::Bencher<'_>,
+    normalizer: &Normalizer<MockProvider>,
+    v: &HgvsVariant,
+) {
+    b.iter_batched(
+        clear_ruled_memo,
+        |()| normalizer.normalize(black_box(v)),
+        BatchSize::PerIteration,
+    )
+}
 
 /// A 500 bp period-4 `ACGT` contig. The period-4 tandem structure means a dup of
 /// a 4-mer extends a reference tandem (so `peel_tandem_dup_beside_change` and
@@ -110,7 +131,7 @@ fn bench_single_shapes(c: &mut Criterion) {
     let mut group = c.benchmark_group("ruled_single");
     for (name, s) in &cases {
         let v = parse_hgvs(s).unwrap();
-        group.bench_function(*name, |b| b.iter(|| normalizer.normalize(black_box(&v))));
+        group.bench_function(*name, |b| normalize_cold(b, &normalizer, &v));
     }
     group.finish();
 }
@@ -127,7 +148,7 @@ fn bench_cis_scaling(c: &mut Criterion) {
             .normalize(&v)
             .unwrap_or_else(|e| panic!("ruled cis bench n={n} normalize: {e}"));
         group.bench_with_input(BenchmarkId::new("cis_delins", n), &v, |b, v| {
-            b.iter(|| normalizer.normalize(black_box(v)))
+            normalize_cold(b, &normalizer, v)
         });
     }
     group.finish();

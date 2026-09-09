@@ -3792,7 +3792,6 @@ fn ruled_pieces_over_window(
     use crate::partition::adapters::frame_context_for_axis_origin;
     use crate::partition::block_ctx::Provenance;
     use crate::partition::bridge::cut_to_pieces;
-    use crate::partition::driver::partition_ruled;
 
     #[cfg(feature = "dev")]
     RULED_ATTEMPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3805,8 +3804,8 @@ fn ruled_pieces_over_window(
         molecule,
         provenance: &provenance,
     };
-    match partition_ruled(&ctx, direction) {
-        Ok(cut) => Some(cut_to_pieces(&cut)),
+    partition_ruled_memoized(&ctx, direction, |result| match result {
+        Ok(cut) => Some(cut_to_pieces(cut)),
         Err(PartitionError::GridTooLarge { .. }) => {
             #[cfg(feature = "dev")]
             RULED_GRID_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3817,6 +3816,547 @@ fn ruled_pieces_over_window(
             RULED_UNRENDERABLE_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             None
         }
+    })
+}
+
+/// Memo key for the pure [`partition_ruled`](crate::partition::driver::partition_ruled):
+/// the full `BlockCtx` content the driver actually reads — the two byte windows,
+/// the frame, the molecule, and the direction. Provenance is **deliberately
+/// absent**: no rule driven by `partition_ruled` reads `ctx.provenance` (Fable
+/// design review, 2026-09-09), and the shipping call site hardcodes
+/// `Provenance::none()` — [`partition_ruled_memoized`] `debug_assert`s that, so a
+/// future wiring of provenance into the ruled rules fails loud rather than serving
+/// a stale answer computed under the wrong provenance.
+///
+/// Owned (`Box<[u8]>`, not a hash fingerprint) so equality is exact — a
+/// plausible-but-wrong cache hit on a normalization path is exactly the failure
+/// this project's doctrine rejects.
+///
+/// Lookups never build one: [`partition_ruled_memoized`] probes the map with a
+/// [`RuledMemoKeyRef`] borrowed from the `BlockCtx`, through the
+/// [`RuledMemoKeyView`] `Borrow` bridge, and copies the windows into an owned key
+/// only on a miss, to store it. Hash and equality are both defined on the view,
+/// so the owned and borrowed forms agree by construction.
+#[derive(Debug, Clone)]
+struct RuledMemoKey {
+    reference: Box<[u8]>,
+    resulting: Box<[u8]>,
+    frame: crate::partition::block_ctx::FrameContext,
+    molecule: crate::partition::block_ctx::Molecule,
+    direction: ShuffleDirection,
+}
+
+/// A [`RuledMemoKey`] borrowed from the block being partitioned: what a lookup
+/// hashes and compares, with no copy of the windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RuledMemoKeyRef<'a> {
+    reference: &'a [u8],
+    resulting: &'a [u8],
+    frame: &'a crate::partition::block_ctx::FrameContext,
+    molecule: crate::partition::block_ctx::Molecule,
+    direction: ShuffleDirection,
+}
+
+impl RuledMemoKeyRef<'_> {
+    /// Copy the borrowed windows into an owned key, for insertion on a miss.
+    fn to_owned_key(self) -> RuledMemoKey {
+        #[cfg(test)]
+        RULED_MEMO_KEYS_BUILT.with(|n| n.set(n.get() + 1));
+        RuledMemoKey {
+            reference: self.reference.into(),
+            resulting: self.resulting.into(),
+            frame: self.frame.clone(),
+            molecule: self.molecule,
+            direction: self.direction,
+        }
+    }
+}
+
+/// The common borrowed form of the owned and borrowed keys. `HashMap::get` needs
+/// `RuledMemoKey: Borrow<Q>` for the probe type `Q`, and a `Borrow` impl must hand
+/// back a reference to something the key already holds — which a freshly built
+/// `RuledMemoKeyRef` is not. A trait object is: the owned key borrows as
+/// `&dyn RuledMemoKeyView` (itself), and so does a `RuledMemoKeyRef`.
+trait RuledMemoKeyView {
+    fn view(&self) -> RuledMemoKeyRef<'_>;
+}
+
+impl RuledMemoKeyView for RuledMemoKey {
+    fn view(&self) -> RuledMemoKeyRef<'_> {
+        RuledMemoKeyRef {
+            reference: &self.reference,
+            resulting: &self.resulting,
+            frame: &self.frame,
+            molecule: self.molecule,
+            direction: self.direction,
+        }
+    }
+}
+
+impl RuledMemoKeyView for RuledMemoKeyRef<'_> {
+    fn view(&self) -> RuledMemoKeyRef<'_> {
+        *self
+    }
+}
+
+impl std::hash::Hash for dyn RuledMemoKeyView + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.view().hash(state);
+    }
+}
+
+impl PartialEq for dyn RuledMemoKeyView + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.view() == other.view()
+    }
+}
+
+impl Eq for dyn RuledMemoKeyView + '_ {}
+
+impl std::hash::Hash for RuledMemoKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.view().hash(state);
+    }
+}
+
+impl PartialEq for RuledMemoKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.view() == other.view()
+    }
+}
+
+impl Eq for RuledMemoKey {}
+
+impl<'a> std::borrow::Borrow<dyn RuledMemoKeyView + 'a> for RuledMemoKey {
+    fn borrow(&self) -> &(dyn RuledMemoKeyView + 'a) {
+        self
+    }
+}
+
+/// Per-thread ceiling, in owned bytes, on what [`RULED_MEMO`] retains. Bounded by
+/// memory rather than entry count because an entry's size is not bounded by the
+/// canonical window: the key's `resulting` component carries the appended
+/// insertion/delins payload, and the cached [`Cut`](crate::partition::ruled::Cut)
+/// owns its runs' payloads too. Per thread, so rayon workers multiply it.
+///
+/// On overflow the whole map is cleared — correctness-neutral, since every entry
+/// is valid forever (the key is a pure function's whole input), so eviction is a
+/// memory-growth knob, not a correctness one. An entry larger than the whole
+/// budget is not cached at all.
+const RULED_MEMO_BYTE_BUDGET: usize = 8 * 1024 * 1024;
+
+/// The per-thread memo's map plus the bytes it currently retains, kept together so
+/// no path can clear one without the other.
+#[derive(Default)]
+struct RuledMemo {
+    map: std::collections::HashMap<
+        RuledMemoKey,
+        Result<crate::partition::ruled::Cut, PartitionError>,
+    >,
+    bytes: usize,
+}
+
+impl RuledMemo {
+    /// Owned bytes one entry retains: both key windows plus the cached cut's heap.
+    fn entry_bytes(
+        key: &RuledMemoKey,
+        result: &Result<crate::partition::ruled::Cut, PartitionError>,
+    ) -> usize {
+        key.reference.len()
+            + key.resulting.len()
+            + result.as_ref().map_or(0, |cut| cut.owned_bytes())
+    }
+
+    /// Insert under the byte budget: skip an entry larger than the whole budget,
+    /// and clear the map first when this entry would overflow it.
+    fn insert(
+        &mut self,
+        key: RuledMemoKey,
+        result: Result<crate::partition::ruled::Cut, PartitionError>,
+    ) {
+        let bytes = Self::entry_bytes(&key, &result);
+        if bytes > RULED_MEMO_BYTE_BUDGET {
+            return;
+        }
+        if self.bytes + bytes > RULED_MEMO_BYTE_BUDGET {
+            self.clear();
+        }
+        self.bytes += bytes;
+        self.map.insert(key, result);
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.bytes = 0;
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+thread_local! {
+    /// Per-thread memo for `partition_ruled`. Thread-local because a `Normalizer`
+    /// is shared `&self` across rayon workers, and the alternation (`mod.rs`) and
+    /// collapse (`normalize_allele`) loops re-derive byte-identical blocks within
+    /// one `normalize()` — the repeat this collapses. Cleared only on budget
+    /// overflow (see [`RULED_MEMO_BYTE_BUDGET`]) or by [`clear_ruled_memo`].
+    static RULED_MEMO: std::cell::RefCell<RuledMemo> =
+        std::cell::RefCell::new(RuledMemo::default());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Owned [`RuledMemoKey`]s built on this thread, counted in
+    /// [`RuledMemoKeyRef::to_owned_key`] — the test-only witness that a memo hit
+    /// is served from the borrowed view and copies no window.
+    static RULED_MEMO_KEYS_BUILT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Empty this thread's ruled-partition memo.
+///
+/// For measurement only: a benchmark that normalizes one input repeatedly calls
+/// this before each timed call, so it times the ruled partitioner rather than a
+/// memo hit. Normalization never needs it — every entry stays valid forever.
+#[doc(hidden)]
+pub fn clear_ruled_memo() {
+    RULED_MEMO.with(|c| c.borrow_mut().clear());
+}
+
+/// [`partition_ruled`](crate::partition::driver::partition_ruled) behind the
+/// per-thread memo, handing the result to `serve` by reference. Wraps ONLY the
+/// driver call (not the whole [`ruled_pieces_over_window`]), so the caller's
+/// dev-only `RULED_*` decline census still fires on every logical call, hit or
+/// miss. `Ok` and `Err` are both cached: a decline (`GridTooLarge`/`Unrenderable`)
+/// is as deterministic in the key as a success, and re-declining identically is
+/// where part of the win is.
+///
+/// A hit allocates nothing here: the map is probed with a key borrowed from `ctx`,
+/// and `serve` reads the cached result in place rather than receiving a clone of
+/// the `Cut`. A miss copies the windows into the owned key it stores, and moves
+/// the fresh result into the map after `serve` has read it. `serve` runs while
+/// this thread's memo is borrowed, so it must not re-enter the memo (a re-entry
+/// panics on the `RefCell`, it cannot serve a wrong answer).
+fn partition_ruled_memoized<R>(
+    ctx: &BlockCtx,
+    direction: ShuffleDirection,
+    serve: impl FnOnce(&Result<crate::partition::ruled::Cut, PartitionError>) -> R,
+) -> R {
+    use crate::partition::driver::partition_ruled;
+    debug_assert!(
+        ctx.provenance.is_none(),
+        "partition_ruled memo key omits provenance, but the shipping call site \
+         hardcodes Provenance::none(); if a real provenance reaches here it must be \
+         added to RuledMemoKey and RuledMemoKeyRef (re-check whether any driven \
+         rule reads it first)",
+    );
+    let key = RuledMemoKeyRef {
+        reference: ctx.reference,
+        resulting: ctx.resulting,
+        frame: ctx.frame,
+        molecule: ctx.molecule,
+        direction,
+    };
+    let mut serve = Some(serve);
+    let served = RULED_MEMO.with(|c| {
+        c.borrow()
+            .map
+            .get(&key as &dyn RuledMemoKeyView)
+            .map(|hit| (serve.take().expect("serve is called once"))(hit))
+    });
+    if let Some(served) = served {
+        return served;
+    }
+    let result = partition_ruled(ctx, direction);
+    let served = (serve.take().expect("serve is called once"))(&result);
+    RULED_MEMO.with(|c| c.borrow_mut().insert(key.to_owned_key(), result));
+    served
+}
+
+#[cfg(test)]
+mod ruled_memo_tests {
+    use super::*;
+    use crate::partition::block_ctx::{BlockCtx, FrameContext, Molecule, Provenance};
+    use crate::partition::driver::partition_ruled;
+
+    /// The memo's premise: a hit (and a miss) must equal a fresh, un-memoized
+    /// partition of a byte-identical block built from an INDEPENDENT allocation.
+    /// The R2/R3 repeats are byte-equal by value across distinct allocations, so
+    /// the key must match on content, not identity.
+    #[test]
+    fn memo_hit_equals_fresh_partition() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        // A tandem-dup-beside-change block that exercises several rules.
+        let reference = b"TAGTAAACCATTTTACGGAGGATCACAAATTCCTCCTTAT".to_vec();
+        let resulting = b"TAGTAAACCATTTTACGGAGGATCACACACATTCCTCCTTAT".to_vec();
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let ctx = BlockCtx {
+                reference: &reference,
+                resulting: &resulting,
+                frame: &frame,
+                molecule: Molecule::Dna,
+                provenance: &prov,
+            };
+            let truth = partition_ruled(&ctx, direction);
+            // First call misses (fills the memo); the second hits.
+            let miss = partition_ruled_memoized(&ctx, direction, Result::clone);
+            let hit = partition_ruled_memoized(&ctx, direction, Result::clone);
+            assert_eq!(
+                miss, truth,
+                "miss must equal the fresh partition ({direction:?})"
+            );
+            assert_eq!(
+                hit, truth,
+                "hit must equal the fresh partition ({direction:?})"
+            );
+            // A byte-identical block from a DISTINCT allocation hits the same entry.
+            let ref2 = reference.clone();
+            let res2 = resulting.clone();
+            let ctx2 = BlockCtx {
+                reference: &ref2,
+                resulting: &res2,
+                frame: &frame,
+                molecule: Molecule::Dna,
+                provenance: &prov,
+            };
+            assert_eq!(
+                partition_ruled_memoized(&ctx2, direction, Result::clone),
+                truth,
+                "identical bytes from a distinct allocation hit the memo ({direction:?})"
+            );
+        }
+    }
+
+    /// A hit must be served from a BORROWED view of the block: the owned key (two
+    /// boxed copies of windows up to a few KiB) is built only on a miss, to be
+    /// stored. Sabotage: build the owned key before the lookup and the count after
+    /// the hit reads 2.
+    #[test]
+    fn a_memo_hit_does_not_build_an_owned_key() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        let reference = b"TAGTAAACCATTTTACGGAGGATCACAAATTCCTCCTTAT".to_vec();
+        let resulting = b"TAGTAAACCATTTTACGGAGGATCACACACATTCCTCCTTAT".to_vec();
+        let ctx = BlockCtx {
+            reference: &reference,
+            resulting: &resulting,
+            frame: &frame,
+            molecule: Molecule::Dna,
+            provenance: &prov,
+        };
+        let truth = partition_ruled(&ctx, ShuffleDirection::ThreePrime);
+        let built = || RULED_MEMO_KEYS_BUILT.with(std::cell::Cell::get);
+        let before = built();
+        let miss = partition_ruled_memoized(&ctx, ShuffleDirection::ThreePrime, Result::clone);
+        assert_eq!(
+            built() - before,
+            1,
+            "a miss builds exactly one owned key, to store"
+        );
+        assert_eq!(RULED_MEMO.with(|c| c.borrow().len()), 1, "a miss inserts");
+        let hit = partition_ruled_memoized(&ctx, ShuffleDirection::ThreePrime, Result::clone);
+        assert_eq!(built() - before, 1, "a hit must not build an owned key");
+        assert_eq!(
+            RULED_MEMO.with(|c| c.borrow().len()),
+            1,
+            "a hit does not insert"
+        );
+        assert_eq!(miss, truth);
+        assert_eq!(hit, truth, "the hit serves the cached cut");
+    }
+
+    /// Molecule and direction ARE part of the key: a value stored under one
+    /// molecule/direction must be invisible under the otherwise-identical other.
+    /// This is white-box on purpose — a `DnaOnly` rule genuinely changes the
+    /// result (so serving the wrong molecule's cut would be a live bug), but the
+    /// smallest DAG block that diverges by molecule is fiddly to build, whereas
+    /// the property under test is simply "the key discriminates". Sabotage: drop
+    /// `molecule` (or `direction`) from `RuledMemoKeyRef` (where the key's hash and
+    /// equality are defined) and the `assert_ne!` and the
+    /// cross-key `get` both fail.
+    #[test]
+    fn memo_key_separates_molecule_and_direction() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let refb: Box<[u8]> = b"ACGT"[..].into();
+        let resb: Box<[u8]> = b"CG"[..].into();
+        let dna_3p = RuledMemoKey {
+            reference: refb.clone(),
+            resulting: resb.clone(),
+            frame: frame.clone(),
+            molecule: Molecule::Dna,
+            direction: ShuffleDirection::ThreePrime,
+        };
+        let rna_3p = RuledMemoKey {
+            reference: refb.clone(),
+            resulting: resb.clone(),
+            frame: frame.clone(),
+            molecule: Molecule::Rna,
+            direction: ShuffleDirection::ThreePrime,
+        };
+        let dna_5p = RuledMemoKey {
+            reference: refb,
+            resulting: resb,
+            frame,
+            molecule: Molecule::Dna,
+            direction: ShuffleDirection::FivePrime,
+        };
+        assert_ne!(dna_3p, rna_3p, "molecule must distinguish the key");
+        assert_ne!(dna_3p, dna_5p, "direction must distinguish the key");
+        RULED_MEMO.with(|c| {
+            let mut map = c.borrow_mut();
+            map.insert(dna_3p.clone(), Err(PartitionError::Unsound));
+            assert!(
+                map.map.contains_key(&dna_3p),
+                "the DNA/3' key hits its own entry"
+            );
+            assert!(
+                !map.map.contains_key(&rna_3p),
+                "the RNA key must not see the DNA entry"
+            );
+            assert!(
+                !map.map.contains_key(&dna_5p),
+                "the 5' key must not see the 3' entry"
+            );
+            // The borrowed probe the wrapper uses agrees with the owned key.
+            assert!(
+                map.map
+                    .contains_key(&dna_3p.view() as &dyn RuledMemoKeyView),
+                "the borrowed DNA/3' view hits the owned entry"
+            );
+            assert!(
+                !map.map
+                    .contains_key(&rna_3p.view() as &dyn RuledMemoKeyView),
+                "the borrowed RNA view must not see the DNA entry"
+            );
+        });
+    }
+
+    /// The memo is bounded by owned bytes, not entries: an entry larger than the
+    /// whole budget is never retained, and an insert that would overflow clears the
+    /// map first — so what a thread retains never exceeds the budget.
+    #[test]
+    fn the_memo_retains_at_most_its_byte_budget() {
+        let key = |reference: Vec<u8>, resulting: Vec<u8>| RuledMemoKey {
+            reference: reference.into(),
+            resulting: resulting.into(),
+            frame: FrameContext::NonCoding,
+            molecule: Molecule::Dna,
+            direction: ShuffleDirection::ThreePrime,
+        };
+        let mut memo = RuledMemo::default();
+
+        // Larger than the whole budget on its own: skipped, nothing retained.
+        memo.insert(
+            key(vec![b'A'; RULED_MEMO_BYTE_BUDGET], vec![b'C'; 1]),
+            Err(PartitionError::Unsound),
+        );
+        assert_eq!((memo.len(), memo.bytes), (0, 0));
+
+        // Two entries of 60% of the budget each: the second overflows, so the map
+        // is cleared before it goes in and only it is retained.
+        let big = RULED_MEMO_BYTE_BUDGET * 3 / 5;
+        memo.insert(
+            key(vec![b'A'; big], Vec::new()),
+            Err(PartitionError::Unsound),
+        );
+        assert_eq!((memo.len(), memo.bytes), (1, big));
+        memo.insert(
+            key(vec![b'C'; big], Vec::new()),
+            Err(PartitionError::Unsound),
+        );
+        assert_eq!((memo.len(), memo.bytes), (1, big));
+        assert!(memo.bytes <= RULED_MEMO_BYTE_BUDGET);
+
+        memo.clear();
+        assert_eq!((memo.len(), memo.bytes), (0, 0));
+    }
+
+    /// A cached `Ok` cut counts its own heap, not just the key windows.
+    #[test]
+    fn a_cached_cut_counts_its_owned_bytes() {
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        let reference = b"TAGTAAACCATTTTACGGAGGATCACAAATTCCTCCTTAT".to_vec();
+        let resulting = b"TAGTAAACCATTTTACGGAGGATCACACACATTCCTCCTTAT".to_vec();
+        let ctx = BlockCtx {
+            reference: &reference,
+            resulting: &resulting,
+            frame: &frame,
+            molecule: Molecule::Dna,
+            provenance: &prov,
+        };
+        let cut = partition_ruled(&ctx, ShuffleDirection::ThreePrime).expect("partitions");
+        assert!(cut.owned_bytes() > 0, "a non-empty cut owns heap");
+        let key = RuledMemoKey {
+            reference: reference.clone().into(),
+            resulting: resulting.clone().into(),
+            frame: frame.clone(),
+            molecule: Molecule::Dna,
+            direction: ShuffleDirection::ThreePrime,
+        };
+        let expected = reference.len() + resulting.len() + cut.owned_bytes();
+        let mut memo = RuledMemo::default();
+        memo.insert(key, Ok(cut));
+        assert_eq!(memo.bytes, expected);
+    }
+
+    /// Black-box the wrapper's OWN key construction (not the key type): feeding the
+    /// real `partition_ruled_memoized` the same bytes/frame but a different
+    /// molecule, direction, or `resulting` must create a DISTINCT cache slot. This
+    /// catches a copy-paste wiring bug the type-level test `memo_key_separates_molecule_and_direction` cannot — e.g.
+    /// hardcoding `Molecule::Dna` instead of `ctx.molecule`, or putting
+    /// `ctx.reference` in both byte positions of the key.
+    #[test]
+    fn the_wrapper_threads_molecule_direction_and_both_windows_into_distinct_slots() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        let reference = b"ACGTACGTAC".to_vec();
+        let resulting_a = b"ACGTAC".to_vec();
+        let resulting_b = b"ACGTACGT".to_vec();
+
+        // Identical bytes/frame, all four (molecule, direction) combinations -> 4
+        // slots proves both `ctx.molecule` AND `direction` are threaded (hit or
+        // miss / Ok or Err is irrelevant: every distinct key inserts one entry).
+        for molecule in [Molecule::Dna, Molecule::Rna] {
+            for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                let ctx = BlockCtx {
+                    reference: &reference,
+                    resulting: &resulting_a,
+                    frame: &frame,
+                    molecule,
+                    provenance: &prov,
+                };
+                let _ = partition_ruled_memoized(&ctx, direction, Result::clone);
+            }
+        }
+        assert_eq!(
+            RULED_MEMO.with(|c| c.borrow().len()),
+            4,
+            "wrapper must key on ctx.molecule AND direction — one slot per combination"
+        );
+
+        // A different `resulting` over the same reference/molecule/direction adds a
+        // 5th slot, proving `resulting` occupies its own key position (not clobbered
+        // by `reference`).
+        let ctx_b = BlockCtx {
+            reference: &reference,
+            resulting: &resulting_b,
+            frame: &frame,
+            molecule: Molecule::Dna,
+            provenance: &prov,
+        };
+        let _ = partition_ruled_memoized(&ctx_b, ShuffleDirection::ThreePrime, Result::clone);
+        assert_eq!(
+            RULED_MEMO.with(|c| c.borrow().len()),
+            5,
+            "wrapper must key on ctx.resulting distinctly from ctx.reference"
+        );
     }
 }
 
