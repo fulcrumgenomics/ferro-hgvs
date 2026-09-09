@@ -3672,6 +3672,14 @@ static RULED_COMPARED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static RULED_DISAGREED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[cfg(feature = "dev")]
 static RULED_ROUNDTRIP_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Logical `partition_ruled` calls served from the per-thread memo (A1) rather
+/// than recomputed. `RULED_MEMO_HITS / RuledCounts.attempted` is the fraction of
+/// ruled-partition work the memo eliminates — the honest, wall-clock-free measure
+/// of A1's benefit on a cold, each-variant-once workload (the repeats are the
+/// alternation/collapse loops re-deriving byte-identical blocks, plus cross-variant
+/// block repeats).
+#[cfg(feature = "dev")]
+static RULED_MEMO_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// This process's ruled-arm census. Relaxed, like [`partition_decline_counts`].
 #[cfg(feature = "dev")]
@@ -3685,6 +3693,13 @@ pub fn ruled_counts() -> RuledCounts {
         disagreed: RULED_DISAGREED.load(Relaxed),
         roundtrip_refused: RULED_ROUNDTRIP_REFUSED.load(Relaxed),
     }
+}
+
+/// Ruled-partition calls (A1) served from the per-thread memo so far this process.
+/// Denominator is [`ruled_counts`]`().attempted`.
+#[cfg(feature = "dev")]
+pub fn ruled_memo_hits() -> u64 {
+    RULED_MEMO_HITS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Partition the canonical window with the ruled driver, as pieces in window
@@ -3839,6 +3854,8 @@ fn partition_ruled_memoized(
         direction,
     );
     if let Some(hit) = RULED_MEMO.with(|c| c.borrow().get(&key).cloned()) {
+        #[cfg(feature = "dev")]
+        RULED_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return hit;
     }
     let result = partition_ruled(ctx, direction);
@@ -4014,6 +4031,82 @@ mod ruled_memo_tests {
             RULED_MEMO.with(|c| c.borrow().len()),
             5,
             "wrapper must key on ctx.resulting distinctly from ctx.reference"
+        );
+    }
+
+    /// The honest COLD benefit of A1, wall-clock-free: over a workload of DISTINCT
+    /// variants (fresh blocks on a non-periodic contig) each normalized exactly
+    /// once, the memo still hits — because the alternation and collapse loops
+    /// re-derive byte-identical blocks WITHIN one `normalize()`. Reports the hit
+    /// fraction and guards that it is non-vacuous: a memo that never hit on a
+    /// multi-pass workload would mean A1 is dead code. (dev-only: it reads the
+    /// `ruled_counts`/`ruled_memo_hits` census.)
+    #[cfg(feature = "dev")]
+    #[test]
+    fn the_memo_eliminates_repeated_partitions_on_a_cold_workload() {
+        use crate::{parse_hgvs, MockProvider, Normalizer};
+
+        // A non-periodic contig, so distinct variant positions give distinct
+        // blocks (no artificial cross-variant hits from a repeating sequence).
+        fn pseudo_random_contig(len: usize) -> String {
+            let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+            (0..len)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ['A', 'C', 'G', 'T'][((x >> 33) & 3) as usize]
+                })
+                .collect()
+        }
+        // A `k`-member net-deletion cis-delins allele starting at `base`.
+        fn cis_delins_at(base: usize, k: usize) -> String {
+            let mut s = String::from("NC_000001.11:g.[");
+            for j in 0..k {
+                if j > 0 {
+                    s.push(';');
+                }
+                let start = base + j * 8;
+                s.push_str(&format!("{}_{}delinsACG", start, start + 4));
+            }
+            s.push(']');
+            s
+        }
+
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let provider = {
+            let mut p = MockProvider::new();
+            p.add_genomic_sequence("NC_000001.11", pseudo_random_contig(3000));
+            p
+        };
+        let normalizer = Normalizer::new(provider);
+
+        let attempts_before = ruled_counts().attempted;
+        let hits_before = ruled_memo_hits();
+        let mut normalized = 0usize;
+        for i in 0..300usize {
+            let base = 40 + i * 8; // distinct, in-range (<= ~2436 of 3000)
+            let k = 2 + (i % 4); // 2..=5 members
+            let s = cis_delins_at(base, k);
+            if let Ok(v) = parse_hgvs(&s) {
+                if normalizer.normalize(&v).is_ok() {
+                    normalized += 1;
+                }
+            }
+        }
+        let attempts = ruled_counts().attempted - attempts_before;
+        let hits = ruled_memo_hits() - hits_before;
+        eprintln!(
+            "[A1 cold hit-rate] variants_normalized={normalized} partition_attempts={attempts} \
+             memo_hits={hits} hit_rate={:.1}%",
+            100.0 * hits as f64 / attempts.max(1) as f64
+        );
+        assert!(normalized > 0, "workload must normalize something");
+        assert!(attempts > 0, "workload must reach the ruled partitioner");
+        assert!(
+            hits > 0,
+            "the memo must eliminate repeated partitions on a multi-pass workload \
+             (A1 is non-vacuous)"
         );
     }
 }
