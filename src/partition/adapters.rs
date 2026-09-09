@@ -1185,6 +1185,73 @@ mod tests {
     }
 
     #[test]
+    fn codon_frame_separation_declines_the_compensated_gap_two_pair() {
+        // Ruling `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair`:
+        // a point insertion and a single-base deletion that share codon 0 but sit
+        // TWO positions apart are described individually. Coding frame, grid phase
+        // 0. reference ACGTACGTA -> TACTACGA: insT before offset 0, del G at
+        // [2,3), and a far del T at [7,8) so the block is length-changing and the
+        // decline is the gap test's, not the `length_changing` gate's.
+        let frame = FrameContext::coding(0, Some(0), None);
+        let prov = Provenance::none();
+        let c = ctx(b"ACGTACGTA", b"TACTACGA", &frame, &prov);
+        let seed = Cut::new(
+            &c,
+            vec![
+                Run::unlabelled(0, 0, b"T".to_vec()),
+                Run::unlabelled(2, 3, Vec::new()),
+                Run::unlabelled(7, 8, Vec::new()),
+            ],
+        )
+        .expect("sound seed");
+        assert!(
+            CodonFrameSeparation.apply(&seed, &c).is_none(),
+            "a gap of two is outside the delins.md:18 exception",
+        );
+
+        // The exact net-length-preserving pair the ruling names, with no far
+        // deletion: ACGTAC -> TACTAC. Declined too, here by the `length_changing`
+        // gate before the gap test is reached.
+        let c = ctx(b"ACGTAC", b"TACTAC", &frame, &prov);
+        let seed = Cut::new(
+            &c,
+            vec![
+                Run::unlabelled(0, 0, b"T".to_vec()),
+                Run::unlabelled(2, 3, Vec::new()),
+            ],
+        )
+        .expect("sound seed");
+        assert!(
+            CodonFrameSeparation.apply(&seed, &c).is_none(),
+            "the net-0 compensated pair is described individually",
+        );
+    }
+
+    #[test]
+    fn codon_frame_separation_merges_the_same_shape_at_gap_one() {
+        // Control for the gap-two decline above: the same insertion with the
+        // deletion moved to offset 1 (one unchanged base, A at 0, between them),
+        // still inside codon 0 and still length-changing. This one merges, so the
+        // gap-two test is discriminating.
+        let frame = FrameContext::coding(0, Some(0), None);
+        let prov = Provenance::none();
+        let c = ctx(b"ACGTACGTA", b"TAGTACGA", &frame, &prov);
+        let seed = Cut::new(
+            &c,
+            vec![
+                Run::unlabelled(0, 0, b"T".to_vec()),
+                Run::unlabelled(1, 2, Vec::new()),
+                Run::unlabelled(7, 8, Vec::new()),
+            ],
+        )
+        .expect("sound seed");
+        let out = CodonFrameSeparation.apply(&seed, &c).expect("merged");
+        assert_eq!(out.runs().len(), 2);
+        assert_eq!((out.runs()[0].ref_start, out.runs()[0].ref_end), (0, 2));
+        assert_eq!(out.runs()[0].alt, b"TA");
+    }
+
+    #[test]
     fn codon_frame_separation_declines_off_a_coding_frame() {
         // The SAME block on a non-coding frame: no reading frame, so the codon
         // exception does not apply and the two members stay split.
