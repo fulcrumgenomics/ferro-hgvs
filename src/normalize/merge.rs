@@ -3749,7 +3749,6 @@ fn ruled_pieces_over_window(
     use crate::partition::adapters::frame_context_for_axis_origin;
     use crate::partition::block_ctx::Provenance;
     use crate::partition::bridge::cut_to_pieces;
-    use crate::partition::driver::partition_ruled;
 
     #[cfg(feature = "dev")]
     RULED_ATTEMPTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3762,7 +3761,7 @@ fn ruled_pieces_over_window(
         molecule,
         provenance: &provenance,
     };
-    match partition_ruled(&ctx, direction) {
+    match partition_ruled_memoized(&ctx, direction) {
         Ok(cut) => Some(cut_to_pieces(&cut)),
         Err(PartitionError::GridTooLarge { .. }) => {
             #[cfg(feature = "dev")]
@@ -3774,6 +3773,248 @@ fn ruled_pieces_over_window(
             RULED_UNRENDERABLE_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             None
         }
+    }
+}
+
+/// Memo key for the pure [`partition_ruled`](crate::partition::driver::partition_ruled):
+/// the full `BlockCtx` content the driver actually reads — the two byte windows,
+/// the frame, the molecule, and the direction. Provenance is **deliberately
+/// absent**: no rule driven by `partition_ruled` reads `ctx.provenance` (Fable
+/// design review, 2026-09-09), and the shipping call site hardcodes
+/// `Provenance::none()` — [`partition_ruled_memoized`] `debug_assert`s that, so a
+/// future wiring of provenance into the ruled rules fails loud rather than serving
+/// a stale answer computed under the wrong provenance.
+///
+/// Owned (`Box<[u8]>`, not a hash fingerprint) so equality is exact — a
+/// plausible-but-wrong cache hit on a normalization path is exactly the failure
+/// this project's doctrine rejects.
+type RuledMemoKey = (
+    Box<[u8]>,
+    Box<[u8]>,
+    crate::partition::block_ctx::FrameContext,
+    crate::partition::block_ctx::Molecule,
+    ShuffleDirection,
+);
+
+/// Capacity ceiling for [`RULED_MEMO`]. On overflow the whole map is cleared —
+/// correctness-neutral, since every entry is valid forever (the key is a pure
+/// function's whole input), so eviction is a memory-growth knob, not a
+/// correctness one. Blocks are bounded by the canonical window, so a few thousand
+/// distinct blocks per thread is a generous per-`normalize` working set.
+const RULED_MEMO_CAPACITY: usize = 4096;
+
+thread_local! {
+    /// Per-thread memo for `partition_ruled`. Thread-local because a `Normalizer`
+    /// is shared `&self` across rayon workers, and the alternation (`mod.rs`) and
+    /// collapse (`normalize_allele`) loops re-derive byte-identical blocks within
+    /// one `normalize()` — the repeat this collapses. Never explicitly cleared
+    /// (see [`RULED_MEMO_CAPACITY`]).
+    static RULED_MEMO: std::cell::RefCell<
+        std::collections::HashMap<RuledMemoKey, Result<crate::partition::ruled::Cut, PartitionError>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// [`partition_ruled`](crate::partition::driver::partition_ruled) behind the
+/// per-thread memo. Wraps ONLY the driver call (not the whole
+/// [`ruled_pieces_over_window`]), so the caller's dev-only `RULED_*` decline
+/// census still fires on every logical call, hit or miss. `Ok` and `Err` are both
+/// cached: a decline (`GridTooLarge`/`Unrenderable`) is as deterministic in the
+/// key as a success, and re-declining identically is where part of the win is.
+fn partition_ruled_memoized(
+    ctx: &BlockCtx,
+    direction: ShuffleDirection,
+) -> Result<crate::partition::ruled::Cut, PartitionError> {
+    use crate::partition::driver::partition_ruled;
+    debug_assert!(
+        ctx.provenance.is_none(),
+        "partition_ruled memo key omits provenance, but the shipping call site \
+         hardcodes Provenance::none(); if a real provenance reaches here it must be \
+         added to RuledMemoKey (re-check whether any driven rule reads it first)",
+    );
+    let key: RuledMemoKey = (
+        ctx.reference.into(),
+        ctx.resulting.into(),
+        ctx.frame.clone(),
+        ctx.molecule,
+        direction,
+    );
+    if let Some(hit) = RULED_MEMO.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let result = partition_ruled(ctx, direction);
+    RULED_MEMO.with(|c| {
+        let mut map = c.borrow_mut();
+        if map.len() >= RULED_MEMO_CAPACITY {
+            map.clear();
+        }
+        map.insert(key, result.clone());
+    });
+    result
+}
+
+#[cfg(test)]
+mod ruled_memo_tests {
+    use super::*;
+    use crate::partition::block_ctx::{BlockCtx, FrameContext, Molecule, Provenance};
+    use crate::partition::driver::partition_ruled;
+
+    /// The memo's premise: a hit (and a miss) must equal a fresh, un-memoized
+    /// partition of a byte-identical block built from an INDEPENDENT allocation.
+    /// The R2/R3 repeats are byte-equal by value across distinct allocations, so
+    /// the key must match on content, not identity.
+    #[test]
+    fn memo_hit_equals_fresh_partition() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        // A tandem-dup-beside-change block that exercises several rules.
+        let reference = b"TAGTAAACCATTTTACGGAGGATCACAAATTCCTCCTTAT".to_vec();
+        let resulting = b"TAGTAAACCATTTTACGGAGGATCACACACATTCCTCCTTAT".to_vec();
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let ctx = BlockCtx {
+                reference: &reference,
+                resulting: &resulting,
+                frame: &frame,
+                molecule: Molecule::Dna,
+                provenance: &prov,
+            };
+            let truth = partition_ruled(&ctx, direction);
+            // First call misses (fills the memo); the second hits.
+            let miss = partition_ruled_memoized(&ctx, direction);
+            let hit = partition_ruled_memoized(&ctx, direction);
+            assert_eq!(
+                miss, truth,
+                "miss must equal the fresh partition ({direction:?})"
+            );
+            assert_eq!(
+                hit, truth,
+                "hit must equal the fresh partition ({direction:?})"
+            );
+            // A byte-identical block from a DISTINCT allocation hits the same entry.
+            let ref2 = reference.clone();
+            let res2 = resulting.clone();
+            let ctx2 = BlockCtx {
+                reference: &ref2,
+                resulting: &res2,
+                frame: &frame,
+                molecule: Molecule::Dna,
+                provenance: &prov,
+            };
+            assert_eq!(
+                partition_ruled_memoized(&ctx2, direction),
+                truth,
+                "identical bytes from a distinct allocation hit the memo ({direction:?})"
+            );
+        }
+    }
+
+    /// Molecule and direction ARE part of the key: a value stored under one
+    /// molecule/direction must be invisible under the otherwise-identical other.
+    /// This is white-box on purpose — a `DnaOnly` rule genuinely changes the
+    /// result (so serving the wrong molecule's cut would be a live bug), but the
+    /// smallest DAG block that diverges by molecule is fiddly to build, whereas
+    /// the property under test is simply "the key discriminates". Sabotage: drop
+    /// `molecule` (or `direction`) from `RuledMemoKey` and the `assert_ne!` and the
+    /// cross-key `get` both fail.
+    #[test]
+    fn memo_key_separates_molecule_and_direction() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let refb: Box<[u8]> = b"ACGT"[..].into();
+        let resb: Box<[u8]> = b"CG"[..].into();
+        let dna_3p: RuledMemoKey = (
+            refb.clone(),
+            resb.clone(),
+            frame.clone(),
+            Molecule::Dna,
+            ShuffleDirection::ThreePrime,
+        );
+        let rna_3p: RuledMemoKey = (
+            refb.clone(),
+            resb.clone(),
+            frame.clone(),
+            Molecule::Rna,
+            ShuffleDirection::ThreePrime,
+        );
+        let dna_5p: RuledMemoKey = (
+            refb,
+            resb,
+            frame,
+            Molecule::Dna,
+            ShuffleDirection::FivePrime,
+        );
+        assert_ne!(dna_3p, rna_3p, "molecule must distinguish the key");
+        assert_ne!(dna_3p, dna_5p, "direction must distinguish the key");
+        RULED_MEMO.with(|c| {
+            let mut map = c.borrow_mut();
+            map.insert(dna_3p.clone(), Err(PartitionError::Unsound));
+            assert!(
+                map.get(&dna_3p).is_some(),
+                "the DNA/3' key hits its own entry"
+            );
+            assert!(
+                map.get(&rna_3p).is_none(),
+                "the RNA key must not see the DNA entry"
+            );
+            assert!(
+                map.get(&dna_5p).is_none(),
+                "the 5' key must not see the 3' entry"
+            );
+        });
+    }
+
+    /// Black-box the wrapper's OWN key construction (not the key type): feeding the
+    /// real `partition_ruled_memoized` the same bytes/frame but a different
+    /// molecule, direction, or `resulting` must create a DISTINCT cache slot. This
+    /// catches a copy-paste wiring bug the type-level test above cannot — e.g.
+    /// hardcoding `Molecule::Dna` instead of `ctx.molecule`, or putting
+    /// `ctx.reference` in both byte positions of the key.
+    #[test]
+    fn the_wrapper_threads_molecule_direction_and_both_windows_into_distinct_slots() {
+        RULED_MEMO.with(|c| c.borrow_mut().clear());
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        let reference = b"ACGTACGTAC".to_vec();
+        let resulting_a = b"ACGTAC".to_vec();
+        let resulting_b = b"ACGTACGT".to_vec();
+
+        // Identical bytes/frame, all four (molecule, direction) combinations -> 4
+        // slots proves both `ctx.molecule` AND `direction` are threaded (hit or
+        // miss / Ok or Err is irrelevant: every distinct key inserts one entry).
+        for molecule in [Molecule::Dna, Molecule::Rna] {
+            for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+                let ctx = BlockCtx {
+                    reference: &reference,
+                    resulting: &resulting_a,
+                    frame: &frame,
+                    molecule,
+                    provenance: &prov,
+                };
+                let _ = partition_ruled_memoized(&ctx, direction);
+            }
+        }
+        assert_eq!(
+            RULED_MEMO.with(|c| c.borrow().len()),
+            4,
+            "wrapper must key on ctx.molecule AND direction — one slot per combination"
+        );
+
+        // A different `resulting` over the same reference/molecule/direction adds a
+        // 5th slot, proving `resulting` occupies its own key position (not clobbered
+        // by `reference`).
+        let ctx_b = BlockCtx {
+            reference: &reference,
+            resulting: &resulting_b,
+            frame: &frame,
+            molecule: Molecule::Dna,
+            provenance: &prov,
+        };
+        let _ = partition_ruled_memoized(&ctx_b, ShuffleDirection::ThreePrime);
+        assert_eq!(
+            RULED_MEMO.with(|c| c.borrow().len()),
+            5,
+            "wrapper must key on ctx.resulting distinctly from ctx.reference"
+        );
     }
 }
 
