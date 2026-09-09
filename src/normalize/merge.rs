@@ -568,11 +568,6 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     provider: &P,
     direction: ShuffleDirection,
 ) -> Vec<HgvsVariant> {
-    // `direction` is consumed only by the dev-gated ruled-ratification shortcut below;
-    // acknowledge it in a non-`dev` build so `clippy --release -- -D warnings` (ci.yml)
-    // does not flag it as unused. See the `#[cfg(feature = "dev")]` block further down.
-    #[cfg(not(feature = "dev"))]
-    let _ = &direction;
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return variants;
     }
@@ -756,14 +751,24 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // consult the partitioner instead of the dup guard + spanning-delins fold below:
     // that fold's `dup_extends_reference_tandem` is a THIRD hand-synced copy of the
     // peel's narrow tract reach, which folds a `[dup;sub]` the ruled cut correctly
-    // exposes (e.g. `c7-g-2188` once step 8 widens the reach) back to a `delins`.
-    // Placed AFTER every admissibility refusal (a consult on a refused group re-cuts
-    // shapes the collapse deliberately leaves alone and was unsound) and BEFORE the
-    // dup guard (so the ruled cut, not the reach copy, decides the `[dup;sub]`). Fall
-    // through to the legacy body on a decline, so no group loses the fold. Dev + ruled
-    // only → default byte-identical; step 9 deletes this consult and the fold below
-    // together, leaving the partitioner the one authority.
-    #[cfg(feature = "dev")]
+    // exposes back to a `delins`. Placed AFTER every admissibility refusal (a consult
+    // on a refused group re-cuts shapes the collapse deliberately leaves alone and was
+    // unsound) and BEFORE the dup guard (so the ruled cut, not the reach copy, decides
+    // the `[dup;sub]`). Fall through to the legacy body on a decline, so no group loses
+    // the fold.
+    //
+    // Runs in EVERY build as of the ruled flip. It was `#[cfg(feature = "dev")]` while
+    // the default was `CanonicalCoalesced`, so it fired only under the dev-only
+    // `FERRO_PARTITION=ruled` override; with `DEFAULT_PARTITION_RULE = Ruled` that gate
+    // made the shipped release binary skip the consult and fold a `[dup;sub]` the ruled
+    // cut exposes — 8 of 500,004 ClinVar rows — violating the decided ruling
+    // `separation-zero-dup-member-is-preserved-not-merged`. Un-gated so release and the
+    // dev gate run the same path. The fuller collapse (deleting this consult AND the
+    // legacy fold + the Stage-B/derive chains, leaving the partitioner the one authority)
+    // stays future work: it is a separate architectural change deliberately out of scope
+    // for this minimal fix, not a technical blocker. The step-8 wide peel it builds on is
+    // already shipped (design doc §7 "Step 8 COMPLETE", `PeelReach::PlusK` in
+    // `src/partition/adapters.rs`).
     if partition_rule() == PartitionRule::Ruled {
         // `keep_if_canonical: true` — the partitioner is the authority here, so
         // when it confirms the members are already canonical (its re-derivation
