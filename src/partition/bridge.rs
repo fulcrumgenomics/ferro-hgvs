@@ -60,6 +60,23 @@ pub(crate) fn cut_to_pieces(cut: &Cut) -> Vec<Piece> {
         .collect()
 }
 
+/// Whether `pieces` still equals `cut_to_pieces(cut)` — i.e. a `merge.rs` pass left
+/// the cut's geometry untouched — computed without materialising the comparison
+/// `Vec`. Exactly equivalent to `pieces == cut_to_pieces(cut)`: a [`Piece`] carries
+/// only `(ref_start, ref_end, alt)` and derives `PartialEq` structurally, and
+/// [`cut_to_pieces`] copies each of those three from the corresponding [`Run`] and
+/// nothing else — so comparing `pieces` against `cut.runs()` field by field answers
+/// the same question and allocates nothing. Adapters use it as the no-op guard in
+/// place of a `let before = pieces.clone()` snapshot.
+pub(crate) fn pieces_match_cut(pieces: &[Piece], cut: &Cut) -> bool {
+    let runs = cut.runs();
+    pieces.len() == runs.len()
+        && pieces
+            .iter()
+            .zip(runs)
+            .all(|(p, r)| p.ref_start == r.ref_start && p.ref_end == r.ref_end && p.alt == r.alt)
+}
+
 /// Lift a `Vec<Piece>` a legacy pass produced back to a validated [`Cut`].
 ///
 /// Every piece becomes an [`Run::unlabelled`] run — so the returned cut is entirely
@@ -396,6 +413,72 @@ mod tests {
             molecule: Molecule::Dna,
             provenance: prov,
         }
+    }
+
+    #[test]
+    fn pieces_match_cut_agrees_with_a_materialised_compare() {
+        let frame = FrameContext::NonCoding;
+        let prov = Provenance::none();
+        // A sound single-substitution cut: ACGT -> AGGT.
+        let c = ctx(b"ACGT", b"AGGT", &frame, &prov);
+        let cut = Cut::new(&c, vec![Run::unlabelled(1, 2, b"G".to_vec())]).expect("sound sub");
+
+        let identical = cut_to_pieces(&cut);
+        let mut changed_alt = identical.clone();
+        changed_alt[0].alt = b"T".to_vec();
+        let mut changed_span = identical.clone();
+        changed_span[0].ref_end = 3;
+        let longer = {
+            let mut v = identical.clone();
+            v.push(Piece {
+                ref_start: 3,
+                ref_end: 3,
+                alt: b"A".to_vec(),
+            });
+            v
+        };
+        let empty: Vec<Piece> = vec![];
+
+        for candidate in [&identical, &changed_alt, &changed_span, &longer, &empty] {
+            assert_eq!(
+                pieces_match_cut(candidate, &cut),
+                *candidate == cut_to_pieces(&cut),
+                "pieces_match_cut must equal a materialised compare for {candidate:?}",
+            );
+        }
+        assert!(
+            pieces_match_cut(&identical, &cut),
+            "the unchanged projection matches the cut",
+        );
+        assert!(
+            !pieces_match_cut(&changed_alt, &cut),
+            "a changed payload does not match, even at equal length",
+        );
+
+        // A two-run cut, with a perturbation on the SECOND piece only — guards the
+        // zip against an ordering or early-exit slip that a one-run cut cannot see.
+        let c2 = ctx(b"ACGTACGT", b"AXGTAYGT", &frame, &prov);
+        let cut2 = Cut::new(
+            &c2,
+            vec![
+                Run::unlabelled(1, 2, b"X".to_vec()),
+                Run::unlabelled(5, 6, b"Y".to_vec()),
+            ],
+        )
+        .expect("sound two-sub cut");
+        let base = cut_to_pieces(&cut2);
+        let mut second_differs = base.clone();
+        second_differs[1].alt = b"Z".to_vec();
+        assert!(
+            pieces_match_cut(&base, &cut2),
+            "the unchanged two-run projection matches",
+        );
+        assert_eq!(
+            pieces_match_cut(&second_differs, &cut2),
+            second_differs == cut_to_pieces(&cut2),
+            "a change to the second piece is caught, matching a materialised compare",
+        );
+        assert!(!pieces_match_cut(&second_differs, &cut2));
     }
 
     #[test]
