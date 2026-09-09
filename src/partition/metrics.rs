@@ -186,10 +186,21 @@ pub fn round_trips(applier: &dyn SequenceApplier, ctx: &BlockCtx, p: &Partition)
 /// range, not a slot; `RefApplier` already rejects a zero-width member landing
 /// inside a span as an overlap, so only the coincident zero-width pair is blind.
 pub fn is_renderable(p: &Partition) -> bool {
-    let mut occupied = std::collections::HashSet::new();
-    for m in &p.members {
-        let content_bearing_zero_width = m.ref_start == m.ref_end && m.kind != EditKind::Identity;
-        if content_bearing_zero_width && !occupied.insert(m.ref_start) {
+    // A member counts here iff it is content-bearing and zero-width (an `Ins` or a
+    // peeled `Dup` at an interbase); the partition is unrenderable iff two of them
+    // share one interbase. Member counts per block are tiny, so this pairwise scan
+    // is cheaper than the `HashSet` it replaces — no allocation, and it returns on
+    // the common "no collision" case after one pass. It is O(n²), but n is tiny;
+    // order-independent, exactly like the set: it fires iff some later counted
+    // member repeats an earlier one's offset.
+    let counted = |m: &Member| m.ref_start == m.ref_end && m.kind != EditKind::Identity;
+    let members = &p.members;
+    for (i, a) in members.iter().enumerate() {
+        if counted(a)
+            && members[i + 1..]
+                .iter()
+                .any(|b| counted(b) && b.ref_start == a.ref_start)
+        {
             return false; // a second insertion at an already-occupied interbase
         }
     }
@@ -283,6 +294,50 @@ mod tests {
         };
         assert!(is_renderable(&one));
         assert!(is_renderable(&two_distinct));
+    }
+
+    /// The allocation-free `is_renderable` must agree with the `HashSet`-based
+    /// reference on every shape — collisions, spans, exempt identities, and
+    /// reversed member order — so the pairwise scan is order-independent exactly
+    /// like the set it replaced.
+    #[test]
+    fn is_renderable_matches_a_set_based_reference() {
+        fn reference(p: &Partition) -> bool {
+            let mut occupied = std::collections::HashSet::new();
+            for m in &p.members {
+                if m.ref_start == m.ref_end
+                    && m.kind != EditKind::Identity
+                    && !occupied.insert(m.ref_start)
+                {
+                    return false;
+                }
+            }
+            true
+        }
+        let cases: Vec<Vec<Member>> = vec![
+            vec![],
+            vec![m(EditKind::Ins, 2, 2, "G")],
+            vec![m(EditKind::Ins, 2, 2, "G"), m(EditKind::Dup, 2, 2, "AC")],
+            vec![m(EditKind::Ins, 2, 2, "G"), m(EditKind::Identity, 2, 2, "")],
+            vec![m(EditKind::Ins, 1, 1, "G"), m(EditKind::Dup, 3, 3, "AC")],
+            vec![m(EditKind::Del, 1, 3, ""), m(EditKind::Ins, 3, 3, "A")],
+            vec![
+                m(EditKind::Dup, 5, 5, "AC"),
+                m(EditKind::Ins, 2, 2, "G"),
+                m(EditKind::Ins, 5, 5, "T"),
+            ],
+            vec![
+                m(EditKind::Ins, 2, 2, "A"),
+                m(EditKind::Ins, 2, 2, "B"),
+                m(EditKind::Ins, 2, 2, "C"),
+            ],
+        ];
+        for members in &cases {
+            let p = Partition {
+                members: members.clone(),
+            };
+            assert_eq!(is_renderable(&p), reference(&p), "mismatch for {members:?}");
+        }
     }
 
     /// `RefApplier::apply` is order-independent: members handed to it out of
