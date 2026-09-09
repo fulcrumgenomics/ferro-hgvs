@@ -159,6 +159,14 @@ impl Cut {
         &self.runs
     }
 
+    /// Heap bytes this cut owns: the run vector's allocation plus each run's
+    /// payload allocation. What a cache holding the cut retains, for a caller that
+    /// bounds its cache by memory rather than by entry count.
+    pub fn owned_bytes(&self) -> usize {
+        self.runs.capacity() * std::mem::size_of::<Run>()
+            + self.runs.iter().map(|r| r.alt.capacity()).sum::<usize>()
+    }
+
     /// Project to the neutral [`Partition`] for rendering / metrics. Labels become
     /// `EditKind`s; locks are dropped (they are a partition-stage concern only).
     pub fn to_partition(&self) -> Partition {
