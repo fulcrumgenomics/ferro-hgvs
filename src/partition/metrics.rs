@@ -5,7 +5,7 @@
 //! `bakeoff::metrics`, since they are a measurement concern.
 
 use crate::partition::block_ctx::BlockCtx;
-use crate::partition::output::{EditKind, Partition};
+use crate::partition::output::{EditKind, Member, Partition};
 
 /// Reconstruct the resulting sequence by applying a partition to a reference.
 /// Injected so metrics are testable without ferro's production renderer.
@@ -33,11 +33,24 @@ impl SequenceApplier for RefApplier {
     fn apply(&self, reference: &[u8], p: &Partition) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(reference.len());
         let mut cursor = 0usize;
-        let mut members = p.members.clone();
-        // (ref_start, ref_end): at a shared start, a zero-width edit (Identity/Ins)
-        // must precede a span so it does not read as an overlap against the cursor.
-        members.sort_by_key(|m| (m.ref_start, m.ref_end));
-        for m in &members {
+        // The splice reads members in ascending `(ref_start, ref_end)` order — at a
+        // shared start, a zero-width edit (Identity/Ins) must precede a span so it
+        // does not read as an overlap against the cursor. A `Cut`'s members already
+        // arrive in that order (the ruled and canonical paths both build them in
+        // reference order), which is every call on the production round-trip gate,
+        // so the common case borrows them and pays for neither the clone nor the
+        // sort. Only an out-of-order caller owns and sorts a copy; the splice below
+        // is identical either way (see `apply_is_order_independent`).
+        let owned: Vec<Member>;
+        let members: &[Member] = if p.members.is_sorted_by_key(|m| (m.ref_start, m.ref_end)) {
+            &p.members
+        } else {
+            let mut v = p.members.clone();
+            v.sort_by_key(|m| (m.ref_start, m.ref_end));
+            owned = v;
+            &owned
+        };
+        for m in members {
             if m.ref_start < cursor || m.ref_end > reference.len() || m.ref_start > m.ref_end {
                 return None; // overlap or out of bounds
             }
@@ -179,5 +192,33 @@ mod tests {
         };
         assert!(is_renderable(&one));
         assert!(is_renderable(&two_distinct));
+    }
+
+    /// `RefApplier::apply` is order-independent: members handed to it out of
+    /// reference order splice to the same sequence as the ascending list. This
+    /// pins the reordering fallback the fast path relies on — a `Cut`'s members
+    /// already arrive ascending (both the ruled and canonical paths build them in
+    /// reference order), so `apply` skips the clone-and-sort, but an out-of-order
+    /// caller must still get the reference-order splice.
+    #[test]
+    fn apply_is_order_independent() {
+        let reference = b"ACGTACGT";
+        let ascending = Partition {
+            members: vec![m(EditKind::Del, 2, 4, ""), m(EditKind::Ins, 6, 6, "XX")],
+        };
+        let shuffled = Partition {
+            members: vec![m(EditKind::Ins, 6, 6, "XX"), m(EditKind::Del, 2, 4, "")],
+        };
+        let expected = b"ACACXXGT";
+        assert_eq!(
+            RefApplier.apply(reference, &ascending).as_deref(),
+            Some(&expected[..]),
+            "ascending members splice in reference order",
+        );
+        assert_eq!(
+            RefApplier.apply(reference, &shuffled).as_deref(),
+            Some(&expected[..]),
+            "shuffled members are reordered before splicing",
+        );
     }
 }
