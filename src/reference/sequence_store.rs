@@ -15,13 +15,6 @@
 //!
 //! `decode_range` (in `multi_fasta`) remains the correctness oracle: a read from
 //! this store must equal a `decode_range` read of the same range, for every range.
-//!
-//! TODO(P4): the build/persist API (`from_named_records`, `write`, `fingerprint`)
-//! is exercised by tests and the store read path is wired into
-//! `MultiFastaProvider`, but nothing in a non-test build *writes* a sidecar yet —
-//! that lands when `ferro prepare` gains the builder and construction opens the
-//! sidecar. Until then the packer half reads as dead in a release build.
-#![allow(dead_code)]
 
 use memmap2::Mmap;
 use std::collections::HashMap;
