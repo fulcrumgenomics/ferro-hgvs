@@ -255,6 +255,15 @@ impl PreparedIndex {
         self.files.get(file_id as usize).map(PathBuf::as_path)
     }
 
+    /// Every indexed record as `(name, entry)`. Iteration order is the index
+    /// map's fixed-seed order (deterministic across runs). Used to build the
+    /// prepared 2-bit sequence store. Excludes the protein index.
+    // TODO(P4): live once `ferro prepare` calls the store builder.
+    #[allow(dead_code)]
+    pub(crate) fn records(&self) -> impl Iterator<Item = (&str, &FastaIndexEntry)> {
+        self.index.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
     /// Whether `index` contains this accession, at its exact stored form (no
     /// version-flex, alias, or `chr`-prefix resolution — see `resolve_name` in
     /// `multi_fasta.rs` for that).

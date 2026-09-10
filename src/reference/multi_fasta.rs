@@ -83,6 +83,9 @@ use crate::error::FerroError;
 use crate::reference::authoritative::CanonicalOverrides;
 use crate::reference::prepared_index::{load_fai_index, FastaIndexEntry, PreparedIndex};
 use crate::reference::provider::{AlignmentGap, GenomicPlacement, ReferenceProvider};
+use crate::reference::sequence_store::{
+    fingerprint as sequence_fingerprint, MappedSequence, PackedSequence,
+};
 use crate::reference::transcript::Transcript;
 
 /// Supplemental transcript info for a single transcript.
@@ -245,6 +248,13 @@ pub struct MultiFastaProvider {
     /// uppercase pass over the bytes. Workloads with many variants in one gene
     /// re-read overlapping windows constantly, and paid for both every time.
     region_cache: Option<SequenceRegionCache>,
+
+    /// Optional mmap-backed 2-bit sequence store (a prepared `.pac` sidecar). When
+    /// present and it holds the queried record, a base range is served as a direct
+    /// unpack of the packed stream, bypassing `decode_range`'s per-access
+    /// newline-strip + uppercase pass (~76% of runtime). Absent ⇒ the FASTA-text
+    /// path is used unchanged. See `reference::sequence_store`.
+    sequence_store: Option<MappedSequence>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -563,7 +573,63 @@ impl MultiFastaProvider {
             contig_aliases: None,
             ng_hosted: None,
             region_cache: new_sequence_region_cache(),
+            sequence_store: None,
         }
+    }
+
+    // The store builder API below is staged for P4 (`ferro prepare` writes the
+    // sidecar; construction opens it). Until that CLI wiring lands, these are
+    // exercised only by the store's tests, so the release build sees them dead.
+    /// `(name, length)` for every indexed record, the input to
+    /// [`sequence_fingerprint`] and to the store builder.
+    #[allow(dead_code)]
+    pub(crate) fn record_name_lengths(&self) -> Vec<(String, u64)> {
+        self.prepared
+            .records()
+            .map(|(n, e)| (n.to_string(), e.length))
+            .collect()
+    }
+
+    /// Fingerprint of the current index, tying a written store to this reference.
+    #[allow(dead_code)]
+    pub(crate) fn sequence_fingerprint(&self) -> u64 {
+        let pairs = self.record_name_lengths();
+        let refs: Vec<(&str, u64)> = pairs.iter().map(|(n, l)| (n.as_str(), *l)).collect();
+        sequence_fingerprint(&refs)
+    }
+
+    /// Build an in-memory 2-bit store over `names`, decoding each record once
+    /// through the existing text path (`decode_range`) so the packed bytes are
+    /// byte-identical to what the store will later serve. This is what the
+    /// prepare-time builder feeds to [`PackedSequence::write`].
+    #[allow(dead_code)]
+    pub(crate) fn pack_records(&self, names: &[&str]) -> Result<PackedSequence, FerroError> {
+        let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(names.len());
+        for &name in names {
+            let entry = self
+                .prepared
+                .entry(name)
+                .ok_or_else(|| FerroError::ReferenceNotFound {
+                    id: name.to_string(),
+                })?;
+            let bytes = if entry.length == 0 {
+                Vec::new()
+            } else {
+                self.decode_range(name, &entry, 0, entry.length)?
+            };
+            decoded.push((name.to_string(), bytes));
+        }
+        let refs: Vec<(&str, &[u8])> = decoded
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        Ok(PackedSequence::from_named_records(&refs))
+    }
+
+    /// Install a prepared sequence store so subsequent reads take the fast path.
+    #[allow(dead_code)]
+    pub(crate) fn set_sequence_store(&mut self, store: MappedSequence) {
+        self.sequence_store = Some(store);
     }
 
     /// Create a new multi-FASTA provider from a directory of FASTA files
@@ -1618,6 +1684,18 @@ impl MultiFastaProvider {
         let actual_end = end.min(entry.length);
         if start >= actual_end {
             return Ok(String::new());
+        }
+
+        // Fast path: if a prepared 2-bit store holds this record, serve the range
+        // as a direct unpack — byte-identical to `decode_range` by construction —
+        // bypassing the FASTA read and the newline-strip/uppercase decode pass.
+        if let Some(store) = self.sequence_store.as_ref() {
+            if let Some(r) = store.record_index(name) {
+                let bytes = store.range(r, start, actual_end);
+                return String::from_utf8(bytes).map_err(|e| FerroError::Io {
+                    msg: format!("sequence store holds non-UTF8 bytes for {}: {}", name, e),
+                });
+            }
         }
 
         let bytes = match self.region_cache.as_ref() {
@@ -4830,6 +4908,65 @@ mod tests {
     /// span whose declared `lrg_end` its gap list cannot reconstruct, so an
     /// undeclared width mismatch would now yield *no* placement and quietly cost
     /// this test its discriminator (asserted below).
+    /// End-to-end P3/P4: a store-backed provider serves every range byte-
+    /// identically to the FASTA-text path, through the whole `get_sequence`
+    /// funnel — including lowercase soft-masking (uppercased) and `N`/IUPAC holes.
+    #[test]
+    fn sequence_store_reads_match_the_text_path_through_the_provider() {
+        use crate::reference::provider::ReferenceProvider;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        // seqA mixes case (soft-masking) and carries an N run + lowercase IUPAC
+        // (r,y) so the decode uppercases and the holes split; seqB has flanking N.
+        let bases_a = "ACGTacgtNNNNNryACGTGG"; // len 21 -> decodes to ...NNNNNRY...
+        let bases_b = "NNACGTACGTNN"; // len 12
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "{bases_a}").unwrap();
+            writeln!(f, ">seqB").unwrap();
+            writeln!(f, "{bases_b}").unwrap();
+        }
+        {
+            // ">seqA\n"=6 -> offset 6; 21 bases +\n ends 28; ">seqB\n"=6 -> 34.
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t21\t6\t21\t22").unwrap();
+            writeln!(f, "seqB\t12\t34\t12\t13").unwrap();
+        }
+
+        // Reference provider (text path); build a store from it and reopen it.
+        let text = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        let names: Vec<String> = text
+            .record_name_lengths()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let fp = text.sequence_fingerprint();
+        let packed = text.pack_records(&name_refs).unwrap();
+        let pac_path = dir.path().join("ref.fna.pac");
+        packed.write(&pac_path, fp).unwrap();
+        let mapped = MappedSequence::open(&pac_path, fp)
+            .unwrap()
+            .expect("store should open");
+
+        // A second provider with the store installed takes the fast path.
+        let mut stored = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        stored.set_sequence_store(mapped);
+
+        for (name, len) in [("seqA", 21u64), ("seqB", 12u64)] {
+            for start in 0..len {
+                for end in start..=len {
+                    let want = text.get_sequence(name, start, end).unwrap();
+                    let got = stored.get_sequence(name, start, end).unwrap();
+                    assert_eq!(got, want, "{name} [{start},{end}) store vs text");
+                }
+            }
+        }
+    }
+
     #[test]
     fn lrg_with_its_own_record_is_served_from_the_record_not_the_placement() {
         let dir = tempdir().unwrap();
