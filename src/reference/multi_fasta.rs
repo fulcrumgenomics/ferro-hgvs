@@ -558,7 +558,7 @@ impl MultiFastaProvider {
     /// `from_directory`, `from_directories`, and `with_cdot` all funnel
     /// through here.
     fn from_prepared(prepared: PreparedIndex) -> Self {
-        Self {
+        let mut provider = Self {
             prepared,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
@@ -574,15 +574,19 @@ impl MultiFastaProvider {
             ng_hosted: None,
             region_cache: new_sequence_region_cache(),
             sequence_store: None,
+        };
+        // Opt-in prepared 2-bit sequence store (see `reference::sequence_store`).
+        // `FERRO_SEQUENCE_STORE=<path>` loads that sidecar when it matches this
+        // index, building it once if absent or stale. Failure is non-fatal: the
+        // FASTA-text path is used unchanged.
+        if let Ok(path) = std::env::var("FERRO_SEQUENCE_STORE") {
+            provider.enable_sequence_store(Path::new(&path));
         }
+        provider
     }
 
-    // The store builder API below is staged for P4 (`ferro prepare` writes the
-    // sidecar; construction opens it). Until that CLI wiring lands, these are
-    // exercised only by the store's tests, so the release build sees them dead.
     /// `(name, length)` for every indexed record, the input to
-    /// [`sequence_fingerprint`] and to the store builder.
-    #[allow(dead_code)]
+    /// [`Self::sequence_fingerprint`] and to the store builder.
     pub(crate) fn record_name_lengths(&self) -> Vec<(String, u64)> {
         self.prepared
             .records()
@@ -591,7 +595,6 @@ impl MultiFastaProvider {
     }
 
     /// Fingerprint of the current index, tying a written store to this reference.
-    #[allow(dead_code)]
     pub(crate) fn sequence_fingerprint(&self) -> u64 {
         let pairs = self.record_name_lengths();
         let refs: Vec<(&str, u64)> = pairs.iter().map(|(n, l)| (n.as_str(), *l)).collect();
@@ -600,9 +603,7 @@ impl MultiFastaProvider {
 
     /// Build an in-memory 2-bit store over `names`, decoding each record once
     /// through the existing text path (`decode_range`) so the packed bytes are
-    /// byte-identical to what the store will later serve. This is what the
-    /// prepare-time builder feeds to [`PackedSequence::write`].
-    #[allow(dead_code)]
+    /// byte-identical to what the store will later serve.
     pub(crate) fn pack_records(&self, names: &[&str]) -> Result<PackedSequence, FerroError> {
         let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(names.len());
         for &name in names {
@@ -627,9 +628,57 @@ impl MultiFastaProvider {
     }
 
     /// Install a prepared sequence store so subsequent reads take the fast path.
-    #[allow(dead_code)]
     pub(crate) fn set_sequence_store(&mut self, store: MappedSequence) {
         self.sequence_store = Some(store);
+    }
+
+    /// Pack every indexed record and write the sidecar at `path`, stamped with
+    /// this index's fingerprint. Called once to bootstrap the store.
+    pub(crate) fn build_and_write_sequence_store(&self, path: &Path) -> Result<(), FerroError> {
+        let name_lengths = self.record_name_lengths();
+        let names: Vec<&str> = name_lengths.iter().map(|(n, _)| n.as_str()).collect();
+        let packed = self.pack_records(&names)?;
+        packed
+            .write(path, self.sequence_fingerprint())
+            .map_err(|e| FerroError::Io {
+                msg: format!("failed to write sequence store {}: {}", path.display(), e),
+            })
+    }
+
+    /// Enable the prepared sequence store at `path`: load it if present and its
+    /// fingerprint matches this index, otherwise build it once (from the FASTA
+    /// text) and load the result. All failures are swallowed with a warning so a
+    /// bad sidecar can never brick provider construction — the text path stands.
+    fn enable_sequence_store(&mut self, path: &Path) {
+        let fp = self.sequence_fingerprint();
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => {
+                self.set_sequence_store(store);
+                return;
+            }
+            Ok(None) => {} // absent or stale — (re)build below
+            Err(e) => {
+                warn!(
+                    "sequence store {} unreadable ({e}); using FASTA text",
+                    path.display()
+                );
+                return;
+            }
+        }
+        if let Err(e) = self.build_and_write_sequence_store(path) {
+            warn!(
+                "could not build sequence store {} ({e}); using FASTA text",
+                path.display()
+            );
+            return;
+        }
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => self.set_sequence_store(store),
+            _ => warn!(
+                "sequence store {} did not reopen after build; using FASTA text",
+                path.display()
+            ),
+        }
     }
 
     /// Create a new multi-FASTA provider from a directory of FASTA files
