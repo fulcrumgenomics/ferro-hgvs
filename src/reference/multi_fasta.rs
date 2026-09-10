@@ -553,6 +553,13 @@ pub fn verify_reference_identity(
     }
 }
 
+/// Conventional basename of the prepared 2-bit sequence store, written by
+/// `ferro prepare` into the reference directory and loaded by convention at
+/// provider construction — an identity-neutral derived index, exactly like the
+/// `.fai` files beside each FASTA (neither is a content-stamped manifest
+/// artifact; see `prepare::identity`).
+const SEQUENCE_STORE_FILENAME: &str = "sequence_store.pac";
+
 impl MultiFastaProvider {
     /// Build a provider from a fully populated [`PreparedIndex`].
     /// `from_directory`, `from_directories`, and `with_cdot` all funnel
@@ -632,6 +639,25 @@ impl MultiFastaProvider {
         self.sequence_store = Some(store);
     }
 
+    /// Whether a prepared sequence store is installed (test observability).
+    #[cfg(test)]
+    pub(crate) fn has_sequence_store(&self) -> bool {
+        self.sequence_store.is_some()
+    }
+
+    /// Write the prepared 2-bit sequence store into `reference_dir` at the
+    /// conventional [`SEQUENCE_STORE_FILENAME`], so later loads pick it up by
+    /// convention (identity-neutral, like the `.fai` sidecars). Returns the path
+    /// written. Public entry point for `ferro prepare`.
+    pub fn write_sequence_store_sidecar(
+        &self,
+        reference_dir: &Path,
+    ) -> Result<PathBuf, FerroError> {
+        let path = reference_dir.join(SEQUENCE_STORE_FILENAME);
+        self.build_and_write_sequence_store(&path)?;
+        Ok(path)
+    }
+
     /// Pack every indexed record and write the sidecar at `path`, stamped with
     /// this index's fingerprint. Called once to bootstrap the store.
     pub(crate) fn build_and_write_sequence_store(&self, path: &Path) -> Result<(), FerroError> {
@@ -681,6 +707,28 @@ impl MultiFastaProvider {
         }
     }
 
+    /// Load the conventional sequence-store sidecar at `path` if it is present
+    /// and its fingerprint matches this index. **Load-only** — unlike
+    /// [`Self::enable_sequence_store`] it never builds, so an ordinary
+    /// `normalize`/`project` never pays a one-off pack; only `ferro prepare`
+    /// writes the sidecar. A no-op when a store is already set (an explicit
+    /// `FERRO_SEQUENCE_STORE` wins), when the sidecar is absent, or when it is
+    /// stale — all silent, since the FASTA-text path is a correct fallback.
+    fn try_load_sequence_store(&mut self, path: &Path) {
+        if self.sequence_store.is_some() || !path.exists() {
+            return;
+        }
+        let fp = self.sequence_fingerprint();
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => self.set_sequence_store(store),
+            Ok(None) => {} // stale fingerprint — fall back to the text path
+            Err(e) => warn!(
+                "sequence store {} unreadable ({e}); using FASTA text",
+                path.display()
+            ),
+        }
+    }
+
     /// Create a new multi-FASTA provider from a directory of FASTA files
     ///
     /// Scans the directory for .fna and .fa files with accompanying .fai indexes.
@@ -717,7 +765,9 @@ impl MultiFastaProvider {
             prepared.file_count()
         );
 
-        Ok(Self::from_prepared(prepared))
+        let mut provider = Self::from_prepared(prepared);
+        provider.try_load_sequence_store(&dir.join(SEQUENCE_STORE_FILENAME));
+        Ok(provider)
     }
 
     /// Create a provider from multiple directories (e.g., transcripts + genome)
@@ -1277,6 +1327,12 @@ impl MultiFastaProvider {
             }
         };
         provider.ng_hosted = ng_hosted;
+
+        // Load the prepared 2-bit sequence store by convention from the reference
+        // directory (identity-neutral, like the `.fai` sidecars). Load-only: a
+        // `ferro prepare` writes it, an ordinary load never builds it. An explicit
+        // `FERRO_SEQUENCE_STORE` (handled in `from_prepared`) takes precedence.
+        provider.try_load_sequence_store(&base_dir.join(SEQUENCE_STORE_FILENAME));
 
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
@@ -4957,6 +5013,51 @@ mod tests {
     /// span whose declared `lrg_end` its gap list cannot reconstruct, so an
     /// undeclared width mismatch would now yield *no* placement and quietly cost
     /// this test its discriminator (asserted below).
+    /// P6: with a `sequence_store.pac` present in the reference directory, a
+    /// plain `from_directory` (no env var) loads it by convention, and reads it;
+    /// without the sidecar it falls back to the text path. Load-only — the plain
+    /// provider never builds the sidecar itself.
+    #[test]
+    fn from_directory_loads_the_conventional_sequence_store_sidecar() {
+        use crate::reference::provider::ReferenceProvider;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "ACGTacgtNNNryACGT").unwrap(); // len 17
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t17\t6\t17\t18").unwrap();
+        }
+
+        // No sidecar yet: plain load uses the text path and does NOT auto-build.
+        let plain = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(!plain.has_sequence_store(), "must not auto-build a sidecar");
+        assert!(!dir.path().join(SEQUENCE_STORE_FILENAME).exists());
+        let want = plain.get_sequence("seqA", 0, 17).unwrap();
+
+        // Write the sidecar into the reference dir (what `ferro prepare` does),
+        // then a fresh plain load must pick it up by convention.
+        plain
+            .build_and_write_sequence_store(&dir.path().join(SEQUENCE_STORE_FILENAME))
+            .unwrap();
+        let stored = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(
+            stored.has_sequence_store(),
+            "sidecar in the dir must be loaded"
+        );
+        assert_eq!(stored.get_sequence("seqA", 0, 17).unwrap(), want);
+        // A range through the middle of the hole, via the store.
+        assert_eq!(
+            stored.get_sequence("seqA", 6, 14).unwrap(),
+            plain.get_sequence("seqA", 6, 14).unwrap()
+        );
+    }
+
     /// End-to-end P3/P4: a store-backed provider serves every range byte-
     /// identically to the FASTA-text path, through the whole `get_sequence`
     /// funnel — including lowercase soft-masking (uppercased) and `N`/IUPAC holes.
