@@ -451,13 +451,13 @@ fn a_bare_transcript_accession_accepts_an_intronic_position() {
 /// `non_idempotent_outputs` goes 4 -> 0 with this, in both directions.
 ///
 /// **Renamed with the flip**, from `..._is_not_a_fixed_point`. An earlier draft
-/// kept the old name on the ground that `ci.yml`'s `ORACLE_EXCLUDE` cites it —
-/// **it does not**: that variable excludes whole modules (`test(spec_corpus_regressions)`),
-/// so no rename can break it. The one real cross-reference is the header comment
-/// in `scripts/run_oracle_suite.sh`, which names this test explicitly and is
-/// updated in the same commit. A test whose name asserts the opposite of its
-/// body is the same defect class as an assertion weaker than its stated
-/// contract.
+/// kept the old name on the ground that the `oracle` profile's first exclusion
+/// in `.config/nextest.toml` cites it — **it does not**: that exclusion excludes
+/// whole modules (`test(spec_corpus_regressions)`), so no rename can break it.
+/// Nothing else in the repository names this test by its function name, so
+/// there is no cross-reference for a rename to break. A test whose name
+/// asserts the opposite of its body is the same defect class as an assertion
+/// weaker than its stated contract.
 ///
 /// The shape needs a transcript with a real 3'UTR, which a `CDS_START = 1`
 /// single-exon fixture cannot have (#1478). It reproduces on both strands.

@@ -125,7 +125,7 @@
 //! Distinguishing the two is a representation decision with a real trailer, so
 //! this file measures and pins rather than fixes.
 //!
-//! # Why this module is named in `SEQUENCE_ORACLE_EXCLUDE`
+//! # Why this module is named in the `oracle` profile's second exclusion
 //!
 //! The output above — an insertion at interbase 11|12 beside an identity
 //! claiming 11..12 — **denotes no sequence**, which is #1281's shape and which
@@ -134,16 +134,18 @@
 //! `the_wider_multi_member_census_is_what_the_header_says`. That is not a false
 //! positive — the oracle is right, and this module pins the defect it is right
 //! about, so a test that pins a defect and an oracle that aborts on it cannot
-//! both run. Exactly the class `ci.yml`'s `ORACLE_EXCLUDE` documents.
+//! both run. Exactly the class the `oracle` profile's first exclusion in
+//! `.config/nextest.toml` documents.
 //!
 //! So when #1815 armed that flag in `test-oracle`, this module was named in
-//! `ci.yml`'s `SEQUENCE_ORACLE_EXCLUDE` alongside the issue that retires the
-//! row: **#1655**. It still runs there under the other three oracles, in a
-//! second un-partitioned step of the same job, and it still runs in full in the
-//! plain `test` job — so arming the fourth oracle cost this file nothing.
+//! the `oracle` profile's second exclusion in `.config/nextest.toml` alongside
+//! the issue that retires the row: **#1655**. It still runs there under the
+//! other three oracles, in a second un-partitioned step of the same job, and
+//! it still runs in full in the plain `test` job — so arming the fourth oracle
+//! cost this file nothing.
 //!
 //! **Fixing #1655 means deleting this module's row from that filter**; rehoming
-//! the sweep the way `ORACLE_EXCLUDE`'s pinned-defect modules are homed is the
+//! the sweep the way the first exclusion homes its pinned-defect modules is the
 //! other way out. Do not silence the fire at the seam — that hollows out the
 //! oracle, and this module's own measurement is the evidence the fire is
 //! correct.

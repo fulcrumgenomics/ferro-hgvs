@@ -1221,7 +1221,7 @@ fn direction_label(direction: ShuffleDirection) -> &'static str {
 /// census is trying to count; a panicking row is filed `declined` and never
 /// reaches its family's output set, so the census reads better than the truth.
 /// The caller refuses rather than emit a flattering artifact — the same reasoning
-/// that put `ORACLE_EXCLUDE` in `ci.yml`.
+/// behind the `oracle` profile's first exclusion in `.config/nextest.toml`.
 ///
 /// Pure over an iterator of variable names, so it can be tested without mutating
 /// the process environment (which races other tests). [`oracle_armed_in_env`]
