@@ -20,13 +20,16 @@ use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// File magic for the on-disk store (`.pac`-style sidecar).
 const MAGIC: &[u8; 8] = b"FERROSEQ";
 /// On-disk format version; bumped on any layout change so a stale sidecar is
-/// rejected rather than misread.
-const FORMAT_VERSION: u32 = 1;
+/// rejected rather than misread. v2 changed the fingerprint semantics (the
+/// provider now folds source-file size+mtime into it, see
+/// [`crate::reference::multi_fasta`]) and hardened `open` to fail closed on a
+/// malformed directory, so a v1 sidecar is rejected and rebuilt.
+const FORMAT_VERSION: u32 = 2;
 
 /// 2-bit code for a base, `A=0 C=1 G=2 T=3` (bwa's mapping). Anything else maps
 /// to `0` as a placeholder and is recorded as a hole (see [`RecordSpan::holes`]).
@@ -45,30 +48,48 @@ fn code_of(base: u8) -> u8 {
 const CODE_TO_BASE: [u8; 4] = *b"ACGT";
 
 /// A fingerprint over a set of `(record name, length)` pairs, tying a written
-/// store to the source index it was built from. Order-independent (records are
-/// folded commutatively) so index iteration order does not change it. FNV-1a,
-/// matching the repo's other content stamps. A stale fingerprint at open time
-/// means the FASTA changed under the sidecar, so it is rejected and the text
-/// path used instead.
+/// store to the *record set* of the source index it was built from. FNV-1a per
+/// record, combined by wrapping addition — which is commutative and associative,
+/// so the result is genuinely independent of record iteration order (a property
+/// [`fingerprint_is_order_independent`] pins).
+///
+/// This detects a record being added, removed, renamed, or changed in length —
+/// but **not** a same-length change to a record's bases (a corrected base, a
+/// soft-mask flip). Detecting that cheaply at open time is impossible without
+/// re-reading the FASTA (the decode this store exists to avoid), so the provider
+/// (`MultiFastaProvider::sequence_fingerprint`) additionally folds each source
+/// FASTA file's size and mtime into the stamp it writes and checks — any in-place
+/// rewrite bumps the mtime, so the sidecar is rejected and the text path used.
+/// A stale fingerprint at open time is a fall-back to the text path, never a wrong
+/// answer.
 pub(crate) fn fingerprint(records: &[(&str, u64)]) -> u64 {
     let mut acc: u64 = 0;
     for (name, length) in records {
-        // Per-record FNV-1a over "name\0length", combined commutatively via xor
-        // + wrapping-add so the whole is independent of record order.
-        let mut h: u64 = 0xcbf29ce484222325;
-        for &b in name.as_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
-        }
-        // FNV step for a NUL separator between name and length, so ("AB", 1) and
-        // ("A", …) with a colliding tail cannot fold to the same value. (XOR with
-        // 0 is the identity, so only the multiply remains.)
-        h = h.wrapping_mul(0x100000001b3);
-        for &b in &length.to_le_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
-        }
-        acc = acc.wrapping_add(h) ^ h.rotate_left(17);
+        acc = acc.wrapping_add(record_hash(name, *length));
     }
     acc
+}
+
+/// Per-record FNV-1a over `name`, a NUL separator, and the little-endian length.
+/// The NUL keeps `("AB", 1)` from colliding with `("A", …)` on a shared tail.
+fn record_hash(name: &str, length: u64) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in name.as_bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    // FNV step for the NUL separator (XOR with 0 is the identity, so only the
+    // multiply remains).
+    h = h.wrapping_mul(0x100000001b3);
+    for &b in &length.to_le_bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Fold one more `u64` into a fingerprint commutatively, for the provider to mix
+/// in per-source-file freshness stamps (size, mtime) on top of the record set.
+pub(crate) fn fingerprint_mix(acc: u64, value: u64) -> u64 {
+    acc.wrapping_add(value.wrapping_mul(0x100000001b3))
 }
 
 /// A maximal run of a single repeated non-`ACGT` byte, so it reproduces verbatim.
@@ -224,31 +245,53 @@ impl PackedSequence {
     /// Serialize to `path` as the on-disk sidecar. `fingerprint` ties the store
     /// to the FASTA/`.fai` it was built from, so a later mismatch is rejected.
     ///
+    /// Written atomically: the bytes go to a `<path>.tmp` sibling and are renamed
+    /// into place only after a successful flush, so a crash or disk-full mid-write
+    /// never leaves a partial `sequence_store.pac` at the final name (which `open`
+    /// would then have to reject rather than a reader silently trusting it).
+    ///
     /// Layout (all little-endian): magic, version, fingerprint, record_count,
     /// packed_len; then per record `name_len,name, base_offset,length,
     /// hole_count, (pos,len,byte)×hole_count`; then the packed bytes last.
     pub(crate) fn write(&self, path: &Path, fingerprint: u64) -> io::Result<()> {
-        let mut w = BufWriter::new(File::create(path)?);
-        w.write_all(MAGIC)?;
-        w.write_all(&FORMAT_VERSION.to_le_bytes())?;
-        w.write_all(&fingerprint.to_le_bytes())?;
-        w.write_all(&(self.records.len() as u32).to_le_bytes())?;
-        w.write_all(&(self.packed.len() as u64).to_le_bytes())?;
-        for span in &self.records {
-            let name = span.name.as_bytes();
-            w.write_all(&(name.len() as u16).to_le_bytes())?;
-            w.write_all(name)?;
-            w.write_all(&span.base_offset.to_le_bytes())?;
-            w.write_all(&span.length.to_le_bytes())?;
-            w.write_all(&(span.holes.len() as u32).to_le_bytes())?;
-            for h in &span.holes {
-                w.write_all(&h.pos.to_le_bytes())?;
-                w.write_all(&h.len.to_le_bytes())?;
-                w.write_all(&[h.byte])?;
+        let tmp = {
+            let mut s = path.as_os_str().to_owned();
+            s.push(".tmp");
+            PathBuf::from(s)
+        };
+        // Scope the writer so the file is closed (and flushed) before the rename.
+        let result = (|| {
+            let mut w = BufWriter::new(File::create(&tmp)?);
+            w.write_all(MAGIC)?;
+            w.write_all(&FORMAT_VERSION.to_le_bytes())?;
+            w.write_all(&fingerprint.to_le_bytes())?;
+            w.write_all(&(self.records.len() as u32).to_le_bytes())?;
+            w.write_all(&(self.packed.len() as u64).to_le_bytes())?;
+            for span in &self.records {
+                let name = span.name.as_bytes();
+                w.write_all(&(name.len() as u16).to_le_bytes())?;
+                w.write_all(name)?;
+                w.write_all(&span.base_offset.to_le_bytes())?;
+                w.write_all(&span.length.to_le_bytes())?;
+                w.write_all(&(span.holes.len() as u32).to_le_bytes())?;
+                for h in &span.holes {
+                    w.write_all(&h.pos.to_le_bytes())?;
+                    w.write_all(&h.len.to_le_bytes())?;
+                    w.write_all(&[h.byte])?;
+                }
+            }
+            w.write_all(&self.packed)?;
+            w.flush()
+        })();
+        match result {
+            Ok(()) => std::fs::rename(&tmp, path),
+            Err(e) => {
+                // Best-effort cleanup of the partial temp file; the write error is
+                // what the caller needs to see.
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
             }
         }
-        w.write_all(&self.packed)?;
-        w.flush()
     }
 }
 
@@ -328,15 +371,34 @@ impl MappedSequence {
         let record_count = c.u32()? as usize;
         let packed_len = c.u64()? as usize;
 
+        // Fail closed on a malformed-but-fingerprint-matching directory. The
+        // counts and spans below are untrusted on-disk `u32`/`u64`s; without
+        // these guards a garbage `record_count`/`hole_count` drives a
+        // multi-gigabyte `Vec`/`HashMap` allocation before the cursor's `need()`
+        // bound ever runs, and a span past the packed stream makes `read_range`
+        // index out of bounds — a release panic (the only end guard there is a
+        // `debug_assert`, compiled out) rather than the intended text-path
+        // fallback. Every record needs ≥ MIN_RECORD_BYTES and every hole exactly
+        // HOLE_BYTES on disk, so the mmap length bounds both counts.
+        const MIN_RECORD_BYTES: usize = 2 + 8 + 8 + 4; // name_len, base_offset, length, hole_count (name may be empty)
+        const HOLE_BYTES: usize = 8 + 8 + 1; // pos, len, byte
+        let malformed = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what);
+        if record_count > mmap.len() / MIN_RECORD_BYTES {
+            return Err(malformed("sequence store record count implausible"));
+        }
+
         let mut records = Vec::with_capacity(record_count);
         let mut by_name = HashMap::with_capacity(record_count);
         for idx in 0..record_count {
             let name_len = c.u16()? as usize;
             let name = String::from_utf8(c.take(name_len)?.to_vec())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF8 record name"))?;
+                .map_err(|_| malformed("sequence store holds a non-UTF8 record name"))?;
             let base_offset = c.u64()?;
             let length = c.u64()?;
             let hole_count = c.u32()? as usize;
+            if hole_count > (mmap.len() - c.pos) / HOLE_BYTES {
+                return Err(malformed("sequence store hole count implausible"));
+            }
             let mut holes = Vec::with_capacity(hole_count);
             for _ in 0..hole_count {
                 let pos = c.u64()?;
@@ -355,10 +417,22 @@ impl MappedSequence {
 
         let packed_offset = c.pos;
         if packed_offset + packed_len > mmap.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "packed stream truncated",
-            ));
+            return Err(malformed("sequence store packed stream truncated"));
+        }
+        // Every record's bases must lie within the packed stream (4 bases/byte),
+        // or read_range indexes past `packed`. Checked with overflow-safe
+        // arithmetic since these are untrusted u64s.
+        let capacity_bases = (packed_len as u64).checked_mul(4);
+        for span in &records {
+            let end = span.base_offset.checked_add(span.length);
+            match (end, capacity_bases) {
+                (Some(end), Some(cap)) if end <= cap => {}
+                _ => {
+                    return Err(malformed(
+                        "sequence store record span exceeds packed stream",
+                    ))
+                }
+            }
         }
         Ok(Some(MappedSequence {
             _mmap: mmap,
@@ -390,7 +464,92 @@ impl MappedSequence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::ErrorKind;
     use tempfile::tempdir;
+
+    /// The fingerprint is documented order-independent; the fold must actually be
+    /// commutative, or a hash-map iteration-order difference between build and
+    /// load spuriously invalidates a valid sidecar. Any permutation of the same
+    /// record set folds to the same value, and a real change (a length edit) does
+    /// not.
+    #[test]
+    fn fingerprint_is_order_independent() {
+        let a = fingerprint(&[("chr1", 100), ("chr2", 50), ("chrM", 16569)]);
+        let b = fingerprint(&[("chrM", 16569), ("chr1", 100), ("chr2", 50)]);
+        let c = fingerprint(&[("chr2", 50), ("chrM", 16569), ("chr1", 100)]);
+        assert_eq!(a, b, "permuted record order must fold identically");
+        assert_eq!(a, c, "permuted record order must fold identically");
+        // A same-name length change is detected.
+        assert_ne!(
+            a,
+            fingerprint(&[("chr1", 101), ("chr2", 50), ("chrM", 16569)]),
+            "a length change must change the fingerprint"
+        );
+        // A rename is detected.
+        assert_ne!(
+            a,
+            fingerprint(&[("chr1", 100), ("chr2", 50), ("chrMT", 16569)]),
+            "a rename must change the fingerprint"
+        );
+    }
+
+    /// Assemble a minimal on-disk directory by hand so a malformed one can be
+    /// tested without a real pack. `packed_len` and the single record's `length`
+    /// are the knobs the fail-closed checks key on.
+    fn write_raw_store(
+        path: &Path,
+        fp: u64,
+        record_count: u32,
+        packed_len: u64,
+        record: Option<(&str, u64, u64)>, // (name, base_offset, length)
+    ) {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(MAGIC);
+        b.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        b.extend_from_slice(&fp.to_le_bytes());
+        b.extend_from_slice(&record_count.to_le_bytes());
+        b.extend_from_slice(&packed_len.to_le_bytes());
+        if let Some((name, base_offset, length)) = record {
+            b.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            b.extend_from_slice(name.as_bytes());
+            b.extend_from_slice(&base_offset.to_le_bytes());
+            b.extend_from_slice(&length.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // hole_count
+        }
+        std::fs::write(path, &b).unwrap();
+    }
+
+    /// A sidecar whose header/fingerprint match but whose directory is malformed
+    /// must fail closed (an `Err`, which the provider turns into a text-path
+    /// fallback) rather than panic or read out of bounds in a release build.
+    #[test]
+    fn open_fails_closed_on_a_malformed_directory() {
+        let dir = tempdir().unwrap();
+        let fp: u64 = 0x1234_5678_9ABC_DEF0;
+        // MappedSequence is not Debug (it owns an Mmap), so assert on the result
+        // without unwrap_err.
+        let assert_invalid = |path: &Path, what: &str| match MappedSequence::open(path, fp) {
+            Err(e) => assert_eq!(e.kind(), ErrorKind::InvalidData, "{what}"),
+            Ok(_) => panic!("{what}: expected InvalidData, got Ok"),
+        };
+
+        // (a) A record span past the packed stream (length 100, capacity 0).
+        let p1 = dir.path().join("span.pac");
+        write_raw_store(&p1, fp, 1, 0, Some(("chr1", 0, 100)));
+        assert_invalid(&p1, "span overflow must be rejected");
+
+        // (b) An implausible record count (huge) against a tiny file — must be
+        // rejected before any capacity allocation.
+        let p2 = dir.path().join("count.pac");
+        write_raw_store(&p2, fp, u32::MAX, 0, None);
+        assert_invalid(&p2, "implausible record count must be rejected");
+
+        // (c) A truncated packed stream (the record fits the declared base
+        // capacity, but the packed bytes are not present) is still rejected.
+        let p3 = dir.path().join("trunc.pac");
+        write_raw_store(&p3, fp, 1, 1_000_000, Some(("chr1", 0, 4)));
+        assert_invalid(&p3, "truncated packed stream must be rejected");
+    }
 
     /// The persisted sidecar reopens byte-identically, resolves records by name,
     /// and rejects a stale fingerprint or a missing file by falling back (`None`)

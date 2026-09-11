@@ -84,7 +84,7 @@ use crate::reference::authoritative::CanonicalOverrides;
 use crate::reference::prepared_index::{load_fai_index, FastaIndexEntry, PreparedIndex};
 use crate::reference::provider::{AlignmentGap, GenomicPlacement, ReferenceProvider};
 use crate::reference::sequence_store::{
-    fingerprint as sequence_fingerprint, MappedSequence, PackedSequence,
+    fingerprint as sequence_fingerprint, fingerprint_mix, MappedSequence, PackedSequence,
 };
 use crate::reference::transcript::Transcript;
 
@@ -560,6 +560,36 @@ pub fn verify_reference_identity(
 /// artifact; see `prepare::identity`).
 const SEQUENCE_STORE_FILENAME: &str = "sequence_store.pac";
 
+/// Outcome of ensuring the sequence-store sidecar exists and is current, so
+/// `ferro prepare` can report whether it did work or honoured `--skip-existing`.
+#[derive(Debug)]
+pub enum SidecarOutcome {
+    /// The sidecar was (re)built and written at this path.
+    Built(PathBuf),
+    /// A fresh matching sidecar already existed and was kept as-is.
+    Kept(PathBuf),
+}
+
+/// A source FASTA file's `(size, mtime-nanoseconds)`, folded into the sequence
+/// store's fingerprint so an in-place edit invalidates the sidecar. On any stat
+/// or mtime failure returns a `(0, 0)` sentinel: if a file readable at build time
+/// is unreadable at load (or vice versa) the two fingerprints differ, so the
+/// store is rejected in favour of the text path — the safe direction.
+fn source_file_freshness(path: &Path) -> (u64, u64) {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            (meta.len(), mtime)
+        }
+        Err(_) => (0, 0),
+    }
+}
+
 impl MultiFastaProvider {
     /// Build a provider from a fully populated [`PreparedIndex`].
     /// `from_directory`, `from_directories`, and `with_cdot` all funnel
@@ -601,11 +631,31 @@ impl MultiFastaProvider {
             .collect()
     }
 
-    /// Fingerprint of the current index, tying a written store to this reference.
+    /// Fingerprint tying a written store to this reference. Folds the record set
+    /// (name + length) AND each source FASTA file's size and mtime.
+    ///
+    /// The record-set half detects a record added, removed, renamed, or resized;
+    /// the file size+mtime half detects a **same-length in-place base edit** (a
+    /// corrected base, a soft-mask flip, a swapped assembly with matching contig
+    /// lengths) that the record set alone cannot see — any rewrite bumps the
+    /// mtime, so the stale sidecar is rejected and the text path used. It also
+    /// makes a `FERRO_SEQUENCE_STORE` pointed at a store built for a *different*
+    /// reference fail the fingerprint. `stat` is O(1) per file and there are only
+    /// a handful. Copying a reference directory without preserving mtimes (a plain
+    /// `cp`) invalidates the sidecar — a safe fall-back to the text path, not a
+    /// wrong answer.
     pub(crate) fn sequence_fingerprint(&self) -> u64 {
         let pairs = self.record_name_lengths();
         let refs: Vec<(&str, u64)> = pairs.iter().map(|(n, l)| (n.as_str(), *l)).collect();
-        sequence_fingerprint(&refs)
+        let mut fp = sequence_fingerprint(&refs);
+        for id in 0..self.prepared.file_count() as u32 {
+            if let Some(path) = self.prepared.path_for(id) {
+                let (size, mtime) = source_file_freshness(path);
+                fp = fingerprint_mix(fp, size);
+                fp = fingerprint_mix(fp, mtime);
+            }
+        }
+        fp
     }
 
     /// Build an in-memory 2-bit store over `names`, decoding each record once
@@ -645,17 +695,30 @@ impl MultiFastaProvider {
         self.sequence_store.is_some()
     }
 
-    /// Write the prepared 2-bit sequence store into `reference_dir` at the
+    /// Ensure the prepared 2-bit sequence store exists in `reference_dir` at the
     /// conventional [`SEQUENCE_STORE_FILENAME`], so later loads pick it up by
-    /// convention (identity-neutral, like the `.fai` sidecars). Returns the path
-    /// written. Public entry point for `ferro prepare`.
+    /// convention (identity-neutral, like the `.fai` sidecars). Public entry point
+    /// for `ferro prepare`.
+    ///
+    /// Honours `--skip-existing`: unless `force`, an existing sidecar whose
+    /// fingerprint already matches this reference is kept rather than rebuilt (the
+    /// ~75 s pack is skipped); with `force` it is always rebuilt. Returns whether
+    /// it was [`SidecarOutcome::Built`] or an existing fresh one was
+    /// [`SidecarOutcome::Kept`].
     pub fn write_sequence_store_sidecar(
         &self,
         reference_dir: &Path,
-    ) -> Result<PathBuf, FerroError> {
+        force: bool,
+    ) -> Result<SidecarOutcome, FerroError> {
         let path = reference_dir.join(SEQUENCE_STORE_FILENAME);
+        if !force {
+            // A fresh matching sidecar already present — keep it.
+            if let Ok(Some(_)) = MappedSequence::open(&path, self.sequence_fingerprint()) {
+                return Ok(SidecarOutcome::Kept(path));
+            }
+        }
         self.build_and_write_sequence_store(&path)?;
-        Ok(path)
+        Ok(SidecarOutcome::Built(path))
     }
 
     /// Pack every indexed record and write the sidecar at `path`, stamped with
@@ -5056,6 +5119,63 @@ mod tests {
             stored.get_sequence("seqA", 6, 14).unwrap(),
             plain.get_sequence("seqA", 6, 14).unwrap()
         );
+    }
+
+    /// Finding: the sidecar fingerprint folds each source FASTA's size and mtime,
+    /// so a **same-length in-place base edit** — which the `(name, length)` record
+    /// set cannot see — invalidates the stale sidecar. The store is then not
+    /// loaded, and the text path serves the NEW bases rather than the store
+    /// silently serving the old ones.
+    #[test]
+    fn a_same_length_fasta_edit_invalidates_the_sidecar() {
+        use crate::reference::provider::ReferenceProvider;
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        let write_fasta = |bases: &str| {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "{bases}").unwrap();
+        };
+        write_fasta("ACGTACGT"); // len 8
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t8\t6\t8\t9").unwrap();
+        }
+
+        // Build the sidecar and confirm a fresh load picks it up.
+        let p = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        p.build_and_write_sequence_store(&dir.path().join(SEQUENCE_STORE_FILENAME))
+            .unwrap();
+        assert!(
+            MultiFastaProvider::from_directory(dir.path())
+                .unwrap()
+                .has_sequence_store(),
+            "freshly built sidecar must load"
+        );
+
+        // Edit the bases in place at the SAME length (name + length unchanged),
+        // and stamp a distinctly newer mtime so the freshness fold moves even on a
+        // coarse-granularity clock. The file size is identical, so only the mtime
+        // half of the fingerprint can catch this.
+        write_fasta("TTTTGGGG"); // still len 8
+        let newer = SystemTime::now() + Duration::from_secs(120);
+        File::options()
+            .write(true)
+            .open(&fasta_path)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+
+        let reloaded = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(
+            !reloaded.has_sequence_store(),
+            "a same-length in-place edit must invalidate the stale sidecar"
+        );
+        // The served bases are the NEW ones (text path), not the store's stale ones.
+        assert_eq!(reloaded.get_sequence("seqA", 0, 8).unwrap(), "TTTTGGGG");
     }
 
     /// End-to-end P3/P4: a store-backed provider serves every range byte-
