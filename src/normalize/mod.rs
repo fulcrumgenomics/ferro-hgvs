@@ -99,7 +99,7 @@ pub use merge::{partition_decline_counts, PartitionDeclineCounts};
 // `crate::partition` driver themselves are production-wired (the flip); only this
 // census is dev-gated.
 #[cfg(feature = "dev")]
-pub use merge::{ruled_counts, RuledCounts};
+pub use merge::{ruled_counts, ruled_memo_hits, RuledCounts};
 
 // The denominator beside that census: blocks cut on EVERY arm, `Live` included.
 //
