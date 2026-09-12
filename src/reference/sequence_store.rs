@@ -47,6 +47,25 @@ fn code_of(base: u8) -> u8 {
 /// The base a 2-bit code decodes to. Inverse of [`code_of`] on `A/C/G/T`.
 const CODE_TO_BASE: [u8; 4] = *b"ACGT";
 
+/// For each packed byte, its four decoded bases in stream order — base `p` of the
+/// byte lives at bits `p*2`, exactly as the per-base unpack reads them. Lets
+/// [`read_range`] decode a whole aligned byte with one table lookup and a 4-byte
+/// copy instead of four shift/mask/index/push steps.
+const PACKED_TO_BASES: [[u8; 4]; 256] = {
+    let mut table = [[0u8; 4]; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        table[b] = [
+            CODE_TO_BASE[b & 0b11],
+            CODE_TO_BASE[(b >> 2) & 0b11],
+            CODE_TO_BASE[(b >> 4) & 0b11],
+            CODE_TO_BASE[(b >> 6) & 0b11],
+        ];
+        b += 1;
+    }
+    table
+};
+
 /// A fingerprint over a set of `(record name, length)` pairs, tying a written
 /// store to the *record set* of the source index it was built from. FNV-1a per
 /// record, combined by wrapping addition — which is commutative and associative,
@@ -130,12 +149,29 @@ fn read_range(packed: &[u8], span: &RecordSpan, start: u64, end: u64) -> Vec<u8>
     if end <= start {
         return Vec::new();
     }
-    // Unpack the 2-bit codes for [start, end) into A/C/G/T.
+    // Unpack the 2-bit codes for [start, end) into A/C/G/T. Decode the aligned
+    // interior a whole byte (4 bases) at a time via the lookup table; the leading
+    // and trailing partial bytes fall back to the per-base read. Byte-identical to
+    // a pure per-base loop (same codes, same CODE_TO_BASE) — the round-trip test
+    // exercises every start/end offset, including mid-byte edges.
     let mut out = Vec::with_capacity((end - start) as usize);
-    for i in start..end {
-        let global = span.base_offset + i;
-        let code = (packed[(global / 4) as usize] >> (((global % 4) * 2) as u8)) & 0b11;
-        out.push(CODE_TO_BASE[code as usize]);
+    let gend = span.base_offset + end;
+    let mut g = span.base_offset + start;
+    let base = |g: u64| CODE_TO_BASE[((packed[(g / 4) as usize] >> ((g % 4) * 2)) & 0b11) as usize];
+    // Leading partial byte, up to the next 4-base boundary.
+    while g < gend && !g.is_multiple_of(4) {
+        out.push(base(g));
+        g += 1;
+    }
+    // Whole aligned bytes.
+    while g + 4 <= gend {
+        out.extend_from_slice(&PACKED_TO_BASES[packed[(g / 4) as usize] as usize]);
+        g += 4;
+    }
+    // Trailing partial byte.
+    while g < gend {
+        out.push(base(g));
+        g += 1;
     }
     // Overlay any ambiguity run intersecting [start, end) with its literal byte,
     // so non-ACGT bases reproduce exactly rather than as the A placeholder they
