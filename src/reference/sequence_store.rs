@@ -25,11 +25,12 @@ use std::path::{Path, PathBuf};
 /// File magic for the on-disk store (`.pac`-style sidecar).
 const MAGIC: &[u8; 8] = b"FERROSEQ";
 /// On-disk format version; bumped on any layout change so a stale sidecar is
-/// rejected rather than misread. v2 changed the fingerprint semantics (the
-/// provider now folds source-file size+mtime into it, see
-/// [`crate::reference::multi_fasta`]) and hardened `open` to fail closed on a
-/// malformed directory, so a v1 sidecar is rejected and rebuilt.
-const FORMAT_VERSION: u32 = 2;
+/// rejected rather than misread. v2 folded source-file size+mtime into the
+/// fingerprint and hardened `open` to fail closed on a malformed directory. v3
+/// binds the fingerprint to a bounded sample of each source file's *contents*
+/// (see [`crate::reference::multi_fasta`]), so a same-size, same-mtime edit is
+/// detected; a v1/v2 sidecar is rejected and rebuilt.
+const FORMAT_VERSION: u32 = 3;
 
 /// 2-bit code for a base, `A=0 C=1 G=2 T=3` (bwa's mapping). Anything else maps
 /// to `0` as a placeholder and is recorded as a hole (see [`RecordSpan::holes`]).
@@ -74,13 +75,14 @@ const PACKED_TO_BASES: [[u8; 4]; 256] = {
 ///
 /// This detects a record being added, removed, renamed, or changed in length —
 /// but **not** a same-length change to a record's bases (a corrected base, a
-/// soft-mask flip). Detecting that cheaply at open time is impossible without
-/// re-reading the FASTA (the decode this store exists to avoid), so the provider
-/// (`MultiFastaProvider::sequence_fingerprint`) additionally folds each source
-/// FASTA file's size and mtime into the stamp it writes and checks — any in-place
-/// rewrite bumps the mtime, so the sidecar is rejected and the text path used.
-/// A stale fingerprint at open time is a fall-back to the text path, never a wrong
-/// answer.
+/// soft-mask flip). Hashing the whole FASTA at open time would pay back the exact
+/// decode this store exists to avoid, so the provider
+/// (`MultiFastaProvider::sequence_fingerprint`) instead folds each source file's
+/// size, mtime, and a *bounded sample* of its bytes into the stamp it writes and
+/// checks (`file_content_identity` in [`crate::reference::multi_fasta`]) — an
+/// in-place rewrite that touches a sampled region is caught even when the size and
+/// mtime are preserved. A stale fingerprint at open time is a fall-back to the
+/// text path, never a wrong answer.
 pub(crate) fn fingerprint(records: &[(&str, u64)]) -> u64 {
     let mut acc: u64 = 0;
     for (name, length) in records {
@@ -146,6 +148,11 @@ fn read_range(packed: &[u8], span: &RecordSpan, start: u64, end: u64) -> Vec<u8>
         "range end {end} past record length {}",
         span.length
     );
+    // Release-safe backstop for the debug_assert above: a caller passing
+    // `end > span.length` must never read past the record (an OOB slice on the
+    // last record, silent corruption on an interior one). Clamp rather than
+    // panic — valid callers never hit this, so it is a no-op for them.
+    let end = end.min(span.length);
     if end <= start {
         return Vec::new();
     }
@@ -177,7 +184,7 @@ fn read_range(packed: &[u8], span: &RecordSpan, start: u64, end: u64) -> Vec<u8>
     // so non-ACGT bases reproduce exactly rather than as the A placeholder they
     // packed to.
     for hole in &span.holes {
-        let hole_end = hole.pos + hole.len;
+        let hole_end = hole.pos.saturating_add(hole.len);
         if hole.pos >= end || hole_end <= start {
             continue;
         }
@@ -290,9 +297,20 @@ impl PackedSequence {
     /// packed_len; then per record `name_len,name, base_offset,length,
     /// hole_count, (pos,len,byte)×hole_count`; then the packed bytes last.
     pub(crate) fn write(&self, path: &Path, fingerprint: u64) -> io::Result<()> {
+        // Unique temp sibling (pid + process-global counter) so two concurrent
+        // builders of the same sidecar (racing `ferro prepare` runs, or a lazy
+        // `FERRO_SEQUENCE_STORE` build against the same directory) never write the
+        // same temp file and tear it; each renames a complete store into place,
+        // last writer wins.
         let tmp = {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
             let mut s = path.as_os_str().to_owned();
-            s.push(".tmp");
+            s.push(format!(
+                ".tmp.{}.{}",
+                std::process::id(),
+                TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
             PathBuf::from(s)
         };
         // Scope the writer so the file is closed (and flushed) before the rename.
@@ -305,6 +323,17 @@ impl PackedSequence {
             w.write_all(&(self.packed.len() as u64).to_le_bytes())?;
             for span in &self.records {
                 let name = span.name.as_bytes();
+                // The on-disk name-length prefix is a u16; a longer name would
+                // write a truncated prefix but the full name bytes, desynchronizing
+                // every subsequent field on read. Accession names are far shorter,
+                // so this is a guard, not a real limit — fail the write rather than
+                // emit a corrupt store.
+                if name.len() > u16::MAX as usize {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("sequence-store record name too long ({} bytes)", name.len()),
+                    ));
+                }
                 w.write_all(&(name.len() as u16).to_le_bytes())?;
                 w.write_all(name)?;
                 w.write_all(&span.base_offset.to_le_bytes())?;
@@ -452,7 +481,12 @@ impl MappedSequence {
         }
 
         let packed_offset = c.pos;
-        if packed_offset + packed_len > mmap.len() {
+        // Overflow-safe, matching the checked arithmetic just below: a corrupt
+        // huge `packed_len` must fail closed, never wrap past the length check.
+        if packed_offset
+            .checked_add(packed_len)
+            .is_none_or(|end| end > mmap.len())
+        {
             return Err(malformed("sequence store packed stream truncated"));
         }
         // Every record's bases must lie within the packed stream (4 bases/byte),
@@ -585,6 +619,68 @@ mod tests {
         let p3 = dir.path().join("trunc.pac");
         write_raw_store(&p3, fp, 1, 1_000_000, Some(("chr1", 0, 4)));
         assert_invalid(&p3, "truncated packed stream must be rejected");
+    }
+
+    /// An unrecognized magic or a `FORMAT_VERSION` this build does not write is a
+    /// "not our current file" signal — a silent fall-back to the text path
+    /// (`Ok(None)`), NOT an error, so an old sidecar left by a previous ferro
+    /// never bricks a run.
+    #[test]
+    fn open_returns_none_on_unrecognized_magic_or_stale_version() {
+        let dir = tempdir().unwrap();
+        let fp: u64 = 0x0FED_CBA9_8765_4321;
+
+        let bad_magic = dir.path().join("badmagic.pac");
+        let mut b = Vec::new();
+        b.extend_from_slice(b"NOTAPAC!"); // 8 bytes, not MAGIC
+        b.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        b.extend_from_slice(&fp.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        std::fs::write(&bad_magic, &b).unwrap();
+        assert!(
+            matches!(MappedSequence::open(&bad_magic, fp), Ok(None)),
+            "unrecognized magic must fall back (Ok(None)), not error"
+        );
+
+        let stale = dir.path().join("stale.pac");
+        let mut b = Vec::new();
+        b.extend_from_slice(MAGIC);
+        b.extend_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+        b.extend_from_slice(&fp.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        std::fs::write(&stale, &b).unwrap();
+        assert!(
+            matches!(MappedSequence::open(&stale, fp), Ok(None)),
+            "stale FORMAT_VERSION must fall back (Ok(None)), not error"
+        );
+    }
+
+    /// The `hole_count` fail-closed guard: a fingerprint-matching but malformed
+    /// directory declaring an implausible per-record hole count is rejected
+    /// (`Err`) rather than trusted, exactly like the record-count and span guards.
+    #[test]
+    fn open_fails_closed_on_implausible_hole_count() {
+        let dir = tempdir().unwrap();
+        let fp: u64 = 0x1111_2222_3333_4444;
+        let path = dir.path().join("holes.pac");
+        let mut b = Vec::new();
+        b.extend_from_slice(MAGIC);
+        b.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        b.extend_from_slice(&fp.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // record_count = 1
+        b.extend_from_slice(&0u64.to_le_bytes()); // packed_len = 0
+        b.extend_from_slice(&("chr1".len() as u16).to_le_bytes());
+        b.extend_from_slice(b"chr1");
+        b.extend_from_slice(&0u64.to_le_bytes()); // base_offset
+        b.extend_from_slice(&0u64.to_le_bytes()); // length
+        b.extend_from_slice(&u32::MAX.to_le_bytes()); // hole_count = implausible
+        std::fs::write(&path, &b).unwrap();
+        match MappedSequence::open(&path, fp) {
+            Err(e) => assert_eq!(e.kind(), ErrorKind::InvalidData),
+            Ok(_) => panic!("implausible hole count must fail closed"),
+        }
     }
 
     /// The persisted sidecar reopens byte-identically, resolves records by name,
