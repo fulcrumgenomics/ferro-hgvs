@@ -94,9 +94,9 @@ could not emit, never in a sequence it did not draw.
 
 Only the `sweeps` CI job sets `FERRO_SWEEP_SEEDS=full`, and it selects tests with `SWEEP_FILTER`.
 A sweep that reads the variable but is not in that filter runs at the prefix everywhere, and CI
-stays green. `tests/it/sweep_filter_invariant.rs` checks that every module that reads the
-variable is in the filter, and the reverse. When you add a sweep, that test tells you what to
-edit.
+stays green. When you add a sweep, name it in `SWEEP_FILTER` (so `test` and `test-oracle` negate
+it) and in the `sweeps` job's selection, or it runs at the prefix everywhere with nothing to
+flag it.
 
 ## What CI runs
 

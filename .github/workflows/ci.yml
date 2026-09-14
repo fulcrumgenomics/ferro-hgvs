@@ -129,9 +129,9 @@ env:
   # tests are added, the sum must not. `censuses` selects ON this filter and
   # passes `--no-tests=fail`, so a rename that made it match nothing reddens
   # there rather than quietly emptying the job, while `test` and `test-oracle`
-  # negate it and would just widen. `tests/it/census_filter_invariant.rs` closes
-  # the half neither of those catches — a module named here that NEITHER of the
-  # job's two steps selects would be negated everywhere and run nowhere.
+  # negate it and would just widen. The gap neither the redness nor the widening
+  # catches: a module named here that NEITHER of the job's two steps selects
+  # would be negated everywhere and run nowhere.
   #
   # NOTE the overlap with `profile.oracle` in `.config/nextest.toml`:
   # `spec_conformance_axis` is in both, and deliberately. That profile's
@@ -1134,8 +1134,8 @@ jobs:
   # `[profile.soak]` in `Cargo.toml`. The saving is from compiling ~9k lines
   # instead of 139k, not from optimizing them less.
   #
-  # `tests/it/soak_package_membership.rs` polices both directions: a module CI
-  # selects from this archive that is not compiled into it would be negated by
+  # The archive must contain exactly what CI selects from it. A module CI selects
+  # from this archive that is not compiled into it would be negated by
   # `test`/`test-oracle` and run nowhere while CI got faster, and a module
   # compiled into it that nothing selects and nothing references is dead compile
   # cost on the critical path.
@@ -1728,8 +1728,8 @@ jobs:
   # `tests-soak/tests/soak/main.rs`, so they are inside the archive
   # `test-build-soak` produces alongside the soak's own modules — one archive for
   # the three jobs, not one per job. Adding a fourth sweep means naming it there
-  # as well as in `SWEEP_FILTER`; `tests/it/soak_package_membership.rs` fails if
-  # only one of the two is done.
+  # as well as in `SWEEP_FILTER` — do both, or the `sweeps` job selects a module
+  # that is not in the archive it runs from.
   #
   # Running them ONLY here, with both oracles on, loses no coverage. The oracles
   # add assertions at `normalize_core_checked`'s exit and change no behaviour, so
@@ -1807,11 +1807,9 @@ jobs:
         # reference-aware modules.)
         #
         # Appended here rather than added to `SWEEP_FILTER` for two reasons.
-        # `tests/it/sweep_filter_invariant.rs`'s
-        # `every_module_named_in_the_sweep_filter_consumes_the_seed_knob` fails
-        # on a module in that filter which does not draw through `sweep_seeds(`,
-        # and this one does not — the filter is a claim about the seed knob, not
-        # a list of what this job runs. And `SWEEP_FILTER` is negated by `test`
+        # `SWEEP_FILTER` is a claim about which modules draw through `sweep_seeds(`
+        # — the seed knob — not a list of what this job runs, and this module does
+        # not draw through it. And `SWEEP_FILTER` is negated by `test`
         # and `test-oracle`, so naming it there would REMOVE the module from both
         # — trading the armed run for the unarmed one instead of adding it. The
         # module is therefore run twice on purpose: unarmed in `test`, armed
@@ -1852,8 +1850,7 @@ jobs:
   # so they are inside the archive `test-build-soak` produces, none is gated on
   # the `dev` feature, and none reads `CARGO_BIN_EXE_ferro`. A module named in
   # `CENSUS_FILTER` but missing from that driver would be negated here and absent
-  # from the archive, i.e. run nowhere;
-  # `tests/it/soak_package_membership.rs` is what makes that loud.
+  # from the archive, i.e. run nowhere.
   censuses:
     name: Slow censuses (optimized)
     needs: [test-build-soak, spec-fixtures, fixtures]
