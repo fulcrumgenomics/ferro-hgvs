@@ -23,8 +23,8 @@
 //! that: the reporter must key on the event, and must not carry a blanket claim
 //! about pull-request coverage while any caller runs on `pull_request`.
 //!
-//! Modelled on `sweep_filter_invariant.rs` and `coderabbit_config_paths.rs`,
-//! which make the same class of silent config rot loud.
+//! Modelled on `coderabbit_config_paths.rs`, which makes the same class of
+//! silent config rot loud.
 
 use std::path::{Path, PathBuf};
 
@@ -59,8 +59,7 @@ fn read(path: &Path) -> String {
 /// nothing. Scanning the raw file conflates the two, and not in a theoretical
 /// way: the fix for this very defect quotes the offending sentence in a comment
 /// to explain why it was removed, so a raw scan would fail the file for
-/// documenting its own correction. That is the `SELF`-exclusion problem
-/// `sweep_filter_invariant.rs` records, in a different costume.
+/// documenting its own correction.
 ///
 /// One rule covers both layers: a line whose first non-whitespace character is
 /// `#` is a comment in YAML and in the `run:` block's bash alike.

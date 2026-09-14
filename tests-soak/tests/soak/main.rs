@@ -27,7 +27,7 @@
 //! Every module below is compiled from its file under `tests/it/`, unmoved, and
 //! is STILL declared in `tests/it/main.rs`. That is deliberate on three counts:
 //!
-//! * **The guards that scan by directory keep working.** `sweep_filter_invariant`,
+//! * **The guards that scan by directory keep working.**
 //!   `oracle_exclude_invariant`, `generated_fixture_ci_wiring`,
 //!   `ruling_citation_currency` and `ruling_guard_field` all enumerate `.rs`
 //!   files under `tests/it/` (or under `tests/`) and each fails in the
@@ -56,11 +56,9 @@
 //! nothing would have gone red: those seeds are checked in NO other job, since
 //! `test` and `test-oracle` both negate `test(proptest)`.
 //!
-//! The cost of the choice is that membership here is a second list that can
-//! drift out of step with `ci.yml`'s filters. That is closed by
-//! `tests/it/soak_package_membership.rs`, which fails when a module CI selects
-//! from this archive is not compiled into it — the failure that would otherwise
-//! be silent, because such a module is negated by `test`/`test-oracle`, absent
+//! The cost of the choice is that membership here is a second list that must be
+//! kept in step with `ci.yml`'s filters by hand: a module CI selects from this
+//! archive but not compiled into it is negated by `test`/`test-oracle`, absent
 //! from this binary, and therefore run nowhere while CI gets faster.
 //!
 //! # Running it locally
@@ -126,8 +124,8 @@ mod common {
 }
 
 // ---------------------------------------------------------------------------
-// The modules the three jobs select. Each list is kept in step with `ci.yml` by
-// `tests/it/soak_package_membership.rs`.
+// The modules the three jobs select. Each list mirrors `ci.yml`'s selection for
+// that job and must be kept in step with it by hand.
 // ---------------------------------------------------------------------------
 
 // `soak` — `-E 'test(proptest)'`, eight shards of 125,000 cases each.
@@ -178,12 +176,12 @@ mod clinvar_hgvs_tests;
 // SUPPORT: compiled because a module above reaches into it, NOT because any job
 // selects it. Its own tests run from `it`, where they always have.
 //
-// `tests/it/soak_package_membership.rs` distinguishes the two categories by
-// derivation rather than by a marker here: anything this file compiles that no
-// job selects must be named as `crate::<module>::` by something else this file
-// compiles. So the exemption cannot be claimed, only earned — and it lapses the
-// moment the reference goes away, which is what keeps this from becoming a
-// place to park dead compile cost on the critical path.
+// The two categories are told apart by derivation, not by a marker here:
+// anything this file compiles that no job selects must be named as
+// `crate::<module>::` by something else this file compiles. So the exemption
+// cannot be claimed, only earned — and it lapses the moment the reference goes
+// away, which is what keeps this from becoming a place to park dead compile cost
+// on the critical path.
 // ---------------------------------------------------------------------------
 
 // `minimal_alignment_enumeration_proptest::the_closed_form_and_the_enumerator_agree`
