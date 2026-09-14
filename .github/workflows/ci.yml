@@ -1280,10 +1280,9 @@ jobs:
 
   # The `benchmark::hgvs_rs::tests::*` tests compile only under the `hgvs-rs`
   # feature, which no other CI job runs — `dev` excludes it, and the only other
-  # `hgvs-rs` builds are compile-only — so a break in them passed every check
-  # (#2080; the #1505 / #1372 / #2046 dead-coverage family). They are hermetic
-  # (URL parsing and a default-config constructor, no UTA/SeqRepo), so this job
-  # only compiles and runs them; `submodules` stays off (nothing here reads
+  # `hgvs-rs` builds are compile-only — so a break in them passes every other check.
+  # They are hermetic (URL parsing and a default-config constructor, no UTA/SeqRepo),
+  # so this job only compiles and runs them; `submodules` stays off (nothing here reads
   # `assets/hgvs-nomenclature`).
   #
   # SCOPED with `-E 'test(benchmark::hgvs_rs::)'` under nextest, not `cargo test`:
@@ -1294,8 +1293,8 @@ jobs:
   #
   # NOT a repository-required context (the ruleset names a fixed set — see
   # `test-required`), so it is wired into the `Test` rollup's `needs` to gate the
-  # merge. The `hgvs-rs` dep tree (hgvs, postgres, seqrepo, …) no other test job
-  # builds, which is why #2080 was split out rather than folded in.
+  # merge. It is a SEPARATE job because the `hgvs-rs` dep tree (hgvs, postgres,
+  # seqrepo, …) is one no other test job builds.
   hgvs-rs-tests:
     name: hgvs-rs Rust tests
     runs-on: ubuntu-latest
@@ -1318,12 +1317,11 @@ jobs:
         run: |
           cargo nextest run --features hgvs-rs --lib --no-tests=fail \
             -E 'test(benchmark::hgvs_rs::)'
-      # `src/service/tools/hgvs_rs.rs` is a fourth dead-coverage site (#2101) the
-      # step above cannot reach: its test's enabled arm needs BOTH `hgvs-rs` and
-      # `web-service`, and no other job builds both at once, so it ran nowhere.
-      # Hermetic (drives `HgvsRsService::new` with an empty seqrepo path, which
-      # fails before any UTA connection). A SEPARATE build because `web-service`
-      # pulls axum/tokio/tower the benchmark step does not need. SCOPED and
+      # `src/service/tools/hgvs_rs.rs`'s test the step above cannot reach: its enabled
+      # arm needs BOTH `hgvs-rs` and `web-service`, and no other job builds both at once,
+      # so it ran nowhere. Hermetic (drives `HgvsRsService::new` with an empty seqrepo
+      # path, which fails before any UTA connection). A SEPARATE build because
+      # `web-service` pulls axum/tokio/tower the benchmark step does not need. SCOPED and
       # `--no-tests=fail` for the same non-vacuity reasons as above.
       - name: Run src/service/tools/hgvs_rs.rs unit tests
         run: |
@@ -1391,13 +1389,12 @@ jobs:
           key: python-wheel
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       # src/python.rs's `python::tests::*` compile only under the `python` feature
-      # and, before #2046, ran NOWHERE: `dev` excludes `python`, `maturin build`
-      # runs no Rust test, and `clippy --all-features` compiles without executing
-      # (#1505 / #1372 dead-coverage family). They are pure (never start the
-      # interpreter), so they only need the crate to LINK against libpython —
-      # which is why `extension-module` is NOT in Cargo.toml's `python` feature
-      # (with it, PyO3 links no libpython on Linux and this executable would fail to
-      # link). `cargo` never reads pyproject.toml, so this step gets `python`
+      # and otherwise run NOWHERE: `dev` excludes `python`, `maturin build` runs no
+      # Rust test, and `clippy --all-features` compiles without executing. They are
+      # pure (never start the interpreter), so they only need the crate to LINK against
+      # libpython — which is why `extension-module` is NOT in Cargo.toml's `python`
+      # feature (with it, PyO3 links no libpython on Linux and this executable would
+      # fail to link). `cargo` never reads pyproject.toml, so this step gets `python`
       # WITHOUT `extension-module`; the wheel step below names both features.
       #
       # SCOPED under nextest, not `cargo test`, because this reports a REQUIRED check
@@ -1456,7 +1453,7 @@ jobs:
   # contract. The rollup reports the required `Build` context (the `test-required`
   # pattern): on a pull_request it gates on `build-lint` alone, otherwise on both.
   # NO new rust-cache key is added: both jobs `shared-key: build-release` (see each
-  # block) so they share ONE entry — which matters near the 10 GiB cap (#1218), and
+  # block) so they share ONE entry — which matters near the 10 GiB cap, and
   # is why the sharing had to be `shared-key`, not `key` (`key` appends the job id,
   # giving two cold per-job entries).
   build-lint:
@@ -1482,10 +1479,10 @@ jobs:
           # Sound HERE because this job's deps are the SUPERSET — its release clippy and
           # featureless build cover both halves, and `build-release-check` needs only the
           # release half. `save-if: main` + a single saver means no race and no new key
-          # near the cap (#1218).
+          # near the cap.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: build-release
-      # The release-profile lint (#1383). Both `clippy` jobs lint the debug profile, so
+      # The release-profile lint. Both `clippy` jobs lint the debug profile, so
       # nothing else checks release, and the normalization oracles compile out of
       # release entirely (`#[cfg(debug_assertions)]`); an ungated oracle helper becomes
       # `dead_code` in release — warn-by-default, so no debug clippy job catches it.
@@ -1499,11 +1496,10 @@ jobs:
       # invocation covers; `--all-targets` would optimize every test/bench binary for
       # no gain.
       - run: cargo clippy --release -- -D warnings
-      # The featureless guard (#1505). Every other Rust job passes `--features dev` /
+      # The featureless guard. Every other Rust job passes `--features dev` /
       # `--all-features` or is scoped to the soak driver, so the DEFAULT feature set's
       # `#[cfg(test)]` modules under `src/` compile NOWHERE else in CI, and a call from
-      # one into feature-gated code cannot redden any job (#1372 landed exactly that on
-      # `main`, caught only by an outside `cargo test`).
+      # one into feature-gated code would redden no job.
       #
       # `--no-run` on purpose: the claim is that the default feature set BUILDS, not that
       # these tests run again. `--lib --bins` covers every `#[cfg(test)]` module under
