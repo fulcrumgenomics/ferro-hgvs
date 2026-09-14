@@ -1578,62 +1578,38 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # This job OWNS one shared cache entry that `build-release-check`
-          # restores read-only. `shared-key` (NOT `key`) is load-bearing:
-          # `key` appends `GITHUB_JOB`, so two jobs passing the same `key` get
-          # SEPARATE entries and never share — `shared-key` omits the job id, so
-          # both land on one `build-release` entry. Sharing is sound HERE (unlike
-          # the per-job caches above — see the note on the first rust-cache block)
-          # precisely because this job's deps are the SUPERSET: clippy `--release`
-          # builds the release deps and the featureless guard below builds the
-          # debug/test deps, while `build-release-check` needs only the release
-          # half, which the shared entry always carries. `save-if: main` plus a
-          # single saver (this job) means no race over the entry, and no new key
-          # near the 10 GiB cap (#1218).
+          # This job OWNS the shared `build-release` cache entry that
+          # `build-release-check` restores read-only. `shared-key` (NOT `key`) is
+          # load-bearing: `key` appends `GITHUB_JOB` so same-`key` jobs never share.
+          # Sound HERE because this job's deps are the SUPERSET — its release clippy and
+          # featureless build cover both halves, and `build-release-check` needs only the
+          # release half. `save-if: main` + a single saver means no race and no new key
+          # near the cap (#1218).
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: build-release
-      # The release-profile lint (#1383). The two `clippy` jobs both lint the debug
-      # profile, so nothing else checks the release profile, and the normalization
-      # oracles are required by convention to compile out of release entirely
-      # (`#[cfg(debug_assertions)]` on `assert_in_bounds`, `assert_reparseable`,
-      # `assert_idempotent` and their `*_self_check_enabled` flags). An oracle
-      # helper left ungated becomes dead code in release, and `dead_code` is
-      # warn-by-default, so nothing went red: #1366's pre-review head failed this
-      # command with three such errors while all three CI clippy jobs were green on
-      # the same commit.
+      # The release-profile lint (#1383). Both `clippy` jobs lint the debug profile, so
+      # nothing else checks release, and the normalization oracles compile out of
+      # release entirely (`#[cfg(debug_assertions)]`); an ungated oracle helper becomes
+      # `dead_code` in release — warn-by-default, so no debug clippy job catches it.
       #
-      # It stays a `cargo clippy` step (not folded into the release build via
-      # `RUSTFLAGS=-D warnings`) because RUSTFLAGS is part of cargo's build
-      # fingerprint, so setting it busts the whole dependency cache — ~400 crates
-      # rebuild cold, the same trap the `CARGO_INCREMENTAL` note in `docs/TESTING.md`
-      # records. `clippy -- -D warnings` passes the flag as a clippy ARG instead,
-      # leaving dependencies `--cap-lints=allow` and their fingerprints untouched.
+      # Stays a `cargo clippy` step, NOT the release build with `RUSTFLAGS=-D warnings`:
+      # RUSTFLAGS is part of cargo's build fingerprint and busts the whole dependency
+      # cache (the `CARGO_INCREMENTAL` trap in `docs/TESTING.md`); `clippy -- -D warnings`
+      # passes the flag as a clippy ARG, leaving dependency fingerprints untouched.
       #
-      # Deliberately NOT `--all-targets`: the dead code lands in the `lib` target,
-      # which the plain invocation covers. Measured by removing the four
-      # `#[cfg(any(debug_assertions, test))]` gates from
-      # `src/normalize/merge.rs` — this command then fails with all four items
-      # reported against `(lib)`, and passes with them restored. `--all-targets`
-      # would additionally compile every test and bench binary with optimisation
-      # for no gain here.
+      # NOT `--all-targets`: the dead code lands in the `lib` target, which the plain
+      # invocation covers; `--all-targets` would optimize every test/bench binary for
+      # no gain.
       - run: cargo clippy --release -- -D warnings
-      # The featureless guard (#1505). Every other Rust job in this workflow
-      # either passes `--features dev` / `--all-features`, or is scoped to the
-      # soak driver package (`test-build-soak`'s
-      # `-p ferro-hgvs-soak-tests`). So the DEFAULT
-      # feature set's unit tests — the `#[cfg(test)]` modules under `src/` — are
-      # compiled NOWHERE in CI, and a call from one of them into feature-gated
-      # code cannot turn any job red.
+      # The featureless guard (#1505). Every other Rust job passes `--features dev` /
+      # `--all-features` or is scoped to the soak driver, so the DEFAULT feature set's
+      # `#[cfg(test)]` modules under `src/` compile NOWHERE else in CI, and a call from
+      # one into feature-gated code cannot redden any job (#1372 landed exactly that on
+      # `main`, caught only by an outside `cargo test`).
       #
-      # Not hypothetical: #1372 put exactly such a call on `main` and it survived
-      # until an external contributor ran the `cargo test` this repository's own
-      # README documents (`README.md:433`). Four `E0599`s, invisible to all 34
-      # checks, reported from outside the project.
-      #
-      # `--no-run` on purpose: the claim being defended is that the default
-      # feature set BUILDS, not that these tests run a second time. `--lib
-      # --bins` covers every `#[cfg(test)]` module under `src/`; the integration
-      # tree is already compiled featureless by `test-build-soak`.
+      # `--no-run` on purpose: the claim is that the default feature set BUILDS, not that
+      # these tests run again. `--lib --bins` covers every `#[cfg(test)]` module under
+      # `src/`; the integration tree is already compiled featureless by `test-build-soak`.
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
 
