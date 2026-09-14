@@ -1778,46 +1778,24 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(spec_conformance_axis) + test(conformance_census_runs)"
 
-  # src/benchmark/hgvs_rs.rs carries 3 pure-Rust `#[cfg(test)]` tests
-  # (`benchmark::hgvs_rs::tests::*`) that only compile under the `hgvs-rs`
-  # feature — and, before #2080, ran NOWHERE. `dev` does not include `hgvs-rs`,
-  # so the sharded `test` jobs never compiled them, and the only two `hgvs-rs`
-  # invocations anywhere in CI are build-only: `clippy-all-features`'s
-  # `--all-features --all-targets` compiles the `#[cfg(test)]` module but does
-  # not execute it (its own comment names `hgvs-rs` as a feature it exists to
-  # keep compiling), and `deploy-local.yml` builds the `ferro-web` binary. A
-  # break in any of the three passed every check — the #1505 / #1372 / #2046
-  # dead-coverage family, one feature over.
+  # The `benchmark::hgvs_rs::tests::*` tests compile only under the `hgvs-rs`
+  # feature, which no other CI job runs — `dev` excludes it, and the only other
+  # `hgvs-rs` builds are compile-only — so a break in them passed every check
+  # (#2080; the #1505 / #1372 / #2046 dead-coverage family). They are hermetic
+  # (URL parsing and a default-config constructor, no UTA/SeqRepo), so this job
+  # only compiles and runs them; `submodules` stays off (nothing here reads
+  # `assets/hgvs-nomenclature`).
   #
-  # The tests are hermetic — URL parsing and a default-config constructor, with
-  # no UTA database or SeqRepo checkout — so this job only has to compile and run
-  # them. No spec submodule is needed: the scoped selection touches nothing that
-  # reads `assets/hgvs-nomenclature` at runtime, and no `include_str!`/
-  # `include_bytes!` under `src/` names it, so `submodules` is left at its
-  # checkout default (off).
+  # SCOPED with `-E 'test(benchmark::hgvs_rs::)'` under nextest, not `cargo test`:
+  # `--features hgvs-rs` pulls in the whole lib suite, which is not safe in one
+  # process (e.g. `normalize::merge` tests assert on process-global `AtomicU64`
+  # counters). `--no-tests=fail` is the non-vacuity guard — a rename/delete exits
+  # 4 rather than reporting `0 passed`.
   #
-  # SCOPED with `-E 'test(benchmark::hgvs_rs::)'`, and run under nextest rather
-  # than `cargo test`, for the same reason #2046's `python::tests` step is:
-  # `--features hgvs-rs` pulls in `benchmark`, so a bare `--lib` run would
-  # execute the whole lib suite (4000+ tests) in one process, which is not safe
-  # — e.g. `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
-  # asserts deltas on process-global `AtomicU64` counters that any concurrent
-  # test reaching `partition_block_for_rule` corrupts. nextest is
-  # process-per-test, and the selection keeps the job to the three tests it
-  # exists to run.
-  #
-  # `--no-tests=fail` is the non-vacuity guard, and the other reason this is
-  # nextest (same reasoning as #2046's `python::tests` step and the `soak` job).
-  # If the module is renamed or the tests are deleted, an empty selection exits 4
-  # here (`error: no tests to run`) rather than reporting `0 passed` and exiting
-  # 0 — so the coverage this job exists to provide cannot silently stop running.
-  #
-  # This job's name is NOT one of the repository-required contexts (the ruleset
-  # names a fixed set — see the `test-required` comment below), so it is wired
-  # into the `Test` rollup's `needs` to gate the merge. The compile cost it buys
-  # is real and deliberate: `hgvs-rs` pulls `hgvs`, `postgres`, `seqrepo`,
-  # `biocommons-bioutils` and `indexmap`, a dependency tree no other test job
-  # builds — which is why #2080 was split out of #2072 rather than folded in.
+  # NOT a repository-required context (the ruleset names a fixed set — see
+  # `test-required`), so it is wired into the `Test` rollup's `needs` to gate the
+  # merge. The `hgvs-rs` dep tree (hgvs, postgres, seqrepo, …) no other test job
+  # builds, which is why #2080 was split out rather than folded in.
   hgvs-rs-tests:
     name: hgvs-rs Rust tests
     runs-on: ubuntu-latest
@@ -1840,23 +1818,13 @@ jobs:
         run: |
           cargo nextest run --features hgvs-rs --lib --no-tests=fail \
             -E 'test(benchmark::hgvs_rs::)'
-      # src/service/tools/hgvs_rs.rs was #2080's FOURTH dead-coverage site (#2101),
-      # which the step above cannot reach. `src/service` compiles only under
-      # `web-service` (`#[cfg(feature = "web-service")] pub mod service;`), while the
-      # enabled arm of `service::tools::hgvs_rs::tests::test_hgvs_rs_service_creation`
-      # is `#[cfg(feature = "hgvs-rs")]`. No other CI job builds BOTH features at once:
-      # `dev` (the sharded `test` jobs) has `web-service` but not `hgvs-rs`, and the
-      # step above has `hgvs-rs` but not `web-service` — so that arm ran nowhere and a
-      # break in it passed every check, the same family as the step above. It is
-      # reached here by asking for the two features together.
-      #
-      # Hermetic for the same reason: the test drives `HgvsRsService::new` with an
-      # empty seqrepo path, which fails during provider path parsing before any UTA
-      # connection is attempted, so it needs no database, SeqRepo, or spec submodule.
-      # A SEPARATE build (not folded into the step above) because `web-service` pulls
-      # axum/tokio/tower, a tree the benchmark step does not need — keeping them apart
-      # leaves #2080's proven coverage on exactly the feature set it was verified with.
-      # SCOPED and `--no-tests=fail` for the same non-vacuity reasons as above.
+      # `src/service/tools/hgvs_rs.rs` is a fourth dead-coverage site (#2101) the
+      # step above cannot reach: its test's enabled arm needs BOTH `hgvs-rs` and
+      # `web-service`, and no other job builds both at once, so it ran nowhere.
+      # Hermetic (drives `HgvsRsService::new` with an empty seqrepo path, which
+      # fails before any UTA connection). A SEPARATE build because `web-service`
+      # pulls axum/tokio/tower the benchmark step does not need. SCOPED and
+      # `--no-tests=fail` for the same non-vacuity reasons as above.
       - name: Run src/service/tools/hgvs_rs.rs unit tests
         run: |
           cargo nextest run --features hgvs-rs,web-service --lib --no-tests=fail \
@@ -1922,46 +1890,22 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: python-wheel
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # src/python.rs carries 10 pure-Rust `#[cfg(test)]` tests that only
-      # compile under the `python` feature — and, before #2046, ran NOWHERE:
-      # `dev` excludes `python` so the sharded test jobs never compiled them,
-      # `maturin build` runs no Rust test, and `cargo clippy --all-features`
-      # compiles without executing. A break in one passed every check (the
-      # #1505 / #1372 dead-coverage family, one feature over).
+      # src/python.rs's `python::tests::*` compile only under the `python` feature
+      # and, before #2046, ran NOWHERE: `dev` excludes `python`, `maturin build`
+      # runs no Rust test, and `clippy --all-features` compiles without executing
+      # (#1505 / #1372 dead-coverage family). They are pure (never start the
+      # interpreter), so they only need the crate to LINK against libpython —
+      # which is why `extension-module` is NOT in Cargo.toml's `python` feature
+      # (with it, PyO3 links no libpython on Linux and this executable would fail to
+      # link). `cargo` never reads pyproject.toml, so this step gets `python`
+      # WITHOUT `extension-module`; the wheel step below names both features.
       #
-      # They are pure (they never start the interpreter), so they only need the
-      # crate to LINK, which needs libpython. That is why `extension-module` is
-      # NOT part of Cargo.toml's `python` feature: with it set, PyO3 links no
-      # libpython on Linux (`is_linking_libpython_for_target` in
-      # pyo3-build-config), so this test executable would fail to link its
-      # undefined Python symbols. `cargo` never reads pyproject.toml, so this
-      # step gets `python` WITHOUT `extension-module` and links libpython; the
-      # wheel step below asks for both features BY NAME (see its comment — the
-      # `[tool.maturin] features` list does not reach a build that passes
-      # `--features` on the command line).
-      #
-      # SCOPED, and run under nextest rather than `cargo test`, because this
-      # job reports a REQUIRED status check and the lib suite is not safe to run
-      # in one process. `cargo test --features python --lib` ran all 4240 lib
-      # tests under libtest's thread pool, where
-      # `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
-      # asserts deltas on process-global `AtomicU64` counters (`SEQFIRST_*` in
-      # src/normalize/merge.rs) that any concurrent test reaching
-      # `partition_block_for_rule` corrupts, and
-      # `parallel::tests::test_stress_concurrent_throughput` is a timing test
-      # sensitive to oversubscription. Measured on this branch at
-      # `--test-threads=32`: 4 of 6 runs failed that way, i.e. a green PR's
-      # required check would flake for reasons unrelated to the PR. nextest is
-      # process-per-test, so the corruption is not expressible at any thread
-      # count, and the selection keeps the job to the tests it exists to run
-      # (10 tests in 0.02s, against 4240 in ~14s).
-      #
-      # `--no-tests=fail` is the non-vacuity guard, and is the other reason this
-      # is nextest: a selection matching nothing exits 4 here ("error: no tests
-      # to run"), where `cargo test -- python::tests` reports
-      # `ok. 0 passed; 4240 filtered out` and exits 0 — a typo in the filter
-      # would silently delete the coverage this job was added to provide. Same
-      # reasoning as the `soak` job's `--no-tests=fail`; see its comment.
+      # SCOPED under nextest, not `cargo test`, because this reports a REQUIRED check
+      # and the lib suite is not process-safe: `normalize::merge` tests assert on
+      # process-global `AtomicU64` counters and `parallel` has a timing test, so a
+      # one-process run flakes under oversubscription. nextest is process-per-test.
+      # `--no-tests=fail` is the non-vacuity guard — a bad filter exits 4 rather than
+      # reporting `0 passed`.
       #
       # The test binary loads libpython at startup, so point the loader at the
       # interpreter's shared-library dir.
@@ -1973,17 +1917,12 @@ jobs:
             cargo nextest run --features python --lib --no-tests=fail \
               -E 'test(python::tests::)'
       # `extension-module` is named explicitly, NOT inherited from
-      # `[tool.maturin] features`. Measured with maturin 1.13.3: a `--features`
-      # flag on the command line REPLACES that list rather than merging with it,
-      # so `maturin build --features python` hands cargo `--features python`
-      # alone and the pyproject entry is never consulted. Without the name here,
-      # the wheel's non-libpython linkage would rest solely on maturin setting
-      # `PYO3_BUILD_EXTENSION_MODULE=1` (which pyo3 honours independently of the
-      # Cargo feature) — true of every maturin in use today, but an unpinned
-      # `maturin>=1.0,<2.0` that predates it would silently build a
-      # libpython-linked wheel. Naming the feature restores exactly the cargo
-      # feature resolution this repo had before the split, and costs no version
-      # floor.
+      # `[tool.maturin] features`: a `--features` flag on the command line REPLACES
+      # that list, so `maturin build --features python` alone would never consult
+      # the pyproject entry. Without the name, the wheel's non-libpython linkage
+      # would rest solely on maturin setting `PYO3_BUILD_EXTENSION_MODULE=1`, which
+      # an older unpinned maturin might not do. Naming the feature restores the
+      # cargo feature resolution this repo had before the split, at no version floor.
       - name: Build release wheel
         run: |
           python -m pip install --upgrade pip
@@ -2096,32 +2035,25 @@ jobs:
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
 
-  # The release build + binary-size guard. This is the ONE place the merge-queue
-  # gating contract is stated; other comments (the Build-gate header above, the
-  # rollup below) point here rather than restate it. It runs in the merge queue
-  # and on the post-merge push to `main`, but NOT on `pull_request`: its ~212s
+  # The release build + binary-size guard, and the ONE place the merge-queue
+  # gating contract is stated (other comments point here). Runs in the merge
+  # queue and on the post-merge push to `main`, but NOT on `pull_request`: its
   # `cargo build --release` (lto + codegen-units=1, mandated by the size cap
-  # below — a faster profile would breach it) is the workflow's slowest job and
-  # the only one over the 4-minute PR target, and it carries no per-PR coverage a
-  # reviewer iterates against (the release-profile lint that catches most release
-  # issues is `build-lint`'s `cargo clippy --release`, which does run on every push).
+  # below) is the slowest job and over the 4-minute PR target, and carries no
+  # per-PR coverage a reviewer iterates against (release-profile lint lives in
+  # `build-lint`'s `cargo clippy --release`, which runs on every push).
   #
-  # `merge_group` is where it GATES: the `Build` rollup requires it (see the
-  # rollup's `needs`), so no pull request merges without the release build and
-  # size check passing against the projected merge.
+  # `merge_group` is where it GATES: the `Build` rollup requires it, so no PR
+  # merges without the release build and size check passing.
   #
-  # `push` (to `main`) is the SAFETY NET. The merge queue is a ruleset rule that
-  # can be rolled back (campaigns/ruleset-19738231-before.json); if it is,
-  # `merge_group` stops firing, so gating there ALONE would let this check vanish
-  # silently — main would then take merges with a green `Build` (build-lint only)
-  # and no release build or size check at all. Running it on the post-merge push
-  # too means an oversized or unbuildable binary reddens `main`'s CI loudly
-  # instead, whatever the merge path. (Redundant with the queue's own run while
-  # the queue is enabled, but post-merge, so it never races the PR target.)
+  # `push` (to `main`) is the SAFETY NET: the merge queue is a rollback-able
+  # ruleset rule, and if it is rolled back `merge_group` stops firing — running
+  # on the post-merge push means an oversized or unbuildable binary still reddens
+  # `main` loudly whatever the merge path.
   #
-  # On a `pull_request` run the job is skipped, and the rollup gates on `build-lint`
-  # alone — a job skipped by a job-level `if` reports success to the required
-  # context, so `Build` still reports and the PR is not left waiting.
+  # On a `pull_request` run the job is skipped and the rollup gates on `build-lint`
+  # alone (a job skipped by a job-level `if` reports success), so `Build` still
+  # reports and the PR is not left waiting.
   build-release-check:
     name: Build release + size
     runs-on: ubuntu-latest
