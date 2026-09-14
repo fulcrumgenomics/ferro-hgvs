@@ -918,16 +918,16 @@ jobs:
       - name: "Note: reference-aware tests are skipped without a manifest"
         # The mutalyzer / biocommons reference-aware suites silently no-op without
         # `FERRO_MANIFEST` (PR CI provisions no multi-GB manifest). Surface an
-        # annotation so the skip is visible (#397).
+        # annotation so the skip is visible.
         #
         # `FERRO_REQUIRE_MANIFEST` is deliberately NOT set here (unlike
         # `FERRO_REQUIRE_BULK_FIXTURES` below): PR CI provisions the bulk fixtures but
         # not a manifest, so requiring one would fail every PR. Only
         # `nightly-mutalyzer.yml` (which runs `ferro prepare`) sets it.
         #
-        # The skip reports as PASS, not SKIP — the half of #1815 this file cannot
-        # close: no gating job provisions a manifest, so a denoted-sequence violation
-        # on these axes still cannot redden a required check.
+        # The skip reports as PASS, not SKIP — the gap this file cannot close: no gating
+        # job provisions a manifest, so a denoted-sequence violation on these axes still
+        # cannot redden a required check.
         if: matrix.shard == 1
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip, and nextest reports that skip path as PASS rather than SKIP. No gating job runs those axes, so a denoted-sequence violation on them still cannot redden a required check (#1815). The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest, non-gating."
@@ -939,7 +939,7 @@ jobs:
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         # Consumes the standard `test-build` archive — see that job for why
         # `--extract-to .` is load-bearing. Proptests are excluded here and owned by
-        # `soak` (100k cases/shard vs 12k); leaving them in would run the same
+        # `soak`, which runs them far deeper; leaving them in would run the same
         # properties at lower depth AND wreck shard balance.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
@@ -972,10 +972,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # Bulk corpora arrive as the `bulk-fixtures` artifact below, not LFS.
-          # `submodules` IS needed here: the spec worked-examples gate resolves each
-          # row's `file:line` citation against the checkout at RUN time and asserts the
-          # quote verbatim — without it that test fails rather than skips, deliberately.
+          # submodules needed for the spec worked-examples gate — see the `test` job.
           submodules: true
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
@@ -986,16 +983,12 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      # Carries BOTH confluence corpora (`g,c` and `n,r`). Without it those nine tests
-      # regenerate theirs via a nested `cargo run` that compiles the crate inside the
-      # test — see the generating steps in `spec-fixtures`.
+      # Both confluence corpora — see the `test` job for why the download is needed.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cis-corpus
           path: tests/fixtures/cis/
-      # The four bulk corpora, fetched and digest-verified once by `fixtures`.
-      # `tests/fixtures/` preserves the artifact's two subdirectories, so the
-      # files land back on the paths the suites read.
+      # The four bulk corpora — see the `test` job.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: bulk-fixtures
@@ -1039,9 +1032,8 @@ jobs:
 
   # 1,000,000-case idempotency soak on every PR, split 10 ways.
   #
-  # Why it exists: PR CI's ordinary 12k-case run has never caught one of this
-  # campaign's idempotency defects (#1210 first reproduced at ~150,000 cases). 12k
-  # is a smoke test; depth is what finds these.
+  # Why it exists: PR CI's ordinary 12k-case run is a smoke test that misses this
+  # campaign's idempotency defects — depth is what finds them.
   #
   # Why it is safe to gate on: each shard pins `PROPTEST_RNG_SEED` and proptest's
   # RNG is ChaCha, so a shard explores the SAME cases every run. Without pinned
@@ -1064,11 +1056,10 @@ jobs:
     # the dev-profile compile back on the soak's critical path.
     #
     # The soak selection is by NAME (`*proptest*`), so a new `*proptest*` module lands
-    # in this 1M-case job without anyone choosing it. `from_sequences_proptest.rs` and
-    # `minimal_alignment_enumeration_proptest.rs` both joined that way; each was
-    # re-checked to be a pure function of generated input (no provider, no fixture) and
-    # to fit the soak's cost. Re-check both when adding another — the enumeration module
-    # is exponential in block length, bounded only by its own `MAX_BLOCK_LEN`.
+    # in this 1M-case job without anyone choosing it. Re-check any new one is a pure
+    # function of generated input (no provider, no fixture) and fits the soak's cost —
+    # the enumeration module is exponential in block length, bounded only by its own
+    # `MAX_BLOCK_LEN`.
     needs: test-build-soak
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1119,24 +1110,11 @@ jobs:
   # The three exhaustive-sweep modules, moved off the `test` / `test-oracle`
   # partitions and onto the optimized archive.
   #
-  # These were the whole workflow's critical path. `--partition hash:K/N` splits
-  # by a hash of the test NAME, which balances shards by count and is blind to
-  # cost — and all three sweeps happened to hash into the same shard. Measured
-  # on run 30681684032, with everything else in those jobs under 4s:
-  #
-  #                                            Test (3/6)   Test oracle (1/2)
-  #   cis_junction_crossing_shift                    118s                183s
-  #   repeat_span_sibling_overlap                     66s                121s
-  #   issue_1254_sibling_crossing_shift               30s                 78s
-  #
-  # They are exhaustive cross-products — the first is a six-deep nest of roughly
-  # 276,000 cases — so they are compute-bound in exactly the way the soak is,
-  # and they benefit from the optimized archive even more (user CPU, oracles on,
-  # 3 reps, spread under 2%):
-  #
-  #   cis_junction_crossing_shift        71.06s -> 8.55s   8.3x
-  #   repeat_span_sibling_overlap        40.44s -> 5.29s   7.6x
-  #   issue_1254_sibling_crossing_shift  20.14s -> 2.32s   8.7x
+  # They were the whole workflow's critical path: `--partition hash:K/N` splits by a
+  # hash of the test NAME, which balances shards by count and is blind to cost — and
+  # all three sweeps happened to hash into the same shard. They are exhaustive
+  # cross-products, compute-bound in exactly the way the soak is, so they benefit from
+  # the optimized archive even more.
   #
   # All three live in `tests/it/` and are `#[path]`-included by
   # `tests-soak/tests/soak/main.rs`, so they are inside the archive
@@ -1167,7 +1145,7 @@ jobs:
           name: nextest-archive-soak
       - name: Run the exhaustive sweeps with the normalization self-checks
         env:
-          # The full corpus, not the 4-seed prefix a local run takes (#1295):
+          # The full corpus, not the 4-seed prefix a local run takes:
           # `sweep_seeds` defaults to the prefix and this job is the ONLY place that
           # asks for all of it, which is why exhaustive coverage still runs on every PR
           # (`test`/`test-oracle` negate `SWEEP_FILTER` and never reach these modules).
@@ -1180,7 +1158,7 @@ jobs:
           # terminal positions in bulk, the source of every instance of the class. See
           # the note on the pair in the `test` job.
           FERRO_ASSERT_IN_BOUNDS: "1"
-          # The denoted-sequence oracle (#1615): does the normalized description denote
+          # The denoted-sequence oracle: does the normalized description denote
           # the same bases as the input? This job is its gating home rather than
           # `test-oracle` (see the note there for the two rows that keep it out of the
           # wider selection). The sweeps' cis members crossing siblings are exactly the
@@ -1193,13 +1171,13 @@ jobs:
         # `issue_1615_denoted_sequence_oracle` is appended because it holds the one test
         # that reads the oracle's counters (`the_seam_compares_when_the_flag_is_set`, the
         # guard that a green run actually compared something), which skips where the flag
-        # is unset. It STAYS appended after #1815 armed `FERRO_ASSERT_SEQUENCE` in
-        # `test-oracle` too — defence in depth, not a copy to remove.
+        # is unset. It STAYS appended even though `test-oracle` now arms
+        # `FERRO_ASSERT_SEQUENCE` too — defence in depth, not a copy to remove.
         #
         # Appended, NOT added to `SWEEP_FILTER`: that filter is the modules drawing
         # through `sweep_seeds(` (this one does not), and it is negated by `test` and
         # `test-oracle`, so naming it there would REMOVE the module from both. It runs
-        # twice on purpose — unarmed in `test`, armed here — being ~10 cheap unit tests.
+        # twice on purpose — unarmed in `test`, armed here — being cheap unit tests.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
@@ -1249,16 +1227,14 @@ jobs:
       - name: Run the censuses that need the oracles armed
         env:
           # Three of the four `test-oracle` sets — see that job for what each asserts.
-          # `FERRO_ASSERT_SEQUENCE` is deliberately excluded (#1815).
+          # `FERRO_ASSERT_SEQUENCE` is deliberately excluded.
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           FERRO_ASSERT_IN_BOUNDS: "1"
-          # Absence of a bulk fixture must FAIL here, never skip — the same
-          # reason as in `test`. `normalize_axis_preserving`'s three corpus
-          # tests `return` early on a missing file, so without this a
-          # `bulk-fixtures` artifact that failed to arrive would delete the
-          # ClinVar, CMRG and Paraphase axis coverage and report a *faster*
-          # green run.
+          # Absence of a bulk fixture must FAIL here, never skip — see `test`.
+          # `normalize_axis_preserving`'s three corpus tests `return` early on a missing
+          # file, so without this a `bulk-fixtures` artifact that failed to arrive would
+          # delete the ClinVar, CMRG and Paraphase axis coverage.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         # `--no-tests=fail` for the reason spelled out on `soak` and `sweeps`:
         # this step names its modules explicitly, so a rename is exactly the
@@ -1294,7 +1270,7 @@ jobs:
       - name: Run the censuses that may not be measured with an oracle armed
         # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: these
         # modules build their corpus in code (`conformance::spec_corpus`) and
-        # read nothing from disk. `conformance_census_runs` (#2094) joins
+        # read nothing from disk. `conformance_census_runs` joins
         # `spec_conformance_axis` here because `run_census` refuses outright
         # with a seam oracle armed, which would fail an armed run.
         run: |
