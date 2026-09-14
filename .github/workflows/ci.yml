@@ -457,7 +457,8 @@ jobs:
       # keys. It saves dependency artifacts only (dropping the workspace crate's own
       # outputs, `incremental/` and `.d` files), which keeps entries small against the
       # ~10 GiB repo cache cap, and it keys per job + dependency hash so a restored entry
-      # cannot disagree with what the job needs.
+      # cannot disagree with what the job needs (a whole-`target/` actions/cache key
+      # freezes stale — it skips its save on a primary-key hit).
       #
       # Deliberately NOT set:
       # - `cache-on-failure` — would save a tree per failed run, against the budget
