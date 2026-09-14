@@ -3,43 +3,26 @@ name: CI
 on:
   push:
     branches: [main]
-  # No `branches:` filter here on purpose. That filter matches the pull
-  # request's BASE, so `branches: [main]` silently skipped CI for every
-  # stacked PR (one whose base is another feature branch). Because the
-  # `pull_request` event never fired, such a PR had no CI runs at all, yet
-  # GitHub still rendered "All checks have passed" — a green badge that
-  # carried no information. Run on every pull request whatever it targets.
+  # No `branches:` filter here: it matches the PR's BASE, so `branches: [main]`
+  # silently skips every stacked PR (one based on another feature branch) while GitHub
+  # still shows "All checks have passed". Run on every pull request whatever it targets.
   pull_request:
-    # `edited` is load-bearing for `representation-change` below: the declaration
-    # lives in the PR description, and the default activity set
-    # (opened/synchronize/reopened) does not fire when a description is edited. Without
-    # it, adding the trailer a red check just asked for re-runs nothing and the check
-    # stays red until an unrelated push.
+    # `edited` is load-bearing for `representation-change` below: its declaration lives in
+    # the PR description, and opened/synchronize/reopened do not fire on a description
+    # edit — so without it, adding the trailer a red check asked for re-runs nothing.
     types: [opened, synchronize, reopened, edited]
-  # Required for a merge queue, and it is a hard prerequisite rather than an
-  # optimisation: a queue entry is gated on the branch's required status checks
-  # being reported against the MERGE GROUP, and a workflow that does not trigger
-  # on `merge_group` reports nothing there at all. Nine of `main`'s ten required
-  # contexts come from this file (`zizmor + actionlint` is the tenth, in
-  # `lint-workflows.yml`), so without this line every queued pull request would
-  # sit on "Expected — waiting for status to be reported" forever. That is the
-  # same failure mode the `paths:` filter caused in `lint-workflows.yml`, one
-  # event further out: a check that never reports is indistinguishable from a
-  # check that has not finished.
-  #
-  # This is inert until a merge queue is actually enabled on `main` — no
-  # `merge_group` event can be delivered before then — so it is safe to land
-  # ahead of the settings change, and it has to, or the first queued PR hangs.
+  # Required for a merge queue: a queue entry gates on this file's required checks
+  # reporting against the MERGE GROUP, and a workflow that does not trigger on
+  # `merge_group` reports nothing there, so every queued PR hangs on "waiting for status"
+  # forever. Inert until a queue is enabled on `main` (no `merge_group` event fires
+  # before then), so it is safe to land ahead of that.
   merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel a merge-group run. `github.ref` is unique per merge group
-  # (`refs/heads/gh-readonly-queue/main/pr-<n>-<base-sha>`), so a collision needs
-  # the same PR re-queued against an unmoved base — rare, and the cost of losing
-  # that race is not a wasted run but a cancelled required check, which the queue
-  # reads as a failure and which evicts the pull request from the queue. Cheap
-  # insurance; `pull_request` and `push` are unaffected.
+  # Never cancel a merge-group run: a cancelled required check reads as a failure and
+  # evicts the PR from the queue. `github.ref` is unique per merge group, so a collision
+  # is rare anyway. `pull_request` and `push` are unaffected.
   cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 permissions:
@@ -48,11 +31,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The three exhaustive-sweep modules, owned by the `sweeps` job and negated from
-  # the `test` / `test-oracle` partitions. One definition because the filter must
-  # appear identically in several places and Actions has no YAML anchors; a copy
-  # that drifts would double-run a sweep or drop one from CI. The two selections
-  # must partition the suite — the counts drift as tests are added, the sum must not.
+  # The three exhaustive-sweep modules, owned by `sweeps` and negated from the `test` /
+  # `test-oracle` partitions. One definition (Actions has no YAML anchors) so a drifted
+  # copy can't double-run or drop a sweep. The selections must partition the suite: the
+  # counts drift as tests are added, the sum must not.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
@@ -86,11 +68,11 @@ env:
     test(merge::tests::direction_symmetry)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
-# 360-minute default, so a wedged runner can hold a PR for hours (#1977). The
-# tiers below bound a hang; they are not a budget, and nothing should be tuned to
-# fit them — `.config/nextest.toml` records why there is no `[profile.ci]`. Each
-# tier is at least 5x its own slowest observed member; re-derive from measurement
-# (across job ATTEMPTS, not just the latest) before tightening any of them.
+# 360-minute default, so a wedged runner can hold a PR for hours. The tiers below
+# bound a hang; they are not a budget, and nothing should be tuned to fit them —
+# `.config/nextest.toml` records why there is no `[profile.ci]`. Each tier is at least
+# 5x its own slowest observed member; re-derive from measurement (across job ATTEMPTS,
+# not just the latest) before tightening any of them.
 #
 #   60  compiles Rust, so a cold cache is on the table
 #       (build, clippy{,-all-features}, spec-fixtures, test-build{,-soak},
