@@ -584,13 +584,11 @@ jobs:
         run: |
           cargo run --features dev --example generate_cis_confluence_corpus -- \
             --axes n,r --output tests/fixtures/cis/cis_confluence_nr_corpus.json
-      # The three doc `--check` generators, merged in from the former `generated-docs`
-      # job (same profile/features as the steps above, so they share this warm tree
-      # instead of a second cache key). Gating is unchanged: a failure here fails
-      # `spec-fixtures`, which skips `test`/`test-oracle`, which `test-required`
-      # counts as not-success. `CARGO_PROFILE_TEST_DEBUG=0` from the old job is NOT
-      # carried over on purpose — it configures the test profile, and these are dev
-      # `cargo run`s.
+      # The three doc `--check` generators, sharing this job's warm tree (same
+      # profile/features as the steps above) instead of a second cache key. A failure
+      # here fails `spec-fixtures`, which skips `test`/`test-oracle`, which `test-required`
+      # counts as not-success. `CARGO_PROFILE_TEST_DEBUG=0` is deliberately NOT set here —
+      # it configures the test profile, and these are dev `cargo run`s.
       - name: Verify conformance summary docs are up to date
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_conformance_summary -- --check
@@ -605,7 +603,7 @@ jobs:
       # submodule bump that invalidates a coverage claim fails the build. It refuses
       # on a moved quote, a moved clause-unit count, a `generatable` clause no corpus
       # row exercises, or a rule tag no clause claims. A step in THIS job (not its
-      # own) to reuse the rust-cache key and add no cache entry (#1218); skipped on a
+      # own) to reuse the rust-cache key and add no cache entry; skipped on a
       # cache hit for the same reason as the steps above.
       - name: Check the spec conformance corpus rule inventory
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
@@ -651,7 +649,7 @@ jobs:
   # `nextest archive`, so the crate compiles a single time however many shards run.
   # (Spec artifacts are in `spec-fixtures`; soak/sweeps run from `test-build-soak`.)
   #
-  # `--extract-to . --extract-overwrite` in the consumers is load-bearing: ~26 CLI
+  # `--extract-to . --extract-overwrite` in the consumers is load-bearing: CLI
   # tests resolve the binary with `env!("CARGO_BIN_EXE_ferro")`, an ABSOLUTE path to
   # `<workspace>/target/debug/ferro` baked at compile time. Every job shares the
   # runner workspace path, so extracting INTO the workspace puts the binary where
@@ -694,7 +692,7 @@ jobs:
           # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a restore
           # could shadow `install-action`'s `cargo-nextest` with a stale one and pin
           # this archive's producer to a different nextest than its consumers. Turning
-          # the bin cache off removes the hazard at the source (#1396); the download
+          # the bin cache off removes the hazard at the source; the download
           # is prebuilt, so the cost is nil.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
@@ -723,21 +721,20 @@ jobs:
           path: nextest.tar.zst
           retention-days: 1
 
-  # A SECOND archive at `opt-level = 2` (#1963), for the soak shards only. The soak
-  # is compute-bound in a way the other jobs are not — eight shards each run 125,000
-  # proptest cases, so a constant factor on the code under test is multiplied a
-  # million times over — while the other jobs run each test once and would only pay
-  # the longer compile.
+  # A SECOND archive at `opt-level = 2`, for the soak shards only. The soak is
+  # compute-bound in a way the other jobs are not — each shard runs its proptest cases
+  # by the hundred thousand, so a constant factor on the code under test is multiplied
+  # over and over — while the other jobs run each test once and would only pay the
+  # longer compile.
   #
   # ONE PACKAGE is built, and NOT `ferro-hgvs`'s `it` target. Cargo profile overrides
-  # are keyed on the PACKAGE, not the target, so `[profile.soak.package.ferro-hgvs]`
-  # would optimize the lib, bins AND the whole 139k-line `it` driver together, with no
-  # way to spell "library optimized, driver cheap". `ferro-hgvs-soak-tests` is that
-  # second package: `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the
-  # consuming jobs select (plus any they reach into), while the files stay under
-  # `tests/it/` and declared in `tests/it/main.rs`. The saving is compiling ~9k lines
-  # instead of 139k, NOT optimizing them less (#1964; reasoning on `[profile.soak]`
-  # in Cargo.toml).
+  # key on the PACKAGE, not the target, so `[profile.soak.package.ferro-hgvs]` would
+  # optimize the lib, bins AND the whole `it` driver together, with no way to spell
+  # "library optimized, driver cheap". `ferro-hgvs-soak-tests` is that second package:
+  # `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the consuming jobs
+  # select (plus any they reach into), while the files stay under `tests/it/` and
+  # declared in `tests/it/main.rs`. The saving is compiling far less, NOT optimizing it
+  # less (reasoning on `[profile.soak]` in Cargo.toml).
   #
   # The archive must contain exactly what CI selects from it. A module CI selects
   # from this archive that is not compiled into it would be negated by
@@ -769,12 +766,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive-soak
           # Same as `test-build`, and more so: this archive feeds `soak` and `sweeps`
-          # too, so a stale cached `cargo-nextest` would desync three jobs (#1396).
+          # too, so a stale cached `cargo-nextest` would desync three jobs.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       # Skip the rebuild when this exact commit already produced an archive.
       # `rust-cache` caches DEPENDENCIES only (it deletes workspace artifacts), so
-      # `ferro_hgvs` and the `it` crate recompile at `opt-level = 2` (#1963) on every
+      # `ferro_hgvs` and the `it` crate recompile at `opt-level = 2` on every
       # run — and this job plus `sweeps` is the critical path.
       #
       # Keyed on the commit SHA, NOT `hashFiles` over inputs: a content-hash key that
@@ -801,8 +798,7 @@ jobs:
         # `benchmark` (reqwest/rusqlite/postgres) — a whole tree compiled at
         # `opt-level = 2` for a binary that never touches it. None of the modules this
         # package compiles is feature-gated and no consuming job selects a gated one,
-        # so the selections are feature-INDEPENDENT. Re-measure rather than trust a
-        # count (both have drifted before):
+        # so the selections are feature-INDEPENDENT. Re-measure rather than trust a count:
         #
         #   cargo nextest list -p ferro-hgvs-soak-tests -E 'test(proptest)' | wc -l
         #   cargo nextest list -p ferro-hgvs-soak-tests -E "$SWEEP_FILTER" | wc -l
@@ -825,14 +821,14 @@ jobs:
   # artifact.
   #
   # NOT Git LFS: LFS bandwidth is metered even on a public repo, and per-job
-  # `lfs: true` fetches exhausted the account's LFS budget, at which point every
-  # `lfs: true` job died at checkout. The corpora live on the `test-fixtures-v1`
-  # release instead (release downloads aren't metered), fetched over plain HTTPS.
+  # `lfs: true` fetches blow the account's LFS budget, after which every `lfs: true`
+  # job dies at checkout. The corpora live on the `test-fixtures-v1` release instead
+  # (release downloads aren't metered), fetched over plain HTTPS.
   #
   # NOT `actions/cache`: a 156 MB entry would evict Rust build caches by LRU against
-  # the ~10 GiB cap (#1218). A workflow artifact is a separate quota; one day of
-  # retention is all a run needs. Slots into the existing `needs` chain, so it adds
-  # no serialization point.
+  # the ~10 GiB cap. A workflow artifact is a separate quota; one day of retention is
+  # all a run needs. Slots into the existing `needs` chain, so it adds no serialization
+  # point.
   fixtures:
     name: Fetch bulk test fixtures
     runs-on: ubuntu-latest
@@ -859,9 +855,9 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: bulk-fixtures
-          # Named explicitly, not globbed. `if-no-files-found: error` catches
-          # an EMPTY artifact, not a short one, and the four paths are exactly
-          # what `CHECKSUMS.sha256` lists and the step above verified.
+          # Named explicitly, not globbed: the four paths are exactly what
+          # `CHECKSUMS.sha256` lists and the step above verified. `if-no-files-found:
+          # error` catches an EMPTY artifact — see `spec-fixtures`.
           path: |
             tests/fixtures/bulk/clinvar_hgvs_500k.json.gz
             tests/fixtures/bulk/clinvar_hgvs_unique.json.gz
