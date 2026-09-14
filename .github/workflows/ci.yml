@@ -217,54 +217,33 @@ jobs:
   # `src/reference/` or `src/error_handling/` can move the normalized string a downstream
   # consumer stores read counts against, so it must say whether it does.
   # `release-plz.toml` renders the changelog's **Representation changes** section from a
-  # `Representation-Change:` trailer on the squash commit (#1433) — the machinery works,
-  # but across the v0.13.0 cycle 87 commits landed carrying zero trailers while 46 touched
-  # the four directories watched at the time, and the section rendered empty. An empty
-  # section looks identical whether nothing moved or nobody declared, so it went unnoticed
-  # for ~90 commits and the disclosure had to be reconstructed by hand before release
-  # (#1522). The last two directories were added by #1853, on the finding that every
-  # newly-normalizing row in that reconstruction attributes to one PR touching only
-  # `src/reference/` and one touching only `src/error_handling/`. The authoritative list
-  # is `WATCHED_PREFIXES` in the script this job runs; this comment restates it for the
-  # reader, and `test_the_prose_restatements_name_every_watched_directory` fails when a
-  # watched directory is missing from it — the obligation is enforced, not promised.
+  # `Representation-Change:` trailer on the squash commit (#1433); an empty section looks
+  # the same whether nothing moved or nobody declared, which is how a release once shipped
+  # with the disclosure reconstructed by hand (#1522, #1853).
   #
-  # `Representation-Change: none` passes. The point is to force the judgement, not to force
-  # a disclosure; what this rejects is silence.
+  # The authoritative list is `WATCHED_PREFIXES` in the script this job runs; this comment
+  # restates it, and `test_the_prose_restatements_name_every_watched_directory` fails when
+  # a watched directory is missing here — the obligation is enforced, not promised.
+  #
+  # `Representation-Change: none` passes: the point is to force the judgement, not a
+  # disclosure. What it rejects is silence.
   representation-change:
     name: Representation change declared
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # `pull_request` only. The check reads the PR description, which is what becomes the
-    # squash commit body and therefore what git-cliff's footer rule matches. A push to
-    # `main` has no equivalent to read, and by then the declaration is already merged.
+    # `pull_request` only: the check reads the PR description, which becomes the squash
+    # commit body git-cliff matches. A push to `main` has nothing equivalent to read, and
+    # by then the declaration is already merged.
     #
-    # UNDER `merge_group` THIS JOB IS SKIPPED, AND THAT IS DELIBERATE — but the reason is
-    # not "it would be awkward to run", it is that there is nothing there to read.
-    # `github.event.pull_request` does not exist on a `merge_group` event (nor do
-    # `github.head_ref`/`github.base_ref`), so every one of the steps below would resolve
-    # its inputs to the empty string and the checker would fail on a change that had
-    # already declared correctly.
+    # SKIPPED under `merge_group`, deliberately: `github.event.pull_request` doesn't exist
+    # there, so every step below would read empty inputs and fail a change that already
+    # declared correctly. A skipped job reports SUCCESS, satisfying the required check, so
+    # the context doesn't stall the queue. That is safe because the declaration is a
+    # property of the PR description and a base change can't turn a present trailer into an
+    # absent one — the real enforcement point is the pull request.
     #
-    # A skipped job reports a conclusion of SUCCESS, which satisfies a required status
-    # check — that is GitHub's documented behaviour for a job skipped by a job-level
-    # conditional, and it is what keeps `Representation change declared` from stalling
-    # every queue entry. (The failure mode it must not be confused with is a *workflow*
-    # that never triggers: that reports nothing, stays "Expected — waiting for status to
-    # be reported", and blocks forever. Which is why `merge_group` is in this file's `on:`
-    # block.)
-    #
-    # So in the queue this context is reported and vacuous. Nothing is lost by that,
-    # because the declaration is a property of the PR description and the queue cannot
-    # invalidate it: a merge group changes the BASE, and no base change can turn a present
-    # trailer into an absent one. That is exactly unlike the value-pinned tests the queue
-    # does exist to protect — those are properties of the merged tree. The real
-    # enforcement point is the pull request, where required checks gate entry to the queue.
-    #
-    # Do NOT "fix" this by widening the condition to run here. Reading the declaration
-    # under `merge_group` would mean parsing it back out of the merge commit message,
-    # which is a different and much weaker source than the description GitHub actually
-    # squashes.
+    # Do NOT "fix" this by running under `merge_group`: it would parse the declaration out
+    # of the merge commit message, a weaker source than the description GitHub squashes.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
