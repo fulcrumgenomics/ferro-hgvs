@@ -48,145 +48,49 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The three exhaustive-sweep modules, owned by the `sweeps` job and excluded
-  # from the `test` / `test-oracle` partitions. Defined once here because the
-  # filter has to appear identically in three places and GitHub Actions has no
-  # YAML anchors — a copy that drifts would either double-run a sweep or, far
-  # worse, drop one from CI entirely.
-  #
-  # The invariant to preserve is that the two selections PARTITION the suite —
-  # the absolute counts drift as tests are added, the sum must not. Verified
-  # against this base: `not test(proptest)` selects 8908, adding
-  # `and not (SWEEP_FILTER)` selects 8878, and the filter itself selects the
-  # remaining 30. 8878 + 30 == 8908, so nothing falls between the two jobs and
-  # nothing is run twice.
-  #
-  # `sweeps`, the one job that selects ON this filter rather than against it,
-  # passes `--no-tests=fail`. So a rename that made the filter match nothing
-  # reddens CI there instead of quietly emptying that job — while `test` and
-  # `test-oracle`, which negate it, would just widen by 30 tests.
-  #
-  # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
-  # runs under `profile.oracle` in `.config/nextest.toml`, whose exclusions make
-  # it a strict SUBSET of `test` rather than the same selection. Every test still
-  # runs somewhere unarmed.
-  #
-  # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
-  # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
-  # denoted-sequence oracle's counters, which are meaningless unless
-  # `FERRO_ASSERT_SEQUENCE` is set. `sweeps` was the only job IN THIS FILE that
-  # set it until #1815 armed it in `test-oracle` too (`nightly-mutalyzer.yml`
-  # sets it as well, non-gating). So "nothing is run twice" holds of this filter
-  # and is one module short of holding of that job's `-E`; the reason it is
-  # appended there rather than added here is on the job itself.
+  # The three exhaustive-sweep modules, owned by the `sweeps` job and negated from
+  # the `test` / `test-oracle` partitions. One definition because the filter must
+  # appear identically in several places and Actions has no YAML anchors; a copy
+  # that drifts would double-run a sweep or drop one from CI. The two selections
+  # must partition the suite — the counts drift as tests are added, the sum must not.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
-  # The slow census modules, owned by the `censuses` job and excluded from the
-  # `test` / `test-oracle` partitions. Same shape as `SWEEP_FILTER` above and
-  # for the same reason; the difference is what the job does with them.
+  # The slow census modules, owned by the `censuses` / `censuses-plain` jobs and
+  # negated from `test` / `test-oracle` — same one-definition and partition rules
+  # as `SWEEP_FILTER`. Moved to dedicated jobs because `--partition hash:K/N`
+  # balances shard counts blind to cost, so a slow census could land on the
+  # critical path. Those jobs select these modules by explicit name, split across
+  # their steps, so a module here that no step selects runs nowhere.
   #
-  # WHY THEY MOVED. `--partition hash:K/N` assigns a test by a hash of its NAME,
-  # so it balances shard *counts* and is blind to cost — the property already
-  # recorded on `sweeps`, where all three exhaustive sweeps hashed into one
-  # shard. The three below hashed into the two slowest jobs and made the
-  # workflow's critical path a single test. Measured on run 31845625298
-  # (`044f085a`):
-  #
-  #                                             Test (K/6)   Test oracle (K/4)
-  #   issue_1542_direction_symmetry               155.7s (3)         240.3s (1)
-  #   spec_conformance_axis (5 tests)             338.0s              excluded
-  #   normalize_axis_preserving (4 tests)         119.3s (1,3,5)      313.0s (1,3)
-  #
-  # `Test oracle (1/4)` ran 328s against 132-160s for its siblings and finished
-  # 83s after every other job in the workflow, so the run's wall clock was one
-  # unlucky hash draw. A shard's wall can never fall below its slowest single
-  # test, so re-sharding cannot fix it — which is why `test-oracle`'s own
-  # comment below, having chosen N=4 to separate the two bulk corpora, names
-  # exactly this carve-out as the robust alternative. This is that alternative.
-  #
-  # The fourth member joined later and its figures are from a DIFFERENT run,
-  # 31909112992 — not comparable row-for-row with the three above, and subject
-  # to the same cross-run spread recorded on `ORACLE_ONLY_FILTER` below:
-  #
-  #   clinvar_hgvs_tests (2 tests)                 37.2s (2,6)         62.3s (2,4)
-  #
-  # Its two tests hash into FOUR different shards between the two matrices, so
-  # ~99s of work leaves them — but only the 54.9s copy in `Test oracle (2/4)`
-  # was on the critical path, which is why the wall-clock saving is much smaller
-  # than the work removed. It is also the only member that is a PARSER
-  # benchmark rather than a normalization census: it never reaches
-  # `canonicalize_from_sequence`, so the optimized archive's gains land on its
-  # gzip decode, JSON deserialization and `parse_hgvs` instead.
-  #
-  # AND WHY THE JOB, NOT THE JOB BOUNDARY, IS THE WIN. `censuses` consumes the
-  # OPTIMIZED archive `test-build-soak` produces, which is where `sweeps`
-  # measured 7.6-8.7x on work of exactly this shape (compute-bound cross
-  # products over `MockProvider`). A carve-out onto the standard debug archive
-  # would move the same 240s to a different runner and buy ~50s.
-  #
-  # THE PARTITION INVARIANT is `SWEEP_FILTER`'s, verbatim: the counts drift as
-  # tests are added, the sum must not. `censuses` selects ON this filter and
-  # passes `--no-tests=fail`, so a rename that made it match nothing reddens
-  # there rather than quietly emptying the job, while `test` and `test-oracle`
-  # negate it and would just widen. The gap neither the redness nor the widening
-  # catches: a module named here that NEITHER of the job's two steps selects
-  # would be negated everywhere and run nowhere.
-  #
-  # NOTE the overlap with `profile.oracle` in `.config/nextest.toml`:
-  # `spec_conformance_axis` is in both, and deliberately. That profile's
-  # exclusion is a statement about which instrument may be armed, and
-  # `oracle_exclude_invariant.rs` demands that every spec-corpus module appear
-  # there; this filter is a statement about where a module runs. Removing it
-  # from either would be wrong for a reason the other does not cover.
+  # `spec_conformance_axis` is deliberately in both this filter and
+  # `profile.oracle`'s exclusion (`.config/nextest.toml`): that exclusion says
+  # which instrument may be armed, this filter says where a module runs — don't
+  # collapse them.
   CENSUS_FILTER: >-
     test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
     + test(spec_conformance_axis) + test(clinvar_hgvs_tests)
     + test(conformance_census_runs)
 
-  # Negated from `test` ONLY. These run in `test-oracle` with the three seam
-  # oracles armed, and an armed run strictly subsumes an un-armed one — the
-  # oracles add assertions at `normalize_core_checked`'s exit and change no
-  # behaviour. That is the same argument `censuses` makes for dropping the
-  # plain-`test` copy of the modules it took, and `sweeps` before it; the only
-  # difference here is that the destination is an existing job rather than a
-  # new one.
+  # Negated from `test` ONLY: this one module runs in `test-oracle` with the seam
+  # oracles armed, and an armed run subsumes the un-armed one, so the plain-`test`
+  # copy is dropped — the same argument `censuses` and `sweeps` make.
   #
-  # WHY NOT `CENSUS_FILTER`: that filter is negated from BOTH shards and the
-  # `censuses` job selects it off the SOAK archive, which is built
-  # `-p ferro-hgvs-soak-tests` and therefore contains no `src/` unit tests at
-  # all. `merge::tests::direction_symmetry` is a `#[cfg(test)]` module inside
-  # `src/normalize/merge.rs`, so naming it in `CENSUS_FILTER` would negate it
-  # from both shards and then select nothing — deleting the census outright.
-  # `--no-tests=fail` would not catch that, because the step's other terms
-  # still match. This variable exists precisely because that trap is silent.
-  #
-  # It is the unit half of #1840's pair. #1955 moved the integration half
-  # (`issue_1542_direction_symmetry`) to `censuses` and left this one running in
-  # BOTH shards.
-  #
-  # NO PER-TEST COST IS PINNED HERE, deliberately. That test measured 93.8s
-  # (`Test (3/6)`, un-armed) and 85.2s (`Test oracle (3/4)`, armed) on run
-  # 31909112992, and 46.8s in the same armed shard on run 31911822856 an hour
-  # later — a 2x spread on one test, so any single figure in a committed comment
-  # is one the next reader cannot reproduce, and pinning one invites a carve-out
-  # decision to be made from noise. What is stable is the SHAPE: `Test (3/6)`
-  # was a shard wearing one test, its whole nextest summary within ~1s of that
-  # single test's time. That, not a number, is why the carve-out exists.
+  # A separate variable, NOT folded into `CENSUS_FILTER`:
+  # `merge::tests::direction_symmetry` is a `src/` unit test (`#[cfg(test)]` in
+  # `src/normalize/merge.rs`), and the soak archive the census jobs run is built
+  # `-p ferro-hgvs-soak-tests` with no `src/` unit tests. Naming it in
+  # `CENSUS_FILTER` would negate it from both shards and then select nothing —
+  # silently deleting the census, uncaught by `--no-tests=fail`.
   ORACLE_ONLY_FILTER: >-
     test(merge::tests::direction_symmetry)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
-# 360-minute default, so a wedged runner holds a PR for six hours: observed on
-# #1977 (run 31905255274, attempt 1), where `Test (2/6)` sat in its nextest step
-# for 72 minutes against the same shard's 65-second step on the run's own second
-# attempt, while the other 32 jobs were green, and would have run to 360.
-#
-# The tiers are deliberately loose, because the failure that matters here is a
-# timeout that fires on legitimate work. `.config/nextest.toml` records the
-# precedent: a `slow-timeout = { period = "60s", terminate-after = 2 }` killed
-# the real censuses at 120s, and that is why there is no `[profile.ci]`. These
-# bound a hang; they are not a budget, and nothing should be tuned to fit them.
+# 360-minute default, so a wedged runner can hold a PR for hours (#1977). The
+# tiers below bound a hang; they are not a budget, and nothing should be tuned to
+# fit them — `.config/nextest.toml` records why there is no `[profile.ci]`. Each
+# tier is at least 5x its own slowest observed member; re-derive from measurement
+# (across job ATTEMPTS, not just the latest) before tightening any of them.
 #
 #   60  compiles Rust, so a cold cache is on the table
 #       (build, clippy{,-all-features}, spec-fixtures, test-build{,-soak},
@@ -194,22 +98,6 @@ env:
 #   30  downloads a prebuilt archive and runs tests (test, test-oracle,
 #       sweeps, censuses, soak)
 #   15  lint/aux, none of which compiles Rust
-#
-# Sizing, re-derived 2026-08-15 across every ATTEMPT of the last 40 completed
-# `ci.yml` runs, 60 `coverage.yml` runs and 40 `lint-workflows.yml` runs — via
-# `/runs/{id}/attempts/{n}/jobs`, because the default `/runs/{id}/jobs` returns
-# only the latest attempt and so hides exactly the wedged runs this bounds.
-# Each tier is at least 5x ITS OWN slowest observed member; the multiple is
-# per-tier and is never taken against a workflow-wide maximum:
-#
-#     60  `Code Coverage (2/4)`  713s  ->  5.05x
-#     30  `Test oracle (2/4)`    179s  -> 10.1x
-#     15  `Format`                25s  ->   36x
-#
-# Every one of those runs is WARM-cache; no cold-cache figure was measured. The
-# 60 tier's headroom is therefore a deliberate allowance for a build that has to
-# compile the dependency tree from scratch, not a measured multiple. Re-derive
-# from measurement before tightening any of them.
 #
 # `coverage.yml`'s third job calls `report-failure.yml` via `uses:`, and GitHub
 # rejects `timeout-minutes` on a job that does that; the callee's own `report`
