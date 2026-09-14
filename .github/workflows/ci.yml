@@ -721,64 +721,37 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
-  # this job's `nextest archive`, so the crate compiles a single time no matter
-  # how many shards run. (The two generated spec artifacts moved to
-  # `spec-fixtures` above; the soak and sweeps run from the optimized archive
-  # `test-build-soak` produces, not this one.)
+  # Build the test binaries ONCE: `test` and `test-oracle` consume this job's
+  # `nextest archive`, so the crate compiles a single time however many shards run.
+  # (Spec artifacts are in `spec-fixtures`; soak/sweeps run from `test-build-soak`.)
   #
-  # `--extract-to . --extract-overwrite` in the consumers is load-bearing, not
-  # tidiness. 26 call sites across 10 test files resolve the CLI binary with
-  # `env!("CARGO_BIN_EXE_ferro")`, which bakes an ABSOLUTE path to
-  # `<workspace>/target/debug/ferro` at compile time. Extracting to nextest's
-  # default temporary directory leaves that path empty and every CLI test fails
-  # -- observed directly, 4-23 failures per shard, while the proptest-only soak
-  # shards passed on the same archive. Every job in a workflow gets the same
-  # runner workspace path, so extracting INTO the workspace puts the binaries
-  # exactly where those baked paths point. Verified locally by hiding
-  # `target/debug/ferro` to reproduce the shard's condition: default extraction
-  # gave 6 failures, `--extract-to .` gave 6 passes.
+  # `--extract-to . --extract-overwrite` in the consumers is load-bearing: ~26 CLI
+  # tests resolve the binary with `env!("CARGO_BIN_EXE_ferro")`, an ABSOLUTE path to
+  # `<workspace>/target/debug/ferro` baked at compile time. Every job shares the
+  # runner workspace path, so extracting INTO the workspace puts the binary where
+  # those baked paths point; the default temp dir leaves them empty and every CLI
+  # test fails.
   #
-  # The same mechanism is why the shards need nothing staged for
-  # `spec_generator_preconditions`, which resolves the two spec generators with
-  # `env!("CARGO_BIN_EXE_generate_spec_{fixture,enumeration}")`. A nextest
-  # archive packs every non-test binary the build produced, not just the test
-  # binaries, and both generators are `[[bin]]` targets that `--features dev`
-  # builds. Verified with the archive command below: it packs
-  # `target/debug/generate_spec_fixture` and
-  # `target/debug/generate_spec_enumeration` alongside `target/debug/ferro`,
-  # all mode 755. Verified end to end too, by deleting both binaries and
-  # running that module from the archive — extraction restored them executable
-  # and all six tests passed. They were staged as a separate
-  # `generator-binaries` artifact until this was measured; `--extract-overwrite`
-  # replaced the downloaded copies before the tests ever read them.
+  # Same mechanism means the shards need nothing staged for
+  # `spec_generator_preconditions`: a nextest archive packs every non-test binary
+  # too, so the `[[bin]]` spec generators ride it and `--extract-overwrite` restores
+  # them into place.
   test-build:
     name: Build test archive
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # The Test jobs build and LINK the integration-test binary. With full
-      # debuginfo (dev/test profile default `debug = true`) the linked
-      # `target/` exhausts the stock runner's ~14 GB free disk and the linker
-      # dies with `ld terminated with signal 7 (Bus error)` — a write past a
-      # full disk. Stripping test-binary debuginfo in CI removes the bulk of
-      # that. CI-only (not in Cargo.toml), so local dev keeps full debuginfo
-      # for backtraces.
+      # The Test jobs LINK the integration-test binary; with full debuginfo the
+      # linked `target/` exhausts the runner's disk and the linker dies (`ld ...
+      # Bus error`). Stripping test-binary debuginfo in CI avoids that. CI-only (not
+      # in Cargo.toml), so local dev keeps full debuginfo for backtraces.
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and nothing to fetch: this repository no longer
-          # tracks anything with LFS. The 156 MB of bulk corpora are release
-          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
-          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
-          # here reads them: no `include_str!`/`include_bytes!` names a path
-          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
-          # this job only compiles.
-          # No `submodules: true`. The spec checkout is read at generator
-          # RUNTIME, in the `spec-fixtures` job — nothing here reads it at
-          # compile time (verified: no `include_str!`/`include_bytes!` under
-          # `src/` or `tests/` names a path below `assets/`).
+          # No bulk corpora and no `submodules`: this job only compiles, and nothing
+          # here reads a bulk fixture or the spec checkout at compile time (those are
+          # read at test/generator RUNTIME, in other jobs).
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -792,32 +765,17 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive
-          # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a
-          # restore could extract a previously-saved `cargo-nextest` over the one
-          # `install-action` puts there and pin this job to whichever version
-          # first populated the key. This job writes an archive that other jobs
-          # read, and producer and consumer must agree on the nextest version.
-          #
-          # This used to be handled by ORDERING — the install step below sat
-          # after the cache step, with a comment saying that was deliberate. Not
-          # caching the binaries removes the hazard at the source instead (#1396),
-          # which matters because reordering two `uses:` steps looks harmless and
-          # would silently reintroduce it. `nightly-soak.yml` and `fuzz.yml`
-          # already do it this way.
-          #
-          # The cost is nil: `install-action` downloads a prebuilt binary rather
-          # than compiling one. Measured on this PR's own runs rather than
-          # assumed — see the PR body.
+          # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a restore
+          # could shadow `install-action`'s `cargo-nextest` with a stale one and pin
+          # this archive's producer to a different nextest than its consumers. Turning
+          # the bin cache off removes the hazard at the source (#1396); the download
+          # is prebuilt, so the cost is nil.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # Same per-commit archive cache as `test-build-soak`. This one is 106.6 MB
-      # against that one's 25.8 MB and was left uncached at first for exactly that
-      # reason — it is not on the critical path while `test-build-soak` takes 170s.
-      # It becomes the gate the moment the other two caches hit, though: the
-      # `test-oracle` path is `max(test-build, spec-fixtures) + slowest oracle
-      # shard`, so with `spec-fixtures` cached this 87s job is what remains.
-      # `prune-ci-caches.yml` is what keeps the three families from re-creating the
-      # over-cap problem this branch fixed.
+      # Per-commit archive cache, like `test-build-soak`. Not on the critical path
+      # while `test-build-soak` runs, but it becomes the `test-oracle` gate once
+      # `spec-fixtures` is cached; `prune-ci-caches.yml` keeps the cache families
+      # under the cap.
       - name: Restore a test archive built from this exact commit
         id: test-archive
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -839,36 +797,21 @@ jobs:
           path: nextest.tar.zst
           retention-days: 1
 
-  # A SECOND archive, built at `opt-level = 2` (#1963), for the soak shards only.
+  # A SECOND archive at `opt-level = 2` (#1963), for the soak shards only. The soak
+  # is compute-bound in a way the other jobs are not — eight shards each run 125,000
+  # proptest cases, so a constant factor on the code under test is multiplied a
+  # million times over — while the other jobs run each test once and would only pay
+  # the longer compile.
   #
-  # The soak is compute-bound in a way the other jobs are not: eight shards each
-  # run 125,000 proptest cases, so a constant factor on the code under test is
-  # multiplied a million times over. Measured locally at 5,000 cases, one
-  # confluence property costs 1.90s of user CPU in the test profile against
-  # 0.355s under this one — 5.4x. The other jobs run each test once and would
-  # only pay the longer compile.
-  #
-  # ONE PACKAGE IS BUILT, AND IT IS NOT `ferro-hgvs`'s `it` TARGET. This job used
-  # to build `--test it`, which compiles the whole 139k-line `it` crate — 6,217
-  # tests — at `opt-level = 3` so that about 45 of them can run. Measured on an
-  # M2 Max, `user` CPU with the workspace artifacts scrubbed the way `rust-cache`
-  # scrubs them here, deps warm: 394.8s for the `it` archive, of which the
-  # library is a minority. The rest was the driver, and the runtime this
-  # profile's optimization buys comes from optimizing the LIBRARY.
-  #
-  # Cargo profile overrides are keyed on the PACKAGE, never on the target, so
-  # `[profile.soak.package.ferro-hgvs]` reaches the lib, the bins and the `it`
-  # test target alike — there is no way to spell "library optimized, driver
-  # cheap" while both are one package. `ferro-hgvs-soak-tests` is that second
-  # package: `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the
-  # three consuming jobs select — plus, separately marked, any module one of
-  # those reaches into — while the modules themselves stay under `tests/it/` and
-  # stay declared in `tests/it/main.rs`.
-  #
-  # NOTE the package is NOT dropped to a lower `opt-level`, which is the half of
-  # #1964 the measurement refused; the table and the reasoning are on
-  # `[profile.soak]` in `Cargo.toml`. The saving is from compiling ~9k lines
-  # instead of 139k, not from optimizing them less.
+  # ONE PACKAGE is built, and NOT `ferro-hgvs`'s `it` target. Cargo profile overrides
+  # are keyed on the PACKAGE, not the target, so `[profile.soak.package.ferro-hgvs]`
+  # would optimize the lib, bins AND the whole 139k-line `it` driver together, with no
+  # way to spell "library optimized, driver cheap". `ferro-hgvs-soak-tests` is that
+  # second package: `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the
+  # consuming jobs select (plus any they reach into), while the files stay under
+  # `tests/it/` and declared in `tests/it/main.rs`. The saving is compiling ~9k lines
+  # instead of 139k, NOT optimizing them less (#1964; reasoning on `[profile.soak]`
+  # in Cargo.toml).
   #
   # The archive must contain exactly what CI selects from it. A module CI selects
   # from this archive that is not compiled into it would be negated by
@@ -876,10 +819,9 @@ jobs:
   # compiled into it that nothing selects and nothing references is dead compile
   # cost on the critical path.
   #
-  # `debug-assertions` and `overflow-checks` stay ON in the profile (see
-  # Cargo.toml) so this buys speed without quietly weakening what the soak
-  # checks — the `#[cfg(debug_assertions)]` oracles and every `debug_assert!`
-  # in the normalizer behave exactly as they do under the test profile.
+  # `debug-assertions` and `overflow-checks` stay ON (see Cargo.toml), so this buys
+  # speed without weakening what the soak checks — the `#[cfg(debug_assertions)]`
+  # oracles and every `debug_assert!` behave as under the test profile.
   test-build-soak:
     name: Build soak archive (optimized)
     runs-on: ubuntu-latest
@@ -887,18 +829,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and nothing to fetch: this repository no longer
-          # tracks anything with LFS. The 156 MB of bulk corpora are release
-          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
-          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
-          # here reads them: no `include_str!`/`include_bytes!` names a path
-          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
-          # this job only compiles.
-          # No `submodules: true` either, for the same reason as `test-build`:
-          # the spec checkout is read at generator RUNTIME, in `spec-fixtures`.
-          # `cargo nextest archive --test it` compiles and packs targets, and
-          # nothing under `src/` or `tests/` names a path below `assets/` at
-          # compile time.
+          # No bulk corpora and no `submodules`, same as `test-build`: this job only
+          # compiles the archive, and nothing here reads a bulk fixture or the spec
+          # checkout at compile time.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -909,42 +842,27 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive-soak
-          # Same reason as `test-build` above, and it applies at least as
-          # strongly here: this job writes the archive that `soak` and `sweeps`
-          # read, so a stale cached `cargo-nextest` would desynchronise three
-          # jobs rather than one (#1396).
+          # Same as `test-build`, and more so: this archive feeds `soak` and `sweeps`
+          # too, so a stale cached `cargo-nextest` would desync three jobs (#1396).
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # Skip the rebuild entirely when this exact commit already produced an
-      # archive. `rust-cache` above caches DEPENDENCIES only — it deliberately
-      # deletes workspace artifacts — so `ferro_hgvs` and the `it` test crate are
-      # recompiled at `opt-level = 2` (#1963) on every run even when not one byte
-      # of Rust changed. Measured on run 31275848682: 142s of this job's 170s is that
-      # rebuild, and this job plus `sweeps` IS the critical path.
+      # Skip the rebuild when this exact commit already produced an archive.
+      # `rust-cache` caches DEPENDENCIES only (it deletes workspace artifacts), so
+      # `ferro_hgvs` and the `it` crate recompile at `opt-level = 2` (#1963) on every
+      # run — and this job plus `sweeps` is the critical path.
       #
-      # Keyed on the commit SHA, deliberately, rather than on `hashFiles` over the
-      # inputs. A content-hash key is easier to hit and one forgotten input serves a
-      # STALE archive — CI green against binaries built from other code, which is
-      # the worst failure this repository could buy itself. The SHA changes whenever
-      # anything does, so a hit means the tree is byte-identical and staleness is
-      # impossible by construction. (On `pull_request` this is the merge SHA, so it
-      # also busts correctly when `main` moves under the PR.)
+      # Keyed on the commit SHA, NOT `hashFiles` over inputs: a content-hash key that
+      # forgets an input serves a STALE archive — CI green against binaries built from
+      # other code. The SHA changes whenever anything does, so a hit means the tree is
+      # byte-identical and staleness is impossible. (On `pull_request` it's the merge
+      # SHA, so it also busts when `main` moves.) What it buys is re-runs of an
+      # unchanged tree, common here because `on: pull_request` includes `edited`.
       #
-      # What it actually buys: re-runs of an unchanged tree. That is not a rare case
-      # here — `on: pull_request` includes `edited` (the representation-change check
-      # reads the PR description), so every description edit re-runs the whole
-      # workflow, today from scratch.
-      #
-      # Only the soak archive is cached, not `test-build`'s. This one is on the
-      # critical path and is 25.8 MB; the other is not on it and is 106.6 MB, so
-      # caching it would cost 4x the space against a cap this PR just brought the
-      # repository back under, to save runner-seconds rather than wall-clock.
-      # `restore` + an explicit `save`, never the combined `actions/cache`. The
-      # combined action saves in a post-step that runs even when the job FAILED, so
-      # a broken or partial archive could be published under this commit's key and
-      # every re-run would then skip the build and test whatever it contained. An
-      # explicit save carries an implicit `success()`, so only a completed build is
-      # ever cached. Same pattern on the two caches below.
+      # Only the soak archive is cached, not `test-build`'s: this one is on the
+      # critical path and smaller. `restore` + explicit `save`, never the combined
+      # `actions/cache`, whose post-step saves even on FAILURE — a broken archive could
+      # be published under this commit's key and every re-run would skip the build and
+      # test whatever it held. Same pattern on the caches below.
       - name: Restore a soak archive built from this exact commit
         id: soak-archive
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -953,26 +871,12 @@ jobs:
           key: nextest-soak-archive-${{ runner.os }}-${{ github.sha }}
       - name: Build soak archive
         if: steps.soak-archive.outputs.cache-hit != 'true'
-        # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
-        # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
-        # futures) — an entire dependency tree compiled at `opt-level = 2` to
-        # produce one test binary that never touches any of it. None of the ten
-        # modules this package compiles is gated on the feature and none of the
-        # three consuming jobs selects a gated one, so the selections are
-        # unchanged: verified by listing under each feature set,
-        # `test(proptest)` resolves to 20 tests either way and the sweep filter
-        # to 44.
-        #
-        # Both numbers have been stale before, in opposite directions and for
-        # different reasons, which is why the re-measure commands are published
-        # rather than the totals trusted. The proptest count moves whenever a
-        # `*proptest*` module is added — it was 15 until `from_sequences_proptest.rs`
-        # added five properties the `test(proptest)` filter picks up by name. The
-        # sweep-filter count was recorded as 29 long after it had reached 44.
-        #
-        # The claim this comment exists to make is the *feature-independence* —
-        # "either way" — which held through both drifts and still holds; the
-        # totals are incidental to it. Re-measure rather than trust them:
+        # No `--features dev`: it pulls `web-service` (axum/tokio/tower) and
+        # `benchmark` (reqwest/rusqlite/postgres) — a whole tree compiled at
+        # `opt-level = 2` for a binary that never touches it. None of the modules this
+        # package compiles is feature-gated and no consuming job selects a gated one,
+        # so the selections are feature-INDEPENDENT. Re-measure rather than trust a
+        # count (both have drifted before):
         #
         #   cargo nextest list -p ferro-hgvs-soak-tests -E 'test(proptest)' | wc -l
         #   cargo nextest list -p ferro-hgvs-soak-tests -E "$SWEEP_FILTER" | wc -l
@@ -990,30 +894,19 @@ jobs:
           path: nextest-soak.tar.zst
           retention-days: 1
 
-  # The four large HGVS corpora the bulk-fixture and exhaustive suites read at
-  # RUNTIME (156 MB), fetched ONCE per run and handed to the ten jobs that need
-  # them as a workflow artifact.
+  # The four large HGVS corpora (156 MB) the bulk-fixture and exhaustive suites read
+  # at RUNTIME, fetched ONCE per run and handed to the jobs that need them as an
+  # artifact.
   #
-  # They used to be Git LFS objects fetched by `lfs: true` in each of those jobs.
-  # LFS bandwidth is metered even on a public repository, so ten jobs x 156 MB
-  # was ~1.56 GB of LFS egress per CI run; at 192 runs in a day that is ~146 GB,
-  # and it exhausted the account's LFS budget outright — at which point EVERY
-  # `lfs: true` job died at checkout with "This repository exceeded its LFS
-  # budget". Release-asset downloads are NOT metered, so the corpora live on the
-  # `test-fixtures-v1` release and this job fetches them over plain HTTPS.
+  # NOT Git LFS: LFS bandwidth is metered even on a public repo, and per-job
+  # `lfs: true` fetches exhausted the account's LFS budget, at which point every
+  # `lfs: true` job died at checkout. The corpora live on the `test-fixtures-v1`
+  # release instead (release downloads aren't metered), fetched over plain HTTPS.
   #
-  # Egress after this change is 156 MB per run against ~1.56 GB, and none of it
-  # is LFS.
-  #
-  # NOT `actions/cache`. The repository's Actions cache sits at ~9.9 GiB of a
-  # 10 GiB cap across ~137 entries, so a 156 MB entry would evict Rust build
-  # caches by LRU — which is #1218, where eviction took the nightly's 3.25 GiB
-  # entry as collateral. A workflow artifact is a different quota, and one day of
-  # retention is all a single run needs.
-  #
-  # Slots into the existing `needs: [test-build, spec-fixtures]` chain, so it
-  # adds no serialization point: it runs in parallel with the two build jobs and
-  # finishes long before either.
+  # NOT `actions/cache`: a 156 MB entry would evict Rust build caches by LRU against
+  # the ~10 GiB cap (#1218). A workflow artifact is a separate quota; one day of
+  # retention is all a run needs. Slots into the existing `needs` chain, so it adds
+  # no serialization point.
   fixtures:
     name: Fetch bulk test fixtures
     runs-on: ubuntu-latest
