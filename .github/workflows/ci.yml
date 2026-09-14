@@ -558,58 +558,30 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # Cargo caching is delegated to `Swatinem/rust-cache` rather than
-      # hand-rolled `actions/cache` keys (#1218). Two reasons, both measured.
-      #
-      # **Size.** Every hand-rolled entry cached the same five paths including a
-      # full `target/`, and they had grown to ~3 GiB each: on 2026-08-04 the
-      # `-wheel`, `-clippy-all-features` and `-coverage` entries were 3.04 GB,
-      # 3.00 GB and 2.87 GB, i.e. three entries from a single PR filling 9 GB of a
-      # 10 GiB repository budget (measured usage: 11.76 GiB, already evicting).
-      # `rust-cache` saves dependency artifacts only — it deletes the workspace
-      # crate's own outputs, `incremental/`, `.d` files and stale entries before
-      # saving. #1218 records that a hand-rolled trim was tried and "did not move
-      # the needle", because it kept the bulk under `target/*/deps`.
-      #
-      # **Staleness.** `actions/cache` SKIPS the save when the primary key already
-      # exists ("Cache hit occurred on the primary key …, not saving cache"), so a
-      # lockfile-only key froze `target/` at whatever the first run for that
-      # lockfile happened to write, forever. Rotating the key was the obvious fix
-      # and #1218 records why it could not be afforded. `rust-cache` largely
-      # dissolves the problem instead of paying for it: the only thing it stores is
-      # dependency artifacts, and its key already hashes the dependency set,
-      # rustc version and job — so a frozen entry cannot disagree with what the
-      # job needs the way a frozen whole-`target/` could.
+      # Cargo caching uses `Swatinem/rust-cache`, not hand-rolled `actions/cache`
+      # keys (#1218). It saves dependency artifacts only (dropping the workspace
+      # crate's own outputs, `incremental/` and `.d` files), which keeps entries
+      # small against the ~10 GiB repo cache cap, and it keys per job + dependency
+      # hash so a restored entry cannot disagree with what the job needs — where a
+      # lockfile-only whole-`target/` key froze stale (`actions/cache` skips the
+      # save on a primary-key hit).
       #
       # Deliberately NOT set:
-      # - `cache-on-failure` — it would save a tree per failed run, and budget is
-      #   the constraint this change exists to relieve.
-      # - `shared-key` — each job would then share one entry, which is the
-      #   cross-profile mismatch that had `generated-docs` (dev profile) and
-      #   `test-build` (`CARGO_PROFILE_TEST_DEBUG=0`) serving each other useless
-      #   trees. `rust-cache` keys per job by default; `key` below only adds a
-      #   legible name, so `gh api .../actions/caches` stays diagnosable — which
-      #   is how #1218 was diagnosed in the first place. The one deliberate
-      #   exception is the `build-lint` / `build-release-check` pair below, which
-      #   DO share one entry via `shared-key: build-release` — safe there, and only
-      #   there, because one job's deps are a strict superset of the other's.
+      # - `cache-on-failure` — would save a tree per failed run, against the budget
+      #   this exists to relieve.
+      # - `shared-key` — would make jobs share one entry across mismatched profiles;
+      #   `rust-cache` keys per job by default, and `key` below only names the entry
+      #   so `gh api .../actions/caches` stays diagnosable. The one exception is the
+      #   `build-lint` / `build-release-check` pair, safe because one job's deps are
+      #   a strict superset of the other's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
-          # keys per job and appends a lockfile/env hash, so every PR run that
-          # differed in either minted a fresh ~0.2-0.7 GiB entry. Measured on
-          # 2026-08-08: 42 entries totalling 13.79 GiB against a 10 GiB cap — 3 to 5
-          # generations of every logical key, `coverage` alone holding 4 x ~0.69 GiB.
-          # Over cap means GitHub evicts by LRU continuously, which is the #1218
-          # failure (two generations reached 13.61 GiB and took the nightly's 3.25 GiB
-          # `ferro-manifest-v3` with them). Restoring on every run and saving only on
-          # `main` collapses it to one generation per key, ~4.2 GiB.
-          #
-          # The trade, stated: a PR that changes `Cargo.lock` no longer warms its own
-          # cache, so it restores `main`'s generation through the `restore-keys`
-          # prefix and recompiles what the lockfile moved. That is one slower job on
-          # dependency-bumping PRs, against every cache in the repo currently racing
-          # eviction.
+          # Save a new generation ONLY from `main` (#1218): saving on every PR minted a
+          # fresh entry per lockfile/env change and blew the cache cap, forcing constant
+          # LRU eviction. Restoring on every run and saving only on `main` holds one
+          # generation per key. The trade: a PR that changes `Cargo.lock` restores
+          # `main`'s generation via `restore-keys` and recompiles what moved — one slower
+          # job, against every cache racing eviction.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy
       # `--workspace` because `default-members` is the root package alone (see
