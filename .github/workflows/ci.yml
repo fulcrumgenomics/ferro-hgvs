@@ -1025,69 +1025,17 @@ jobs:
             --partition hash:${{ matrix.shard }}/8 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER) and not ($ORACLE_ONLY_FILTER)"
 
-  # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
-  # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
-  # what the oracle asserts, so re-rolling thousands of random cases here checks
-  # nothing the plain run did not already check — it just cost ~80s of every CI
-  # run. The deep random coverage lives in the `soak` job below instead.
-  # FOUR shards. The number was once load-bearing and no longer is — worth
-  # recording, because the reasoning it rested on is the reasoning that produced
-  # `CENSUS_FILTER`.
+  # The idempotency oracle re-run, sharded. EXCLUDES the proptest modules: their
+  # own property already IS `norm(norm(x)) == norm(x)`, exactly what the oracle
+  # asserts, so re-rolling them here checks nothing the plain run did not — the deep
+  # random coverage lives in `soak`.
   #
-  # `--partition hash:K/N` assigns each test by a hash of its NAME, so it
-  # balances test *counts* and is blind to duration. At N=3 the two bulk
-  # axis-preservation corpora — then the two slowest tests in the repository
-  # under the oracles — both hashed into shard 1, every run, deterministically:
-  #
-  #     Test oracle (1/3)  242s     <- axis_is_preserved_over_the_{cmrg,clinvar_unique}_corpus
-  #     Test oracle (2/3)   94s
-  #     Test oracle (3/3)   77s
-  #
-  # 413s of work split 242/94/77 instead of ~138 each, so the job's critical path
-  # was one unlucky draw. N=4 separated them (cmrg -> 1, clinvar_unique -> 3).
-  #
-  # **That fix did not hold, and could not have.** The shard count is chosen
-  # against one snapshot of the test-NAME set, and every added or renamed test
-  # re-rolls the whole assignment. #1840 added `issue_1542_direction_symmetry`,
-  # it hashed onto shard 1 next to the cmrg corpus, and the job went back to
-  # 328s against 132-160s for its siblings — the same failure the shard count
-  # had been picked to avoid, two months later and by a different draw.
-  #
-  # So the robust alternative this comment used to name and decline — "giving
-  # `normalize_axis_preserving` a job of its own and negating it here" — was
-  # taken instead. It is `CENSUS_FILTER` and the `censuses` job, and it also
-  # carries `issue_1542_direction_symmetry` and `spec_conformance_axis`. Its
-  # cost was the three-file change this comment warned about (`ci.yml`,
-  # `scripts/run_oracle_suite.sh`, `tests/it/oracle_exclude_invariant.rs`), and
-  # that was the right price: a negation is stable under a re-roll and a shard
-  # count is not.
-  #
-  # N is 10. The "no measured gain" that kept it at 4 held only while this job was
-  # NOT the whole workflow's critical path. Once the sharded test binaries stopped
-  # having a single multi-minute dominator, this job's max shard became the pole
-  # that sets the run's wall time, and lowering that pole IS a measured gain.
-  #
-  # `--partition hash` balances test COUNTS and is blind to cost, and cost is what
-  # sets the wall. A shard runs its tests ~4-up on the 4-vCPU runner, so its wall
-  # is (sum of its tests' seconds) / ~3.8 — a LOAD figure, not a slowest-test one.
-  # After #01 sliced the former heaviest censuses into per-slice tests, no single
-  # test is a hard floor, so the pole is pure load imbalance across the bins.
-  #
-  # Measured at N=4 the shards ran ~2825 tests each (balanced to 0.5%) carrying a
-  # 3.1x test-seconds spread set only by which heavy tests co-hashed. N=6 bought
-  # ~12s of whole-run wall; N=8 topped out near 107s on its heaviest shard; N=10
-  # spreads the heavy load-chunks across more bins, dropping the pure-partition
-  # max toward ~90s/shard. Past ~10 the fixed per-shard prefix (archive download
-  # ~24s) and rising cross-shard download contention stop the marginal shard from
-  # helping. One shard additionally carries the un-partitioned
-  # `oracle-rerun` step (5 tests, ~27s); it is deliberately placed on a
-  # light partition shard (see that step) so it does not become the pole — the
-  # pole is the heaviest pure-partition shard, set by hash clustering.
-  #
-  # So the number is chosen against wall time now, not left conventional. If a
-  # future test's own seconds ever approach a per-shard budget, the stable fix is
-  # to SLICE it (as #01 sliced the geometry corpus) or carve it into its own job
-  # (as CENSUS_FILTER did) — never a shard-count bump chased against one snapshot.
+  # `--partition hash:K/N` balances test COUNTS by name and is blind to cost, and
+  # cost is what sets the wall. N (10) is chosen against wall time: past ~10 the
+  # fixed per-shard prefix (archive download) and cross-shard contention stop more
+  # shards helping. If a future test's own seconds approach a per-shard budget, the
+  # stable fix is to SLICE it or carve it into its own job (as `CENSUS_FILTER` did) —
+  # never a shard-count bump chased against one snapshot of the test-name hash.
   test-oracle:
     name: Test oracle (${{ matrix.shard }}/10)
     needs: [test-build, spec-fixtures, fixtures]
@@ -1145,34 +1093,20 @@ jobs:
             --extract-to . --extract-overwrite \
             --profile oracle --partition hash:${{ matrix.shard }}/10 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER)"
-      # This step re-runs the rows `profile.oracle` withholds from the armed step
-      # above, under the three oracles those rows pass. `profile.oracle-rerun` in
-      # `.config/nextest.toml` selects those rows and arms those three. See
-      # docs/ORACLES.md, section "What the oracle profile excludes".
+      # Re-runs the rows `profile.oracle` withholds from the armed step above, under
+      # the three oracles those rows pass (`profile.oracle-rerun` selects and arms
+      # them). See docs/ORACLES.md, "What the oracle profile excludes".
       #
-      # Runs on ONE shard and UN-partitioned, deliberately. It selects the named
-      # rows, so `--partition hash:K/10` would leave some shards selecting none, and
-      # neither answer to that is acceptable: `--no-tests=fail` would redden a shard
-      # for doing its job, and `--no-tests=pass` would be a step that goes green having
-      # run nothing — the vacuous pass this repository keeps meeting. Un-partitioned
-      # on ONE shard with `--no-tests=fail` instead, so a rename that empties the
-      # filter is loud rather than silent. These rows ran exactly once per CI run
-      # before this change too, spread across the shards, so nothing runs twice and
-      # nothing runs less.
+      # ONE shard, UN-partitioned, deliberately: it selects named rows, so
+      # `--partition hash:K/10` would leave some shards selecting none —
+      # `--no-tests=fail` would redden them and `--no-tests=pass` would be a vacuous
+      # green. One un-partitioned shard with `--no-tests=fail` makes a rename that
+      # empties the filter loud. Rides a historically light shard so it does not become
+      # the straggler (a smaller-is-better placement, not load-bearing).
       #
-      # It rides shard 3, not shard 1: this short step stacks onto whichever shard
-      # runs it, so it belongs on a light one rather than adding to a heavy one and
-      # becoming the oracle's straggler. Shard 3 is a historically light partition;
-      # the choice is not load-bearing (the whole-run wall is bounded by the release
-      # build, and the pole among the pure-partition shards sits above this step
-      # either way), only a smaller-is-better placement.
-      #
-      # It carries no `if: always()`, so a red armed step on shard 3 skips it. That
-      # is the intended reading: the job is already failing and the useful signal is
-      # the armed step's own failure, not a further confirmation that the withheld
-      # rows still pass. Nothing here can turn a red job green — the concern the
-      # `.github/workflows/**` review rule raises about a skipped step is coverage
-      # lost on a PASSING run, and on a passing run this step always executes.
+      # No `if: always()`, so a red armed step skips it — intended: nothing here can
+      # turn a red job green, and on a PASSING run (where the skipped-step concern
+      # applies) this step always executes.
       - name: Run the sequence-oracle exclusions under the other three oracles
         if: matrix.shard == 3
         env:
