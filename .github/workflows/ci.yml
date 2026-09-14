@@ -104,7 +104,7 @@ jobs:
       - name: Assert Cargo.toml abi3-pyXY matches pyproject.toml requires-python
         # `abi3-pyXY` sets the wheel's minimum runnable Python; `requires-python`
         # sets the minimum pip installs on. Drift gives users a runtime ABI
-        # mismatch or a silently-stale floor. #397
+        # mismatch or a silently-stale floor.
         run: |
           python <<'PY'
           import re
