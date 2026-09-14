@@ -454,12 +454,10 @@ jobs:
           toolchain: stable
           components: clippy
       # Cargo caching uses `Swatinem/rust-cache`, not hand-rolled `actions/cache`
-      # keys (#1218). It saves dependency artifacts only (dropping the workspace
-      # crate's own outputs, `incremental/` and `.d` files), which keeps entries
-      # small against the ~10 GiB repo cache cap, and it keys per job + dependency
-      # hash so a restored entry cannot disagree with what the job needs — where a
-      # lockfile-only whole-`target/` key froze stale (`actions/cache` skips the
-      # save on a primary-key hit).
+      # keys. It saves dependency artifacts only (dropping the workspace crate's own
+      # outputs, `incremental/` and `.d` files), which keeps entries small against the
+      # ~10 GiB repo cache cap, and it keys per job + dependency hash so a restored entry
+      # cannot disagree with what the job needs.
       #
       # Deliberately NOT set:
       # - `cache-on-failure` — would save a tree per failed run, against the budget
@@ -471,12 +469,12 @@ jobs:
       #   a strict superset of the other's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # Save a new generation ONLY from `main` (#1218): saving on every PR minted a
-          # fresh entry per lockfile/env change and blew the cache cap, forcing constant
-          # LRU eviction. Restoring on every run and saving only on `main` holds one
-          # generation per key. The trade: a PR that changes `Cargo.lock` restores
-          # `main`'s generation via `restore-keys` and recompiles what moved — one slower
-          # job, against every cache racing eviction.
+          # Save a new generation ONLY from `main`: saving on every PR mints a fresh entry
+          # per lockfile/env change and blows the cache cap, forcing constant LRU eviction.
+          # Restoring on every run and saving only on `main` holds one generation per key.
+          # The trade: a PR that changes `Cargo.lock` restores `main`'s generation via
+          # `restore-keys` and recompiles what moved — one slower job, against every cache
+          # racing eviction.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy
       # `--workspace` because `default-members` is the root package alone (see
