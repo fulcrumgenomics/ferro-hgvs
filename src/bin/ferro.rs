@@ -1650,10 +1650,16 @@ fn run_normalize(
     // Print capability summary
     print_normalize_capabilities_dir(reference);
 
-    // Create output writer - either file or stdout
+    // Create output writer - either file or stdout. Both are wrapped in a
+    // `BufWriter`. Output is written a record at a time (one `write_all`/`writeln!`
+    // per line), and bare `io::stdout()` is a `LineWriter` that issues a syscall
+    // for every newline-terminated line — roughly one write per record on a large
+    // run. Batching into 8 KiB blocks cuts that to one syscall per block; the file
+    // path was already buffered this way. The `BufWriter` flushes on the explicit
+    // `flush()`/drop the file path already relied on, so output is unaffected.
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-        None => Box::new(io::stdout()),
+        None => Box::new(BufWriter::new(io::stdout())),
     };
     let mut error_count = 0usize;
     let mut success_count = 0usize;
@@ -1955,16 +1961,18 @@ fn run_normalize(
     // captured) and still flushes on its own drop, so this does not affect output.
     std::mem::forget(normalizer);
 
+    // Flush the output writer before returning, for every format — not just TSV.
+    // Both arms are now `BufWriter`s (file and stdout), and a `BufWriter`'s `Drop`
+    // swallows a write error, so an explicit flush is what turns a failed write
+    // (broken pipe, ENOSPC, `--output` to a full disk) into a reported failure
+    // rather than a silent exit-0 with truncated output. It must also precede the
+    // TSV summary below, which otherwise asserts rows that a failed write dropped.
+    writer.flush()?;
+
     // The run summary answers "how many of my variants changed?" without the
     // caller having to re-read the table. It goes to stderr so the output stream
     // stays a table whose every line is a row.
     if tsv {
-        // Flush before claiming counts: with `--output` the rows are sitting in a
-        // `BufWriter` whose `Drop` would swallow a write error, so flushing here
-        // is what turns a failed write into a reported failure rather than a
-        // summary that asserts rows were emitted. (Bare stdout is a `LineWriter`,
-        // already flushed per row, so there this is a no-op.)
-        writer.flush()?;
         eprintln!(
             "{}",
             normalize_tsv_summary(
@@ -2060,9 +2068,11 @@ fn run_project(
         ),
     );
 
+    // Both arms are buffered: output is written a record at a time and bare
+    // `io::stdout()` is a `LineWriter` that syscalls per line — see `run_normalize`.
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-        None => Box::new(io::stdout()),
+        None => Box::new(BufWriter::new(io::stdout())),
     };
     let mut error_count = 0usize;
 
@@ -2169,10 +2179,11 @@ fn run_parse(
 
     let preprocessor = error_config.preprocessor();
 
-    // Create output writer - either file or stdout
+    // Create output writer - either file or stdout, both buffered — see
+    // `run_normalize` for why stdout is wrapped in a `BufWriter`.
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-        None => Box::new(io::stdout()),
+        None => Box::new(BufWriter::new(io::stdout())),
     };
     let mut error_count = 0usize;
     let mut success_count = 0usize;
@@ -2292,6 +2303,10 @@ fn run_parse(
         success_count += s;
         error_count += er;
     }
+
+    // Flush the BufWriter explicitly so a write error surfaces here rather than
+    // being swallowed by the drop-time flush.
+    writer.flush()?;
 
     let elapsed = start.elapsed();
 
