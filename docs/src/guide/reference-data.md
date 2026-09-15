@@ -66,3 +66,48 @@ ferro normalize -i variants.txt --reference ferro-reference/
 
 To guard against a reference that has drifted on disk, add `--strict-reference`, which hard-fails if
 the reference's content no longer matches its recorded identity (the default warns and proceeds).
+
+## Faster reads: the 2-bit sequence store
+
+Normalization has to read reference bases constantly. Read straight from the FASTA text, every access
+pays to strip newlines and upper-case the bytes — which profiling shows dominates the time `ferro
+normalize` spends reading the reference. `ferro prepare` avoids that by doing the work **once**:
+alongside the usual files it writes a `sequence_store.pac` sidecar — the reference sequences decoded
+and packed two bits per base (the same idea as bwa's `.pac`). At run time `normalize` and `project`
+memory-map that file and read bases directly, so the per-access decode disappears, with
+**byte-for-byte identical output**. In our own runs — roughly 500,000 ClinVar variants, single-threaded,
+with a warm page cache — this cut wall-clock time by about a third. Treat that as indicative rather than
+a benchmark: the speedup depends on your corpus, CPU, and storage, so measure it on your own workload
+(time the same `ferro normalize` run with and without a `sequence_store.pac` beside the reference).
+
+The sidecar is written as part of the normal `prepare` step — there is no separate command:
+
+```bash
+# Writes ferro-reference/sequence_store.pac alongside the other files:
+ferro prepare --output-dir ferro-reference
+
+# --force rebuilds it even when a matching one is already present:
+ferro prepare --output-dir ferro-reference --force
+```
+
+There is nothing to turn on:
+
+- **It is built automatically** by `ferro prepare`, and rebuilt when you re-prepare. `--force` rebuilds
+  it even if a matching one is already present; without `--force` a matching sidecar is kept and the
+  one-time pack skipped.
+- **It is loaded automatically** by `normalize` and `project` whenever a `sequence_store.pac` sits
+  beside the reference. The one-time build cost is paid only by `prepare`, never by an ordinary run.
+- **It fails safe.** If the sidecar is absent, was built for a different reference, or is unreadable,
+  ferro silently falls back to reading the FASTA text — the result is the same either way. Editing a
+  reference FASTA in place changes its size, modification time, or contents, which the sidecar's
+  fingerprint detects (it samples the source bytes, so a same-size, same-timestamp edit is caught too);
+  the stale store is then ignored and rebuilt on your next `ferro prepare` — no `--force` needed. The
+  store is a speed-up, never a source of different answers.
+
+To point at a store in a non-default location — or to force one to be built on first use — set
+`FERRO_SEQUENCE_STORE` to its path:
+
+```bash
+FERRO_SEQUENCE_STORE=/path/to/sequence_store.pac \
+  ferro normalize -i variants.txt --reference ferro-reference/
+```

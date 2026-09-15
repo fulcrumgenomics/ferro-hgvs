@@ -16,6 +16,7 @@ pub mod ng_placement_builder;
 pub(crate) mod prepared_index;
 pub mod protein;
 pub mod provider;
+pub(crate) mod sequence_store;
 pub mod transcript;
 pub mod validate;
 

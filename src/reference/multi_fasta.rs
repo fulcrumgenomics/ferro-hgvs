@@ -83,6 +83,9 @@ use crate::error::FerroError;
 use crate::reference::authoritative::CanonicalOverrides;
 use crate::reference::prepared_index::{load_fai_index, FastaIndexEntry, PreparedIndex};
 use crate::reference::provider::{AlignmentGap, GenomicPlacement, ReferenceProvider};
+use crate::reference::sequence_store::{
+    fingerprint as sequence_fingerprint, fingerprint_mix, MappedSequence, PackedSequence,
+};
 use crate::reference::transcript::Transcript;
 
 /// Supplemental transcript info for a single transcript.
@@ -245,6 +248,13 @@ pub struct MultiFastaProvider {
     /// uppercase pass over the bytes. Workloads with many variants in one gene
     /// re-read overlapping windows constantly, and paid for both every time.
     region_cache: Option<SequenceRegionCache>,
+
+    /// Optional mmap-backed 2-bit sequence store (a prepared `.pac` sidecar). When
+    /// present and it holds the queried record, a base range is served as a direct
+    /// unpack of the packed stream, bypassing `decode_range`'s per-access
+    /// newline-strip + uppercase pass (~76% of runtime). Absent ⇒ the FASTA-text
+    /// path is used unchanged. See `reference::sequence_store`.
+    sequence_store: Option<MappedSequence>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -543,12 +553,97 @@ pub fn verify_reference_identity(
     }
 }
 
+/// Conventional basename of the prepared 2-bit sequence store, written by
+/// `ferro prepare` into the reference directory and loaded by convention at
+/// provider construction — an identity-neutral derived index, exactly like the
+/// `.fai` files beside each FASTA (neither is a content-stamped manifest
+/// artifact; see `prepare::identity`).
+const SEQUENCE_STORE_FILENAME: &str = "sequence_store.pac";
+
+/// Outcome of ensuring the sequence-store sidecar exists and is current, so
+/// `ferro prepare` can report whether it did work or honoured `--skip-existing`.
+#[derive(Debug)]
+pub enum SidecarOutcome {
+    /// The sidecar was (re)built and written at this path.
+    Built(PathBuf),
+    /// A fresh matching sidecar already existed and was kept as-is.
+    Kept(PathBuf),
+}
+
+/// A content-bound identity for a source file, folded into the sequence store's
+/// fingerprint so a stale sidecar is rejected. Combines the file's size, its
+/// mtime, and a bounded sample of its *bytes* — head, tail, and evenly spaced
+/// interior windows — hashed with FNV-1a.
+///
+/// Sampling rather than hashing the whole file keeps this O(1) in file size:
+/// re-reading a multi-gigabyte FASTA on every provider construction would pay
+/// back the exact per-access decode cost the store exists to avoid. The trade is
+/// a residual blind spot — a same-size, same-mtime edit falling *entirely*
+/// between the sampled windows is not seen — which is far narrower than the
+/// size+mtime-only stamp it replaces, which missed every same-size, same-mtime
+/// edit. Files at or below the sampling budget are hashed in full, so small
+/// files (and every `.fai`) are covered exactly.
+///
+/// Returns `None` when the file cannot be opened, stat'd, or read: an identity
+/// that cannot be obtained must make the caller *skip* the sidecar (the text
+/// path is always correct), never fall back to a sentinel that leaves a stale
+/// store trusted.
+fn file_content_identity(path: &Path) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    /// Bytes read from each sampled window.
+    const WINDOW: u64 = 64 * 1024;
+    /// Number of evenly spaced sample windows across a large file.
+    const SAMPLES: u64 = 5;
+
+    #[inline]
+    fn fnv1a(mut h: u64, bytes: &[u8]) -> u64 {
+        for &b in bytes {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    let mut file = File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    let size = meta.len();
+
+    // Fold size and mtime first — cheap, and they still catch the common cases.
+    let mut h = fnv1a(0xcbf2_9ce4_8422_2325, &size.to_le_bytes());
+    if let Ok(mtime) = meta.modified() {
+        if let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH) {
+            h = fnv1a(h, &(d.as_nanos() as u64).to_le_bytes());
+        }
+    }
+
+    if size <= WINDOW * SAMPLES {
+        // Small file (every `.fai`, and any modest FASTA): hash it whole.
+        let mut buf = Vec::with_capacity(size as usize);
+        file.read_to_end(&mut buf).ok()?;
+        return Some(fnv1a(h, &buf));
+    }
+
+    // Large file: sample `SAMPLES` evenly spaced windows spanning `[0, size)`.
+    // The first window is the head, the last is the tail. The offset is folded
+    // in too, so two identical windows at different positions cannot cancel.
+    let mut buf = vec![0u8; WINDOW as usize];
+    let last_start = size - WINDOW;
+    for i in 0..SAMPLES {
+        let offset = last_start * i / (SAMPLES - 1);
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut buf).ok()?;
+        h = fnv1a(h, &offset.to_le_bytes());
+        h = fnv1a(h, &buf);
+    }
+    Some(h)
+}
+
 impl MultiFastaProvider {
     /// Build a provider from a fully populated [`PreparedIndex`].
     /// `from_directory`, `from_directories`, and `with_cdot` all funnel
     /// through here.
     fn from_prepared(prepared: PreparedIndex) -> Self {
-        Self {
+        let mut provider = Self {
             prepared,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
@@ -563,6 +658,228 @@ impl MultiFastaProvider {
             contig_aliases: None,
             ng_hosted: None,
             region_cache: new_sequence_region_cache(),
+            sequence_store: None,
+        };
+        // Opt-in prepared 2-bit sequence store (see `reference::sequence_store`).
+        // `FERRO_SEQUENCE_STORE=<path>` loads that sidecar when it matches this
+        // index, building it once if absent or stale. Failure is non-fatal: the
+        // FASTA-text path is used unchanged.
+        if let Ok(path) = std::env::var("FERRO_SEQUENCE_STORE") {
+            provider.enable_sequence_store(Path::new(&path));
+        }
+        provider
+    }
+
+    /// `(name, length)` for every indexed record, the input to
+    /// [`Self::sequence_fingerprint`] and to the store builder.
+    pub(crate) fn record_name_lengths(&self) -> Vec<(String, u64)> {
+        self.prepared
+            .records()
+            .map(|(n, e)| (n.to_string(), e.length))
+            .collect()
+    }
+
+    /// Fingerprint tying a written store to this reference. Folds the record set
+    /// (name + length) AND a content-bound identity for each source FASTA and its
+    /// `.fai` (see `file_content_identity`: size, mtime, and a bounded sample of
+    /// the bytes).
+    ///
+    /// The record-set half detects a record added, removed, renamed, or resized;
+    /// the per-file content identity detects a **same-length in-place base edit**
+    /// (a corrected base, a soft-mask flip, a swapped assembly with matching
+    /// contig lengths) that the record set alone cannot see — *including* an edit
+    /// that preserves the mtime, which a size+mtime-only stamp would miss. It also
+    /// makes a `FERRO_SEQUENCE_STORE` pointed at a store built for a *different*
+    /// reference fail the fingerprint.
+    ///
+    /// Returns `None` when any backing file's content identity cannot be obtained
+    /// (unreadable FASTA or `.fai`): a fingerprint that cannot be computed must
+    /// make the caller **skip** the sidecar for the FASTA-text path, never trust a
+    /// store it could not validate. This replaces the former `(0, 0)` freshness
+    /// sentinel, which left an unreadable file able to keep a matching fingerprint.
+    pub(crate) fn sequence_fingerprint(&self) -> Option<u64> {
+        let pairs = self.record_name_lengths();
+        let refs: Vec<(&str, u64)> = pairs.iter().map(|(n, l)| (n.as_str(), *l)).collect();
+        let mut fp = sequence_fingerprint(&refs);
+        // Fold ONLY the files backing the packed records, gathered from
+        // `records()` (which excludes the protein index). Folding every file in
+        // the table (`0..file_count()`) would include protein FASTAs — which the
+        // store never packs, and which `from_manifest` appends to the file table
+        // *after* the conventional auto-load computes this fingerprint. That made
+        // `ferro prepare` (proteins present) stamp a fingerprint that no load path
+        // (proteins absent) could reproduce, so the sidecar was silently rejected
+        // on every normalize/project run against a protein-bearing reference.
+        // Keying on the record-backing files makes write and load agree regardless
+        // of when proteins are indexed. `.fai` geometry also determines the decoded
+        // bytes, so each backing FASTA's `.fai` is folded too.
+        let mut file_ids: Vec<u32> = self.prepared.records().map(|(_, e)| e.file_id).collect();
+        file_ids.sort_unstable();
+        file_ids.dedup();
+        for id in file_ids {
+            if let Some(path) = self.prepared.path_for(id) {
+                fp = fingerprint_mix(fp, file_content_identity(path)?);
+                let mut fai = path.as_os_str().to_owned();
+                fai.push(".fai");
+                fp = fingerprint_mix(fp, file_content_identity(Path::new(&fai))?);
+            }
+        }
+        Some(fp)
+    }
+
+    /// Build an in-memory 2-bit store over `names`, decoding each record once
+    /// through the existing text path (`decode_range`) so the packed bytes are
+    /// byte-identical to what the store will later serve.
+    pub(crate) fn pack_records(&self, names: &[&str]) -> Result<PackedSequence, FerroError> {
+        let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(names.len());
+        for &name in names {
+            let entry = self
+                .prepared
+                .entry(name)
+                .ok_or_else(|| FerroError::ReferenceNotFound {
+                    id: name.to_string(),
+                })?;
+            let bytes = if entry.length == 0 {
+                Vec::new()
+            } else {
+                self.decode_range(name, &entry, 0, entry.length)?
+            };
+            decoded.push((name.to_string(), bytes));
+        }
+        let refs: Vec<(&str, &[u8])> = decoded
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        Ok(PackedSequence::from_named_records(&refs))
+    }
+
+    /// Install a prepared sequence store so subsequent reads take the fast path.
+    pub(crate) fn set_sequence_store(&mut self, store: MappedSequence) {
+        self.sequence_store = Some(store);
+    }
+
+    /// Whether a prepared sequence store is installed (test observability).
+    #[cfg(test)]
+    pub(crate) fn has_sequence_store(&self) -> bool {
+        self.sequence_store.is_some()
+    }
+
+    /// Ensure the prepared 2-bit sequence store exists in `reference_dir` at the
+    /// conventional [`SEQUENCE_STORE_FILENAME`], so later loads pick it up by
+    /// convention (identity-neutral, like the `.fai` sidecars). Public entry point
+    /// for `ferro prepare`.
+    ///
+    /// Honours `--skip-existing`: unless `force`, an existing sidecar whose
+    /// fingerprint already matches this reference is kept rather than rebuilt (the
+    /// ~75 s pack is skipped); with `force` it is always rebuilt. Returns whether
+    /// it was [`SidecarOutcome::Built`] or an existing fresh one was
+    /// [`SidecarOutcome::Kept`].
+    pub fn write_sequence_store_sidecar(
+        &self,
+        reference_dir: &Path,
+        force: bool,
+    ) -> Result<SidecarOutcome, FerroError> {
+        let path = reference_dir.join(SEQUENCE_STORE_FILENAME);
+        if !force {
+            // A fresh matching sidecar already present — keep it. If the source
+            // files cannot be fingerprinted, fall through and let the build path
+            // report the failure rather than silently keeping a stale sidecar.
+            if let Some(fp) = self.sequence_fingerprint() {
+                if let Ok(Some(_)) = MappedSequence::open(&path, fp) {
+                    return Ok(SidecarOutcome::Kept(path));
+                }
+            }
+        }
+        self.build_and_write_sequence_store(&path)?;
+        Ok(SidecarOutcome::Built(path))
+    }
+
+    /// Pack every indexed record and write the sidecar at `path`, stamped with
+    /// this index's fingerprint. Called once to bootstrap the store.
+    pub(crate) fn build_and_write_sequence_store(&self, path: &Path) -> Result<(), FerroError> {
+        let name_lengths = self.record_name_lengths();
+        let names: Vec<&str> = name_lengths.iter().map(|(n, _)| n.as_str()).collect();
+        let packed = self.pack_records(&names)?;
+        let fp = self.sequence_fingerprint().ok_or_else(|| FerroError::Io {
+            msg: format!(
+                "cannot fingerprint the source files backing {}: one is unreadable, so a \
+                 sequence store written now could not be validated on load",
+                path.display()
+            ),
+        })?;
+        packed.write(path, fp).map_err(|e| FerroError::Io {
+            msg: format!("failed to write sequence store {}: {}", path.display(), e),
+        })
+    }
+
+    /// Enable the prepared sequence store at `path`: load it if present and its
+    /// fingerprint matches this index, otherwise build it once (from the FASTA
+    /// text) and load the result. All failures are swallowed with a warning so a
+    /// bad sidecar can never brick provider construction — the text path stands.
+    fn enable_sequence_store(&mut self, path: &Path) {
+        let Some(fp) = self.sequence_fingerprint() else {
+            warn!(
+                "cannot fingerprint reference source files; using FASTA text instead of \
+                 sequence store {}",
+                path.display()
+            );
+            return;
+        };
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => {
+                self.set_sequence_store(store);
+                return;
+            }
+            Ok(None) => {} // absent or stale — (re)build below
+            Err(e) => {
+                warn!(
+                    "sequence store {} unreadable ({e}); using FASTA text",
+                    path.display()
+                );
+                return;
+            }
+        }
+        if let Err(e) = self.build_and_write_sequence_store(path) {
+            warn!(
+                "could not build sequence store {} ({e}); using FASTA text",
+                path.display()
+            );
+            return;
+        }
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => self.set_sequence_store(store),
+            _ => warn!(
+                "sequence store {} did not reopen after build; using FASTA text",
+                path.display()
+            ),
+        }
+    }
+
+    /// Load the conventional sequence-store sidecar at `path` if it is present
+    /// and its fingerprint matches this index. **Load-only** — unlike
+    /// [`Self::enable_sequence_store`] it never builds, so an ordinary
+    /// `normalize`/`project` never pays a one-off pack; only `ferro prepare`
+    /// writes the sidecar. A no-op when a store is already set (an explicit
+    /// `FERRO_SEQUENCE_STORE` wins), when the sidecar is absent, or when it is
+    /// stale — all silent, since the FASTA-text path is a correct fallback.
+    fn try_load_sequence_store(&mut self, path: &Path) {
+        if self.sequence_store.is_some() || !path.exists() {
+            return;
+        }
+        let Some(fp) = self.sequence_fingerprint() else {
+            warn!(
+                "cannot fingerprint reference source files; using FASTA text instead of \
+                 sequence store {}",
+                path.display()
+            );
+            return;
+        };
+        match MappedSequence::open(path, fp) {
+            Ok(Some(store)) => self.set_sequence_store(store),
+            Ok(None) => {} // stale fingerprint — fall back to the text path
+            Err(e) => warn!(
+                "sequence store {} unreadable ({e}); using FASTA text",
+                path.display()
+            ),
         }
     }
 
@@ -602,7 +919,9 @@ impl MultiFastaProvider {
             prepared.file_count()
         );
 
-        Ok(Self::from_prepared(prepared))
+        let mut provider = Self::from_prepared(prepared);
+        provider.try_load_sequence_store(&dir.join(SEQUENCE_STORE_FILENAME));
+        Ok(provider)
     }
 
     /// Create a provider from multiple directories (e.g., transcripts + genome)
@@ -622,7 +941,15 @@ impl MultiFastaProvider {
             prepared.file_count()
         );
 
-        Ok(Self::from_prepared(prepared))
+        // Load the conventional sidecar from the primary (first) directory, like
+        // `from_directory` does for its single dir. A sidecar built for a different
+        // record set (or living in another dir) fails the fingerprint and falls
+        // back to the text path — never a wrong read.
+        let mut provider = Self::from_prepared(prepared);
+        if let Some(first) = paths.first() {
+            provider.try_load_sequence_store(&first.join(SEQUENCE_STORE_FILENAME));
+        }
+        Ok(provider)
     }
 
     /// Defer loading the GRCh37 cdot referenced by `cdot_grch37_json` (if present)
@@ -1163,6 +1490,12 @@ impl MultiFastaProvider {
         };
         provider.ng_hosted = ng_hosted;
 
+        // Load the prepared 2-bit sequence store by convention from the reference
+        // directory (identity-neutral, like the `.fai` sidecars). Load-only: a
+        // `ferro prepare` writes it, an ordinary load never builds it. An explicit
+        // `FERRO_SEQUENCE_STORE` (handled in `from_prepared`) takes precedence.
+        provider.try_load_sequence_store(&base_dir.join(SEQUENCE_STORE_FILENAME));
+
         // Load cdot transcript metadata if available
         if let Some(cdot_path_str) = manifest.get("cdot_json").and_then(|v| v.as_str()) {
             let cdot_path = resolve_path(cdot_path_str);
@@ -1618,6 +1951,18 @@ impl MultiFastaProvider {
         let actual_end = end.min(entry.length);
         if start >= actual_end {
             return Ok(String::new());
+        }
+
+        // Fast path: if a prepared 2-bit store holds this record, serve the range
+        // as a direct unpack — byte-identical to `decode_range` by construction —
+        // bypassing the FASTA read and the newline-strip/uppercase decode pass.
+        if let Some(store) = self.sequence_store.as_ref() {
+            if let Some(r) = store.record_index(name) {
+                let bytes = store.range(r, start, actual_end);
+                return String::from_utf8(bytes).map_err(|e| FerroError::Io {
+                    msg: format!("sequence store holds non-UTF8 bytes for {}: {}", name, e),
+                });
+            }
         }
 
         let bytes = match self.region_cache.as_ref() {
@@ -4830,6 +5175,257 @@ mod tests {
     /// span whose declared `lrg_end` its gap list cannot reconstruct, so an
     /// undeclared width mismatch would now yield *no* placement and quietly cost
     /// this test its discriminator (asserted below).
+    /// P6: with a `sequence_store.pac` present in the reference directory, a
+    /// plain `from_directory` (no env var) loads it by convention, and reads it;
+    /// without the sidecar it falls back to the text path. Load-only — the plain
+    /// provider never builds the sidecar itself.
+    #[test]
+    fn from_directory_loads_the_conventional_sequence_store_sidecar() {
+        use crate::reference::provider::ReferenceProvider;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "ACGTacgtNNNryACGT").unwrap(); // len 17
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t17\t6\t17\t18").unwrap();
+        }
+
+        // No sidecar yet: plain load uses the text path and does NOT auto-build.
+        let plain = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(!plain.has_sequence_store(), "must not auto-build a sidecar");
+        assert!(!dir.path().join(SEQUENCE_STORE_FILENAME).exists());
+        let want = plain.get_sequence("seqA", 0, 17).unwrap();
+
+        // Write the sidecar into the reference dir (what `ferro prepare` does),
+        // then a fresh plain load must pick it up by convention.
+        plain
+            .build_and_write_sequence_store(&dir.path().join(SEQUENCE_STORE_FILENAME))
+            .unwrap();
+        let stored = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(
+            stored.has_sequence_store(),
+            "sidecar in the dir must be loaded"
+        );
+        assert_eq!(stored.get_sequence("seqA", 0, 17).unwrap(), want);
+        // A range through the middle of the hole, via the store.
+        assert_eq!(
+            stored.get_sequence("seqA", 6, 14).unwrap(),
+            plain.get_sequence("seqA", 6, 14).unwrap()
+        );
+    }
+
+    /// Finding: the sidecar fingerprint folds each source FASTA's size and mtime,
+    /// so a **same-length in-place base edit** — which the `(name, length)` record
+    /// set cannot see — invalidates the stale sidecar. The store is then not
+    /// loaded, and the text path serves the NEW bases rather than the store
+    /// silently serving the old ones.
+    #[test]
+    fn a_same_length_fasta_edit_invalidates_the_sidecar() {
+        use crate::reference::provider::ReferenceProvider;
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        let write_fasta = |bases: &str| {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "{bases}").unwrap();
+        };
+        write_fasta("ACGTACGT"); // len 8
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t8\t6\t8\t9").unwrap();
+        }
+
+        // Build the sidecar and confirm a fresh load picks it up.
+        let p = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        p.build_and_write_sequence_store(&dir.path().join(SEQUENCE_STORE_FILENAME))
+            .unwrap();
+        assert!(
+            MultiFastaProvider::from_directory(dir.path())
+                .unwrap()
+                .has_sequence_store(),
+            "freshly built sidecar must load"
+        );
+
+        // Edit the bases in place at the SAME length (name + length unchanged),
+        // and stamp a distinctly newer mtime so the freshness fold moves even on a
+        // coarse-granularity clock. The file size is identical, so only the mtime
+        // half of the fingerprint can catch this.
+        write_fasta("TTTTGGGG"); // still len 8
+        let newer = SystemTime::now() + Duration::from_secs(120);
+        File::options()
+            .write(true)
+            .open(&fasta_path)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+
+        let reloaded = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(
+            !reloaded.has_sequence_store(),
+            "a same-length in-place edit must invalidate the stale sidecar"
+        );
+        // The served bases are the NEW ones (text path), not the store's stale ones.
+        assert_eq!(reloaded.get_sequence("seqA", 0, 8).unwrap(), "TTTTGGGG");
+    }
+
+    /// Finding (CodeRabbit review, PR #2227): size + mtime alone miss a same-size
+    /// edit that *also* preserves the mtime (a scripted rewrite that restores
+    /// timestamps, a same-size assembly swap copied with `cp -p`). Binding the
+    /// fingerprint to a sample of the file CONTENTS closes that hole — the bases
+    /// change, so the content identity changes, so the stale sidecar is rejected
+    /// and the text path serves the new bases.
+    #[test]
+    fn a_same_length_same_mtime_fasta_edit_invalidates_the_sidecar() {
+        use crate::reference::provider::ReferenceProvider;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        let write_fasta = |bases: &str| {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "{bases}").unwrap();
+        };
+        write_fasta("ACGTACGT"); // len 8
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t8\t6\t8\t9").unwrap();
+        }
+
+        // Build the sidecar, confirm it loads, and capture the FASTA's exact mtime.
+        let p = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        p.build_and_write_sequence_store(&dir.path().join(SEQUENCE_STORE_FILENAME))
+            .unwrap();
+        let original_mtime = std::fs::metadata(&fasta_path).unwrap().modified().unwrap();
+        assert!(
+            MultiFastaProvider::from_directory(dir.path())
+                .unwrap()
+                .has_sequence_store(),
+            "freshly built sidecar must load"
+        );
+
+        // Edit the bases in place at the SAME length AND restore the ORIGINAL
+        // mtime, so neither the size nor the mtime half of the fingerprint can see
+        // the change — only the file's content can.
+        write_fasta("TTTTGGGG"); // still len 8
+        File::options()
+            .write(true)
+            .open(&fasta_path)
+            .unwrap()
+            .set_modified(original_mtime)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&fasta_path).unwrap().modified().unwrap(),
+            original_mtime,
+            "precondition: this test only exercises the content path if the mtime is unchanged"
+        );
+
+        let reloaded = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(
+            !reloaded.has_sequence_store(),
+            "a same-length, same-mtime in-place edit must still invalidate the sidecar"
+        );
+        assert_eq!(reloaded.get_sequence("seqA", 0, 8).unwrap(), "TTTTGGGG");
+    }
+
+    /// Finding (CodeRabbit review, PR #2227): the old `(0, 0)` freshness sentinel
+    /// let an unreadable source file keep a matching fingerprint. A file whose
+    /// content identity cannot be obtained now yields `None`, so
+    /// [`MultiFastaProvider::sequence_fingerprint`] returns `None` and the caller
+    /// skips the sidecar for the text path rather than trusting a stale store.
+    #[test]
+    fn content_identity_is_none_for_an_unreadable_file_and_tracks_content() {
+        let dir = tempdir().unwrap();
+
+        let missing = dir.path().join("does-not-exist.fna");
+        assert!(
+            file_content_identity(&missing).is_none(),
+            "a missing/unreadable file must have no content identity"
+        );
+
+        // A readable file has an identity, and editing its bytes (same length,
+        // so size cannot be what moves) changes it.
+        let f = dir.path().join("a.bin");
+        std::fs::write(&f, b"the quick brown fox").unwrap();
+        let id_a = file_content_identity(&f).expect("readable file has an identity");
+        std::fs::write(&f, b"the quick brown box").unwrap();
+        let id_b = file_content_identity(&f).expect("readable file has an identity");
+        assert_ne!(
+            id_a, id_b,
+            "a same-length content edit must change the identity"
+        );
+    }
+
+    /// End-to-end P3/P4: a store-backed provider serves every range byte-
+    /// identically to the FASTA-text path, through the whole `get_sequence`
+    /// funnel — including lowercase soft-masking (uppercased) and `N`/IUPAC holes.
+    #[test]
+    fn sequence_store_reads_match_the_text_path_through_the_provider() {
+        use crate::reference::provider::ReferenceProvider;
+
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        // seqA mixes case (soft-masking) and carries an N run + lowercase IUPAC
+        // (r,y) so the decode uppercases and the holes split; seqB has flanking N.
+        let bases_a = "ACGTacgtNNNNNryACGTGG"; // len 21 -> decodes to ...NNNNNRY...
+        let bases_b = "NNACGTACGTNN"; // len 12
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">seqA").unwrap();
+            writeln!(f, "{bases_a}").unwrap();
+            writeln!(f, ">seqB").unwrap();
+            writeln!(f, "{bases_b}").unwrap();
+        }
+        {
+            // ">seqA\n"=6 -> offset 6; 21 bases +\n ends 28; ">seqB\n"=6 -> 34.
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "seqA\t21\t6\t21\t22").unwrap();
+            writeln!(f, "seqB\t12\t34\t12\t13").unwrap();
+        }
+
+        // Reference provider (text path); build a store from it and reopen it.
+        let text = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        let names: Vec<String> = text
+            .record_name_lengths()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let fp = text
+            .sequence_fingerprint()
+            .expect("fingerprint over readable files");
+        let packed = text.pack_records(&name_refs).unwrap();
+        let pac_path = dir.path().join("ref.fna.pac");
+        packed.write(&pac_path, fp).unwrap();
+        let mapped = MappedSequence::open(&pac_path, fp)
+            .unwrap()
+            .expect("store should open");
+
+        // A second provider with the store installed takes the fast path.
+        let mut stored = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        stored.set_sequence_store(mapped);
+
+        for (name, len) in [("seqA", 21u64), ("seqB", 12u64)] {
+            for start in 0..len {
+                for end in start..=len {
+                    let want = text.get_sequence(name, start, end).unwrap();
+                    let got = stored.get_sequence(name, start, end).unwrap();
+                    assert_eq!(got, want, "{name} [{start},{end}) store vs text");
+                }
+            }
+        }
+    }
+
     #[test]
     fn lrg_with_its_own_record_is_served_from_the_record_not_the_placement() {
         let dir = tempdir().unwrap();

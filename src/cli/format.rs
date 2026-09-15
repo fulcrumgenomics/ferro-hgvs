@@ -29,6 +29,7 @@
 //!   because its row is preceded by the `line` column.
 
 use crate::error::FerroError;
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::str::FromStr;
 
@@ -552,7 +553,15 @@ fn breaks_tsv_row(c: char) -> bool {
 /// the "one line, six fields" shape unconditional. Runs collapse to one space so
 /// a `\r\n` (or an indented multi-line diagnostic) does not leave a trail of
 /// whitespace behind.
-fn sanitize_tsv_field(s: &str) -> String {
+fn sanitize_tsv_field(s: &str) -> Cow<'_, str> {
+    // The overwhelmingly common field — an HGVS string, a status token, a `true`/
+    // `false` — contains no row-breaking character, so borrow it untouched and
+    // allocate nothing. Only an error `detail` (arbitrary text) ever needs the
+    // run-collapsing rewrite. Called three times per output row, so on a
+    // 500k-variant corpus this is ~1.5M allocations avoided.
+    if !s.chars().any(breaks_tsv_row) {
+        return Cow::Borrowed(s);
+    }
     let mut out = String::with_capacity(s.len());
     let mut in_run = false;
     for c in s.chars() {
@@ -566,7 +575,7 @@ fn sanitize_tsv_field(s: &str) -> String {
             in_run = false;
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// One rendered `normalize --format tsv` row plus the `changed` verdict it was
@@ -1192,6 +1201,21 @@ mod tests {
     /// blind spot an incomplete sanitizer would have. Inspecting for
     /// [`char::is_control`] plus the three non-control separators instead means
     /// the assertion is independent of the implementation's notion of a break.
+    #[test]
+    fn sanitize_tsv_field_borrows_when_clean_and_collapses_breaks() {
+        // Clean field (the common case): borrowed, byte-identical, no allocation.
+        let clean = "NM_000088.3:c.459A>G";
+        match sanitize_tsv_field(clean) {
+            Cow::Borrowed(b) => assert_eq!(b, clean),
+            Cow::Owned(_) => panic!("a clean field must be borrowed, not allocated"),
+        }
+        // Dirty field: every run of row-breaking chars collapses to one space.
+        assert_eq!(sanitize_tsv_field("a\tb\n\nc").as_ref(), "a b c");
+        assert_eq!(sanitize_tsv_field("x\r\ny").as_ref(), "x y");
+        // A leading/trailing break still collapses to a single space.
+        assert_eq!(sanitize_tsv_field("\tmid\t").as_ref(), " mid ");
+    }
+
     fn tsv_fields(row: &str) -> Vec<&str> {
         let expected = NORMALIZE_TSV_HEADER.split('\t').count();
         let fields: Vec<&str> = row.split('\t').collect();
