@@ -64,11 +64,42 @@ pub mod validate;
 #[cfg(feature = "dev")]
 pub use merge::dev_partitioners;
 
+// The legacy side of Task 3's byte-identity gate: the four legacy rules'
+// partitions, relabeled as typed `Member`s through the Direction-1 adapter.
+// Dev-only, re-exported only so `tests/it/partition_registry_equivalence.rs` can
+// drive the raw dispatch without touching the cached `FERRO_PARTITION` read.
+#[cfg(feature = "dev")]
+pub use merge::legacy_partition_members;
+
+// The four legacy-rule arms as `Monolithic`/`Partitioner` handles, and their type.
+// Dev-only, re-exported so the bake-off harness and its examples can name the
+// shared arms (the retired `bakeoff::ferro_rules` bridge's replacement) without
+// reaching into the `pub(crate)` `merge` module. See `merge::legacy_rule_arms`.
+#[cfg(feature = "dev")]
+pub use merge::{legacy_rule_arms, LegacyRuleArm};
+
+// Task 4's Direction-2 kind-directed adapter surface: render a typed `Member` (or a
+// whole `Partition`, or a named bake-off arm's partition of a block) into HGVS,
+// HONORING the arm's declared `EditKind` rather than re-deriving it. Dev-only,
+// re-exported for `tests/it/partition_adapter_kind_directed.rs` and any bake-off
+// driver; not reachable from a release build.
+#[cfg(feature = "dev")]
+pub use merge::{
+    normalize_block_via_arm, render_member_via_adapter, render_partition_via_adapter,
+    MemberRenderError,
+};
+
 // How often a sequence-first partitioner declined and `partition_block` answered
 // under its name. Not gated on `dev`: a bake-off is run from whatever build the
 // measurement uses, and a census that exists only in some builds is one a run can
 // forget to read. See `PartitionDeclineCounts`.
 pub use merge::{partition_decline_counts, PartitionDeclineCounts};
+// The ruled arm's census (design §10 step 1). Dev-only: `RuledCounts` and this
+// `ruled_counts` accessor exist only under the `dev` feature. The `ruled` arm and the
+// `crate::partition` driver themselves are production-wired (the flip); only this
+// census is dev-gated.
+#[cfg(feature = "dev")]
+pub use merge::{ruled_counts, RuledCounts};
 
 // The denominator beside that census: blocks cut on EVERY arm, `Live` included.
 //
@@ -96,6 +127,8 @@ pub use merge::MAX_CANONICAL_BLOCK;
 // `canonicalize_from_sequence` -- it is infallible -- so the refusal is offered
 // to entry points that can return a failure.
 pub use merge::partition_switch_startup_error;
+#[cfg(feature = "dev")]
+pub use merge::set_bakeoff_arm_override;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
@@ -3445,7 +3478,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<HgvsVariant, FerroError> {
-        let mode = if REDERIVE_SKIPS_REPARTITION {
+        // T4 (design §T4): under the ruled arm the second block partition is the
+        // ruled driver, whose move-set `repartition_gate`'s "sub/del/ins/dup is a
+        // fixed point" premise was never measured against — that premise was
+        // established for the `CanonicalCoalesced` pair. So bypass the gate and
+        // run the full re-partition under Ruled. `ruled_arm_active` is `true`
+        // whenever `Ruled` is the arm — the shipped default — so the release build
+        // takes the `Full` branch here; `REDERIVE_SKIPS_REPARTITION` gating applies
+        // only when a different arm is selected by name.
+        let mode = if merge::ruled_arm_active() {
+            RepartitionMode::Full
+        } else if REDERIVE_SKIPS_REPARTITION {
             RepartitionMode::Gated
         } else {
             RepartitionMode::Full
@@ -4189,6 +4232,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
+        // The typed `config.partitioner` override (design §8) is consulted only
+        // in dev builds, where the field exists; `None` and every non-dev build
+        // resolve to `partition_rule()`/the shipped default, byte-identically.
+        #[cfg(feature = "dev")]
+        let rebuilt = merge::canonicalize_from_sequence_with_partitioner(
+            members,
+            AllelePhase::Cis,
+            &self.provider,
+            self.config.shuffle_direction,
+            self.config.partitioner.as_deref(),
+        )?;
+        #[cfg(not(feature = "dev"))]
         let rebuilt = merge::canonicalize_from_sequence(
             members,
             AllelePhase::Cis,
@@ -5711,6 +5766,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 current.clone(),
                 allele.phase,
                 &self.provider,
+                self.config.shuffle_direction,
             );
             let merged_raw =
                 merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);

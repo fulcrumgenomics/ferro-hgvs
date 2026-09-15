@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 38 records, 35 decided / 3 undecided
-//! 124 clause lines, of which 41 are named by more than one record
+//! 44 records, 41 decided / 3 undecided
+//! 130 clause lines, of which 43 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -204,6 +204,10 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/consultation/open-issues.md:89
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited, via docs/consultation/open-issues.md:89-90)
+//! docs/consultation/open-issues.md:90
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited, via docs/consultation/open-issues.md:89-90)
 //! docs/recommendations/DNA/alleles.md:5  [MULTI]
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
@@ -252,36 +256,50 @@
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
+//!     `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair` — decided (governing)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
+//!     `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (governing)
+//!     `codon-exception-reaches-the-termination-codon` — decided (governing)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:19
+//!     `codon-exception-reaches-the-termination-codon` — decided (cited)
 //! docs/recommendations/DNA/delins.md:42
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
-//! docs/recommendations/DNA/delins.md:44
+//! docs/recommendations/DNA/delins.md:44  [MULTI]
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //! docs/recommendations/DNA/delins.md:45
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
 //! docs/recommendations/DNA/delins.md:46  [MULTI]
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:79
@@ -298,27 +316,36 @@
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
 //! docs/recommendations/DNA/delins.md:84
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:86
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
-//! docs/recommendations/DNA/delins.md:88
+//! docs/recommendations/DNA/delins.md:88  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (deviates-from)
 //! docs/recommendations/DNA/delins.md:89  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:5  [MULTI]
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:17  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (governing)
+//! docs/recommendations/DNA/duplication.md:21
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:26
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:60
@@ -353,6 +380,10 @@
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/inversion.md:69
 //!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (governing)
+//! docs/recommendations/DNA/repeated.md:21
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
+//! docs/recommendations/DNA/repeated.md:22
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //! docs/recommendations/DNA/repeated.md:23
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:16
@@ -407,6 +438,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
@@ -444,6 +476,7 @@
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:56
@@ -538,30 +571,44 @@
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
+//!     `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair` — decided (governing)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18
+//!     `codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair` — decided (cited)
 //!     `codon-carve-out-shape-restriction` — decided (governing)
+//!     `codon-exception-reaches-the-termination-codon` — decided (governing)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:44
+//!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //! docs/recommendations/DNA/delins.md:46
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (cited)
+//!     `codon-exception-vs-coincidence-carve-out-precedence` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (governing)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:81
@@ -572,21 +619,30 @@
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
+//! docs/recommendations/DNA/delins.md:88
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (deviates-from)
 //! docs/recommendations/DNA/delins.md:89
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:5
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
 //!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:17
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (governing)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
+//!     `separation-zero-dup-member-is-preserved-not-merged` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:90
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -620,6 +676,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `payload-coincidence-separation-and-budget-are-house-choices` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
@@ -653,6 +710,7 @@
 //!     `inversion-vs-a-mixed-member-competitor` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `inverted-duplication-is-derived-as-ins-range-inv` — decided (cited)
+//!     `pure-tandem-expansion-insertion-is-not-repartitioned` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/general.md:57
@@ -981,7 +1039,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (38, 35, 3),
+        (44, 41, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -1145,7 +1203,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        41,
+        43,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -1173,14 +1231,19 @@ fn clauses_named_by_several_records_are_flagged() {
     // down when the question was answered rather than when a record was quietly
     // dropped.
     //
-    // What the five leave behind is NOT the two ring lines this comment
+    // What the five leave behind is NOT just the two ring lines this comment
     // originally named. The base has since gained
     // `junction-exit-wrapper-scope-in-a-mixed-allele`, which spreads
-    // `checklist.md:20` for reasons of its own, so the residue is three lines
-    // and only two of them are the ring pair. That is the same lesson as the
-    // module header's: a remembered total is a copy of someone else's state and
-    // rots when the base moves past it, whereas the delta of five is a property
-    // of this record and survived the move intact.
+    // `checklist.md:20` for reasons of its own. A fourth cycle then ran end to
+    // end: the precedence record
+    //   `codon-exception-vs-coincidence-carve-out-precedence`
+    // spread `delins.md:18` and `delins.md:47` (each all-one-verdict or single
+    // before it) while its question was open, taking the count to five — and its
+    // 2026-08-24 ruling burned both straight back down. So the residue is three
+    // lines now: the two ring lines and `checklist.md:20`. That is the same lesson
+    // as the module header's: a remembered total is a copy of someone else's state
+    // and rots when the base moves past it, whereas the delta each record owns
+    // survives the move intact.
     //
     // The id is on a line of its own above, and the word describing its former
     // state is not on that line, deliberately: `ruling_citation_currency` reads

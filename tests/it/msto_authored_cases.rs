@@ -125,11 +125,13 @@ const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
     ),
     // The headline case of #1421. Same locus, same net length as the row above,
     // and it used to take the OPPOSITE verdict — which was the whole point of the
-    // table. It no longer does: both now split, which is the fix.
+    // table. Under the step-9 flip the ruled arm re-derives from the resulting
+    // sequence and exposes a tandem dup beside the change (dup-beside-change class,
+    // R7): `[29C>A;30_31dup;...]`, base-preserving.
     (
         "net+6-retained",
         "TEMPLATE:g.29_33delinsAACACATACTG",
-        "TEMPLATE:g.[28_29insAA;32G>A;33_34insACTG]",
+        "TEMPLATE:g.[29C>A;30_31dup;32G>A;33_34insACTG]",
         true,
     ),
     (

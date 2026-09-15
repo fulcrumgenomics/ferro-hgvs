@@ -234,8 +234,11 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
     canonical  the member-count-minimal minimal alignment
     canonical-coalesced
                canonical, plus the delins.md:44-47 merge -- a split whose
-               payload realigns as one block becomes a single delins.
-               THE DEFAULT; also used when unset or empty.
+               payload realigns as one block becomes a single delins. The
+               default up to and including v1.0.0; set it by name to reproduce
+               that output.
+    ruled      the ruled partitioner (the ruled driver). THE DEFAULT; also
+               used when unset or empty.
 
   An unrecognised value is REFUSED: this command exits with an error BEFORE it
   reads any input, naming the value you gave and the arms this build has. It
@@ -4162,7 +4165,13 @@ mod tests {
             .expect("`normalize` subcommand")
             .clone();
         let help = normalize.render_long_help().to_string();
-        for value in ["live", "shadow", "canonical", "canonical-coalesced"] {
+        for value in [
+            "live",
+            "shadow",
+            "canonical",
+            "canonical-coalesced",
+            "ruled",
+        ] {
             assert!(
                 help.contains(value),
                 "`normalize --help` does not mention the `{value}` partition rule; \

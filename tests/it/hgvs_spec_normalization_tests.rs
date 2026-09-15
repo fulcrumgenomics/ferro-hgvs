@@ -1430,6 +1430,57 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "cross-zone-c-positions-order-by-transcript-coordinate",
         "decided",
     ),
+    // Codon exception (`delins.md:18`) vs the payload-coincidence carve-out
+    // (`delins.md:47`): on a coding axis both reach the same derived pieces and the
+    // composition ORDER adjudicates which merge wins. Decided codon-first as a
+    // `README.md` rule-6 house choice (the spec is silent on composition order; both
+    // forms are conformant), NOT a spec mandate. Surfaced by the partitioner bake-off
+    // and decided after adversarial review (2026-08-24).
+    (
+        "codon-exception-vs-coincidence-carve-out-precedence",
+        "decided",
+    ),
+    // The codon exception reaches the termination (stop) codon: "one amino acid"
+    // reads on the described residue position, and `:19`'s own NOTE illustrates the
+    // rationale with a stop prediction (`p.[Lys79*;Lys79Asn]`). Governing `:18`.
+    ("codon-exception-reaches-the-termination-codon", "decided"),
+    // The gap-one antecedent excludes the compensated zero-width gap-2 pair
+    // (`Ins(k,k)+Del(k+2,k+3)`): separated by two positions, so it falls outside
+    // `:18` and `:17` (describe individually) governs. Decided-keep the C1 gap-1 guard.
+    (
+        "codon-carve-out-excludes-the-compensated-zero-width-gap-two-pair",
+        "decided",
+    ),
+    // The payload-coincidence carve-out's two numbers are house choices:
+    // `max_separation = 5` is the spec's own FLOOR (`delins.md:44`'s worked example
+    // splits at gaps 4/5/3, so bridging its single delins needs >= 5), and the value
+    // above the floor is a disclosed open item; `mismatch_budget = 1` is forced by F2
+    // codon-first (`< 2`) and the budget-0 degeneracy. Rule-6 house choice, ratified
+    // by the partitioner bake-off sweep (2026-08-25). Never conformance.
+    (
+        "payload-coincidence-separation-and-budget-are-house-choices",
+        "decided",
+    ),
+    // The dup case `delins-adjacent-members-when-both-consume-reference` (decided)
+    // put out of its scope:
+    // at separation zero the ruled arm keeps a tandem dup exposed by re-derivation
+    // (`c.[2075_2076dup;2077G>A]`) per `duplication.md:18` rather than the spec's
+    // published `c.2077delinsATA` (`delins.md:88`), whose discriminator is
+    // unrecoverable provenance. A decided rule-2 deviation taken as an operator act
+    // for the step-9 flip; never conformance.
+    (
+        "separation-zero-dup-member-is-preserved-not-merged",
+        "decided",
+    ),
+    // A pure insertion that is itself a tandem repeat expansion of its abutting
+    // reference tract is not re-partitioned by the ruled peel's Part B into a
+    // `[sub; dup]` whose substitution lands on a base no minimal alignment changes.
+    // A README rule-6 house choice, forced in direction by the confluence gate and
+    // the lone-repeat decline (`merge.rs:4812`); restores the pre-flip `A[3]`.
+    (
+        "pure-tandem-expansion-insertion-is-not-repartitioned",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
