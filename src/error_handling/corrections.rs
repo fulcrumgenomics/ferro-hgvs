@@ -974,15 +974,30 @@ pub fn correct_accession_prefix_case(input: &str) -> (Cow<'_, str>, Vec<Detected
         ("lrg_", "LRG_"),
     ];
 
+    // Allocation-free ASCII case-insensitive prefix check. This previously called
+    // `input.to_lowercase()` inside the loop — 11 fresh String allocations on every
+    // call, including the common no-correction case, which profiling showed to be
+    // the dominant per-variant allocation source in preprocessing. `eq_ignore_ascii_case`
+    // on the leading bytes reproduces the old `to_lowercase().starts_with` for THIS
+    // prefix set because none of the leading letters (n/x/e/l) is the lowercase form
+    // of any non-ASCII character — so no Unicode input can fold into a prefix under
+    // `to_lowercase()` without also matching `eq_ignore_ascii_case`. Recheck if a
+    // prefix beginning with `k` or `s` is ever added: U+212A KELVIN SIGN lowercases to
+    // ASCII `k` (and long-s forms to `s`), which would diverge.
+    let bytes = input.as_bytes();
     for (lower, correct) in prefixes {
-        if input.to_lowercase().starts_with(lower) && !input.starts_with(correct) {
-            let corrected = format!("{}{}", correct, &input[lower.len()..]);
+        let n = lower.len();
+        if bytes.len() >= n
+            && bytes[..n].eq_ignore_ascii_case(lower.as_bytes())
+            && !input.starts_with(correct)
+        {
+            let corrected = format!("{}{}", correct, &input[n..]);
             corrections.push(DetectedCorrection::new(
                 ErrorType::LowercaseAccessionPrefix,
-                input[..lower.len()].to_string(),
+                input[..n].to_string(),
                 correct.to_string(),
                 0,
-                lower.len(),
+                n,
             ));
             return (Cow::Owned(corrected), corrections);
         }
@@ -5034,6 +5049,46 @@ mod tests {
         let (corrected, corrections) = correct_accession_prefix_case("NM_000088.3");
         assert_eq!(corrected, "NM_000088.3");
         assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn test_correct_accession_prefix_mixed_case() {
+        // The prefix match is case-insensitive, so a mixed-case prefix is corrected
+        // just like an all-lowercase one. This locks the `eq_ignore_ascii_case`
+        // contract: a case-sensitive byte comparison would silently leave these
+        // uncorrected while still passing the all-lowercase test above.
+        let (corrected, corrections) = correct_accession_prefix_case("Nm_000088.3");
+        assert_eq!(corrected, "NM_000088.3");
+        assert_eq!(corrections.len(), 1);
+        // Pin the DetectedCorrection's own fields, not just its presence: the span
+        // and original/corrected text are what downstream diagnostics report, and
+        // are exactly the arguments this change rewrote (`input[..n]`, `n`).
+        assert_eq!(
+            corrections[0].error_type,
+            ErrorType::LowercaseAccessionPrefix
+        );
+        assert_eq!(corrections[0].original, "Nm_");
+        assert_eq!(corrections[0].corrected, "NM_");
+        assert_eq!((corrections[0].start, corrections[0].end), (0, 3));
+
+        // Ensembl prefix (no underscore, 4 bytes — the longest prefix), mixed case.
+        let (corrected, corrections) = correct_accession_prefix_case("EnsT00000123");
+        assert_eq!(corrected, "ENST00000123");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].original, "EnsT");
+        assert_eq!(corrections[0].corrected, "ENST");
+        assert_eq!((corrections[0].start, corrections[0].end), (0, 4));
+    }
+
+    #[test]
+    fn test_correct_accession_prefix_shorter_than_prefix_is_a_noop() {
+        // Inputs shorter than any prefix must return unchanged rather than panic
+        // slicing `bytes[..n]`. This guards the `bytes.len() >= n` short-circuit.
+        for input in ["", "n", "nm", "ens"] {
+            let (corrected, corrections) = correct_accession_prefix_case(input);
+            assert_eq!(corrected, input);
+            assert!(corrections.is_empty());
+        }
     }
 
     // Edit type case tests
