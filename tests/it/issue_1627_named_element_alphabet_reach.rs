@@ -65,7 +65,7 @@
 //! 24 `standards.md:39` rows spell the insert `delinsX`; re-measured at
 //! `78c43230`, the embedded count over the corpus is **0**, because the
 //! generator never varies the insert's literal run. Quoting that zero as
-//! "embedded shapes do not occur" would be exactly the mistake `CLAUDE.md`
+//! "embedded shapes do not occur" would be exactly the mistake `CONTRIBUTING.md`
 //! warns about, so the embedded cases are asserted here by construction.
 
 use ferro_hgvs::hgvs::edit::{InsertedSequence, NaEdit};

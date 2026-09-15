@@ -583,7 +583,7 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
         let Ok(output) = actual else { continue };
         // A `None` is a *decline*, and a decline reached by a bare `continue` is
         // a row dropped out of a corpus-wide guard with nothing counting it —
-        // the shape `CLAUDE.md`'s "a generator must account for what it dropped"
+        // the shape `CONTRIBUTING.md`'s "a generator must account for what it dropped"
         // is about. It is collected and refused below rather than skipped.
         let Some(bounds) = member_bounds(output, &provider) else {
             declined.push(format!("  {} -> {output}", case.input));

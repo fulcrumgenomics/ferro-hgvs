@@ -42,7 +42,7 @@ use ferro_hgvs::ShuffleDirection;
 /// could not key, and which round-trips through JSON.
 ///
 /// The `CaptureCounts` stamped beside the census is the discipline from
-/// `CLAUDE.md`'s "a generator must account for what it dropped": `attempted ==
+/// `CONTRIBUTING.md`'s "a generator must account for what it dropped": `attempted ==
 /// succeeded + dropped`, and the corpus really does drop designs, so `dropped` is
 /// positive and every drop carries a reason. SPDI has no offset notation, so the
 /// corpus's intronic outputs have no `sequence` key — a family carrying one cannot

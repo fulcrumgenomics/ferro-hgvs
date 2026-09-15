@@ -62,7 +62,7 @@
 //!   the `Delins` source of that rule and #1592 is its sibling.
 //! * **The authority.** A house rule, **not** a spec clause — no clause in
 //!   `assets/hgvs-nomenclature` speaks about one cis member bounding another's
-//!   shift, and per `CLAUDE.md` the cross-zone comparison this rests on is
+//!   shift, and per `docs/READING_THE_SPEC.md` the cross-zone comparison this rests on is
 //!   ferro's policy rather than compliance. The governing record is
 //!   `rulings[canonical-form-choice-when-both-legal]` (`decided`): among legal
 //!   descriptions ferro re-derives from the resulting sequence and emits what

@@ -600,10 +600,13 @@ knowledge_base:
     scope: "local"
   code_guidelines:
     enabled: true
-    # CLAUDE.md is picked up by default; CONTRIBUTING.md and the design docs
-    # carry the conventions that are not in it.
+    # CLAUDE.md is picked up by default; CONTRIBUTING.md, and the other
+    # design docs  carry the conventions that are not in it.
     filePatterns:
       - "CLAUDE.md"
       - "CONTRIBUTING.md"
+      - "docs/TESTING.md"
+      - "docs/ORACLES.md"
+      - "docs/READING_THE_SPEC.md"
       - "docs/CONFORMANCE_HARNESS_DESIGN.md"
       - "docs/RECONSTRUCTION_POLICY_DESIGN.md"

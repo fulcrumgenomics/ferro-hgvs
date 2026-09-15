@@ -6196,7 +6196,7 @@ struct MemberAlignment {
 /// `[3544_3545insA;3547_3548delinsT]`). Both are minimal, so something has to
 /// choose, and the choice is an implementer's — the same standing
 /// [`best_alignment`]'s "place the indel 5'-most" tie-break has, and the same
-/// one `CLAUDE.md`'s note that "a split is rarely unique" describes.
+/// one `docs/READING_THE_SPEC.md`'s note that "a split is rarely unique" describes.
 ///
 /// The walk prefers the diagonal, then a deletion, then an insertion — the order
 /// [`AlignmentDag::out_edges`] already yields — and follows on-path edges only,
@@ -6462,7 +6462,7 @@ fn denoted_by(parts: &[Piece], ref_start: usize, ref_end: usize, ref_bytes: &[u8
 /// **394 converged confluence classes** of 11,272 (3': 8,006 -> 7,612), because
 /// the input-relative weight bound then refused the allele spelling of the same
 /// variant while accepting the lone-`delins` spelling. Confluence outranks
-/// stability (`CLAUDE.md`), so the cut wins; the measurement is recorded here
+/// stability (`docs/READING_THE_SPEC.md`), so the cut wins; the measurement is recorded here
 /// because the refusal is the obvious next idea and looks strictly safer than it
 /// is.
 ///

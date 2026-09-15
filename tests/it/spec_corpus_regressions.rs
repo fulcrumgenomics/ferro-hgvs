@@ -548,7 +548,7 @@ fn a_deletion_flush_against_an_insertion_at_the_cds_end_changes_the_sequence() {
 /// The corpus measures **0 violations over 210 rows carrying the shape**, and the
 /// denominator is asserted non-zero — `0 of 0` is what a rebuilt #1456 looks like.
 ///
-/// Recorded per `CLAUDE.md`'s "record what was refuted, not only what was
+/// Recorded per `CONTRIBUTING.md`'s "record what was refuted, not only what was
 /// decided": a measurement that killed a plausible belief is worth as much as the
 /// ruling, because the belief recurs.
 #[test]

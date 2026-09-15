@@ -51,9 +51,10 @@ fail-fast = false
 # (which would reintroduce the race this script exists to remove) and a
 # non-reader cannot be added (which is how the archive jobs broke).
 #
-# Note the fourth entry. `normalize_axis_preserving` is a consumer, and it is not
-# in the two-module list `CLAUDE.md` gave until this change; a filter written
-# from that list would have been wrong on its first day. `censuses` selects that
+# Note the fourth entry. `normalize_axis_preserving` is a consumer, and a filter
+# written from a hand-maintained consumer list would have missed it;
+# `tests/it/spec_fixture_setup_filter.rs` derives the list instead. `censuses`
+# selects that
 # module and downloads `spec-fixtures`, so the script fires there and is the
 # near-free stat `all()` promised — the archive jobs that break are exactly the
 # two that select neither it nor any other consumer.
