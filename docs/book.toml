@@ -17,7 +17,7 @@ create-missing = false
 
 [output.html]
 additional-css = ["theme/custom.css"]
-additional-js = ["theme/sidebar-brand.js"]
+additional-js = ["theme/sidebar-brand.js", "theme/shadow-spec.js"]
 git-repository-url = "https://github.com/fulcrumgenomics/ferro-hgvs"
 edit-url-template = "https://github.com/fulcrumgenomics/ferro-hgvs/edit/main/docs/{path}"
 no-section-label = true
@@ -49,3 +49,17 @@ runnable = false
 # output backend so `mdbook build` FAILS on internal dead links — mdBook alone only warns.
 [output.linkcheck2]
 follow-web-links = false
+# The shadow-spec pages quote the upstream HGVS spec verbatim inside block-quotes, and the
+# shadow_spec test (tests/it/shadow_spec.rs) pins each quote as a byte-for-byte substring of the
+# vendored submodule source. Those quotes carry the spec's own intra-doc cross-references
+# (`../general.md`, `../../background/numbering.md#DNAc`, `../../consultation/SVD-WG009.md`, …),
+# which resolve on hgvs-nomenclature.org but not inside this book — and they cannot be rewritten to
+# absolute URLs without breaking the harness's substring check. Exclude exactly those upstream paths
+# from link checking; every real intra-book relative link (e.g. `../DNA/deletion.md`) is still verified.
+exclude = [
+    '^\.\./general\.md$',
+    '^\.\./uncertain\.md$',
+    '^\.\./\.\./background/numbering\.md(#.*)?$',
+    '^\.\./\.\./background/glossary\.md$',
+    '^\.\./\.\./consultation/SVD-WG[0-9]+\.md$',
+]
