@@ -6462,7 +6462,7 @@ fn denoted_by(parts: &[Piece], ref_start: usize, ref_end: usize, ref_bytes: &[u8
 /// **394 converged confluence classes** of 11,272 (3': 8,006 -> 7,612), because
 /// the input-relative weight bound then refused the allele spelling of the same
 /// variant while accepting the lone-`delins` spelling. Confluence outranks
-/// stability (`docs/READING_THE_SPEC.md`), so the cut wins; the measurement is recorded here
+/// stability (`CONTRIBUTING.md`), so the cut wins; the measurement is recorded here
 /// because the refusal is the obvious next idea and looks strictly safer than it
 /// is.
 ///

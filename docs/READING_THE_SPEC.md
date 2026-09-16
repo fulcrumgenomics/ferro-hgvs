@@ -17,6 +17,11 @@ grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|REQUIRES|OPTIONAL)( NO
 # -> docs/recommendations/RNA/adjoined_transcript.md:21:SHOULD    (and nothing else)
 ```
 
+`REQUIRES` is in that alternation on purpose, even though RFC 2119 lists `REQUIRED` and not
+`REQUIRES`: the census is of every uppercase directive a reader might argue keyword strength from,
+and `adjoined_transcript.md:20`'s "REQUIRES" is exactly such a word. Drop it from the grep and the
+count wrongly falls to one — so do not restate the count as "once".
+
 Every clause this project has litigated — `general.md:33`, `:34`, `:55`, `:57`,
 `DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose. Read strictly,
 none of them is normative. That does not make them ignorable: it makes most of these questions
