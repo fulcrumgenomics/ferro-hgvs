@@ -240,7 +240,7 @@ pub enum RowKind {
 ///
 /// The split exists because "is not allowed" and "can only be used … when" are
 /// not the same claim, and this repository's own `docs/READING_THE_SPEC.md` records that
-/// **uppercase RFC 2119 keywords appear exactly once outside `style.md`** — so
+/// **uppercase RFC 2119 keywords appear exactly twice outside `style.md`** — so
 /// keyword strength cannot rank clauses and the wording has to be quoted instead.
 /// The axis test pins the two counts separately and asserts on neither: a
 /// [`Strength::Conditional`] acceptance is a finding to adjudicate, not a

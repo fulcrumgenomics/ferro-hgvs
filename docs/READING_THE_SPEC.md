@@ -17,6 +17,11 @@ grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|REQUIRES|OPTIONAL)( NO
 # -> docs/recommendations/RNA/adjoined_transcript.md:21:SHOULD    (and nothing else)
 ```
 
+`REQUIRES` is in that alternation on purpose, even though RFC 2119 lists `REQUIRED` and not
+`REQUIRES`: the census is of every uppercase directive a reader might argue keyword strength from,
+and `adjoined_transcript.md:20`'s "REQUIRES" is exactly such a word. Drop it from the grep and the
+count wrongly falls to one — so do not restate the count as "once".
+
 Every clause this project has litigated — `general.md:33`, `:34`, `:55`, `:57`,
 `DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose. Read strictly,
 none of them is normative. That does not make them ignorable: it makes most of these questions
@@ -41,8 +46,12 @@ cite the passage.
 
 ## A split is rarely unique, which is a stability argument by itself
 
-Exact enumeration over 40 rows found **27 that admit more than one equally-compliant split**,
-median 2 and **max 125**; the spec's own `:44-47` example admits five. So adopting a split
+Exact enumeration over the 40 rows of ferro's committed spec-enumeration corpus found **27
+that admit more than one equally-compliant split**, median 2 and **max 125**; the spec's own
+`:44-47` example admits five. (The count is a deterministic combinatorial enumeration over that
+corpus against the pinned spec, so it does not depend on host or toolchain — the corpus is the
+input that fixes it; the same figure is recorded in `docs/NORMALIZATION_CONTRACT.md`.) So
+adopting a split
 trades one stable canonical form for an arbitrary pick out of a family — and the arbitrariness
 is invisible in any single-row before/after comparison, which is how it keeps getting missed.
 
