@@ -1606,6 +1606,13 @@ mod decisions {
                 "a decided record with no summary must be refused"
             );
 
+            // A summary that is empty once trimmed is no summary at all.
+            decided.summary = Some("   ".to_string());
+            assert!(
+                validate_ruling_shape("r", &decided).is_err(),
+                "a whitespace-only summary is empty after trimming and must be refused"
+            );
+
             decided.summary = Some("Two adjacent changes are written as one delins.".to_string());
             assert!(validate_ruling_shape("r", &decided).is_ok());
 
