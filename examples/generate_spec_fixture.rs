@@ -1164,6 +1164,18 @@ mod decisions {
                 );
             }
         }
+        // The other half of the contract, symmetric with the decided arm above:
+        // an `undecided` record has no ruling to summarise, so a summary on one is
+        // a claim of settledness the status contradicts. Refused here as well as
+        // at `tests/it/common/rulings.rs`'s parse boundary, which builds the two
+        // published documents.
+        if ruling.status == overrides::RulingStatus::Undecided && ruling.summary.is_some() {
+            anyhow::bail!(
+                "{owner}: an `undecided` ruling carries a `summary`. An undecided record has no \
+                 ruling to summarise; state the conflict in `question` and `rationale`, and \
+                 leave `summary` unset"
+            );
+        }
         validate_guard_shape(owner, ruling.guard.as_ref())?;
         Ok(())
     }
@@ -1521,7 +1533,15 @@ mod decisions {
                 deviates_from: deviates_from.iter().map(|c| c.to_string()).collect(),
                 house_choice: None,
                 rationale: "because".to_string(),
-                summary: Some("the ruling, stated in one plain sentence.".to_string()),
+                // A decided record must carry a summary and an undecided one must
+                // not, so the default follows the status; a test overrides it to
+                // exercise a violation.
+                summary: match status {
+                    overrides::RulingStatus::Decided => {
+                        Some("the ruling, stated in one plain sentence.".to_string())
+                    }
+                    overrides::RulingStatus::Undecided => None,
+                },
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
                 guard: Some(guard_citing(&[
@@ -1606,6 +1626,13 @@ mod decisions {
                 "a decided record with no summary must be refused"
             );
 
+            // A summary that is empty once trimmed is no summary at all.
+            decided.summary = Some("   ".to_string());
+            assert!(
+                validate_ruling_shape("r", &decided).is_err(),
+                "a whitespace-only summary is empty after trimming and must be refused"
+            );
+
             decided.summary = Some("Two adjacent changes are written as one delins.".to_string());
             assert!(validate_ruling_shape("r", &decided).is_ok());
 
@@ -1619,6 +1646,16 @@ mod decisions {
             // Undecided records are not required to have one.
             let open = ruling(Undecided, &["a.md:1", "b.md:2"], None, &[]);
             assert!(validate_ruling_shape("r", &open).is_ok());
+
+            // ...and must NOT carry one: an undecided record has no ruling to
+            // summarise, so a summary is a claim of settledness its status denies.
+            let mut open_with_summary = ruling(Undecided, &["a.md:1", "b.md:2"], None, &[]);
+            open_with_summary.summary =
+                Some("a summary an undecided record must not have.".to_string());
+            assert!(
+                validate_ruling_shape("r", &open_with_summary).is_err(),
+                "an undecided record carrying a summary must be refused"
+            );
         }
 
         /// The build must refuse a house choice that claims spec authority.

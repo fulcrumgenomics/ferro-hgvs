@@ -404,20 +404,19 @@ fn contents(decided: &[&Record], open: &[&Record]) -> String {
     }
     let _ = writeln!(out, "\n**Decided**\n");
     for record in decided {
-        match record.summary.as_deref() {
-            Some(summary) => {
-                let _ = writeln!(
-                    out,
-                    "- [`{}`](#{}) — {}",
-                    record.id,
-                    anchor(&record.id),
-                    summary
-                );
-            }
-            None => {
-                let _ = writeln!(out, "- [`{}`](#{})", record.id, anchor(&record.id));
-            }
-        }
+        // Every decided record carries a summary — `generate_spec_fixture`
+        // refuses one without it — so this cannot be `None`.
+        let summary = record
+            .summary
+            .as_deref()
+            .expect("decided records carry a summary (enforced by generate_spec_fixture)");
+        let _ = writeln!(
+            out,
+            "- [`{}`](#{}) — {}",
+            record.id,
+            anchor(&record.id),
+            summary
+        );
     }
     let _ = writeln!(out);
     out
