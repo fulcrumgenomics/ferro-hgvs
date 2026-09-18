@@ -10,6 +10,8 @@ Run the suite with nextest:
 ```bash
 cargo nextest run --features dev              # the whole suite
 cargo nextest run -E 'test(parse)'            # one test, or a name pattern
+cargo nextest run --features dev --no-capture # with test output
+cargo bench --features dev                    # benchmarks; `seqfirst_align` requires `dev`
 ```
 
 Use `cargo nextest`, not `cargo test`. `cargo test` runs a separate process per test target, but
@@ -105,10 +107,12 @@ needs every test job to succeed. If it is red while every shard is green, read t
 to find the upstream job. Read its `needs:` list from the file, not from this page. The jobs, and
 how to run each one locally:
 
-- `test`: the default suite, with `FERRO_REQUIRE_BULK_FIXTURES=1`. Some suites skip and report
-  PASS when their bulk data is absent. That variable turns the skip into a failure. Set it
-  locally when you have the data. `scripts/run_conformance_axis.sh` runs one manifest-backed
-  axis.
+- `test`: the default suite, with `FERRO_REQUIRE_BULK_FIXTURES=1`. `test-oracle`, `censuses`, and
+  the fetching jobs in `coverage.yml` and `external-validation.yml` set it too. Some suites skip
+  and report PASS when their bulk data is absent. That variable turns the skip into a failure.
+  Set it locally when you have the data. `scripts/run_conformance_axis.sh` validates a supplied
+  manifest, then runs the `test(axis_)` filter; that substring also selects unrelated tests, only
+  some of which are manifest-gated.
 - `test-oracle`: the suite with `FERRO_ASSERT_IDEMPOTENT`, `FERRO_ASSERT_REPARSE` and
   `FERRO_ASSERT_IN_BOUNDS` set, without the spec-corpus census modules that those oracles would
   silence. `FERRO_ASSERT_IDEMPOTENT=1` on a bare `cargo nextest run` is always red on `main`.
@@ -155,7 +159,9 @@ fails if a class gives more than one output. The disagreements it finds today ar
 pinned. To converge them is a downstream representation change, not a fix for a test PR. The
 `rulings` section of the same file is documented in `CONTRIBUTING.md`, Adjudications.
 
-Regenerate the fixture with plain generation, not `--check`. Generation is what validates the
-committed overrides against the spec checkout, and CI does the same before every run. `--check`
-answers only one question: is my local artifact current? It is not a gate, and CI does not gate
-on it.
+Regenerate the fixture with plain generation, not `--check`. Both render the fixture from the
+committed overrides against the spec checkout — that render is the validation, and CI does it
+before every run — but plain generation writes the fixture while `--check` only compares the
+rendered result against an existing artifact without overwriting it (a missing one is
+generated). `--check` is not a gate here, and CI does not gate on it, because the fixture is
+gitignored and has no committed baseline.
