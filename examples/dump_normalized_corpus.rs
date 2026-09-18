@@ -159,8 +159,29 @@
 //!    having first shipped able to build only *growing* repeats. A count of
 //!    blindnesses is itself a number that goes stale every time the thing it
 //!    counts happens, which is the failure this whole section is about. The
-//!    maintained list is `CLAUDE.md`'s, under "Assert the property. Measure the
-//!    count. Never let a count BE the property".
+//!    maintained list follows.
+//!
+//!    | blind to | issue |
+//!    |---|---|
+//!    | member geometry | #1456 |
+//!    | scale — 20-mer cores never reach the split cap | #1460 |
+//!    | sequence structure — a random core cannot be asked for a coincidence pattern | #1517 |
+//!    | transcript geometry — a single exon with `CDS_START = 1` | #1478 |
+//!    | molecule type — no `p.` row at all until the protein axis | #1606 |
+//!    | reversed ranges | #1917 |
+//!    | a repeat placed beside a sibling it could collide with | #1749 |
+//!    | that family shipping able to build only *growing* repeats | #1752 |
+//!    | direction — every lone `delins` was equal-length or a net insertion | #1610 |
+//!    | the measurement surface — the corpus drives `Normalizer::normalize` only; a change confined to the `from_sequences`/`rederive` derivation surface reads as `0 moved` | #2204 |
+//!
+//!    Add a row; do not increment a number.
+//!
+//!    **The ordinals written inside the generator disagree with each other and with this table, and that
+//!    is settled rather than pending.** `PROTEIN_FAMILIES` calls itself "the fourth instance" and
+//!    `repeat_beside_a_sibling` "the fifth", each counting a chain that omits #1517 and #1917;
+//!    `lone_net_deletion_delins` then declines to claim an ordinal at all, on the stated ground that "a
+//!    third restatement is how that drift got started". Do not renumber them into agreement — that is
+//!    the increment this section forbids. Read those ordinals as prose and this table as the inventory.
 //!
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
@@ -6311,13 +6332,13 @@ mod tests {
     ///
     /// The stale phrasings are given as digits above **on purpose**: the scan
     /// below reads comment text, so spelling them out here would make this
-    /// comment its own first failure. `claude_md_adjudication_tables` records the
+    /// comment its own first failure. `ruling_citation_currency` records the
     /// same hazard and the same answer — keep the prose clear of the pattern
     /// rather than exempting the file, which would blind the scan to it for good.
     ///
     /// Correcting the seven sites fixes today and guarantees a repeat: the counts
     /// live in a `const` and the prose restates them, which is precisely the
-    /// "a count restated instead of imported" shape `CLAUDE.md` names. So the
+    /// "a count restated instead of imported" shape `CONTRIBUTING.md` names. So the
     /// counts are **derived here** — from `FAMILIES.len()`, from
     /// `PROTEIN_FAMILIES.len()`, and from the singleton `const … _FAMILY`
     /// declarations counted out of the source — and the prose is asserted against

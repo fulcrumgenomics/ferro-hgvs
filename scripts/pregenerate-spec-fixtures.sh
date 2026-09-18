@@ -6,7 +6,7 @@
 # Why this exists (#1608). The two generated build artifacts
 #   tests/fixtures/grammar/hgvs_spec_normalization.json
 #   tests/fixtures/grammar/hgvs_spec_enumeration.json
-# are `.gitignore`d (see CLAUDE.md, "Generated spec fixture"). Their consuming
+# are `.gitignore`d (see docs/TESTING.md, "Generated spec fixture"). Their consuming
 # tests regenerate them on demand from inside the test body, via
 # `tests/it/common/fixture_gen.rs`, which fires a nested
 # `cargo run --features dev --bin generate_spec_*`. That nested build is atomic

@@ -409,6 +409,7 @@ fn record_with_rationale(rationale: &str) -> rulings::Record {
         status: "decided".to_string(),
         question: String::new(),
         rationale: rationale.to_string(),
+        summary: None,
         applies_to: Vec::new(),
         equivalence_classes: Vec::new(),
         guard: rulings::Guard::Declined("synthetic".to_string()),

@@ -1,7 +1,7 @@
 //! Shared `--check` semantics for the gitignored generated spec artifacts.
 //!
 //! `hgvs_spec_normalization.json` and `hgvs_spec_enumeration.json` are build
-//! artifacts, not committed files (see `CLAUDE.md`), so `--check` answers
+//! artifacts, not committed files (see `docs/TESTING.md`), so `--check` answers
 //! exactly one question: **is my local artifact current?**
 //!
 //! It deliberately does *not* validate the committed inputs — the plain

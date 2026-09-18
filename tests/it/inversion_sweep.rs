@@ -84,7 +84,7 @@
 //! # Which rows are adjudications, and which are characterization
 //!
 //! Say it plainly, because the distinction is the repo's own policy
-//! (`CLAUDE.md`: "a test that merely pins today's output is not an adjudication
+//! (`CONTRIBUTING.md`: "a test that merely pins today's output is not an adjudication
 //! record"):
 //!
 //! - **Three rows are adjudications.** The spec publishes

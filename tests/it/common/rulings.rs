@@ -219,7 +219,7 @@ impl HouseRule {
 ///
 /// Carrying it as a *record* rather than as a `status` value is deliberate: a
 /// house choice is `decided` — a choice has been made — and the two published
-/// tables (`CLAUDE.md`, `docs/NORMALIZATION_CONTRACT.md`) partition the ledger
+/// tables (`docs/NORMALIZATION_CONTRACT.md`) partition the ledger
 /// by status. A third status would have re-partitioned both and made every
 /// house choice read as a species of open question, which is the opposite of
 /// what it is.
@@ -287,6 +287,13 @@ pub struct Record {
     /// the source scan in `ruling_citation_currency.rs`, which reads `.rs` files
     /// only. See `every_record_to_record_citation_resolves` there.
     pub rationale: String,
+    /// The record's one-sentence `summary`, verbatim. Required on every
+    /// `decided` record by the fixture generator; `None` on `undecided` ones.
+    ///
+    /// Exposed because `normalization_contract_doc.rs` prints it in the
+    /// contents list and `shadow_spec.rs` transcludes it into the Interpretation
+    /// pages.
+    pub summary: Option<String>,
     /// The descriptions the record declares itself to apply to, verbatim, in the
     /// ledger's own order. Absent or `null` reads as none.
     ///
@@ -603,6 +610,47 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
 
             let question = required_str(record, "question", &format!("record {id}")).to_string();
             let rationale = required_str(record, "rationale", &format!("record {id}")).to_string();
+            let summary = optional_str(record, "summary", &id).map(str::to_string);
+            // The `Record::summary` contract, enforced at the parse boundary
+            // because `normalization_contract_doc.rs` and `shadow_spec.rs` build
+            // straight from this reader — not from the generated fixture the
+            // generator validates. Without it a decided record with no summary
+            // reaches `normalization_contract_doc`'s `expect` as a panic far from
+            // the cause, a blank one renders an empty contents line, and an
+            // undecided record carrying a summary passes every check unseen.
+            match (status.as_str(), summary.as_deref().map(str::trim)) {
+                ("decided", None) => panic!(
+                    "record {id} is decided but carries no `summary` — a decided record states \
+                     its answer in one sentence for the contents list of \
+                     docs/NORMALIZATION_CONTRACT.md and the shadow-spec pages; an id states the \
+                     question, not the answer"
+                ),
+                ("decided", Some("")) => {
+                    panic!("record {id} is decided but its `summary` is blank")
+                }
+                ("decided", Some(summary))
+                    if summary.contains(".md:") || summary.contains(".rs::") =>
+                {
+                    // The generator refuses the same shape; enforce it here too,
+                    // because `normalization_contract_doc.rs` copies each summary
+                    // verbatim into the contents list without that validation. The
+                    // prose scanners read `question` and `rationale`, never
+                    // `summary`, so a `file:line` or `path.rs::name` citation here
+                    // is never checked for currency and quietly rots.
+                    panic!(
+                        "record {id} carries a `file:line` or `path.rs::name` citation in its \
+                         `summary` — the prose scanners read `question` and `rationale`, not \
+                         `summary`, so put the citation in a checked field and state the ruling \
+                         in plain words"
+                    )
+                }
+                ("undecided", Some(_)) => panic!(
+                    "record {id} is undecided but carries a `summary` — an undecided record has \
+                     no ruling to summarise, so a summary is a claim of settledness the status \
+                     contradicts; record the conflict in `question` and `rationale`"
+                ),
+                _ => {}
+            }
 
             let governing = optional_str(record, "governing", &id);
             let deviates_from: Vec<&str> = match record.get("deviates_from") {
@@ -727,6 +775,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 status,
                 question,
                 rationale,
+                summary,
                 applies_to,
                 equivalence_classes,
                 guard,
@@ -766,7 +815,7 @@ pub fn statuses() -> BTreeMap<String, String> {
 // Plain `#[test]`, deliberately **not** inside a `#[cfg(test)] mod tests`: this
 // tree is an integration-test binary, which compiles without `cfg(test)`, so a
 // gated module would never run and would read as coverage it does not provide
-// (see the repository `CLAUDE.md` on committed tests that have never executed).
+// (see the repository `CONTRIBUTING.md` on committed tests that have never executed).
 //
 // A well-formed document plus one mutation per field. The mutations are the
 // point: every one of them used to parse as "field absent", which converts a
@@ -782,6 +831,7 @@ fn one_valid_record() -> serde_json::Value {
             "status": "decided",
             "question": "Does a well-formed record parse?",
             "rationale": "A test record, with prose that cites no other record.",
+            "summary": "A well-formed record parses.",
             "governing": "docs/a.md:1",
             "guard": { "tests": ["tests/it/a_file.rs::a_guard"] },
             "clauses": [{ "clause": "docs/a.md:1", "quote": "a quoted clause" }],
@@ -797,6 +847,79 @@ fn a_well_formed_document_parses() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, "decided");
     assert_eq!(records[0].citations[0].role, Role::Governing);
+}
+
+// --------------------------------------------------------------------------
+// `summary` × `status`.
+//
+// The contract on `Record::summary` is that a `decided` record carries a
+// one-sentence summary and an `undecided` one carries none. The generator
+// enforces it on the ledger it writes, but `normalization_contract_doc.rs` and
+// `shadow_spec.rs` build straight from THIS reader, so a violation that reached
+// here would surface as a downstream `expect` panic, a blank contents line, or
+// an undecided summary nothing ever checks. These are that enforcement.
+// --------------------------------------------------------------------------
+
+/// A `decided` record with no `summary` is refused: its answer is what the
+/// contents list of `docs/NORMALIZATION_CONTRACT.md` and the shadow-spec pages
+/// print, and an id states the question, not the answer.
+#[test]
+#[should_panic(expected = "is decided but carries no `summary`")]
+fn a_decided_record_with_no_summary_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record")
+        .remove("summary");
+    records_from_value(&document, "<test>");
+}
+
+/// A blank (or whitespace-only) `summary` on a `decided` record is no summary at
+/// all, and would render an empty contents line.
+#[test]
+#[should_panic(expected = "is decided but its `summary` is blank")]
+fn a_decided_record_with_a_blank_summary_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["summary"] = serde_json::json!("   ");
+    records_from_value(&document, "<test>");
+}
+
+/// An `undecided` record must NOT carry a summary: it has no ruling to
+/// summarise, so a summary is a claim of settledness the status contradicts.
+#[test]
+#[should_panic(expected = "is undecided but carries a `summary`")]
+fn an_undecided_record_with_a_summary_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["status"] = serde_json::json!("undecided");
+    document["rulings"][0]["governing"] = serde_json::Value::Null;
+    document["rulings"][0]["clauses"] = serde_json::json!([
+        { "clause": "docs/a.md:1", "quote": "a quoted clause" },
+        { "clause": "docs/b.md:2", "quote": "another quoted clause" },
+    ]);
+    // The base fixture's summary is left in place — that is the violation.
+    records_from_value(&document, "<test>");
+}
+
+/// A `decided` record whose `summary` cites a spec clause (`file:line`) is
+/// refused: the prose scanners never read `summary`, so a citation here escapes
+/// the currency check the generator applies to `question` and `rationale`.
+#[test]
+#[should_panic(expected = "citation in its `summary`")]
+fn a_decided_summary_with_a_clause_citation_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["summary"] = serde_json::json!("Merged, per general.md:33.");
+    records_from_value(&document, "<test>");
+}
+
+/// The same refusal for a `path.rs::name` test citation, which the generator
+/// also rejects — kept as a separate case so a match on only one substring
+/// still leaves this one red.
+#[test]
+#[should_panic(expected = "citation in its `summary`")]
+fn a_decided_summary_with_a_test_citation_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["summary"] = serde_json::json!("Pinned by tests/it/foo.rs::bar.");
+    records_from_value(&document, "<test>");
 }
 
 /// A record whose ruling is the project's own, for the house-choice cases.
@@ -875,6 +998,12 @@ fn a_house_choice_that_deviates_from_a_clause_is_rejected() {
 fn an_undecided_house_choice_is_rejected() {
     let mut document = one_house_choice_record();
     document["rulings"][0]["status"] = serde_json::json!("undecided");
+    // Undecided records carry no summary; drop the base fixture's so this
+    // reaches the house-choice contradiction rather than the summary rule.
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record")
+        .remove("summary");
     document["rulings"][0]["clauses"] = serde_json::json!([
         { "clause": "docs/a.md:1", "quote": "a quoted clause" },
         { "clause": "docs/b.md:2", "quote": "another quoted clause" },
@@ -1089,6 +1218,12 @@ fn an_absent_applies_to_reads_as_none() {
 fn a_null_verdict_field_reads_as_absent() {
     let mut document = one_valid_record();
     document["rulings"][0]["status"] = serde_json::json!("undecided");
+    // An undecided record carries no summary; the base fixture is decided and
+    // does, so drop it here to keep this focused on the verdict fields.
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record")
+        .remove("summary");
     document["rulings"][0]["governing"] = serde_json::Value::Null;
     document["rulings"][0]["deviates_from"] = serde_json::Value::Null;
     let records = records_from_value(&document, "<test>");

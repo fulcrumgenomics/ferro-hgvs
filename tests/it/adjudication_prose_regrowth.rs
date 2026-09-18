@@ -109,8 +109,8 @@
 //!   looked the record up. Its own docs name the limit: "the person who never
 //!   looked the record up writes no citation for it to check."
 //!
-//! Every existing ledger guard — those two plus `claude_md_adjudication_tables`,
-//! `normalization_contract_doc`, `ledger_clause_jurisdiction`,
+//! Every existing ledger guard — those two plus `normalization_contract_doc`,
+//! `ledger_clause_jurisdiction`,
 //! `ruling_guard_field` and `normalization_ruleset_page` — fires only on prose
 //! that already names a record, or on the ledger's own contents. **The class that
 //! cost this project a week names no record and cites no clause**: the falsified

@@ -27,8 +27,8 @@ quoted against, and the reasoning in full.
 It is generated, not written. Every question, verdict, clause and quote below is the record's
 own text, reproduced mechanically from
 [`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`](../tests/fixtures/grammar/hgvs_spec_normalization_overrides.json).
-Nothing here is a summary of a record, because a summary is a second copy that can drift from
-the thing it summarises.
+The one-line summary beside each decided record in the contents list is the record's own
+`summary` field, copied verbatim; nothing here is paraphrased by the renderer.
 
 ## What this document is not
 
@@ -84,41 +84,41 @@ for the knob and its traps.
 
 **Decided**
 
-- [`absolute-prohibition-enforcement-stage`](#absolute-prohibition-enforcement-stage)
-- [`adjudication-precedence-order`](#adjudication-precedence-order)
-- [`alignment-only-symbol-in-a-description`](#alignment-only-symbol-in-a-description)
-- [`bare-transcript-intronic-position`](#bare-transcript-intronic-position)
-- [`c-and-n-positions-are-flat-transcript-offsets`](#c-and-n-positions-are-flat-transcript-offsets)
-- [`c-description-against-an-unresolvable-cds-is-refused`](#c-description-against-an-unresolvable-cds-is-refused)
-- [`canonical-form-choice-when-both-legal`](#canonical-form-choice-when-both-legal)
-- [`cds-unknown-position-is-refused-at-conversion`](#cds-unknown-position-is-refused-at-conversion)
-- [`coding-axis-merges-are-a-disclosed-general-34-deviation`](#coding-axis-merges-are-a-disclosed-general-34-deviation)
-- [`codon-carve-out-shape-restriction`](#codon-carve-out-shape-restriction)
-- [`conflicting-member-geometry-refusal-scope`](#conflicting-member-geometry-refusal-scope)
-- [`confluence-gate-is-apply-equality-on-every-determined-axis`](#confluence-gate-is-apply-equality-on-every-determined-axis)
-- [`contiguous-insertion-split-by-a-blocked-derivation`](#contiguous-insertion-split-by-a-blocked-derivation)
-- [`cross-zone-c-positions-order-by-transcript-coordinate`](#cross-zone-c-positions-order-by-transcript-coordinate)
-- [`delins-adjacent-members-when-both-consume-reference`](#delins-adjacent-members-when-both-consume-reference)
-- [`delins-codon-carve-out-gap-one`](#delins-codon-carve-out-gap-one)
-- [`delins-merge-vs-individual-gap-two-or-more`](#delins-merge-vs-individual-gap-two-or-more)
-- [`delins-payload-coincidence-carve-out-is-coding-dna-scoped`](#delins-payload-coincidence-carve-out-is-coding-dna-scoped)
-- [`delins-recommendation-reach-when-the-input-arrives-split`](#delins-recommendation-reach-when-the-input-arrives-split)
-- [`derivation-may-not-be-bounded-by-the-inputs-spelling`](#derivation-may-not-be-bounded-by-the-inputs-spelling)
-- [`duplication-must-ranks-the-label-not-the-partition`](#duplication-must-ranks-the-label-not-the-partition)
-- [`exon-junction-dup-converge-from-the-far-side`](#exon-junction-dup-converge-from-the-far-side)
-- [`inversion-vs-a-mixed-member-competitor`](#inversion-vs-a-mixed-member-competitor)
-- [`inversion-vs-two-delins-76-83`](#inversion-vs-two-delins-76-83)
-- [`inverted-duplication-is-derived-as-ins-range-inv`](#inverted-duplication-is-derived-as-ins-range-inv)
-- [`past-cds-end-coordinate-is-non-conformant`](#past-cds-end-coordinate-is-non-conformant)
-- [`projection-codon-exception-is-decided-by-the-rendered-axis`](#projection-codon-exception-is-decided-by-the-rendered-axis)
-- [`rna-axis-alignment-only-symbol-reach`](#rna-axis-alignment-only-symbol-reach)
-- [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions)
-- [`separation-is-a-property-of-the-spelling-not-of-the-variant`](#separation-is-a-property-of-the-spelling-not-of-the-variant)
-- [`separation-rule-force-modal-or-negation`](#separation-rule-force-modal-or-negation)
-- [`spdi-n-unit-repeat-refusal`](#spdi-n-unit-repeat-refusal)
-- [`unchanged-is-read-over-every-minimal-alignment`](#unchanged-is-read-over-every-minimal-alignment)
-- [`unequal-length-block-a-placed-gap-is-not-a-separation`](#unequal-length-block-a-placed-gap-is-not-a-separation)
-- [`whole-span-reverse-complement-types-as-inv`](#whole-span-reverse-complement-types-as-inv)
+- [`absolute-prohibition-enforcement-stage`](#absolute-prohibition-enforcement-stage) — Spellings the spec prohibits are rejected — at parse in strict mode; lenient mode instead repairs the input where it can and fails only if it cannot normalize.
+- [`adjudication-precedence-order`](#adjudication-precedence-order) — The canonical normalization ruleset is stated once, in ferro's reference documentation, and this record deliberately does not restate it — it holds only the escalation register for the rare case where the spec prefers one conformant form but supplies nothing to choose between the candidates that satisfy it.
+- [`alignment-only-symbol-in-a-description`](#alignment-only-symbol-in-a-description) — The alignment-only symbols 'X' and '-' are refused in a description, since they are not among the IUPAC-IUBMB nucleotide symbols a description may use.
+- [`bare-transcript-intronic-position`](#bare-transcript-intronic-position) — A bare transcript intronic position such as 'NM_...:c.20+2del' is refused in strict input-hygiene mode and accepted in lenient mode, since the spec allows it only when a genomic reference is given.
+- [`c-and-n-positions-are-flat-transcript-offsets`](#c-and-n-positions-are-flat-transcript-offsets) — A 'c.'/'n.' position names the base at that offset in the flat transcript sequence and is never resolved by walking the exon table, so it lands correctly even on a transcript whose cdot alignment carries a gap.
+- [`c-description-against-an-unresolvable-cds-is-refused`](#c-description-against-an-unresolvable-cds-is-refused) — A 'c.' description against a transcript whose CDS start the reference cannot resolve is refused rather than returned unchanged, because ferro has no origin to number the coordinate from.
+- [`canonical-form-choice-when-both-legal`](#canonical-form-choice-when-both-legal) — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
+- [`cds-unknown-position-is-refused-at-conversion`](#cds-unknown-position-is-refused-at-conversion) — Converting a 'c.?' (unknown) position toward a transcript coordinate is refused rather than coerced into a concrete position — a project choice, since fabricating a coordinate for an explicitly unknown one yields a storable-but-wrong result.
+- [`coding-axis-merges-are-a-disclosed-general-34-deviation`](#coding-axis-merges-are-a-disclosed-general-34-deviation) — Ferro discloses, rather than defends, a coding-axis merge of allele members authored two or more unchanged nucleotides apart when no member is gap-bearing, as a deviation from the spec's preference to describe them individually; the disclosed set measured empty on the current partition rule, and the record awaits narrowing or retirement.
+- [`codon-carve-out-shape-restriction`](#codon-carve-out-shape-restriction) — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
+- [`conflicting-member-geometry-refusal-scope`](#conflicting-member-geometry-refusal-scope) — Two members of one allele that claim intersecting reference territory — nested, overlapping, or two insertions at one interbase — are refused, whatever edit types they render as.
+- [`confluence-gate-is-apply-equality-on-every-determined-axis`](#confluence-gate-is-apply-equality-on-every-determined-axis) — Ferro's release gate asserts, over the decided equivalence classes, that inputs denoting the same sequence on every determined axis normalize to one output, with equivalence judged by applying the descriptions to the reference rather than by comparing normalized strings.
+- [`contiguous-insertion-split-by-a-blocked-derivation`](#contiguous-insertion-split-by-a-blocked-derivation) — A single contiguous insertion spelled as an insertion plus a duplication one base apart is written as the one insertion, because the separation rule keys on two variants and this locus carries only one.
+- [`cross-zone-c-positions-order-by-transcript-coordinate`](#cross-zone-c-positions-order-by-transcript-coordinate) — Two `c.` positions in different numbering zones (`c.-n`/`c.n`/`c.*n`) are ordered by their flat transcript-sequence offset, not by the `c.` spelling — a house choice under `README.md` rule 5's silent limb, because the recommendations define the zones but state no rule for comparing across them.
+- [`delins-adjacent-members-when-both-consume-reference`](#delins-adjacent-members-when-both-consume-reference) — Two adjacent changes that both consume reference bases are written as a single delins; the spec marks the split spelling "not correct" at separation zero.
+- [`delins-codon-carve-out-gap-one`](#delins-codon-carve-out-gap-one) — Two changes one nucleotide apart that together affect a single amino acid are written as one delins on the coding sequence, the explicit exception the spec makes to describing them individually.
+- [`delins-merge-vs-individual-gap-two-or-more`](#delins-merge-vs-individual-gap-two-or-more) — When two changes two or more nucleotides apart arise only because part of the inserted sequence coincides with the reference and the block is a net deletion, ferro writes them as one spanning delins rather than individually.
+- [`delins-payload-coincidence-carve-out-is-coding-dna-scoped`](#delins-payload-coincidence-carve-out-is-coding-dna-scoped) — Where a split exists only because payload bases coincide with the reference, ferro writes it as one spanning delins on every DNA axis (c./g./m./n., but not r.); on the frameless axes this is a disclosed rule-2 deviation and the project's choice among conformant forms.
+- [`delins-recommendation-reach-when-the-input-arrives-split`](#delins-recommendation-reach-when-the-input-arrives-split) — Ferro merges a re-derived split into one delins only when some member supplies inserted bases while consuming a different number of reference bases; a split of pure deletions inserts nothing and stays individual.
+- [`derivation-may-not-be-bounded-by-the-inputs-spelling`](#derivation-may-not-be-bounded-by-the-inputs-spelling) — Ferro never refuses a re-derived description for naming more change than the input's own spelling did; the derived form is chosen from the sequence, not weighed against how the input was written.
+- [`duplication-must-ranks-the-label-not-the-partition`](#duplication-must-ranks-the-label-not-the-partition) — The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins.
+- [`exon-junction-dup-converge-from-the-far-side`](#exon-junction-dup-converge-from-the-far-side) — A duplication is placed at the most 3' position that does not cross an exon/exon junction, reached from either side, so a copy spelled past the junction is pulled back to it.
+- [`inversion-vs-a-mixed-member-competitor`](#inversion-vs-a-mixed-member-competitor) — When a span replaced by its reverse complement competes with a description mixing lone substitutions and multi-column members, ferro writes it as one inv; both forms are conformant, so this is the project's choice among them.
+- [`inversion-vs-two-delins-76-83`](#inversion-vs-two-delins-76-83) — A span replaced by its exact reverse complement is written as a single inv even where its interior columns coincide with the reference, not as the two delins those columns would separate.
+- [`inverted-duplication-is-derived-as-ins-range-inv`](#inverted-duplication-is-derived-as-ins-range-inv) — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases.
+- [`past-cds-end-coordinate-is-non-conformant`](#past-cds-end-coordinate-is-non-conformant) — A 'c.N' coordinate past the CDS end is non-conformant: strict mode refuses it, while lenient and silent modes repair it to the equivalent 'c.*' position — applied the same way to a lone position and to a member of a cis allele.
+- [`projection-codon-exception-is-decided-by-the-rendered-axis`](#projection-codon-exception-is-decided-by-the-rendered-axis) — The codon merge fires only on an axis that declares a reading frame, so when a coding description merges under it ferro leaves the members individual on the derived genomic axis rather than re-merging it to match.
+- [`rna-axis-alignment-only-symbol-reach`](#rna-axis-alignment-only-symbol-reach) — A non-leading lower-case 'x', which is not an assigned RNA nucleotide symbol, is refused in an 'r.' description, mirroring the refusal of the alignment-only 'X' on the DNA axes.
+- [`self-cancelling-across-ring-junctions`](#self-cancelling-across-ring-junctions) — The prohibition on replacing part of a sequence with part of itself does not reach the '::'-joined segments of a ring chromosome, so ferro keeps a ring's members rather than collapsing them to a linear delins.
+- [`separation-is-a-property-of-the-spelling-not-of-the-variant`](#separation-is-a-property-of-the-spelling-not-of-the-variant) — Ferro reads the separation between changes off the partition it re-derives from the resulting sequence, not off the input's spelling, so two spellings of one variant converge on one output.
+- [`separation-rule-force-modal-or-negation`](#separation-rule-force-modal-or-negation) — Two changes a nucleotide or more apart are described individually — this is the spec's preference (ruleset rule 2), not an outright ban; the only spelling the recommendations forbid is the split at separation zero.
+- [`spdi-n-unit-repeat-refusal`](#spdi-n-unit-repeat-refusal) — On the HGVS-to-SPDI path ferro refuses an 'N'-unit or 'N'-containing repeat rather than expand it to literal 'N' bases — a project choice, since 'N' states a length, not identified bases, and the recommendations do not reach SPDI conversion.
+- [`unchanged-is-read-over-every-minimal-alignment`](#unchanged-is-read-over-every-minimal-alignment) — Ferro treats a reference base as unchanged only when every minimum-edit alignment of the block matches it — a project choice the recommendations neither require nor forbid — except that an equal-length run with no base surviving at its own coordinate is rendered as one spanning delins.
+- [`unequal-length-block-a-placed-gap-is-not-a-separation`](#unequal-length-block-a-placed-gap-is-not-a-separation) — A lone unequal-length net-deletion delins whose payload merely coincides with the reference is kept whole on every DNA axis (c./g./m./n., but not r.) rather than split at that coincidence into a separate residual member.
+- [`whole-span-reverse-complement-types-as-inv`](#whole-span-reverse-complement-types-as-inv) — A span whose whole content is replaced by its exact reverse complement is written as one inv, however much of its interior coincides with the reference and whatever the competing partition is made of.
 
 ## The records
 

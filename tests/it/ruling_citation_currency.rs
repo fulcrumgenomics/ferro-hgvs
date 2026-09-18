@@ -467,7 +467,7 @@ fn a_status_word_used_as_code_is_not_a_status_claim() {
 /// ledger.
 ///
 /// Without this, every assertion below passes trivially if the roots move or the
-/// extension filter breaks — the failure mode this repo's `CLAUDE.md` calls a
+/// extension filter breaks — the failure mode this repo's `CONTRIBUTING.md` calls a
 /// structural zero.
 #[test]
 fn the_scan_reads_the_tree_it_claims_to() {
