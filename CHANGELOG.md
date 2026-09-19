@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v1.0.0...v1.0.1) - 2026-09-19
+
+### Fixed
+
+- *(ci)* read Representation-Change only from genuine footers in changelog audit ([#2234](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2234))
+
+### Other
+
+- First pass cleanup of ORACLES.md & friends ([#2223](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2223))
+- docs(spec) Update CONTRIBUTING.md for readability/agentic understanding ([#2222](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2222))
+- docs(spec) Attempt to make READING_THE_SPEC more understandable to me… ([#2217](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2217))
+- Debulk the CLAUDE.md ([#2215](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2215))
+- *(cli)* buffer stdout so batch output is not one syscall per line ([#2230](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2230))
+- *(error-handling)* drop 11 per-variant String allocations in the accession-prefix corrector ([#2229](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2229))
+
 ## [1.0.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.2...v1.0.0) - 2026-08-25
 
 ### Added
