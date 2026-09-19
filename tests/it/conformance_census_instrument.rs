@@ -30,11 +30,12 @@
 //! needs the `ferro-benchmark` binary, which the soak driver the `censuses` job
 //! runs off does not build — so it must stay in the `Test` shards.
 //!
-//! This module is named in `ci.yml`'s `ORACLE_EXCLUDE` for the same reason
-//! `conformance_census_runs` and `spec_conformance_axis` are: it consumes
-//! `conformance::census`, and an armed oracle makes a census read better than the
-//! truth. Since the refusal moved inside `run_census` it would simply be red there
-//! instead, which is the louder half of the same fact.
+//! This module is named in the `oracle` profile's first exclusion in
+//! `.config/nextest.toml` for the same reason `conformance_census_runs` and
+//! `spec_conformance_axis` are: it consumes `conformance::census`, and an armed
+//! oracle makes a census read better than the truth. Since the refusal moved
+//! inside `run_census` it would simply be red there instead, which is the
+//! louder half of the same fact.
 
 use std::collections::BTreeMap;
 
