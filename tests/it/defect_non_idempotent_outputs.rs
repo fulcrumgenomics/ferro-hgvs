@@ -77,7 +77,7 @@
 //! `spec_corpus_regressions.rs` rows named above; what is pinned as an ACHIEVED
 //! invariant is idempotency over all seven former-class families.
 //!
-//! # Why this module is in `ORACLE_EXCLUDE`
+//! # Why this module is in the `oracle` profile's first exclusion
 //!
 //! It measures over the spec corpus, and `FERRO_ASSERT_IDEMPOTENT` **panics** on
 //! exactly the condition it measures. A panicking row contributes no output, so
@@ -92,7 +92,7 @@
 //! measure that, with `tests/it/oracle_exclude_invariant.rs` updated in the same
 //! change. See
 //! `tests/it/oracle_exclude_invariant.rs`, which fails if this module is not
-//! named in `ci.yml`'s `ORACLE_EXCLUDE`.
+//! named in the `oracle` profile's first exclusion in `.config/nextest.toml`.
 
 use std::sync::OnceLock;
 

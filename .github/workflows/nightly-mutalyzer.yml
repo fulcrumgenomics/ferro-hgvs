@@ -76,10 +76,11 @@ jobs:
       # census pin, and was then chased as an "inconsistency between worktrees".
       #
       # ENUMERATE, DO NOT GLOB. Widening this to a pattern was considered and
-      # rejected: it imports the seven modules `ci.yml`'s `ORACLE_EXCLUDE`
-      # withholds from an armed job, which fail on `main` for reasons no nightly
-      # caused, and it makes the xfail artifact — the only channel a non-gating
-      # job has — unreadable. The reproduce-text below says the same thing.
+      # rejected: it imports the seven modules the `oracle` profile's first
+      # exclusion in `.config/nextest.toml` withholds from an armed job, which
+      # fail on `main` for reasons no nightly caused, and it makes the xfail
+      # artifact — the only channel a non-gating job has — unreadable. The
+      # reproduce-text below says the same thing.
       #
       # ADDING A MANIFEST-GATED GUARD? Add its module here. `FERRO_REQUIRE_MANIFEST`
       # below cannot catch an omission from this list — it fires when a SELECTED
@@ -314,11 +315,11 @@ jobs:
             echo '```'
             echo
             echo "Keep the \`-E\` selection, and keep it ENUMERATED. Dropping it while keeping the"
-            echo "flags — or replacing it with a pattern — widens the run onto the modules"
-            echo "\`ci.yml\`'s \`ORACLE_EXCLUDE\` withholds from an armed job, which fail on"
-            echo "\`main\` for reasons no nightly caused — see that variable's comment, and"
-            echo "\`scripts/run_oracle_suite.sh\` for the local runner that applies the same"
-            echo "exclusion."
+            echo "flags — or replacing it with a pattern — widens the run onto the modules the"
+            echo "\`oracle\` profile's first exclusion in \`.config/nextest.toml\` withholds from"
+            echo "an armed job, which fail on \`main\` for reasons no nightly caused — see that"
+            echo "exclusion's comment, and \`scripts/run_oracle_suite.sh\` for the local runner"
+            echo "that applies the same exclusion."
             echo
             echo "\`FERRO_REQUIRE_MANIFEST=1\` is set in this job so a guard that finds no"
             echo "prepared reference FAILS rather than skipping green. If you reproduce"

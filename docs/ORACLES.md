@@ -1,175 +1,160 @@
-# The normalization seam oracles
+# Normalization oracles
 
-Four `FERRO_ASSERT_*` flags turn every normalization in the test suite into an invariant check.
-Each asks one question of every normalized description: is it a fixed point, does it re-parse, are
-its coordinates in range, and does it denote the same bases the input did. This page is the home
-for that story. The other three copies point here: the `ci.yml` job comments, the runner header,
-and the invariant test header.
+This repo uses a set of "oracles" as an extra correctness check. When armed, they validate every
+normalization output the test suite produces, in the CI jobs that arm them and in local armed runs.
+Each oracle is switched on by setting its `FERRO_ASSERT_*` flag; an unarmed debug build or the plain
+`test` job runs none of them, and release builds carry no oracle code at all. Read this page when an
+oracle fires on your PR, when you add a normalization path, or when you change the oracle jobs in
+`ci.yml`.
+
+Each oracle asks a question of an output: is it a fixed point, does it re-parse, are its
+coordinates in range, does it denote the same bases as the input? They catch a wrong output that
+passes every test written against an expected spelling. The sections below say how to run the
+oracles, what each catches and misses, where CI arms them, and how a fire blocks a merge.
+
+Terms used on this page:
+
+- **oracle**: a check that judges an output by a property, with no expected spelling to compare
+  against.
+- **seam**: the single exit every normalization passes through. The oracles run there.
+- **arm**: set a `FERRO_ASSERT_*` flag, which switches on its oracle.
+- **fire**: an oracle fails. It panics, so the test that produced the output fails.
 
 ## The seam
 
-The four flags share one call site. `Normalizer::assert_seam_oracles` runs at the single exit of
-`normalize_core_checked`, so it covers every public normalization path: `normalize()`,
-`normalize_with_diagnostics()`, and every `VariantProjector` axis. An oracle sees every normalized
-description ferro hands back.
+All oracles run from a single call site. `Normalizer::assert_seam_oracles` runs at the exit
+of `normalize_core_checked`, and every public normalization path uses that exit: `normalize()`,
+`normalize_with_diagnostics()`, and every `VariantProjector` axis. Route a new normalization path
+through `normalize_core_checked`. Do not call an oracle from anywhere else.
 
-The four checks run in a fixed order: in-bounds, re-parse, idempotency, denoted-sequence.
-Denoted-sequence runs last because it is the expensive one and the only one that reads the
-reference. An out-of-bounds or unparseable output must be named as that, not as a sequence the
-oracle could not apply.
+The checks run in a fixed order, putting more expensive checks last. Currently that order is
+in-bounds, re-parse, idempotency, and denoted-sequence.
 
-Each flag is compiled out in release builds. Every call carries `#[cfg(debug_assertions)]`, so the
-whole body disappears in release. Each flag is read once into a `OnceLock`, so a disabled run pays
-only one atomic load. The idempotency oracle re-enters normalization to verify its own output, so a
-thread-local `IN_IDEMPOTENCY_CHECK` guard breaks that recursion: the inner call skips its check.
+Every oracle carries `#[cfg(debug_assertions)]`, so a release build contains no oracle code. Each
+flag is read once into a `OnceLock`, so a debug run with the flag unset pays one atomic load. The
+idempotency oracle re-enters normalization to check its own output. A thread-local
+`IN_IDEMPOTENCY_CHECK` guard makes the inner call skip its check.
 
 ## Running the oracles locally
 
-Use the runner. It reproduces `ci.yml`'s `test-oracle` *armed step*: that step's four flags, over
-that step's selection. It does **not** reproduce the job's compensating step, which re-runs the
-`SEQUENCE_ORACLE_EXCLUDE` debt rows under the other three oracles — that step runs only in CI, so a
-local run leaves those rows uncovered. See [What CI arms, and where](#what-ci-arms-and-where).
-
 ```bash
-scripts/run_oracle_suite.sh                     # arm the flags and run the selection
-scripts/run_oracle_suite.sh --print-selection   # print what it would run, then stop
-scripts/run_oracle_suite.sh -E 'test(my_test)'  # extra args go through to nextest
+scripts/run_oracle_suite.sh                     # run the armed suite
+scripts/run_oracle_suite.sh --print-selection   # list what it would run, then stop
+scripts/run_oracle_suite.sh -E 'test(my_test)'  # other arguments pass through to nextest
 ```
 
-Do not arm any of the four flags by hand over the whole suite. This command is red on `main`:
+The runner selects the `oracle` profile in `.config/nextest.toml`. That profile excludes the
+modules that cannot run armed and binds `scripts/arm-oracles.sh`, which sets the `FERRO_ASSERT_*`
+flags. CI's `test-oracle` job selects the same profile and adds only scheduling: it shards the
+run and leaves the sweeps, censuses and proptests to other jobs. A local run therefore includes
+tests that job does not.
+[Which oracles the CI arms, and where](#which-oracles-the-ci-arms-and-where) lists every job
+and the flags it sets.
 
-```bash
-FERRO_ASSERT_IDEMPOTENT=1 FERRO_ASSERT_REPARSE=1 \
-  FERRO_ASSERT_IN_BOUNDS=1 FERRO_ASSERT_SEQUENCE=1 \
-  cargo nextest run --features dev   # red on main
-```
+To change what the armed run excludes, edit the profile. Neither `ci.yml` nor the runner needs a
+matching edit. `tests/it/oracle_exclude_invariant.rs` reads the profile and fails when it
+disagrees with the test tree.
 
-It is red for two reasons, and neither is a coverage gap to close:
+Do not set the flags by hand over the whole suite. Some modules pin a wrong output on purpose or
+count conformance rows. An armed oracle fails on them by design, so that run is red on `main`.
+The red is not a coverage gap. Those modules run unarmed in the plain `test` job.
 
-- A spec-corpus census counts the defect an oracle would panic on. `conformance::census::measure`
-  catches the panic and files that row as `declined`, so the count reads better than the truth, and
-  `conformance::census::run_census` refuses to run at all with a flag set. This applies to every
-  flag: `run_census` refuses when any `FERRO_ASSERT_*` variable is set, and `measure` flatters
-  under whichever oracle fires.
-- Some rows pin a defect at the seam. `spec_corpus_regressions` pins the CDS-end flush-pair rows
-  the denoted-sequence oracle fires on. A test that pins a defect and an oracle that fires on it
-  cannot both run. This applies only to the denoted-sequence flag; the other three oracles fire on
-  neither pinned-defect module.
+## The oracles
 
-`ORACLE_EXCLUDE` names those modules, and the armed CI job negates it. See
-[What CI arms, and where](#what-ci-arms-and-where).
+### Idempotency oracle
 
-The runner reads the whole `-E` selection and the flag set out of `ci.yml`. It copies nothing, so
-neither can drift into a second copy. `tests/it/oracle_exclude_invariant.rs` re-derives the same
-selection in Rust from different anchors and compares the two, so a hand-built copy that drifts from
-the file fails that test.
-
-## Idempotency oracle
-
-`FERRO_ASSERT_IDEMPOTENT=1` asserts that `norm(norm(x)) == norm(x)`. Every test that normalizes
-becomes an idempotency check. Its blind spot: it verifies by re-normalizing its own output, so it
+`FERRO_ASSERT_IDEMPOTENT=1` asserts `norm(norm(x)) == norm(x)` for every normalized output:
+normalizing again must change nothing. The check re-normalizes the output to verify this, so it
 cannot judge an output that fails to parse.
 
-## Re-parse oracle
+### Re-parse oracle
 
-`FERRO_ASSERT_REPARSE=1` asserts that `parse_hgvs` accepts a normalized description, when
-normalization is what broke it. The exemptions are a closed list of four:
+`FERRO_ASSERT_REPARSE=1` asserts that `parse_hgvs` accepts the normalized description. The oracle
+fires only when the input parsed and the output does not. `parse_hgvs` holds no provider, so this
+oracle accepts a well-formed spelling that denotes the wrong bases.
 
-- `0` and `?` are legal whole-allele outputs that `parse_hgvs` rejects standalone because it wants
-  an accession.
-- An empty allele (`[]`), which only direct construction reaches; the projector's own tests build
-  one to pin that it declines.
-- A non-flanking genomic insertion, the projection pivot: its coordinates are sound but its spelling
-  is not one HGVS admits, so the projector withholds the reported genomic axis instead
+A fire on any shape not listed below is a defect in the producer. Fix the producer. Do not add an
+exemption. The exemptions are a closed list:
+
+- `0` and `?`. They are legal whole-allele outputs. `parse_hgvs` rejects them standalone because it
+  requires an accession.
+- An empty allele, `[]`. Only direct construction reaches it. The projector's own tests build one to
+  pin that the projector declines it.
+- A non-flanking genomic insertion, the projection pivot. Its coordinates are sound, but HGVS admits
+  no spelling for it, so the projector withholds the reported genomic axis
   (`non_flanking_genomic_insertion_anchor`).
-- A non-coding downstream position (`n.*N`), which parse refuses in every mode while
-  `TxPos::downstream` stays public API, so only a Rust caller reaches it; `noncoding_zone_marker`
-  keys the exemption on the AST.
+- A non-coding downstream position, `n.*N`. `parse_hgvs` rejects it in every mode, but
+  `TxPos::downstream` is public API, so a Rust caller can build one. `noncoding_zone_marker` keys
+  the exemption on the AST.
 
-Keep the list whole. If you widen it, that is the signal to fix the producer. Its blind spot:
-`parse_hgvs` holds no provider, so a well-formed spelling that denotes the wrong bases is valid to it.
+### In-bounds oracle
 
-## In-bounds oracle
+`FERRO_ASSERT_IN_BOUNDS=1` asserts that no coordinate in a normalized description is past the end of
+its sequence. The rules are on the doc comment of `merge::first_out_of_bounds_coordinate`. This page
+does not repeat them. The oracle does not cover protein axes or an inserted-range payload such as
+`g.10_11ins[20_30]`. Idempotency does not stand in for this check: an out-of-range coordinate that
+is a fixed point passes it.
 
-`FERRO_ASSERT_IN_BOUNDS=1` asserts that no coordinate a normalized description names is past the end
-of its own sequence. The rules live on the doc comment of `merge::first_out_of_bounds_coordinate`.
-Read them there. Not covered: protein axes, and an inserted-range payload (`g.10_11ins[20_30]`).
+### Denoted-sequence oracle
 
-The oracle exists because this defect class was found by hand, one shape at a time, in #1274, #1343
-and #1307 before #1353 asserted it at the seam.
+`FERRO_ASSERT_SEQUENCE=1` checks that normalization did not change what a description does. A
+description is an edit to a reference sequence. The oracle applies the input and the output to one
+stretch of reference, wide enough to cover both, and asserts that the results are the same bases.
+One window for both is what lets a 3'-shift inside a repeat yield the same bases instead of a
+difference. In other words,
+this oracle detects a wrong edit that looks right: one that parses, whose positions exist, and that
+normalizing again leaves unchanged.
 
-Its blind spot: an out-of-range coordinate that is a fixed point passes idempotency, so idempotency
-does not catch it.
-
-## Denoted-sequence oracle
-
-`FERRO_ASSERT_SEQUENCE=1` is the only oracle that asks what the output means. It applies the input to
-the reference, applies the output, and asserts the bases agree. It applies both descriptions over
-the union of their spans, in one fetch, so a shared frame does not report a 3'-shift as a difference.
-
-The other three are all form questions, and a wrong sequence passes all of them. It is a fixed point,
-so idempotency is satisfied. It parses, and `parse_hgvs` holds no provider, so re-parse cannot know.
-Its coordinates exist, so in-bounds is satisfied.
-
-The class was found by hand in #1254, #1281, #1290, #1304, #1308, #1312, #1592 and #1600 before #1615
-asserted it at the seam, and #1592 and #1600 each record the other three oracles passing on their
-reproducer.
-
-The applier is not the normalizer. `spdi::compare_denoted_sequences` reaches the bases through
-`hgvs_to_spdi` and an SPDI splice, the same walk `apply_to_reference` and
-`tests/it/common/cis_apply_oracle.rs` use, so nothing here agrees with the output merely because
-normalization produced it. `EquivalenceChecker` is not usable for this: it normalizes both sides,
-which is circular. For why `hgvs_to_spdi` and the normalizer read a `c.` position on the same flat
-transcript axis, see the ruling record `c-and-n-positions-are-flat-transcript-offsets` in
-`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. The regression guard for that defect
-is `CDOT_GAP_JUNCTIONS` in `tests/it/normalization_transcripts_exon_contract.rs`, whose doc comment
-says why the NM_033517.1 record must keep its gap.
-
-A side that cannot be applied is counted, not silently passed. A skip that reads as a pass is the
-exact failure mode this oracle exists to remove:
+Read `normalize::denoted_sequence_oracle_counts()` before you trust a green run. It returns
+`(compared, skipped)` for the process, and zero comparisons and zero faults look the same. A side
+that cannot be applied is counted as a skip, never as a pass:
 
 | case | verdict |
 |---|---|
 | both apply, bases agree | pass, counted in `compared` |
 | both apply, bases differ | fire |
-| the output denotes no sequence while the input does | fire. Two members can claim one base, which is worse than a wrong sequence, so it is never a skip |
-| the input denotes no sequence (a trans allele, a `REFSEQ_MISMATCH`, an edit SPDI cannot carry) | skip, counted in `skipped`. There is no baseline |
+| the output denotes no sequence and the input does | fire. The output lost the input's meaning, for example when two members claim one base |
+| the input denotes no sequence (a trans allele, a `REFSEQ_MISMATCH`, an edit SPDI cannot carry) | skip, counted in `skipped`. The input gives no baseline |
 | the two name different accessions | skip, counted |
 | the union window exceeds `MAX_APPLY_WINDOW`, or the provider cannot serve it | skip, counted |
 
-`normalize::denoted_sequence_oracle_counts()` returns `(compared, skipped)` process-wide. Read it
-before you trust a green oracle run, because zero comparisons and zero faults look the same from the
-outside.
+The oracle stays silent on the shapes below by design. A fire on one of them is a regression in
+the oracle: file it against the oracle, not the normalizer.
 
-`tests/it/issue_1615_denoted_sequence_oracle.rs` is the oracle's own regression guard. It pins each
-recorded wrong output and asserts the predicate fires without re-normalizing, so it keeps testing the
-oracle rather than the fix. Its other half is a negative control where a legitimate re-spelling must
-stay silent.
-
-The first run of this oracle over the suite raised many fires, and all but a few were false. Each row
-below is a class, and the reasoning is on the code:
-
-| class | why it was not a defect |
+| class | why the oracle does not fire |
 |---|---|
 | output cannot be transliterated | the input states its own deleted bases and converts with no provider; the output must read a reference the fixture does not hold |
-| insertion flush against a deletion | the disjointness predicate called it an overlap; the applier's tie-break does not, and it is well defined. See #1749 and #1831. The 233 is the size of the class when it was diagnosed |
+| insertion flush against a deletion | the applier's tie-break defines the order, so it is not an overlap. See #1749 and #1831 |
 | overlap-conflicting input | an insertion interior to a deletion; the input denotes nothing, so there is no baseline |
-| `pter`/`qter` | they carry no numeric coordinate, so `hgvs_to_spdi` resolves the position to the last base |
-| corrected `REFSEQ_MISMATCH` | normalization is supposed to change the denoted sequence here |
+| `pter`/`qter` | they carry no numeric coordinate, so the applier declines the row before it converts either side |
+| corrected `REFSEQ_MISMATCH` | the input names a reference base the reference does not hold; normalization corrects it, so the denoted sequence changes on purpose; the seam's denoted-sequence check skips the row by its warning |
 | `r.` payload against a DNA reference | the same bases in two alphabets |
-| uncertain allele `[(…)]` | the normalizer deliberately does not clamp those |
+| uncertain allele `[(…)]` | the members are uncertain, so the applier skips the row |
 
-The two sides of a comparison do not need the reference equally. Any check that reads "I could not
-derive it" as "it is wrong" fires hardest where that asymmetry is largest.
+The applier does not call the normalizer or use its result, or the check would agree with whatever
+normalization produced. `spdi::compare_denoted_sequences` reaches the bases through `hgvs_to_spdi`
+and an SPDI splice, a walk that agrees with `apply_to_reference`. Do not use `EquivalenceChecker`
+here: it normalizes both sides. The applier and the normalizer read a `c.` position on the same flat
+transcript axis; the ruling record `c-and-n-positions-are-flat-transcript-offsets` says why, and
+`CDOT_GAP_JUNCTIONS` guards it.
 
-## What CI arms, and where
+To add a regression test for the oracle, pin the recorded wrong output and assert that the oracle
+fires on it. Do not run the normalizer: a test that re-normalizes goes green when the defect is
+fixed and stops testing the oracle. `tests/it/issue_1615_denoted_sequence_oracle.rs` holds these
+rows, plus a negative control that a legitimate re-spelling stays silent.
 
-Each column is a flag. Each row is a job or a step. `yes` means the flag is set.
+## The oracles in CI
+
+### Which oracles the CI arms, and where
+
+CI splits the test suite across several jobs, and each job chooses which oracles to switch on for
+its tests. The `test-oracle` job takes its flags from the `oracle` profile. `sweeps`, `censuses`
+and the nightly set theirs in their own workflow steps.
 
 | job or step | IDEMPOTENT | REPARSE | IN_BOUNDS | SEQUENCE |
 |---|---|---|---|---|
 | `test-oracle` armed step | yes | yes | yes | yes |
-| `test-oracle` compensating step | yes | yes | yes | no |
+| `test-oracle` re-run step | yes | yes | yes | no |
 | `sweeps` | yes | yes | yes | yes |
 | `censuses` armed step | yes | yes | yes | no |
 | `censuses-plain` | no | no | no | no |
@@ -177,51 +162,43 @@ Each column is a flag. Each row is a job or a step. `yes` means the flag is set.
 | `soak` | no | no | no | no |
 | nightly | yes | yes | yes | yes |
 
-`ORACLE_EXCLUDE` states which instrument may be armed while another is measuring. It is not a
-coverage exemption: every module it names runs unarmed in the plain `test` job. Two census mechanisms
-sit behind it. `conformance::census::measure` catches a panic and files that row as `declined`, which
-flatters the count; `spec_conformance_axis` calls it. `conformance::census::run_census` refuses
-outright when any `FERRO_ASSERT_*` is set and returns `CensusError::OracleArmed`;
-`conformance_census_runs` calls it, and `conformance_census_instrument` reaches it through the
-`ferro-benchmark` binary.
+To turn an oracle on in a CI job, first run every test that job runs with the flag set. Passing
+the few tests you have in mind proves nothing about the others. `censuses` leaves
+`FERRO_ASSERT_SEQUENCE` off by design until that run is done. One caveat when reading results:
+`test-oracle` provisions no `FERRO_MANIFEST`, so the tests that need one return early and pass,
+and a green `test-oracle` says nothing about them.
 
-Two pinned-defect modules sit on the same list. The denoted-sequence oracle fires on rows that
-`spec_corpus_regressions` pins, the CDS-end flush-pair class, and a fire reddens that test rather than
-emptying any sweep or count. The idempotency, re-parse and in-bounds oracles fire on neither
-`spec_corpus_regressions` nor `defect_non_idempotent_outputs`. `defect_non_idempotent_outputs` fires
-under no flag; it stays on the list because `tests/it/oracle_exclude_invariant.rs` requires every
-module that reads the spec corpus to be there.
+### What the oracle profile excludes
 
-`SEQUENCE_ORACLE_EXCLUDE` is a debt list. It withholds rows from the denoted-sequence oracle and
-from nothing else: a module whose purpose is to pin a defect, and a gate whose corpus rows fire. Read
-the rows off `ci.yml`, each beside the open issue that retires it.
-The `test-oracle` compensating step re-runs exactly those rows under the other three oracles, so this
-file's oracle coverage is a strict superset of what it was, not a trade. Suppressing a row at the seam
-would hollow out the oracle; a visible, issue-numbered selection term does not, which is why the debt
-list is its own variable.
+The `oracle` profile excludes two lists. The first is modules that cannot run armed at all. The
+second is single rows the denoted-sequence oracle fires on for a bug not yet fixed.
 
-Only a selection-wide armed run over a job's own `-E` says whether a flag can be armed. "The rows I
-know about are green" has never been sufficient here. `censuses` arms three flags and not the fourth,
-deliberately: its flag set is a strict subset of `test-oracle`'s. Do not restore parity by copying
-`FERRO_ASSERT_SEQUENCE` down without first measuring it over `ORACLE_ONLY_FILTER`'s modules. And
-`test-oracle` arms the fourth flag but provisions no `FERRO_MANIFEST`, so the reference-aware axes
-early-return there and nextest reports that skip path as PASS: a denoted-sequence violation on those
-axes cannot redden the required check, and that manifest half stays open (#1815).
+The module list. These modules still run unarmed in the plain `test` job, so the list is not a
+coverage exemption. A census counts spec rows. Armed, `conformance::census::measure` catches the
+oracle's panic and files the row as `declined`, so the count reads better than the truth.
+`conformance::census::run_census` refuses to run instead, returning `CensusError::OracleArmed` when
+any `FERRO_ASSERT_*` flag is set. A pinned-defect module records a known wrong output, so an oracle
+fires on it by design. Every module that reads the spec corpus
+must be on this list, whether or not it fires, and every name on the list must read the corpus.
+`tests/it/oracle_exclude_invariant.rs` fails on either miss. When you add a test module that
+imports the corpus, add it here.
 
-## The nightly and the merge gate
+The debt list. These rows are excluded from the denoted-sequence oracle only. The `test-oracle`
+re-run step runs them under the `oracle-rerun` profile with the other oracles armed. Each row sits
+beside the open issue that retires it. Read the rows off `.config/nextest.toml`. To exclude a new
+fire, add the row to both profiles beside its open issue. Never add an exemption inside
+`assert_seam_oracles`: a row in the profile is visible and names its issue, and an exemption in
+code hides the fire from every run. When the issue closes, remove the row from both profiles.
 
-In PR CI, `test-oracle` and `sweeps` carry no `continue-on-error`, so an oracle fire turns the job red.
+### The merge gate and the nightly test
 
-The nightly reference-aware job carries `continue-on-error`. Its purpose is to surface drift in the
-xfail report, not to gate. The corpus runner wraps normalization in `catch_panics`, so an oracle fire
-lands in the uploaded xfail artifact as a failing case. Read a nightly oracle fire out of that report,
-not from the workflow conclusion.
+For PRs, CI runs `test-oracle` and `sweeps` with the oracles armed. A fire fails the job, and the
+required `Test` rollup needs both jobs, so the fire blocks the merge. Read the rollup's `needs:`
+list from `.github/workflows/ci.yml`, not from this page.
 
-A nightly issue can still be about an oracle. The #1998 diff step compares the run's failing set
-against the committed baseline. It carries no `continue-on-error`, so any drift fails the job and
-`report-failure` opens a tracking issue, and a new oracle fire changes the failing set, so it reaches
-that gate. A separate job-summary step prints the armed reproduction recipe, keyed on the test step's
-`outcome`.
-
-An oracle fire blocks the merge. The required `Test` context is a rollup. Its `needs:` list includes
-`test-oracle` and `sweeps`. Read that list from `.github/workflows/ci.yml`, not from this page.
+The nightly reference-aware run tolerates known failures and alarms on new ones. Its test step
+carries `continue-on-error`, so a failing test does not fail the job. A later step diffs the run's
+failing set against the committed baseline and fails the job on any difference, which opens a
+`report-failure` issue. A new oracle fire is a new failure, so it opens the issue. A fire on a test
+already in the baseline does not, so a green nightly does not mean no oracle fired. To see what
+fired, read the uploaded xfail artifact; the job summary prints the armed reproduction recipe.

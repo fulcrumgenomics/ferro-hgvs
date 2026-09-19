@@ -31,10 +31,9 @@ due to bandwidth quota limitations. `scripts/fetch-test-fixtures.sh` downloads t
 files over HTTPS with no token, so it works on a forked-PR runner, and checks each one
 against `tests/fixtures/CHECKSUMS.sha256`; all digests must match.
 
-Skipping the fetch is safe, but `clinvar_hgvs_tests`, `cmrg_exhaustive_tests` and
-`paraphase_exhaustive_tests` then report PASS without testing anything, and the bulk-corpus
-tests in `normalize_axis_preserving` do the same — its spec-fixture and unit tests still run.
-[Testing](#testing) has the flag that makes them fail instead.
+Skipping the fetch is safe, but `clinvar_hgvs_tests`, `cmrg_exhaustive_tests`,
+`paraphase_exhaustive_tests` and `normalize_axis_preserving` then report PASS without
+testing anything. [Testing](#testing) has the flag that makes them fail instead.
 `tests/fixtures/README.md` covers provenance and regeneration.
 
 ### Python bindings setup
@@ -239,9 +238,8 @@ are its rules.
 
 - **The verdict is the first word.** `none`, `no`, `n/a` and `na` all count as a decline,
   in any casing.
-- **A full stop, semicolon, colon, em dash or en dash may introduce a reason.** `none. Tests
-  only` is a decline. An ASCII hyphen is not a terminator, so `none - Tests only` is filed as a
-  move. Explain a decline when the reason is not obvious.
+- **A full stop, semicolon, colon or dash may introduce a reason.** `none. Tests only` is
+  a decline. Explain a decline when the reason is not obvious.
 - **A comma is not a terminator.** `none, except two rows` is filed as a move, because a
   comma usually introduces a qualification that changes the verdict. `no rows move` has no
   terminator, so the verdict is not `no`, and it is filed as a move. Both err toward
@@ -552,14 +550,10 @@ a failing replay test means. When your PR changes normalization output:
    with `spec_expected` set to `c.79_80delinsTT`. A key that matches no fixture input fails
    generation. See [Override entry shape](#override-entry-shape).
 
-4. **Do not use `--check` as a gate here.** Both plain generation and `--check` load the
-   overrides and render the fixture, and that render is what validates every override against
-   the spec checkout — so a stale override fails either way. The difference is that plain
-   generation writes the fixture, while `--check` compares the rendered result against an
-   existing artifact without overwriting it (a missing one is generated, not a failure). The
-   fixture is gitignored, so there is no committed baseline for `--check` to gate on. The
-   tool-support tables are the opposite case: their outputs are committed, and there `--check`
-   is the gate.
+4. **Do not use `--check` as a gate.** Generation is what validates every override against
+   the spec checkout, so a stale override fails the build; `--check` only asks whether your
+   local artifact is current. The tool-support tables are the opposite case: their outputs
+   are committed, and there `--check` is the gate.
 
 5. **To bump the spec:** move the submodule pointer with
    `git -C assets/hgvs-nomenclature checkout <new-tag>`, re-validate the default accessions

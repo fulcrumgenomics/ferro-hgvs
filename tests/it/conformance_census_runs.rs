@@ -25,12 +25,13 @@
 //! `a_looser_relation_converges_at_least_as_many_families` genuinely needs both a
 //! `sequence` and a `partition` census in one process regardless.
 //!
-//! This module is named in `ci.yml`'s `ORACLE_EXCLUDE` for the same reason
-//! `conformance_census_instrument` and `spec_conformance_axis` are: it measures
-//! the census, and an armed seam oracle makes a census read better than the truth
-//! (a panicking row contributes no output, so its family silently converges).
-//! Since the refusal moved inside `run_census` it would be a red `OracleArmed`
-//! error here instead, which is the louder half of the same fact.
+//! This module is named in the `oracle` profile's first exclusion in
+//! `.config/nextest.toml` for the same reason `conformance_census_instrument`
+//! and `spec_conformance_axis` are: it measures the census, and an armed seam
+//! oracle makes a census read better than the truth (a panicking row
+//! contributes no output, so its family silently converges). Since the refusal
+//! moved inside `run_census` it would be a red `OracleArmed` error here
+//! instead, which is the louder half of the same fact.
 
 use std::collections::BTreeSet;
 

@@ -715,8 +715,8 @@ pub(crate) fn apply_triples_classified(
 /// each triple's position, which read a tie between a zero-width triple and a
 /// span triple differently depending on which the stable sort happened to visit
 /// first: `g.[5_9del;4_5insA]` was disjoint and `g.[4_5insA;5_9del]` was not.
-/// `docs/ORACLES.md` records that class as 233 false fires of the denoted-sequence
-/// oracle.
+/// `splice_denoted_sequence`'s doc comment records that class as 233 false fires of the
+/// denoted-sequence oracle (#1749).
 fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
     let footprints: Vec<WriteFootprint<u64>> =
         ordered.iter().map(|t| triple_footprint(t)).collect();
@@ -1624,8 +1624,8 @@ mod tests {
     /// Without this, the decline above would also be satisfied by a predicate
     /// that called every insertion-plus-deletion pair an obstruction — which is
     /// the over-rejection `gap < end`'s strictness exists to prevent, and the
-    /// class `docs/ORACLES.md` records as 233 false fires of the denoted-sequence
-    /// oracle.
+    /// class `splice_denoted_sequence`'s doc comment records as 233 false fires of the
+    /// denoted-sequence oracle (#1749).
     #[test]
     fn an_insertion_flush_against_that_deletion_still_applies() {
         for descriptor in [
@@ -1900,8 +1900,8 @@ mod tests {
     /// differently depending on which it visits first.
     ///
     /// An insertion flush against the 5' edge of a deletion is well defined
-    /// (`docs/ORACLES.md` records it as a 233-fire false-positive class of the
-    /// denoted-sequence oracle), so the verdict must be "disjoint" in **both**
+    /// (`splice_denoted_sequence`'s doc comment records it as a 233-fire false-positive
+    /// class of the denoted-sequence oracle, #1749), so the verdict must be "disjoint" in **both**
     /// member orders. Today it is not, and nothing in the description picks
     /// between them.
     #[test]
