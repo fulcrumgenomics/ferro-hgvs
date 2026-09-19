@@ -2897,6 +2897,74 @@ class VariantProjection:
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
 
+class MutalyzerResult:
+    """A Mutalyzer-style, multi-axis view of a variant, computed by ferro.
+
+    Returned by :meth:`VariantProjector.mutalyzer`. Bundles the input's
+    normalized form and its g./c./n./r./p. axes into one object, in a shape
+    familiar to Mutalyzer users. Each axis is the rendered HGVS string, or
+    ``None`` when that axis is not derivable from the input and reference.
+
+    Interface-compatible, not output-compatible: the values are ferro's own
+    spec-grounded normalization and projection, so they can differ from what
+    Mutalyzer would emit — that is expected, not a bug. ``str(result)`` renders
+    a plain, aligned block with absent axes shown as ``-``.
+    """
+
+    @property
+    def input(self) -> str:
+        """The input description, echoed verbatim."""
+        ...
+
+    @property
+    def normalized(self) -> str | None:
+        """The input normalized on its own coordinate axis, or None."""
+        ...
+
+    @property
+    def genomic(self) -> str | None:
+        """The genomic (g.) description, or None."""
+        ...
+
+    @property
+    def coding(self) -> str | None:
+        """The coding (c.) description, or None."""
+        ...
+
+    @property
+    def noncoding(self) -> str | None:
+        """The non-coding transcript (n.) description, or None."""
+        ...
+
+    @property
+    def rna(self) -> str | None:
+        """The predicted RNA consequence (r.), or None."""
+        ...
+
+    @property
+    def protein(self) -> str | None:
+        """The predicted protein consequence (p.), or None."""
+        ...
+
+    @property
+    def gene_symbol(self) -> str | None:
+        """The gene symbol, or None."""
+        ...
+
+    @property
+    def transcript_id(self) -> str:
+        """The transcript the axes were resolved against."""
+        ...
+
+    @property
+    def warnings(self) -> list[NormalizationWarning]:
+        """Diagnostics emitted while normalizing the input; empty when clean."""
+        ...
+
+    def has_warnings(self) -> bool:
+        """True when at least one warning was emitted."""
+        ...
+
 class VariantProjector:
     """Projects g. HGVS variants onto transcripts to produce c./p. equivalents."""
 
@@ -2973,6 +3041,31 @@ class VariantProjector:
 
         Returns:
             VariantProjection with g./c./p. representations and flags.
+
+        Raises:
+            ProjectionError: If parsing or projection fails (a subclass of
+                ValueError and RuntimeError).
+        """
+        ...
+
+    def mutalyzer(self, hgvs_string: str, transcript: str) -> MutalyzerResult:
+        """Produce a Mutalyzer-style, multi-axis view of a variant.
+
+        Bundles the input's normalized form and its g./c./n./r./p. axes into one
+        :class:`MutalyzerResult`. Unlike :meth:`project` (which the caller reads
+        an axis off of), this returns every derivable axis at once, in a shape
+        familiar to Mutalyzer users.
+
+        Interface-compatible, not output-compatible: the values are ferro's own
+        spec-grounded normalization and projection and can differ from
+        Mutalyzer's — that is expected.
+
+        Args:
+            hgvs_string: The variant description to view.
+            transcript: The transcript to resolve the axes against.
+
+        Returns:
+            MutalyzerResult with the normalized form and all derivable axes.
 
         Raises:
             ProjectionError: If parsing or projection fails (a subclass of
