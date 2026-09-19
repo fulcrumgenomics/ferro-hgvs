@@ -1,17 +1,25 @@
-//! Liveness check for the pairing between the spec corpus and CI's armed job.
+//! Liveness check for the pairing between the spec corpus and the armed profile.
 //!
-//! Every module that measures over the spec corpus must be named in
-//! `ORACLE_EXCLUDE`, and every name there must still measure over the corpus.
-//! The tests below check that pairing in both directions.
+//! The `oracle` profile in `.config/nextest.toml` is the policy half of `ci.yml`'s
+//! `test-oracle` job. Its `default-filter` carries two exclusions, and its setup
+//! script `scripts/arm-oracles.sh` arms the flags. CI and
+//! `scripts/run_oracle_suite.sh` both select that profile, so this file reads the
+//! profile and nothing reads `ci.yml` to recover it.
+//!
+//! Every module that measures over the spec corpus must be named in the first
+//! exclusion, and every name there must still measure over the corpus. The second
+//! exclusion is the debt list withheld from the denoted-sequence oracle; the
+//! `oracle-rerun` profile must select exactly those rows and arm the other three
+//! oracles. The tests below check each pairing in both directions.
 //!
 //! The failure mode is the flattering kind. A corpus module added later and not
-//! named in `ORACLE_EXCLUDE` does not go red; it reports a better census, which
+//! named in the first exclusion does not go red; it reports a better census, which
 //! reads as progress rather than as the lost evidence it is.
 //!
 //! This is not a coverage exemption. The corpus modules run unarmed in the plain
 //! `test` job, and the corpus measures idempotency itself.
 //!
-//! See docs/ORACLES.md, section "What CI arms, and where".
+//! See docs/ORACLES.md, section "What the oracle profile excludes".
 
 use std::path::PathBuf;
 
@@ -30,11 +38,11 @@ const SELF: &str = "oracle_exclude_invariant.rs";
 /// library module so it could be run rather than only pinned, and
 /// `conformance_census_instrument` therefore measures over the corpus while
 /// importing nothing named `spec_corpus`. That is the scan's blind spot in its
-/// flattering direction — an unmatched module is never demanded in
-/// `ORACLE_EXCLUDE`, so its census is taken with the seam oracles armed and reads
+/// flattering direction — an unmatched module is never demanded in the
+/// exclusion, so its census is taken with the seam oracles armed and reads
 /// better than the truth — and it is the exact shape this file's module doc
-/// predicts ("a corpus module added later and not named in ORACLE_EXCLUDE does not
-/// go red, it reports a better census").
+/// predicts ("a corpus module added later and not named in the first exclusion
+/// does not go red, it reports a better census").
 ///
 /// Path forms, not bare words, so a mention in prose — of which these modules have
 /// many — does not count as consumption.
@@ -47,8 +55,8 @@ const CORPUS_IMPORT_GROUP: &str = "conformance::{";
 ///
 /// A single `contains(path)` misses `use
 /// ferro_hgvs::conformance::{spec_corpus, summary};`, and it misses it in the
-/// flattering direction: a module written that way is never demanded in
-/// `ORACLE_EXCLUDE`, so its census is taken with the oracle armed and reads
+/// flattering direction: a module written that way is never demanded in the
+/// exclusion, so its census is taken with the oracle armed and reads
 /// *better* than the truth. That is the exact failure this file exists to close,
 /// so the matcher may not be blind to a spelling rustfmt will happily produce.
 ///
@@ -68,9 +76,9 @@ fn imports_corpus(text: &str) -> bool {
     //
     // Each item is reduced to its LEADING IDENTIFIER before comparing, which is
     // one rule covering three spellings that each escaped a narrower one, all in
-    // the flattering direction — an unmatched module is never demanded in
-    // `ORACLE_EXCLUDE`, so its census is taken with the seam oracles armed and
-    // reads better than the truth:
+    // the flattering direction — an unmatched module is never demanded in the
+    // exclusion, so its census is taken with the seam oracles armed and reads
+    // better than the truth:
     //
     // | item as written              | leading identifier |
     // |------------------------------|--------------------|
@@ -116,51 +124,319 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A `>-` folded scalar from `ci.yml`, folded back to one line.
+const NEXTEST_CONFIG: &str = ".config/nextest.toml";
+const ORACLE_PROFILE: &str = "oracle";
+const RERUN_PROFILE: &str = "oracle-rerun";
+
+/// The setup script both profiles bind. It writes the `FERRO_ASSERT_*` flags to
+/// `$NEXTEST_ENV`, so it is the only place the flag names live.
+const ARM_SCRIPT: &str = "arm-oracles";
+
+const SEQUENCE_FLAG: &str = "FERRO_ASSERT_SEQUENCE";
+
+fn nextest_config() -> toml::Value {
+    let path = repo_root().join(NEXTEST_CONFIG);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    toml::from_str(&text).unwrap_or_else(|e| panic!("{NEXTEST_CONFIG} is not valid TOML: {e}"))
+}
+
+fn profile<'a>(config: &'a toml::Value, name: &str) -> &'a toml::Value {
+    config
+        .get("profile")
+        .and_then(|profiles| profiles.get(name))
+        .unwrap_or_else(|| panic!("`{NEXTEST_CONFIG}` defines no `[profile.{name}]`"))
+}
+
+/// A profile's `default-filter`, whitespace-normalised to one line.
+fn default_filter(name: &str) -> String {
+    profile(&nextest_config(), name)
+        .get("default-filter")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "`[profile.{name}]` has no `default-filter`. Without one the profile selects \
+                 everything, and an armed run over everything is the known-red wall the \
+                 profile exists to avoid."
+            )
+        })
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The bodies of a filterset's `not (…)` clauses, in order.
 ///
-/// Reading only the first line would silently exempt whichever module happens to
-/// sit on the second, which is exactly the blind spot this file exists to close.
-fn ci_filter(key: &str) -> String {
-    let ci = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))
-        .expect("ci.yml is readable");
-    let mut lines = ci.lines();
-    let header = lines
-        .by_ref()
-        .find(|l| l.trim_start().starts_with(&format!("{key}:")))
-        .unwrap_or_else(|| panic!("ci.yml defines {key}"));
-
-    // An inline value is returned, not merely permitted: accepting a shape the
-    // parser cannot read is its own small version of the rot this file catches.
-    let inline = header
-        .split_once(':')
-        .map(|(_, value)| value.trim())
-        .unwrap_or_default();
-    if !inline.is_empty() && !inline.starts_with(['>', '|']) {
-        return inline.to_string();
+/// A paren-depth scan rather than a filterset parser: the filter in play is
+/// `not (A) and not (B)` where `A` and `B` are `test(…)` unions, and the two
+/// call sites assert the clause they want exists.
+fn not_clauses(filter: &str) -> Vec<String> {
+    let mut clauses = Vec::new();
+    let mut rest = filter;
+    while let Some(at) = rest.find("not (") {
+        let body = &rest[at + "not (".len()..];
+        let mut depth = 1usize;
+        let end = body
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(i)
+            })
+            .unwrap_or_else(|| panic!("unbalanced parentheses in filterset: {filter}"));
+        clauses.push(body[..end].trim().to_string());
+        rest = &body[end..];
     }
+    clauses
+}
+
+/// One of the `oracle` profile's two exclusions, by position.
+fn exclusion(index: usize, what: &str) -> String {
+    let filter = default_filter(ORACLE_PROFILE);
+    let clauses = not_clauses(&filter);
+    clauses.get(index).cloned().unwrap_or_else(|| {
+        panic!(
+            "`[profile.{ORACLE_PROFILE}]`'s default-filter has {} `not (…)` clause(s), so the \
+             {what} exclusion is not at position {index}: {filter}",
+            clauses.len()
+        )
+    })
+}
+
+/// The spec-corpus modules: the `oracle` profile's first exclusion.
+fn oracle_exclude() -> String {
+    exclusion(0, "spec-corpus")
+}
+
+/// The rows withheld from the denoted-sequence oracle: the `oracle` profile's
+/// second exclusion.
+fn sequence_oracle_exclude() -> String {
+    exclusion(1, "denoted-sequence")
+}
+
+/// Whether a profile binds [`ARM_SCRIPT`] over its **whole** selection.
+///
+/// A profile with the exclusions and no binding runs the selection unarmed and
+/// reports it as an oracle pass, which is the worse of the two ways to be wrong.
+/// A binding with a `filter` narrower than `all()` is the same failure by degree:
+/// the tests the filter omits run unarmed while the invariant still passes, so
+/// the binding must cover every selected test. Requiring the literal `all()`
+/// keeps that explicit rather than leaning on nextest's default.
+fn binds_arm_script(name: &str) -> bool {
+    profile(&nextest_config(), name)
+        .get("scripts")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|bindings| {
+            bindings.iter().any(|binding| {
+                binding.get("setup").and_then(toml::Value::as_str) == Some(ARM_SCRIPT)
+                    && binding.get("filter").and_then(toml::Value::as_str) == Some("all()")
+            })
+        })
+}
+
+/// The `FERRO_ASSERT_*` keys [`ARM_SCRIPT`] arms for a profile, sorted.
+///
+/// Read by running the script the way nextest does — `NEXTEST_PROFILE` set and
+/// `NEXTEST_ENV` pointing at a file it appends to — rather than by parsing its
+/// text, so a rewrite of the script cannot leave this guard reading prose.
+fn armed_flags(name: &str) -> Vec<String> {
+    let command = nextest_config()
+        .get("scripts")
+        .and_then(|scripts| scripts.get("setup"))
+        .and_then(|setup| setup.get(ARM_SCRIPT))
+        .and_then(|script| script.get("command"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| {
+            panic!("`{NEXTEST_CONFIG}` defines no `[scripts.setup.{ARM_SCRIPT}]` command")
+        })
+        .to_string();
+    let env_file = std::env::temp_dir().join(format!("{ARM_SCRIPT}-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_file(&env_file);
+
+    let output = std::process::Command::new(repo_root().join(&command))
+        .env("NEXTEST_PROFILE", name)
+        .env("NEXTEST_ENV", &env_file)
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|e| panic!("run {command}: {e}"));
     assert!(
-        inline.starts_with(['>', '|']),
-        "{key} is neither a block scalar nor an inline value: {header:?}"
+        output.status.success(),
+        "{command} failed under NEXTEST_PROFILE={name} ({}):\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(&env_file)
+        .unwrap_or_else(|e| panic!("{command} wrote nothing to $NEXTEST_ENV: {e}"));
+    let _ = std::fs::remove_file(&env_file);
+
+    let mut flags: Vec<String> = text
+        .lines()
+        .filter_map(|line| line.strip_suffix("=1"))
+        .filter(|key| key.starts_with("FERRO_ASSERT_"))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !flags.is_empty(),
+        "{command} armed no FERRO_ASSERT_* flag under NEXTEST_PROFILE={name}; the profile would \
+         run its whole selection unarmed and report an oracle pass:\n{text}"
+    );
+    flags.sort();
+    flags
+}
+
+/// `ci.yml`, parsed. Shared by the env-filter reader and the step guard.
+fn ci_workflow() -> serde_yaml::Value {
+    let path = repo_root().join(".github/workflows/ci.yml");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("ci.yml is not valid YAML: {e}"))
+}
+
+/// A filter from `ci.yml`'s top-level `env:`.
+///
+/// `SWEEP_FILTER` and `CENSUS_FILTER` are scheduling, which CI owns; the profile
+/// is policy, which this repo owns. The two must stay disjoint, so the guards
+/// below read both.
+fn ci_env_filter(key: &str) -> String {
+    ci_workflow()
+        .get("env")
+        .and_then(|env| env.get(key))
+        .and_then(serde_yaml::Value::as_str)
+        .unwrap_or_else(|| panic!("ci.yml's top-level `env:` defines no `{key}`"))
+        .to_string()
+}
+
+/// The `FERRO_ASSERT_*` keys set in an `env:` mapping, if any.
+///
+/// A flag set at workflow or job scope is inherited by every step's process, so
+/// a stray `FERRO_ASSERT_SEQUENCE` there reaches the `oracle-rerun` step and arms
+/// the very oracle that step exists to withhold — a fire that reads as a fresh
+/// normalizer defect rather than as this wiring mistake. The profiles own the
+/// flags; no `env:` scope may set one.
+fn ferro_assert_keys(env: &serde_yaml::Value) -> Vec<String> {
+    env.as_mapping()
+        .map(|mapping| {
+            mapping
+                .keys()
+                .filter_map(serde_yaml::Value::as_str)
+                .filter(|key| key.starts_with("FERRO_ASSERT_"))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One step of the `test-oracle` job, found by its `name:`.
+fn test_oracle_step(name: &str) -> serde_yaml::Value {
+    ci_workflow()["jobs"]["test-oracle"]["steps"]
+        .as_sequence()
+        .unwrap_or_else(|| panic!("ci.yml's `test-oracle` job has no steps"))
+        .iter()
+        .find(|step| step["name"].as_str() == Some(name))
+        .cloned()
+        .unwrap_or_else(|| panic!("ci.yml's `test-oracle` job has no step named {name:?}"))
+}
+
+/// The profile a step's `run:` selects: the token after `--profile`.
+fn profile_selected_by(step: &serde_yaml::Value) -> Option<String> {
+    let mut tokens = step["run"].as_str()?.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == "--profile" {
+            return tokens.next().map(str::to_string);
+        }
+    }
+    None
+}
+
+/// The profiles arm the oracles, so each `test-oracle` step must select its
+/// profile by name and set no `FERRO_ASSERT_*` flag of its own. A run line that
+/// dropped `--profile oracle` would run unarmed over an unfiltered selection and
+/// go green: the vacuous pass this repository keeps guarding against.
+#[test]
+fn each_test_oracle_step_selects_its_profile_and_arms_nothing_itself() {
+    let armed = test_oracle_step("Run Rust tests with the normalization self-checks");
+    let rerun =
+        test_oracle_step("Run the sequence-oracle exclusions under the other three oracles");
+
+    assert_eq!(
+        profile_selected_by(&armed).as_deref(),
+        Some("oracle"),
+        "the armed `test-oracle` step must pass `--profile oracle` on its `run:` line in \
+         .github/workflows/ci.yml; the profile carries the exclusions and arms the flags, so a \
+         step without it runs unarmed and green"
+    );
+    assert_eq!(
+        profile_selected_by(&rerun).as_deref(),
+        Some("oracle-rerun"),
+        "the re-run `test-oracle` step must pass `--profile oracle-rerun` on its `run:` line in \
+         .github/workflows/ci.yml; the profile carries the exclusions and arms the flags, so a \
+         step without it runs unarmed and green"
     );
 
-    let key_indent = header.len() - header.trim_start().len();
-    let mut value = String::new();
-    for line in lines {
-        if line.trim().is_empty() || line.trim_start().starts_with('#') {
-            break;
-        }
-        let indent = line.len() - line.trim_start().len();
-        if indent <= key_indent {
-            break;
-        }
-        value.push(' ');
-        value.push_str(line.trim());
-    }
+    let rerun_run = rerun["run"].as_str().expect("the re-run step has a `run:`");
     assert!(
-        !value.trim().is_empty(),
-        "{key} parsed as empty; ci.yml's formatting changed"
+        rerun_run
+            .split_whitespace()
+            .any(|token| token == "--no-tests=fail"),
+        "the re-run step must carry --no-tests=fail, so a renamed row empties it loudly"
     );
-    value
+
+    // A stray flag anywhere in the env chain — workflow, job, or either step —
+    // is inherited by the step process, so the check cannot stop at step scope.
+    let workflow = ci_workflow();
+    for (scope, env) in [
+        ("ci.yml's top-level", &workflow["env"]),
+        (
+            "the `test-oracle` job's",
+            &workflow["jobs"]["test-oracle"]["env"],
+        ),
+        ("the armed step's", &armed["env"]),
+        ("the re-run step's", &rerun["env"]),
+    ] {
+        let stray = ferro_assert_keys(env);
+        assert!(
+            stray.is_empty(),
+            "{scope} env sets {stray:?}. The `oracle`/`oracle-rerun` profiles own the \
+             FERRO_ASSERT_* flags, and a flag set at workflow, job or step scope is inherited by \
+             the step process — a stray {SEQUENCE_FLAG} would arm the fourth oracle on the very \
+             rows `oracle-rerun` exists to run under the other three."
+        );
+    }
+}
+
+/// The local runner must select the `oracle` profile too.
+///
+/// `scripts/run_oracle_suite.sh` is the other consumer of the `oracle` profile,
+/// beside `ci.yml`'s `test-oracle` job. It runs the suite twice, on a `list` line
+/// and a `run` line, and each must pass `--profile oracle`, or the local run is
+/// the vacuous kind: unarmed over an unfiltered selection, green for the wrong
+/// reason. Read only the script here; the CI steps are the other test's job.
+#[test]
+fn the_local_runner_selects_the_oracle_profile() {
+    let path = repo_root().join("scripts/run_oracle_suite.sh");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let nextest_lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("cargo nextest"))
+        .collect();
+    assert!(
+        nextest_lines.len() >= 2,
+        "scripts/run_oracle_suite.sh has {} `cargo nextest` line(s); it must have at least the \
+         `list` line and the `run` line",
+        nextest_lines.len()
+    );
+    for line in nextest_lines {
+        assert!(
+            line.contains("--profile oracle"),
+            "scripts/run_oracle_suite.sh has a `cargo nextest` line without `--profile oracle`: \
+             {line:?}\nThe profile carries the exclusions and arms the flags, so without it a \
+             local run is unarmed and green."
+        );
+    }
 }
 
 /// Integration-test modules built on the spec corpus, by module name.
@@ -193,12 +469,12 @@ fn modules_named_in(filter: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every module that measures over the spec corpus must be named in
-/// `ORACLE_EXCLUDE`, or its census is taken with an oracle armed and reads
-/// better than the truth.
+/// Every module that measures over the spec corpus must be named in the
+/// `oracle` profile's first exclusion, or its census is taken with an oracle
+/// armed and reads better than the truth.
 #[test]
 fn every_spec_corpus_module_is_named_in_the_oracle_exclude() {
-    let filter = ci_filter("ORACLE_EXCLUDE");
+    let filter = oracle_exclude();
     let modules = corpus_modules();
     assert!(
         !modules.is_empty(),
@@ -212,26 +488,26 @@ fn every_spec_corpus_module_is_named_in_the_oracle_exclude() {
         .collect();
     assert!(
         missing.is_empty(),
-        "these modules measure over the spec corpus but are not named in \
-         ci.yml's ORACLE_EXCLUDE, so `test-oracle` runs them with the seam \
-         oracles armed. A panicking row contributes no output, which does not \
+        "these modules measure over the spec corpus but are not named in the `oracle` \
+         profile's first exclusion in {NEXTEST_CONFIG}, so `test-oracle` runs them with \
+         the seam oracles armed. A panicking row contributes no output, which does not \
          redden the job — it makes confluence read HIGHER than it is: {missing:#?}\n\
-         ORACLE_EXCLUDE is:{filter}\n\
+         The exclusion is: {filter}\n\
          Add `+ test(<module>)` to it, or stop measuring over the corpus."
     );
 }
 
-/// The converse: a name in `ORACLE_EXCLUDE` that no longer measures over the
+/// The converse: a name in the first exclusion that no longer measures over the
 /// corpus is withholding a module from the armed job for no reason.
 #[test]
 fn every_module_named_in_the_oracle_exclude_measures_over_the_corpus() {
-    let filter = ci_filter("ORACLE_EXCLUDE");
+    let filter = oracle_exclude();
     let modules = corpus_modules();
 
     let named = modules_named_in(&filter);
     assert!(
         !named.is_empty(),
-        "ORACLE_EXCLUDE names no modules; its formatting changed: {filter}"
+        "the `oracle` profile's first exclusion names no modules; its formatting changed: {filter}"
     );
 
     let stale: Vec<&String> = named
@@ -240,10 +516,10 @@ fn every_module_named_in_the_oracle_exclude_measures_over_the_corpus() {
         .collect();
     assert!(
         stale.is_empty(),
-        "ci.yml's ORACLE_EXCLUDE names these modules, but they do not measure \
-         over the spec corpus — so they are being withheld from the armed job \
-         for no reason: {stale:#?}\n\
-         Remove them from ORACLE_EXCLUDE."
+        "the `oracle` profile's first exclusion in {NEXTEST_CONFIG} names these modules, \
+         but they do not measure over the spec corpus — so they are being withheld from \
+         the armed job for no reason: {stale:#?}\n\
+         Remove them from the exclusion."
     );
 }
 
@@ -254,7 +530,7 @@ fn every_module_named_in_the_oracle_exclude_measures_over_the_corpus() {
 /// [`CORPUS_MODULES`], which is right for avoiding prose false positives but
 /// cannot see a module that reaches the corpus **indirectly** — through a shared
 /// helper in `tests/it/common/` that does the importing. Such a module would
-/// carry no matching literal, would not be demanded in `ORACLE_EXCLUDE`, and
+/// carry no matching literal, would not be demanded in the exclusion, and
 /// would then measure with the seam oracles armed. Per this file's module doc
 /// that does not go red; it reports a better census.
 ///
@@ -285,7 +561,7 @@ fn no_shared_helper_hides_a_corpus_consumer_from_the_scan() {
          A module consuming the corpus THROUGH one of them carries no \
          `conformance::…` literal of its own for any of {CORPUS_MODULES:?}, so \
          `every_spec_corpus_module_is_named_in_the_oracle_exclude` would not \
-         demand it be named in ORACLE_EXCLUDE — and it would then measure with \
+         demand it be named in the exclusion — and it would then measure with \
          the seam oracles armed, which reports a better census rather than \
          going red.\n\
          Either import the corpus directly in each consuming module, or teach \
@@ -293,394 +569,14 @@ fn no_shared_helper_hides_a_corpus_consumer_from_the_scan() {
     );
 }
 
-/// The local oracle runner, which reproduces `test-oracle`'s armed step (its
-/// flags and selection) outside CI; the job's compensating step is CI-only.
-const LOCAL_RUNNER: &str = "scripts/run_oracle_suite.sh";
-
-/// The `FERRO_ASSERT_*` keys the `test-oracle` job sets, derived in Rust.
-///
-/// Deliberately anchored **differently** from the awk in [`LOCAL_RUNNER`],
-/// which scopes to the window between that job's step `name:` and its `run:`.
-/// This one bounds the whole `test-oracle:` job by indentation and keys on the
-/// quoted `: "1"` value. A second opinion that shares the other's derivation is
-/// not a second opinion: it is the same reading written twice, and this repo
-/// has already shipped a defect that way (`check_changelog_grouping.py`'s
-/// rationale).
-///
-/// Comment lines are skipped for the reason the awk skips them: the job's
-/// comment block *mentions* every flag in prose. A scan that read prose as a
-/// setting would demand the runner arm oracles CI does not, and the rows that
-/// prose names would then be red locally and green in CI.
-///
-/// **Scoped to the ARMED step, and that scoping is load-bearing: `test-oracle`
-/// carries two nextest steps (#1815).** The compensating step re-executes
-/// `SEQUENCE_ORACLE_EXCLUDE`'s rows under the other three oracles, and it sets
-/// three of the same keys. A whole-job scan would report those three keys
-/// twice, so this guard reads only the armed step.
-///
-/// The discriminator is deliberately **not** the step's `name:`, which is what
-/// [`LOCAL_RUNNER`]'s awk anchors on: the armed step is the one that
-/// `--partition`s the suite, and the compensating step is un-partitioned by
-/// design. Keying on the `run:` body rather than on the label keeps the two
-/// derivations independent: a renamed step breaks one of them and not the
-/// other, which is the whole point of having two.
-fn test_oracle_job_flags() -> Vec<String> {
-    let armed = test_oracle_steps()
-        .into_iter()
-        .find(|step| step.runs.contains("--partition"))
-        .expect(
-            "ci.yml's test-oracle job has a step whose `run:` partitions the suite; \
-             its shape changed and this guard would otherwise read the wrong step's flags",
-        );
-    armed.flags
-}
-
-/// One step of the `test-oracle:` job: the `FERRO_ASSERT_*` keys its `env:`
-/// sets, and the text of its `run:`.
-struct OracleStep {
-    /// `FERRO_ASSERT_*` keys set to `"1"`, in file order, comments skipped.
-    flags: Vec<String>,
-    /// Every line of the step at or after its `run:`, joined.
-    runs: String,
-    /// The `-E` expression the step hands to nextest, if it passes one.
-    selection: Option<String>,
-}
-
-/// The `test-oracle:` job's steps, split on the `- name:` at step indent.
-///
-/// Exists because `test-oracle` carries two nextest steps with overlapping
-/// flag sets (#1815), so "the flags of `test-oracle`" is not a well-formed
-/// question: every guard below has to say *which* step it means.
-fn test_oracle_steps() -> Vec<OracleStep> {
-    let mut steps: Vec<OracleStep> = Vec::new();
-    let mut in_run = false;
-    for line in test_oracle_job_lines() {
-        let trimmed = line.trim();
-        // A step boundary: `- name:` at the job's step indent.
-        if line.starts_with("      - name:") {
-            steps.push(OracleStep {
-                flags: Vec::new(),
-                runs: String::new(),
-                selection: None,
-            });
-            in_run = false;
-            continue;
-        }
-        let Some(step) = steps.last_mut() else {
-            continue;
-        };
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed == "run: |" || trimmed.starts_with("run:") {
-            in_run = true;
-            continue;
-        }
-        if in_run {
-            step.runs.push('\n');
-            step.runs.push_str(&line);
-            if let Some(at) = line.find("-E \"") {
-                let rest = &line[at + "-E \"".len()..];
-                if let Some(end) = rest.find('"') {
-                    step.selection = Some(rest[..end].to_string());
-                }
-            }
-            continue;
-        }
-        if let Some(key) = trimmed
-            .strip_suffix(": \"1\"")
-            .filter(|key| key.starts_with("FERRO_ASSERT_"))
-        {
-            step.flags.push(key.to_string());
-        }
-    }
-    steps
-}
-
-/// The lines of `ci.yml`'s `test-oracle:` job, bounded by indentation.
-fn test_oracle_job_lines() -> Vec<String> {
-    let ci = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))
-        .expect("ci.yml is readable");
-    let mut in_job = false;
-    let mut lines = Vec::new();
-    for line in ci.lines() {
-        if line.starts_with("  test-oracle:") {
-            in_job = true;
-            continue;
-        }
-        if in_job {
-            // A non-blank, non-comment line at job-key indent ends the job.
-            let indent = line.len() - line.trim_start().len();
-            if !line.trim().is_empty() && !line.trim_start().starts_with('#') && indent <= 2 {
-                break;
-            }
-            lines.push(line.to_string());
-        }
-    }
-    lines
-}
-
-/// The complete `-E` expression `test-oracle` hands to nextest, with `ci.yml`'s
-/// two variable references expanded.
-///
-/// The job negates four things — the proptest modules, `SWEEP_FILTER`,
-/// `ORACLE_EXCLUDE` and `CENSUS_FILTER` — and the runner first shipped negating
-/// only the second-to-last of them, so a local "as CI runs it" also executed the
-/// proptest modules and the three exhaustive sweeps. Comparing only the
-/// exclusion could not see that, which is why the whole expression is compared
-/// here.
-fn ci_oracle_selection() -> String {
-    // The ARMED step's selection, identified by `--partition` rather than by
-    // position. `test-oracle` carries two nextest steps (#1815), so "the first
-    // `-E` in the job" is a positional accident, not a statement about which
-    // step is meant. Reordering the steps would silently retarget this
-    // comparison.
-    let template = test_oracle_steps()
-        .into_iter()
-        .find(|step| step.runs.contains("--partition"))
-        .and_then(|step| step.selection)
-        .expect("ci.yml's test-oracle job passes a -E selection to nextest in its armed step");
-
-    let expanded = template
-        .replace("$SWEEP_FILTER", ci_filter("SWEEP_FILTER").trim())
-        // Before `$ORACLE_EXCLUDE` only for readability — the order does not
-        // matter, because the pattern carries the leading `$` and
-        // `$SEQUENCE_ORACLE_EXCLUDE` holds no second one. Measured both ways.
-        // `scripts/run_oracle_suite.sh` carries the same note; the resemblance
-        // between the two names is the trap, and it is not a real one.
-        .replace(
-            "$SEQUENCE_ORACLE_EXCLUDE",
-            ci_filter("SEQUENCE_ORACLE_EXCLUDE").trim(),
-        )
-        .replace("$ORACLE_EXCLUDE", ci_filter("ORACLE_EXCLUDE").trim())
-        .replace("$CENSUS_FILTER", ci_filter("CENSUS_FILTER").trim());
-    assert!(
-        !expanded.contains('$'),
-        "test-oracle's -E selection references a variable this test does not expand: {expanded}"
-    );
-    expanded
-}
-
-/// What [`LOCAL_RUNNER`] says it would run.
-struct RunnerSelection {
-    /// The `ORACLE_EXCLUDE` value it extracted from `ci.yml`.
-    exclude: String,
-    /// The complete `-E` expression it would hand to nextest.
-    selection: String,
-    /// The `FERRO_ASSERT_*` flags it would arm.
-    flags: Vec<String>,
-}
-
-/// What [`LOCAL_RUNNER`] says it would run, read from its own `--print-selection`.
-fn local_runner_selection() -> RunnerSelection {
-    let script = repo_root().join(LOCAL_RUNNER);
-    assert!(
-        script.is_file(),
-        "{LOCAL_RUNNER} is missing. It is the only local command that runs the seam \
-         oracles over the same selection CI does; without it the documented bare \
-         `FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run` is the only recipe, and that \
-         one cannot pass."
-    );
-    let output = std::process::Command::new("bash")
-        .arg(&script)
-        .arg("--print-selection")
-        .current_dir(repo_root())
-        .output()
-        .expect("bash can run the local oracle runner");
-    assert!(
-        output.status.success(),
-        "{LOCAL_RUNNER} --print-selection failed ({}):\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("the runner prints UTF-8");
-
-    let mut exclude = String::new();
-    let mut selection = String::new();
-    let mut flags = Vec::new();
-    for line in stdout.lines() {
-        if let Some(value) = line.strip_prefix("ORACLE_EXCLUDE=") {
-            exclude = value.trim().to_string();
-        } else if let Some(value) = line.strip_prefix("SELECTION=") {
-            selection = value.trim().to_string();
-        } else if let Some(value) = line.strip_prefix("FLAG=") {
-            flags.push(value.trim().to_string());
-        }
-    }
-    assert!(
-        !selection.is_empty(),
-        "{LOCAL_RUNNER} --print-selection printed no SELECTION= line; \
-         its output shape changed and the comparison below would go vacuous"
-    );
-    RunnerSelection {
-        exclude,
-        selection,
-        flags,
-    }
-}
-
-/// The local runner must exclude exactly what `test-oracle` excludes.
-///
-/// A drift here fails in the **flattering** direction, which is why it is worth
-/// a test rather than a comment: a runner excluding more than CI goes green
-/// locally on a defect CI is red on, and the operator's evidence for "my change
-/// is clean" is then a run that never touched the modules in question.
-#[test]
-fn the_local_oracle_runner_excludes_exactly_what_ci_excludes() {
-    assert_eq!(
-        local_runner_selection().exclude,
-        ci_filter("ORACLE_EXCLUDE").trim(),
-        "{LOCAL_RUNNER} and ci.yml disagree about ORACLE_EXCLUDE. The runner reads it \
-         from ci.yml with awk; if that extraction broke, fix the awk — do not inline a \
-         copy of the list, which is the drift this test exists to catch."
-    );
-}
-
-/// The local runner must run the **whole** selection `test-oracle` runs, not
-/// just its exclusion.
-///
-/// `the_local_oracle_runner_excludes_exactly_what_ci_excludes` compares one of
-/// the expression's three negated terms, so it passed throughout the period the
-/// runner also executed the proptest modules and the three exhaustive sweeps —
-/// tests `test-oracle` does not run. A guard over a subset of the contract reads
-/// as a guard over the contract, which is the failure this file is otherwise
-/// about.
-#[test]
-fn the_local_oracle_runner_selects_exactly_what_ci_selects() {
-    assert_eq!(
-        local_runner_selection().selection,
-        ci_oracle_selection(),
-        "{LOCAL_RUNNER} and ci.yml's test-oracle job disagree about the nextest selection. \
-         The runner reads the whole `-E` expression out of ci.yml and expands its variable \
-         references; if that extraction broke, fix the awk — do not inline a copy of the \
-         expression, which is the drift this test exists to catch."
-    );
-}
-
-/// …and the agreed selection must actually **negate** all three things CI
-/// negates.
-///
-/// The equality test above cannot tell a correct expression from a matching
-/// pair of wrong ones: both sides read the same line of `ci.yml`, so a `-E`
-/// that stopped negating the sweeps would satisfy it. This one keys on the
-/// `not (…)` wrapper instead.
-///
-/// **Asserting that each module is merely NAMED in the selection would be
-/// vacuous.** The selection is built *by substituting those two filters'
-/// values into* the template, so every module they name is guaranteed to
-/// appear as a `test(<module>)` substring however the template is spelled,
-/// including a template that had dropped the `not`. Dropping it is not
-/// hypothetical: `and ($SWEEP_FILTER)` in place of `and not ($SWEEP_FILTER)`
-/// inverts the job from "the suite minus the three sweeps" to "only the
-/// three sweeps", the quiet-narrowing failure the runner's own header warns
-/// about.
-/// **Its name may not contain `proptest`, and that is not cosmetic.** `test()`
-/// is a substring predicate over the whole test name, so a function carrying
-/// that token is selected by the `soak` job's `-E 'test(proptest)'` and
-/// negated by `test` and `test-oracle`. This file compiles into `tests/it`,
-/// not into `tests-soak`, so a name carrying `proptest` here would not run
-/// under `soak` either: negated everywhere it is named, selected nowhere it
-/// exists. `tests/it/soak_package_membership.rs` fails on any such name.
-#[test]
-fn the_ci_oracle_selection_negates_the_property_tests_the_sweeps_and_the_corpus_modules() {
-    let selection = ci_oracle_selection();
-    assert!(
-        selection.contains("not test(proptest)"),
-        "test-oracle's selection no longer negates the proptest modules, which the `soak` \
-         job owns at 125k cases per shard: {selection}"
-    );
-
-    for key in ["SWEEP_FILTER", "ORACLE_EXCLUDE", "SEQUENCE_ORACLE_EXCLUDE"] {
-        let value = ci_filter(key);
-        let value = value.trim();
-        assert!(
-            !modules_named_in(value).is_empty(),
-            "ci.yml's {key} names no module; its formatting changed and this guard has \
-             gone vacuous"
-        );
-        assert!(
-            selection.contains(&format!("not ({value})")),
-            "test-oracle's -E selection does not negate {key}, so the armed job RUNS those \
-             modules instead of withholding them. Note a bare `and (${key})` would still \
-             mention every one of them, which is why this asserts the `not (…)` wrapper \
-             rather than the module names.\nSelection is: {selection}"
-        );
-    }
-}
-
-/// …and arm exactly the oracles `test-oracle` arms.
-///
-/// Both directions matter and neither is symmetric with the other. Arming
-/// **fewer** makes a local run weaker than CI while reading as an oracle pass.
-/// Arming **more** makes the runner red on rows no PR caused, which teaches the
-/// operator to ignore it.
-///
-/// `censuses` arms three flags where `test-oracle` arms four, deliberately and
-/// unmeasured, so the next plausible "restore parity" edit is there. See
-/// docs/ORACLES.md, section "What CI arms, and where".
-#[test]
-fn the_local_oracle_runner_arms_exactly_the_flags_test_oracle_arms() {
-    let runner_flags = local_runner_selection().flags;
-    let ci_flags = test_oracle_job_flags();
-    assert!(
-        !ci_flags.is_empty(),
-        "no FERRO_ASSERT_* flag was found in ci.yml's test-oracle job; its formatting \
-         changed and this guard has gone vacuous"
-    );
-    assert_eq!(
-        runner_flags, ci_flags,
-        "{LOCAL_RUNNER} and ci.yml's test-oracle job disagree about which oracles to arm"
-    );
-}
-
-/// The runner may not carry its own copy of the exclusion list.
-///
-/// The equality tests above compare *values*, so they would still pass against a
-/// hardcoded copy that happens to be current today. This one forbids the copy
-/// itself, because the value only has to be right at the moment someone runs the
-/// test — and the failure mode of a stale copy is silent and flattering.
-#[test]
-fn the_local_oracle_runner_does_not_hardcode_the_exclusion() {
-    let text = std::fs::read_to_string(repo_root().join(LOCAL_RUNNER))
-        .expect("the local oracle runner is readable");
-    // Strip comments before scanning: the script's header explains the failure
-    // by NAMING the modules, which is exactly what makes the header useful and
-    // must not be mistaken for a hardcoded filter.
-    let code: String = text
-        .lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let named = modules_named_in(&ci_filter("ORACLE_EXCLUDE"));
-    // The same non-vacuity guard its siblings carry: with no module names to
-    // look for, the filter below is trivially empty and this test passes
-    // without having checked anything.
-    assert!(
-        !named.is_empty(),
-        "ORACLE_EXCLUDE names no modules; its formatting changed and this guard has gone \
-         vacuous"
-    );
-    let hardcoded: Vec<String> = named
-        .into_iter()
-        .filter(|module| code.contains(&format!("test({module})")))
-        .collect();
-    assert!(
-        hardcoded.is_empty(),
-        "{LOCAL_RUNNER} hardcodes these modules instead of reading ORACLE_EXCLUDE from \
-         ci.yml: {hardcoded:#?}\n\
-         Two copies of one list drift, and this one drifts flatteringly — a stale copy \
-         excludes a module CI still runs armed."
-    );
-}
-
 /// Every row withheld from the denoted-sequence oracle must name something that
 /// exists.
 ///
 /// `test()` is a substring predicate, so a typo does not error — it selects
-/// nothing. In `SEQUENCE_ORACLE_EXCLUDE` that fails in the **loud** direction
-/// (the armed job stops withholding the row and goes red on it), which is the
-/// good case and is why this is a cheap guard rather than a critical one. The
-/// expensive half is the compensating step: `--no-tests=fail` turns a filter that
+/// nothing. In the `oracle` profile that fails in the **loud** direction (the
+/// armed run stops withholding the row and goes red on it), which is the good
+/// case and is why this is a cheap guard rather than a critical one. The
+/// expensive half is `oracle-rerun`: `--no-tests=fail` turns a filter that
 /// selects nothing into a red step, so a typo there is loud too, but a filter
 /// with *one* good row and one typo would keep the step green while silently
 /// dropping half of what it exists to re-run.
@@ -693,13 +589,13 @@ fn the_local_oracle_runner_does_not_hardcode_the_exclusion() {
 /// misspelling or a rename.
 #[test]
 fn every_row_withheld_from_the_sequence_oracle_names_something_that_exists() {
-    let named = modules_named_in(&ci_filter("SEQUENCE_ORACLE_EXCLUDE"));
+    let named = modules_named_in(&sequence_oracle_exclude());
     assert!(
         !named.is_empty(),
-        "ci.yml's SEQUENCE_ORACLE_EXCLUDE names nothing; either its formatting changed \
-         (in which case fix it) or its last row retired — in which case delete the \
-         variable, the `and not (…)` term in test-oracle's -E, the compensating step, \
-         the block in scripts/run_oracle_suite.sh, and these guards, in one change."
+        "the `oracle` profile's second exclusion names nothing; either its formatting \
+         changed (in which case fix it) or its last row retired — in which case delete \
+         that clause, the `oracle-rerun` profile, its step in test-oracle, and these \
+         guards, in one change."
     );
 
     let mut haystack = String::new();
@@ -722,10 +618,10 @@ fn every_row_withheld_from_the_sequence_oracle_names_something_that_exists() {
         .collect();
     assert!(
         missing.is_empty(),
-        "SEQUENCE_ORACLE_EXCLUDE names these, and nothing in tests/ or examples/ \
-         defines them: {missing:#?}\n\
-         A `test()` term that matches nothing selects nothing, so the compensating \
-         step would silently stop re-running the row it is there to protect."
+        "the `oracle` profile's second exclusion names these, and nothing in tests/ or \
+         examples/ defines them: {missing:#?}\n\
+         A `test()` term that matches nothing selects nothing, so `oracle-rerun` would \
+         silently stop re-running the row it is there to protect."
     );
 }
 
@@ -751,105 +647,77 @@ fn collect_rust_sources(dir: &std::path::Path, into: &mut String) {
 /// other three.
 ///
 /// This is the guard that keeps arming the fourth oracle a **superset**, not a
-/// trade. A nextest `-E` is one expression, so the armed step's
-/// `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws those rows from all four
-/// oracles at once; the compensating step (#1815) puts three of them back.
-/// Delete that step and the change quietly becomes "three oracles surrendered
-/// to gain one", with nothing red, which is why it is asserted rather than
-/// left to the comment beside it.
+/// trade. The `oracle` profile's second exclusion withdraws those rows from all
+/// four oracles at once; the `oracle-rerun` profile puts three of them back
+/// (#1815). Delete that profile, or let its filter drift from the exclusion, and
+/// the change quietly becomes "three oracles surrendered to gain one", with
+/// nothing red, which is why it is asserted rather than left to the comment
+/// beside it.
 ///
 /// Three things are checked, and the third is the one a reader would omit:
 ///
-/// 1. the step exists and selects **exactly** `$SEQUENCE_ORACLE_EXCLUDE`, by
-///    reference and not by a copy of its value;
-/// 2. it arms exactly the other three oracles;
-/// 3. it does **not** arm `FERRO_ASSERT_SEQUENCE`. Without this, a copy-paste of
-///    the armed step's `env:` block would satisfy (2) as a subset check and make
-///    the step red on the very rows it exists to run — turning a green job red
-///    for a reason that looks like a real defect.
+/// 1. `oracle-rerun` selects **exactly** the second exclusion. The two spellings
+///    cannot reference each other, so they are compared here.
+/// 2. both profiles bind the arm script. A profile with the exclusions and no
+///    binding runs its selection unarmed and reports an oracle pass.
+/// 3. the script arms `FERRO_ASSERT_SEQUENCE` for `oracle` and exactly the other
+///    flags for `oracle-rerun`. Arming the fourth there would fire on the very
+///    rows the profile exists to run, and the failure would read as a fresh
+///    normalizer defect rather than as this wiring mistake.
 #[test]
 fn the_sequence_oracle_exclusions_still_run_under_the_other_three_oracles() {
-    let steps = test_oracle_steps();
-    let armed = steps
-        .iter()
-        .find(|step| step.runs.contains("--partition"))
-        .expect("test-oracle has a partitioned, armed step");
-    assert!(
-        armed.flags.iter().any(|f| f == "FERRO_ASSERT_SEQUENCE"),
-        "test-oracle's armed step no longer sets FERRO_ASSERT_SEQUENCE, so there is \
-         nothing for SEQUENCE_ORACLE_EXCLUDE to withhold it from. If the flag is being \
-         un-armed, remove the filter and this guard in the same change rather than \
-         leaving a compensating step for an exclusion that excludes nothing."
-    );
-
-    let compensating: Vec<&OracleStep> = steps
-        .iter()
-        .filter(|step| {
-            step.selection.as_deref() == Some("$SEQUENCE_ORACLE_EXCLUDE")
-                && !step.runs.contains("--partition")
-        })
-        .collect();
+    let withheld = sequence_oracle_exclude();
     assert_eq!(
-        compensating.len(),
-        1,
-        "expected exactly one un-partitioned step in test-oracle selecting \
-         `$SEQUENCE_ORACLE_EXCLUDE`, found {}.\n\
-         Without it, the armed step's `and not ($SEQUENCE_ORACLE_EXCLUDE)` withdraws \
-         those rows from FERRO_ASSERT_IDEMPOTENT, _REPARSE and _IN_BOUNDS as well — \
-         which they pass — so arming the fourth oracle would cost three.\n\
-         Note the selection must be the VARIABLE REFERENCE, not a copy of its value: \
-         two copies of one list drift, and this one drifts flatteringly.",
-        compensating.len()
+        default_filter(RERUN_PROFILE),
+        withheld,
+        "`[profile.{RERUN_PROFILE}]`'s default-filter must equal the `oracle` profile's second \
+         exclusion, row for row. Filtersets cannot reference each other, so the list is \
+         spelled twice in {NEXTEST_CONFIG}; a drift here re-runs the wrong rows under the \
+         other three oracles while the armed run withholds the right ones from all four."
     );
-    let compensating = compensating[0];
 
-    let mut expected: Vec<String> = armed
-        .flags
+    for name in [ORACLE_PROFILE, RERUN_PROFILE] {
+        assert!(
+            binds_arm_script(name),
+            "`[profile.{name}]` has no `[[profile.{name}.scripts]]` entry binding `{ARM_SCRIPT}` \
+             with `filter = 'all()'`, so it would run some or all of its selection with no oracle \
+             armed and report an oracle pass. The binding must cover every selected test."
+        );
+    }
+
+    let armed = armed_flags(ORACLE_PROFILE);
+    assert!(
+        armed.iter().any(|flag| flag == SEQUENCE_FLAG),
+        "scripts/arm-oracles.sh no longer arms {SEQUENCE_FLAG} for the `{ORACLE_PROFILE}` \
+         profile, so there is nothing for the second exclusion to withhold it from. If the \
+         flag is being un-armed, remove that clause, the `{RERUN_PROFILE}` profile and this \
+         guard in the same change rather than leaving a re-run for an exclusion that excludes \
+         nothing. Armed: {armed:?}"
+    );
+    let expected: Vec<String> = armed
         .iter()
-        .filter(|f| *f != "FERRO_ASSERT_SEQUENCE")
+        .filter(|flag| *flag != SEQUENCE_FLAG)
         .cloned()
         .collect();
-    let mut actual = compensating.flags.clone();
-    expected.sort();
-    actual.sort();
     assert_eq!(
-        actual, expected,
-        "the compensating step must arm exactly the oracles the armed step arms MINUS \
-         FERRO_ASSERT_SEQUENCE.\n\
-         Armed step: {:?}\nCompensating step: {:?}\n\
-         Deriving the expectation from the armed step rather than from a literal list is \
-         deliberate — a fifth oracle added above must reach these rows too, and a hardcoded \
-         three would not notice.",
-        armed.flags, compensating.flags
-    );
-    assert!(
-        !compensating
-            .flags
-            .iter()
-            .any(|f| f == "FERRO_ASSERT_SEQUENCE"),
-        "the compensating step arms FERRO_ASSERT_SEQUENCE, which is the one oracle these \
-         rows are withheld from. It would fire on exactly the rows the step exists to run, \
-         reddening a job that is otherwise green — and the failure would read as a fresh \
-         normalizer defect rather than as this wiring mistake."
-    );
-    assert!(
-        compensating.runs.contains("--no-tests=fail"),
-        "the compensating step must pass --no-tests=fail. Its selection is five tests \
-         named by substring, so a rename that empties the filter would otherwise be a \
-         step that goes green having run nothing — the vacuous pass this repository \
-         keeps meeting."
+        armed_flags(RERUN_PROFILE),
+        expected,
+        "the `{RERUN_PROFILE}` profile must arm exactly the flags `{ORACLE_PROFILE}` arms MINUS \
+         {SEQUENCE_FLAG}. Deriving the expectation from the `{ORACLE_PROFILE}` profile rather \
+         than from a literal list is deliberate — a fifth oracle added there must reach these \
+         rows too, and a hardcoded three would not notice."
     );
 }
 
-/// The debt list must stay disjoint from the two permanent filters.
+/// The debt list must stay disjoint from the permanent filters.
 ///
 /// An overlap is not merely untidy here, unlike the sweep/oracle pair below. A
-/// row in both `ORACLE_EXCLUDE` and `SEQUENCE_ORACLE_EXCLUDE` is withheld from
-/// the armed step twice — harmless — but the compensating step would then run it
-/// under three oracles that the armed job deliberately never runs it under,
-/// because `ORACLE_EXCLUDE`'s whole point is that those instruments destroy each
-/// other on those modules. So the overlap would *create* the red that
-/// `ORACLE_EXCLUDE` exists to prevent, in a new step, for a reason nothing states.
+/// row in both of the `oracle` profile's exclusions is withheld from the armed
+/// run twice — harmless — but `oracle-rerun` would then run it under three
+/// oracles that the armed run deliberately never runs it under, because the
+/// first exclusion's whole point is that those instruments destroy each other
+/// on those modules. So the overlap would *create* the red that the first
+/// exclusion exists to prevent, in a new step, for a reason nothing states.
 ///
 /// The `SWEEP_FILTER` half is the milder version: those rows run in `sweeps` with
 /// all four oracles armed already, so re-running them here would be redundant
@@ -857,25 +725,30 @@ fn the_sequence_oracle_exclusions_still_run_under_the_other_three_oracles() {
 /// job it says nothing about.
 #[test]
 fn the_sequence_oracle_exclude_is_disjoint_from_the_permanent_filters() {
-    let debt = modules_named_in(&ci_filter("SEQUENCE_ORACLE_EXCLUDE"));
+    let debt = modules_named_in(&sequence_oracle_exclude());
     assert!(
         !debt.is_empty(),
-        "SEQUENCE_ORACLE_EXCLUDE names nothing; this guard has gone vacuous"
+        "the `oracle` profile's second exclusion names nothing; this guard has gone vacuous"
     );
-    for key in ["ORACLE_EXCLUDE", "SWEEP_FILTER", "CENSUS_FILTER"] {
-        let other = modules_named_in(&ci_filter(key));
+    let permanent = [
+        ("the `oracle` profile's first exclusion", oracle_exclude()),
+        ("SWEEP_FILTER", ci_env_filter("SWEEP_FILTER")),
+        ("CENSUS_FILTER", ci_env_filter("CENSUS_FILTER")),
+    ];
+    for (label, filter) in permanent {
+        let other = modules_named_in(&filter);
         assert!(
             !other.is_empty(),
-            "ci.yml's {key} names no module; this guard has gone vacuous"
+            "{label} names no module; this guard has gone vacuous"
         );
         let both: Vec<&String> = debt.iter().filter(|m| other.contains(m)).collect();
         assert!(
             both.is_empty(),
-            "these are named in BOTH SEQUENCE_ORACLE_EXCLUDE and {key}: {both:#?}\n\
-             The debt list is temporary and carries issue numbers; {key} is a standing \
-             statement about what the armed job must never run. A row in both means the \
-             compensating step re-runs, under three armed oracles, a module {key} \
-             withholds from them."
+            "these are named in BOTH the second exclusion and {label}: {both:#?}\n\
+             The debt list is temporary and carries issue numbers; {label} is a standing \
+             statement about what the armed run must never run. A row in both means \
+             `oracle-rerun` re-runs, under three armed oracles, a module {label} withholds \
+             from them."
         );
     }
 }
@@ -887,14 +760,15 @@ fn the_sequence_oracle_exclude_is_disjoint_from_the_permanent_filters() {
 /// person editing either would reasonably read them as independent.
 #[test]
 fn the_sweep_filter_and_the_oracle_exclude_are_disjoint() {
-    let sweeps = modules_named_in(&ci_filter("SWEEP_FILTER"));
-    let excluded = modules_named_in(&ci_filter("ORACLE_EXCLUDE"));
+    let sweeps = modules_named_in(&ci_env_filter("SWEEP_FILTER"));
+    let excluded = modules_named_in(&oracle_exclude());
 
     let both: Vec<&String> = sweeps.iter().filter(|m| excluded.contains(m)).collect();
     assert!(
         both.is_empty(),
-        "these modules are named in BOTH ci.yml filters, which are meant to \
-         select disjoint sets for different reasons: {both:#?}"
+        "these modules are named in BOTH ci.yml's SWEEP_FILTER and the `oracle` profile's \
+         first exclusion, which are meant to select disjoint sets for different reasons: \
+         {both:#?}"
     );
 }
 
@@ -903,8 +777,8 @@ fn the_sweep_filter_and_the_oracle_exclude_are_disjoint() {
 ///
 /// Written because the grouped form was the gap: the scan matched a single
 /// literal, so `use ferro_hgvs::conformance::{spec_corpus, summary};` read as
-/// "does not consume the corpus" and the module was never demanded in
-/// `ORACLE_EXCLUDE`.
+/// "does not consume the corpus" and the module was never demanded in the
+/// exclusion.
 ///
 /// The **aliased grouped** form was the same gap a second time. Widening the
 /// matcher to read groups was not enough, because it then compared the whole
