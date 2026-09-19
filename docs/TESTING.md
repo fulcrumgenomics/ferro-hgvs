@@ -14,11 +14,10 @@ cargo nextest run --features dev --no-capture # with test output
 cargo bench --features dev                    # benchmarks; `seqfirst_align` requires `dev`
 ```
 
-Use `cargo nextest`, not `cargo test`. `cargo test` runs a separate process per test target, but
-the tests within one target share that process and run as threads. Two lib tests,
-`normalize::merge::tests` and `parallel::tests`, live in the same library target, so they share
-one process and are not safe in that shared thread pool. nextest runs each test in its own
-process, so they pass.
+Use `cargo nextest`, not `cargo test`. `cargo test` runs each test target in its own binary, and
+the test cases within a binary share that one process. Two lib tests, `normalize::merge::tests` and
+`parallel::tests`, are not safe in that shared pool. nextest runs each test in its own process, so
+they pass.
 
 ### Layout: one `it` binary
 
@@ -75,9 +74,12 @@ The `cargo t` alias, `nextest run --features dev --lib --test it`, builds only t
 the `it` suite. That is about half the work. It skips the standalone integration targets, so run
 the full suite with `cargo ta` before you push.
 
-The two settings together noticeably cut both the wall-clock and CPU time of a rebuild after a
-`tests/it/` edit. These did not help, so you do not need to try them: `lld`, a split of the `it`
-binary, and `[profile.test]` debug settings.
+Measured on an M2 Max with the repo-pinned toolchain (`rust-toolchain.toml`), warm `target/`, no
+other load: after a one-line edit to a `tests/it/` module, rebuilding a single test with
+`env -u CARGO_INCREMENTAL cargo t -E 'test(<one_test>)'` fell from about 17 s to about 5 s wall, and
+from about 30 s to about 4 s CPU, once both settings above are in place. The numbers are approximate
+and vary with the edit and the machine. These did not help, so you do not need to try them: `lld`, a
+split of the `it` binary, and `[profile.test]` debug settings.
 
 ## Exhaustive cis sweeps: `FERRO_SWEEP_SEEDS`
 
@@ -110,13 +112,10 @@ how to run each one locally:
 - `test`: the default suite, with `FERRO_REQUIRE_BULK_FIXTURES=1`. `test-oracle`, `censuses`, and
   the fetching jobs in `coverage.yml` and `external-validation.yml` set it too. Some suites skip
   and report PASS when their bulk data is absent. That variable turns the skip into a failure.
-  Set it locally when you have the data. `scripts/run_conformance_axis.sh` validates a supplied
-  manifest, then runs the `test(axis_)` filter; that substring also selects unrelated tests, only
-  some of which are manifest-gated.
+  Set it locally when you have the data. `scripts/run_conformance_axis.sh` runs one
+  manifest-backed axis.
 - `test-oracle`: the suite with the four `FERRO_ASSERT_*` seam oracles armed, over the suite minus
-  the modules those oracles would silence; a compensating step then re-runs the
-  `SEQUENCE_ORACLE_EXCLUDE` rows under the other three oracles, so those rows keep their coverage.
-  The local runner reproduces only the armed step. See `docs/ORACLES.md`, section "What CI arms, and
+  the modules those oracles would silence. See `docs/ORACLES.md`, section "What CI arms, and
   where".
 - `sweeps`: the three exhaustive sweeps at `FERRO_SWEEP_SEEDS=full`.
 - `censuses` and `censuses-plain`: the slow census modules, from the optimized soak archive.
@@ -159,9 +158,7 @@ fails if a class gives more than one output. The disagreements it finds today ar
 pinned. To converge them is a downstream representation change, not a fix for a test PR. The
 `rulings` section of the same file is documented in `CONTRIBUTING.md`, Adjudications.
 
-Regenerate the fixture with plain generation, not `--check`. Both render the fixture from the
-committed overrides against the spec checkout — that render is the validation, and CI does it
-before every run — but plain generation writes the fixture while `--check` only compares the
-rendered result against an existing artifact without overwriting it (a missing one is
-generated). `--check` is not a gate here, and CI does not gate on it, because the fixture is
-gitignored and has no committed baseline.
+Regenerate the fixture with plain generation, not `--check`. Generation is what validates the
+committed overrides against the spec checkout, and CI does the same before every run. `--check`
+answers only one question: is my local artifact current? It is not a gate, and CI does not gate
+on it.

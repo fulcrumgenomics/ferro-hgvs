@@ -338,9 +338,10 @@ fn the_parser_is_what_keeps_an_insertion_anchor_off_i64_max() {
 //
 // As of #1815 that job DOES set the flag, and this module runs under it: all 8
 // of its tests are armed and green, and — unlike `stranded_identity_member` —
-// it is deliberately NOT named in `ci.yml`'s `SEQUENCE_ORACLE_EXCLUDE`, because
-// #1690 closed and the three failures are gone. (It was on the debt list drafted
-// while #1690 was open; that row was never needed.)
+// it is deliberately NOT named in the `oracle` profile's second exclusion in
+// `.config/nextest.toml`, because #1690 closed and the three failures are
+// gone. (It was on the debt list drafted while #1690 was open; that row was
+// never needed.)
 //
 // The guard below still has to be a test that runs unarmed, for a reason arming
 // the flag does not touch: an armed oracle catches this site only on a row that

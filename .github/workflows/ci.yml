@@ -67,8 +67,9 @@ env:
   # `test-oracle`, which negate it, would just widen by 30 tests.
   #
   # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
-  # negates `ORACLE_EXCLUDE` below, so it runs a strict SUBSET of `test` rather
-  # than the same selection. Every test still runs somewhere unarmed.
+  # runs under `profile.oracle` in `.config/nextest.toml`, whose exclusions make
+  # it a strict SUBSET of `test` rather than the same selection. Every test still
+  # runs somewhere unarmed.
   #
   # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
   # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
@@ -132,12 +133,12 @@ env:
   # the half neither of those catches — a module named here that NEITHER of the
   # job's two steps selects would be negated everywhere and run nowhere.
   #
-  # NOTE the overlap with `ORACLE_EXCLUDE` below: `spec_conformance_axis` is in
-  # both, and deliberately. `ORACLE_EXCLUDE` is a statement about which
-  # instrument may be armed, and `oracle_exclude_invariant.rs` demands that
-  # every spec-corpus module appear there; this filter is a statement about
-  # where a module runs. Removing it from either would be wrong for a reason the
-  # other does not cover.
+  # NOTE the overlap with `profile.oracle` in `.config/nextest.toml`:
+  # `spec_conformance_axis` is in both, and deliberately. That profile's
+  # exclusion is a statement about which instrument may be armed, and
+  # `oracle_exclude_invariant.rs` demands that every spec-corpus module appear
+  # there; this filter is a statement about where a module runs. Removing it
+  # from either would be wrong for a reason the other does not cover.
   CENSUS_FILTER: >-
     test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
     + test(spec_conformance_axis) + test(clinvar_hgvs_tests)
@@ -174,37 +175,6 @@ env:
   # single test's time. That, not a number, is why the carve-out exists.
   ORACLE_ONLY_FILTER: >-
     test(merge::tests::direction_symmetry)
-  # The spec-corpus modules, excluded from `test-oracle` ONLY. They run unarmed
-  # in the plain `test` job, so this is not a coverage exemption. It states which
-  # instrument may be armed while another measures. Some rows count a defect an
-  # armed oracle would panic on, so an armed run would flatter the count. Others
-  # pin a defect the oracle fires on. `tests/it/oracle_exclude_invariant.rs` keeps
-  # the list honest in both directions. Three rows join for a different reason:
-  # `corpus_prohibited_inputs` measures refusal, so an armed oracle reddens it
-  # instead of flattering it; `issue_1715_rna_alignment_symbol_reach` only asserts
-  # the generator builds no `r.` row, so its zero is structural;
-  # `conformance_census_instrument` reaches the same census through
-  # `conformance::census` and refuses once a flag is set. See docs/ORACLES.md,
-  # section "What CI arms, and where".
-  ORACLE_EXCLUDE: >-
-    test(spec_conformance_axis) + test(spec_corpus_regressions)
-    + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
-    + test(lenient_overlap_and_projection_split)
-    + test(defect_non_idempotent_outputs)
-    + test(issue_1715_rna_alignment_symbol_reach)
-    + test(conformance_census_instrument)
-    + test(conformance_census_runs)
-  # Withheld from the DENOTED-SEQUENCE oracle and from nothing else. Each row
-  # carries the open issue that retires it. `stranded_identity_member` is a
-  # genuine fire on a module that pins a defect (#1655). The render-time gate,
-  # `the_render_time_reference_matches_what_the_pipeline_was_given`, fires on
-  # its corpus rows (#2140, #1983, #2139). The `test-oracle` compensating step
-  # re-runs these rows under the other three oracles, so this file's oracle
-  # coverage grows and trades nothing. This list is a debt and must shrink. See
-  # docs/ORACLES.md, section "What CI arms, and where".
-  SEQUENCE_ORACLE_EXCLUDE: >-
-    test(stranded_identity_member)
-    + test(the_render_time_reference_matches_what_the_pipeline_was_given)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
 # 360-minute default, so a wedged runner holds a PR for six hours: observed on
@@ -1511,7 +1481,7 @@ jobs:
   # max toward ~90s/shard. Past ~10 the fixed per-shard prefix (archive download
   # ~24s) and rising cross-shard download contention stop the marginal shard from
   # helping. One shard additionally carries the un-partitioned
-  # SEQUENCE_ORACLE_EXCLUDE step (5 tests, ~27s); it is deliberately placed on a
+  # `oracle-rerun` step (5 tests, ~27s); it is deliberately placed on a
   # light partition shard (see that step) so it does not become the pole — the
   # pole is the heaviest pure-partition shard, set by hash clustering.
   #
@@ -1573,26 +1543,24 @@ jobs:
           name: bulk-fixtures
           path: tests/fixtures/
       - name: Run Rust tests with the normalization self-checks
-        # This step arms all four `FERRO_ASSERT_*` flags over this job's whole
-        # selection MINUS `SEQUENCE_ORACLE_EXCLUDE`. The gate is
-        # `#[cfg(debug_assertions)]`, on in the test profile even with
-        # `CARGO_PROFILE_TEST_DEBUG=0` (that strips debuginfo, not assertions).
-        # See docs/ORACLES.md, section "What CI arms, and where".
+        # `profile.oracle` in `.config/nextest.toml` arms all four `FERRO_ASSERT_*`
+        # flags and carries both oracle exclusions; the `-E` here subtracts only
+        # what other jobs own. The gate is `#[cfg(debug_assertions)]`, on in the
+        # test profile even with `CARGO_PROFILE_TEST_DEBUG=0` (that strips
+        # debuginfo, not assertions). See docs/ORACLES.md, section "Which oracles
+        # the CI arms, and where".
         env:
-          FERRO_ASSERT_IDEMPOTENT: "1"
-          FERRO_ASSERT_REPARSE: "1"
-          FERRO_ASSERT_IN_BOUNDS: "1"
-          FERRO_ASSERT_SEQUENCE: "1"
           # As in `test` above: an absent bulk fixture fails rather than skips.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/10 \
-            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE) and not ($CENSUS_FILTER) and not ($SEQUENCE_ORACLE_EXCLUDE)"
-      # This step re-runs the rows `SEQUENCE_ORACLE_EXCLUDE` withholds from the
-      # armed step above, under the three oracles those rows pass. See
-      # docs/ORACLES.md, section "What CI arms, and where".
+            --profile oracle --partition hash:${{ matrix.shard }}/10 \
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER)"
+      # This step re-runs the rows `profile.oracle` withholds from the armed step
+      # above, under the three oracles those rows pass. `profile.oracle-rerun` in
+      # `.config/nextest.toml` selects those rows and arms those three. See
+      # docs/ORACLES.md, section "What the oracle profile excludes".
       #
       # Runs on ONE shard and UN-partitioned, deliberately. It selects the named
       # rows, so `--partition hash:K/10` would leave some shards selecting none, and
@@ -1620,14 +1588,10 @@ jobs:
       - name: Run the sequence-oracle exclusions under the other three oracles
         if: matrix.shard == 3
         env:
-          FERRO_ASSERT_IDEMPOTENT: "1"
-          FERRO_ASSERT_REPARSE: "1"
-          FERRO_ASSERT_IN_BOUNDS: "1"
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
-            --extract-to . --extract-overwrite --no-tests=fail \
-            -E "$SEQUENCE_ORACLE_EXCLUDE"
+            --extract-to . --extract-overwrite --profile oracle-rerun --no-tests=fail
 
   # 1,000,000-case idempotency soak on every PR, split 10 ways.
   #
@@ -1873,7 +1837,7 @@ jobs:
   # census, so it stays un-armed in `censuses-plain`. Do not restore parity by
   # copying `FERRO_ASSERT_SEQUENCE` down here without first
   # measuring it over `ORACLE_ONLY_FILTER`'s modules. See docs/ORACLES.md,
-  # section "What CI arms, and where".
+  # section "Which oracles the CI arms, and where".
   #
   # No `submodules: true`: none of the three modules names a path under
   # `assets/` (the spec worked-examples citation gate, which does, stays in
