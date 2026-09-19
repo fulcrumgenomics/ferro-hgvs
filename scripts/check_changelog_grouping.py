@@ -246,23 +246,53 @@ def commit_bodies(commit_range: str, repo: Path) -> dict[str, str]:
     return {fields[i]: fields[i + 1].strip("\n") for i in range(0, len(fields), 2)}
 
 
-def trailer_value(message: str) -> str | None:
-    """Return the `Representation-Change:` value in `message`, or None.
+#: A line that opens a git trailer/footer block: a `token:` at column 0, where the token is
+#: a word using hyphens for spaces (git's own trailer syntax). Used to decide whether the
+#: line above a `Representation-Change:` is itself a footer, so a stacked footer still reads
+#: as one.
+_FOOTER_TOKEN_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*[ \t]*:")
 
-    **Column 0, matching `scripts/check_representation_change.py` (#1573).** This pattern
-    allowed `^[ \\t]*` before the token, which git and git-cliff both treat as a
-    *continuation* of the value above it — so the two halves counted different trailers. A PR
-    description that quotes the declining example above its own real disclosure was the live
-    divergence: the checker read the column-0 disclosure and this read the indented `none`,
-    then reported the commit as a decline filed under **Representation changes** and failed
-    the build.
+#: A `Representation-Change:` line and its single-line value. Column 0 only. Matched per
+#: line, so the surrounding lines can be inspected to decide whether it is a genuine footer.
+_TRAILER_LINE = re.compile(r"Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$", re.IGNORECASE)
+
+
+def trailer_value(message: str) -> str | None:
+    """Return the `Representation-Change:` footer value in `message`, or None.
+
+    **A footer, not any matching line (#2233).** git-cliff groups a commit on its parsed
+    *footers*, and a footer is a `token: value` line that begins a trailing footer block --
+    preceded by a blank line (a paragraph boundary) or by another footer line. It is not the
+    same string wrapped into body prose. The earlier revision searched the whole message
+    with a column-0 `^Representation-Change:` regex, so a commit whose body wrapped rubric
+    text onto a line beginning `Representation-Change: <...>` mid-paragraph (#2222's
+    CONTRIBUTING rubric) was read as a real disclosure that git-cliff had *not* grouped under
+    "Representation changes" -- turning the audit red on `main` and every open PR until the
+    next release tag, with no PR author able to fix it. This reads the trailer the way
+    git-cliff does (verified against git-cliff 2.13.1), so the two agree on what counts as a
+    trailer. The last qualifying footer wins, matching git-cliff's trailing footer region.
+
+    **Column 0, matching `scripts/check_representation_change.py` (#1573).** The token must
+    start at column 0. An earlier revision allowed `^[ \\t]*` before it, which git and
+    git-cliff both treat as a *continuation* of the value above it -- so the two halves
+    counted different trailers. A PR description that quotes the declining example above its
+    own real disclosure was the live divergence: the checker read the column-0 disclosure and
+    this read the indented `none`, then reported the commit as a decline filed under
+    **Representation changes** and failed the build.
     """
-    match = re.search(
-        r"^Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$",
-        message,
-        re.IGNORECASE | re.MULTILINE,
-    )
-    return match.group("value") if match else None
+    lines = message.splitlines()
+    value: str | None = None
+    for index, line in enumerate(lines):
+        # `index == 0` is the subject line, which is never a trailer.
+        if index == 0:
+            continue
+        match = _TRAILER_LINE.match(line)
+        if match is None:
+            continue
+        previous = lines[index - 1]
+        if previous.strip() == "" or _FOOTER_TOKEN_LINE.match(previous):
+            value = match.group("value")
+    return value
 
 
 def opens_with_a_decline(value: str) -> bool:
