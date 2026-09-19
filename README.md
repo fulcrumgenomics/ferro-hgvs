@@ -98,6 +98,8 @@ ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 
 > **Throughput tip:** when normalizing many variants, feed them **sorted by transcript accession (or by genomic position)**. ferro caches each resolved transcript, so consecutive variants on the same transcript skip the (dominant) cost of re-reading and re-building it from the reference. Sorted input keeps the relevant transcripts resident in the cache and is markedly faster on large batches — see [Performance Comparison](#performance-comparison).
 
+> **Prepared sequence store (automatic):** `ferro prepare` also writes a `sequence_store.pac` sidecar — the reference sequences decoded once and packed 2 bits per base — and `normalize`/`project` load it automatically when it sits beside the reference, skipping the per-access FASTA decode that dominates reference-read time. On a ≈500,000-variant ClinVar batch (single-threaded, warm cache) this is roughly a third faster wall-clock with **byte-identical output**; exact figures depend on corpus and hardware. Nothing to enable; it fails safe to the FASTA text path if absent or stale. See [Reference data → Faster reads](docs/src/guide/reference-data.md#faster-reads-the-2-bit-sequence-store).
+
 ### Optional reference data
 
 A bare `ferro prepare` builds a **RefSeq-only** reference (accessions `NM_`/`NR_`/`NP_`/`NG_`). Two opt-in flags provision additional data — pass them at prepare time; they are what a fully-provisioned ("blessed") reference is built with:
