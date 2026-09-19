@@ -112,10 +112,9 @@ use crate::common::cis_apply_oracle::{normalize, sweep_sequences};
 /// Fixed, and deliberately **not** routed through the `FERRO_SWEEP_SEEDS` knob.
 /// That knob exists to shrink the three exhaustive sweeps, which dominate a
 /// local run at ~80s each; this file's whole corpus normalizes in well under a
-/// second, so there is nothing to shrink. Routing through it would also oblige
-/// `SWEEP_FILTER` in `ci.yml` to name this module —
-/// `sweep_filter_invariant::every_seed_knob_consumer_is_named_in_the_sweep_filter`
-/// enforces exactly that — which would move the file into the `sweeps` job and
+/// second, so there is nothing to shrink. Routing through it would also put this
+/// module in the class `SWEEP_FILTER` names, and `SWEEP_FILTER` is negated by
+/// `test` and `test-oracle` — which would move the file into the `sweeps` job and
 /// make an invariant that should hold everywhere run at a reduced corpus in
 /// every other job.
 const CORPUS_SEEDS: u32 = 8;
