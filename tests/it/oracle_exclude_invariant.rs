@@ -23,11 +23,11 @@
 
 use std::path::PathBuf;
 
-/// This file. Excluded from the consumer scan below for the same reason
-/// `sweep_filter_invariant.rs` excludes itself: the scan's **matcher literal**
-/// is the import path it searches for, and that literal lives here. Without the
-/// exclusion the guard would demand it be named in a CI filter that has no
-/// reason to run it.
+/// This file. Excluded from the consumer scan below because the scan's **matcher
+/// literal** is the import path it searches for, and that literal lives here.
+/// Without the exclusion the guard would demand it be named in the `oracle`
+/// profile's exclusion in `.config/nextest.toml`, which has no reason to
+/// withhold it.
 const SELF: &str = "oracle_exclude_invariant.rs";
 
 /// The modules under `ferro_hgvs::conformance` whose import marks a test module
@@ -287,26 +287,12 @@ fn armed_flags(name: &str) -> Vec<String> {
     flags
 }
 
-/// `ci.yml`, parsed. Shared by the env-filter reader and the step guard.
+/// `ci.yml`, parsed. Shared by the `FERRO_ASSERT_*` env scan and the step guard.
 fn ci_workflow() -> serde_yaml::Value {
     let path = repo_root().join(".github/workflows/ci.yml");
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("ci.yml is not valid YAML: {e}"))
-}
-
-/// A filter from `ci.yml`'s top-level `env:`.
-///
-/// `SWEEP_FILTER` and `CENSUS_FILTER` are scheduling, which CI owns; the profile
-/// is policy, which this repo owns. The two must stay disjoint, so the guards
-/// below read both.
-fn ci_env_filter(key: &str) -> String {
-    ci_workflow()
-        .get("env")
-        .and_then(|env| env.get(key))
-        .and_then(serde_yaml::Value::as_str)
-        .unwrap_or_else(|| panic!("ci.yml's top-level `env:` defines no `{key}`"))
-        .to_string()
 }
 
 /// The `FERRO_ASSERT_*` keys set in an `env:` mapping, if any.
@@ -328,7 +314,6 @@ fn ferro_assert_keys(env: &serde_yaml::Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
 /// One step of the `test-oracle` job, found by its `name:`.
 fn test_oracle_step(name: &str) -> serde_yaml::Value {
     ci_workflow()["jobs"]["test-oracle"]["steps"]
@@ -709,66 +694,35 @@ fn the_sequence_oracle_exclusions_still_run_under_the_other_three_oracles() {
     );
 }
 
-/// The debt list must stay disjoint from the permanent filters.
+/// The debt list must stay disjoint from the profile's standing exclusion.
 ///
-/// An overlap is not merely untidy here, unlike the sweep/oracle pair below. A
-/// row in both of the `oracle` profile's exclusions is withheld from the armed
-/// run twice — harmless — but `oracle-rerun` would then run it under three
-/// oracles that the armed run deliberately never runs it under, because the
-/// first exclusion's whole point is that those instruments destroy each other
-/// on those modules. So the overlap would *create* the red that the first
-/// exclusion exists to prevent, in a new step, for a reason nothing states.
-///
-/// The `SWEEP_FILTER` half is the milder version: those rows run in `sweeps` with
-/// all four oracles armed already, so re-running them here would be redundant
-/// rather than wrong — but it would also mean the debt list silently governs a
-/// job it says nothing about.
+/// An overlap is not merely untidy. A row in both of the `oracle` profile's
+/// exclusions is withheld from the armed run twice — harmless — but
+/// `oracle-rerun` would then run it under three oracles that the armed run
+/// deliberately never runs it under, because the first exclusion's whole point
+/// is that those instruments destroy each other on those modules. So the overlap
+/// would *create* the red that the first exclusion exists to prevent, in a new
+/// step, for a reason nothing states.
 #[test]
-fn the_sequence_oracle_exclude_is_disjoint_from_the_permanent_filters() {
+fn the_sequence_oracle_exclude_is_disjoint_from_the_standing_exclusion() {
     let debt = modules_named_in(&sequence_oracle_exclude());
     assert!(
         !debt.is_empty(),
         "the `oracle` profile's second exclusion names nothing; this guard has gone vacuous"
     );
-    let permanent = [
-        ("the `oracle` profile's first exclusion", oracle_exclude()),
-        ("SWEEP_FILTER", ci_env_filter("SWEEP_FILTER")),
-        ("CENSUS_FILTER", ci_env_filter("CENSUS_FILTER")),
-    ];
-    for (label, filter) in permanent {
-        let other = modules_named_in(&filter);
-        assert!(
-            !other.is_empty(),
-            "{label} names no module; this guard has gone vacuous"
-        );
-        let both: Vec<&String> = debt.iter().filter(|m| other.contains(m)).collect();
-        assert!(
-            both.is_empty(),
-            "these are named in BOTH the second exclusion and {label}: {both:#?}\n\
-             The debt list is temporary and carries issue numbers; {label} is a standing \
-             statement about what the armed run must never run. A row in both means \
-             `oracle-rerun` re-runs, under three armed oracles, a module {label} withholds \
-             from them."
-        );
-    }
-}
-
-/// The two filters must stay disjoint.
-///
-/// They are negated together in one expression, so an overlap is harmless today
-/// — but it means one job's list silently governs the other's, and the next
-/// person editing either would reasonably read them as independent.
-#[test]
-fn the_sweep_filter_and_the_oracle_exclude_are_disjoint() {
-    let sweeps = modules_named_in(&ci_env_filter("SWEEP_FILTER"));
-    let excluded = modules_named_in(&oracle_exclude());
-
-    let both: Vec<&String> = sweeps.iter().filter(|m| excluded.contains(m)).collect();
+    let standing = modules_named_in(&oracle_exclude());
+    assert!(
+        !standing.is_empty(),
+        "the `oracle` profile's first exclusion names no module; this guard has gone vacuous"
+    );
+    let both: Vec<&String> = debt.iter().filter(|m| standing.contains(m)).collect();
     assert!(
         both.is_empty(),
-        "these modules are named in BOTH ci.yml's SWEEP_FILTER and the `oracle` profile's \
-         first exclusion, which are meant to select disjoint sets for different reasons: \
-         {both:#?}"
+        "these are named in BOTH the second exclusion and the first exclusion: {both:#?}\n\
+         The debt list is temporary and carries issue numbers; the first exclusion is a \
+         standing statement about what the armed run must never run. A row in both means \
+         `oracle-rerun` re-runs, under three armed oracles, a module the first exclusion \
+         withholds from them."
     );
 }
 
@@ -861,9 +815,9 @@ fn the_corpus_import_scan_sees_every_spelling() {
     // The same prefix hazard for the second entry, so widening the list did not
     // widen what counts as a match.
     assert!(!imports_corpus(
-        "use ferro_hgvs::conformance::{census_filter_invariant, summary};"
+        "use ferro_hgvs::conformance::{census_regressions, summary};"
     ));
     assert!(!imports_corpus(
-        "use ferro_hgvs::conformance::{census_filter_invariant as c, summary};"
+        "use ferro_hgvs::conformance::{census_regressions as c, summary};"
     ));
 }

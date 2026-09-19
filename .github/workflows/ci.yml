@@ -3,43 +3,26 @@ name: CI
 on:
   push:
     branches: [main]
-  # No `branches:` filter here on purpose. That filter matches the pull
-  # request's BASE, so `branches: [main]` silently skipped CI for every
-  # stacked PR (one whose base is another feature branch). Because the
-  # `pull_request` event never fired, such a PR had no CI runs at all, yet
-  # GitHub still rendered "All checks have passed" — a green badge that
-  # carried no information. Run on every pull request whatever it targets.
+  # No `branches:` filter here: it matches the PR's BASE, so `branches: [main]`
+  # silently skips every stacked PR (one based on another feature branch) while GitHub
+  # still shows "All checks have passed". Run on every pull request whatever it targets.
   pull_request:
-    # `edited` is load-bearing for `representation-change` below: the declaration
-    # lives in the PR description, and the default activity set
-    # (opened/synchronize/reopened) does not fire when a description is edited. Without
-    # it, adding the trailer a red check just asked for re-runs nothing and the check
-    # stays red until an unrelated push.
+    # `edited` is load-bearing for `representation-change` below: its declaration lives in
+    # the PR description, and opened/synchronize/reopened do not fire on a description
+    # edit — so without it, adding the trailer a red check asked for re-runs nothing.
     types: [opened, synchronize, reopened, edited]
-  # Required for a merge queue, and it is a hard prerequisite rather than an
-  # optimisation: a queue entry is gated on the branch's required status checks
-  # being reported against the MERGE GROUP, and a workflow that does not trigger
-  # on `merge_group` reports nothing there at all. Nine of `main`'s ten required
-  # contexts come from this file (`zizmor + actionlint` is the tenth, in
-  # `lint-workflows.yml`), so without this line every queued pull request would
-  # sit on "Expected — waiting for status to be reported" forever. That is the
-  # same failure mode the `paths:` filter caused in `lint-workflows.yml`, one
-  # event further out: a check that never reports is indistinguishable from a
-  # check that has not finished.
-  #
-  # This is inert until a merge queue is actually enabled on `main` — no
-  # `merge_group` event can be delivered before then — so it is safe to land
-  # ahead of the settings change, and it has to, or the first queued PR hangs.
+  # Required for a merge queue: a queue entry gates on this file's required checks
+  # reporting against the MERGE GROUP, and a workflow that does not trigger on
+  # `merge_group` reports nothing there, so every queued PR hangs on "waiting for status"
+  # forever. Inert until a queue is enabled on `main` (no `merge_group` event fires
+  # before then), so it is safe to land ahead of that.
   merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel a merge-group run. `github.ref` is unique per merge group
-  # (`refs/heads/gh-readonly-queue/main/pr-<n>-<base-sha>`), so a collision needs
-  # the same PR re-queued against an unmoved base — rare, and the cost of losing
-  # that race is not a wasted run but a cancelled required check, which the queue
-  # reads as a failure and which evicts the pull request from the queue. Cheap
-  # insurance; `pull_request` and `push` are unaffected.
+  # Never cancel a merge-group run: a cancelled required check reads as a failure and
+  # evicts the PR from the queue. `github.ref` is unique per merge group, so a collision
+  # is rare anyway. `pull_request` and `push` are unaffected.
   cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 permissions:
@@ -48,145 +31,48 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The three exhaustive-sweep modules, owned by the `sweeps` job and excluded
-  # from the `test` / `test-oracle` partitions. Defined once here because the
-  # filter has to appear identically in three places and GitHub Actions has no
-  # YAML anchors — a copy that drifts would either double-run a sweep or, far
-  # worse, drop one from CI entirely.
-  #
-  # The invariant to preserve is that the two selections PARTITION the suite —
-  # the absolute counts drift as tests are added, the sum must not. Verified
-  # against this base: `not test(proptest)` selects 8908, adding
-  # `and not (SWEEP_FILTER)` selects 8878, and the filter itself selects the
-  # remaining 30. 8878 + 30 == 8908, so nothing falls between the two jobs and
-  # nothing is run twice.
-  #
-  # `sweeps`, the one job that selects ON this filter rather than against it,
-  # passes `--no-tests=fail`. So a rename that made the filter match nothing
-  # reddens CI there instead of quietly emptying that job — while `test` and
-  # `test-oracle`, which negate it, would just widen by 30 tests.
-  #
-  # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
-  # runs under `profile.oracle` in `.config/nextest.toml`, whose exclusions make
-  # it a strict SUBSET of `test` rather than the same selection. Every test still
-  # runs somewhere unarmed.
-  #
-  # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
-  # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
-  # denoted-sequence oracle's counters, which are meaningless unless
-  # `FERRO_ASSERT_SEQUENCE` is set. `sweeps` was the only job IN THIS FILE that
-  # set it until #1815 armed it in `test-oracle` too (`nightly-mutalyzer.yml`
-  # sets it as well, non-gating). So "nothing is run twice" holds of this filter
-  # and is one module short of holding of that job's `-E`; the reason it is
-  # appended there rather than added here is on the job itself.
+  # The three exhaustive-sweep modules, owned by `sweeps` and negated from the `test` /
+  # `test-oracle` partitions. One definition (Actions has no YAML anchors) so a drifted
+  # copy can't double-run or drop a sweep. The selections must partition the suite: the
+  # counts drift as tests are added, the sum must not.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
-  # The slow census modules, owned by the `censuses` job and excluded from the
-  # `test` / `test-oracle` partitions. Same shape as `SWEEP_FILTER` above and
-  # for the same reason; the difference is what the job does with them.
+  # The slow census modules, owned by the `censuses` / `censuses-plain` jobs and
+  # negated from `test` / `test-oracle` — same one-definition and partition rules
+  # as `SWEEP_FILTER`. Moved to dedicated jobs because `--partition hash:K/N`
+  # balances shard counts blind to cost, so a slow census could land on the
+  # critical path. Those jobs select these modules by explicit name, split across
+  # their steps, so a module here that no step selects runs nowhere.
   #
-  # WHY THEY MOVED. `--partition hash:K/N` assigns a test by a hash of its NAME,
-  # so it balances shard *counts* and is blind to cost — the property already
-  # recorded on `sweeps`, where all three exhaustive sweeps hashed into one
-  # shard. The three below hashed into the two slowest jobs and made the
-  # workflow's critical path a single test. Measured on run 31845625298
-  # (`044f085a`):
-  #
-  #                                             Test (K/6)   Test oracle (K/4)
-  #   issue_1542_direction_symmetry               155.7s (3)         240.3s (1)
-  #   spec_conformance_axis (5 tests)             338.0s              excluded
-  #   normalize_axis_preserving (4 tests)         119.3s (1,3,5)      313.0s (1,3)
-  #
-  # `Test oracle (1/4)` ran 328s against 132-160s for its siblings and finished
-  # 83s after every other job in the workflow, so the run's wall clock was one
-  # unlucky hash draw. A shard's wall can never fall below its slowest single
-  # test, so re-sharding cannot fix it — which is why `test-oracle`'s own
-  # comment below, having chosen N=4 to separate the two bulk corpora, names
-  # exactly this carve-out as the robust alternative. This is that alternative.
-  #
-  # The fourth member joined later and its figures are from a DIFFERENT run,
-  # 31909112992 — not comparable row-for-row with the three above, and subject
-  # to the same cross-run spread recorded on `ORACLE_ONLY_FILTER` below:
-  #
-  #   clinvar_hgvs_tests (2 tests)                 37.2s (2,6)         62.3s (2,4)
-  #
-  # Its two tests hash into FOUR different shards between the two matrices, so
-  # ~99s of work leaves them — but only the 54.9s copy in `Test oracle (2/4)`
-  # was on the critical path, which is why the wall-clock saving is much smaller
-  # than the work removed. It is also the only member that is a PARSER
-  # benchmark rather than a normalization census: it never reaches
-  # `canonicalize_from_sequence`, so the optimized archive's gains land on its
-  # gzip decode, JSON deserialization and `parse_hgvs` instead.
-  #
-  # AND WHY THE JOB, NOT THE JOB BOUNDARY, IS THE WIN. `censuses` consumes the
-  # OPTIMIZED archive `test-build-soak` produces, which is where `sweeps`
-  # measured 7.6-8.7x on work of exactly this shape (compute-bound cross
-  # products over `MockProvider`). A carve-out onto the standard debug archive
-  # would move the same 240s to a different runner and buy ~50s.
-  #
-  # THE PARTITION INVARIANT is `SWEEP_FILTER`'s, verbatim: the counts drift as
-  # tests are added, the sum must not. `censuses` selects ON this filter and
-  # passes `--no-tests=fail`, so a rename that made it match nothing reddens
-  # there rather than quietly emptying the job, while `test` and `test-oracle`
-  # negate it and would just widen. `tests/it/census_filter_invariant.rs` closes
-  # the half neither of those catches — a module named here that NEITHER of the
-  # job's two steps selects would be negated everywhere and run nowhere.
-  #
-  # NOTE the overlap with `profile.oracle` in `.config/nextest.toml`:
-  # `spec_conformance_axis` is in both, and deliberately. That profile's
-  # exclusion is a statement about which instrument may be armed, and
-  # `oracle_exclude_invariant.rs` demands that every spec-corpus module appear
-  # there; this filter is a statement about where a module runs. Removing it
-  # from either would be wrong for a reason the other does not cover.
+  # `spec_conformance_axis` is deliberately in both this filter and
+  # `profile.oracle`'s exclusion (`.config/nextest.toml`): that exclusion says
+  # which instrument may be armed, this filter says where a module runs — don't
+  # collapse them.
   CENSUS_FILTER: >-
     test(issue_1542_direction_symmetry) + test(normalize_axis_preserving)
     + test(spec_conformance_axis) + test(clinvar_hgvs_tests)
     + test(conformance_census_runs)
 
-  # Negated from `test` ONLY. These run in `test-oracle` with the three seam
-  # oracles armed, and an armed run strictly subsumes an un-armed one — the
-  # oracles add assertions at `normalize_core_checked`'s exit and change no
-  # behaviour. That is the same argument `censuses` makes for dropping the
-  # plain-`test` copy of the modules it took, and `sweeps` before it; the only
-  # difference here is that the destination is an existing job rather than a
-  # new one.
+  # Negated from `test` ONLY: this one module runs in `test-oracle` with the seam
+  # oracles armed, and an armed run subsumes the un-armed one, so the plain-`test`
+  # copy is dropped — the same argument `censuses` and `sweeps` make.
   #
-  # WHY NOT `CENSUS_FILTER`: that filter is negated from BOTH shards and the
-  # `censuses` job selects it off the SOAK archive, which is built
-  # `-p ferro-hgvs-soak-tests` and therefore contains no `src/` unit tests at
-  # all. `merge::tests::direction_symmetry` is a `#[cfg(test)]` module inside
-  # `src/normalize/merge.rs`, so naming it in `CENSUS_FILTER` would negate it
-  # from both shards and then select nothing — deleting the census outright.
-  # `--no-tests=fail` would not catch that, because the step's other terms
-  # still match. This variable exists precisely because that trap is silent.
-  #
-  # It is the unit half of #1840's pair. #1955 moved the integration half
-  # (`issue_1542_direction_symmetry`) to `censuses` and left this one running in
-  # BOTH shards.
-  #
-  # NO PER-TEST COST IS PINNED HERE, deliberately. That test measured 93.8s
-  # (`Test (3/6)`, un-armed) and 85.2s (`Test oracle (3/4)`, armed) on run
-  # 31909112992, and 46.8s in the same armed shard on run 31911822856 an hour
-  # later — a 2x spread on one test, so any single figure in a committed comment
-  # is one the next reader cannot reproduce, and pinning one invites a carve-out
-  # decision to be made from noise. What is stable is the SHAPE: `Test (3/6)`
-  # was a shard wearing one test, its whole nextest summary within ~1s of that
-  # single test's time. That, not a number, is why the carve-out exists.
+  # A separate variable, NOT folded into `CENSUS_FILTER`:
+  # `merge::tests::direction_symmetry` is a `src/` unit test (`#[cfg(test)]` in
+  # `src/normalize/merge.rs`), and the soak archive the census jobs run is built
+  # `-p ferro-hgvs-soak-tests` with no `src/` unit tests. Naming it in
+  # `CENSUS_FILTER` would negate it from both shards and then select nothing —
+  # silently deleting the census, uncaught by `--no-tests=fail`.
   ORACLE_ONLY_FILTER: >-
     test(merge::tests::direction_symmetry)
 
 # Every job carries a `timeout-minutes`. Without one a job inherits GitHub's
-# 360-minute default, so a wedged runner holds a PR for six hours: observed on
-# #1977 (run 31905255274, attempt 1), where `Test (2/6)` sat in its nextest step
-# for 72 minutes against the same shard's 65-second step on the run's own second
-# attempt, while the other 32 jobs were green, and would have run to 360.
-#
-# The tiers are deliberately loose, because the failure that matters here is a
-# timeout that fires on legitimate work. `.config/nextest.toml` records the
-# precedent: a `slow-timeout = { period = "60s", terminate-after = 2 }` killed
-# the real censuses at 120s, and that is why there is no `[profile.ci]`. These
-# bound a hang; they are not a budget, and nothing should be tuned to fit them.
+# 360-minute default, so a wedged runner can hold a PR for hours. The tiers below
+# bound a hang; they are not a budget, and nothing should be tuned to fit them —
+# `.config/nextest.toml` records why there is no `[profile.ci]`. Each tier is at least
+# 5x its own slowest observed member; re-derive from measurement (across job ATTEMPTS,
+# not just the latest) before tightening any of them.
 #
 #   60  compiles Rust, so a cold cache is on the table
 #       (build, clippy{,-all-features}, spec-fixtures, test-build{,-soak},
@@ -194,22 +80,6 @@ env:
 #   30  downloads a prebuilt archive and runs tests (test, test-oracle,
 #       sweeps, censuses, soak)
 #   15  lint/aux, none of which compiles Rust
-#
-# Sizing, re-derived 2026-08-15 across every ATTEMPT of the last 40 completed
-# `ci.yml` runs, 60 `coverage.yml` runs and 40 `lint-workflows.yml` runs — via
-# `/runs/{id}/attempts/{n}/jobs`, because the default `/runs/{id}/jobs` returns
-# only the latest attempt and so hides exactly the wedged runs this bounds.
-# Each tier is at least 5x ITS OWN slowest observed member; the multiple is
-# per-tier and is never taken against a workflow-wide maximum:
-#
-#     60  `Code Coverage (2/4)`  713s  ->  5.05x
-#     30  `Test oracle (2/4)`    179s  -> 10.1x
-#     15  `Format`                25s  ->   36x
-#
-# Every one of those runs is WARM-cache; no cold-cache figure was measured. The
-# 60 tier's headroom is therefore a deliberate allowance for a build that has to
-# compile the dependency tree from scratch, not a measured multiple. Re-derive
-# from measurement before tightening any of them.
 #
 # `coverage.yml`'s third job calls `report-failure.yml` via `uses:`, and GitHub
 # rejects `timeout-minutes` on a job that does that; the callee's own `report`
@@ -232,15 +102,9 @@ jobs:
         # robust than regex matching the literal string form.
         run: python -m pip install --no-cache-dir 'packaging>=24'
       - name: Assert Cargo.toml abi3-pyXY matches pyproject.toml requires-python
-        # Cargo.toml's `abi3-pyXY` pyo3 feature sets the minimum Python
-        # version the abi3 wheel can run on; pyproject.toml's
-        # `requires-python` declares the minimum Python pip will accept
-        # at install time. If they drift (e.g. a future bump on one
-        # side only), users hit either a runtime ABI mismatch
-        # (`abi3-py311` wheel on `requires-python = ">=3.10"` installs
-        # but fails to load on 3.10) or a silently-stale floor
-        # (`abi3-py310` wheel still permitted on a project that meant
-        # to drop 3.10 support). #397 item 5.
+        # `abi3-pyXY` sets the wheel's minimum runnable Python; `requires-python`
+        # sets the minimum pip installs on. Drift gives users a runtime ABI
+        # mismatch or a silently-stale floor.
         run: |
           python <<'PY'
           import re
@@ -308,14 +172,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # `uv sync --no-install-project` below deliberately skips building the
-      # project, but a bare `uv run` re-installs it — and for this maturin
-      # package that means a full Rust extension build. Measured: 158s of this
-      # job's 169s was `Building ferro-hgvs`, to run ~9s of ruff and mypy over
-      # pure Python; with this set the job takes 10s. Nothing here needs the
-      # compiled module: ruff is a static linter and mypy reads the checked-in
-      # `python/ferro_hgvs/__init__.pyi` stubs. The wheel is built and
-      # exercised for real in `python-wheel-test`.
+      # `UV_NO_SYNC` stops a bare `uv run` from re-installing the project, which
+      # for this maturin package means a full Rust extension build this job does
+      # not need: ruff is a static linter and mypy reads the checked-in
+      # `python/ferro_hgvs/__init__.pyi` stubs. The wheel is built and exercised
+      # in `python-wheel-test`.
       UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -338,54 +199,32 @@ jobs:
   # `src/reference/` or `src/error_handling/` can move the normalized string a downstream
   # consumer stores read counts against, so it must say whether it does.
   # `release-plz.toml` renders the changelog's **Representation changes** section from a
-  # `Representation-Change:` trailer on the squash commit (#1433) — the machinery works,
-  # but across the v0.13.0 cycle 87 commits landed carrying zero trailers while 46 touched
-  # the four directories watched at the time, and the section rendered empty. An empty
-  # section looks identical whether nothing moved or nobody declared, so it went unnoticed
-  # for ~90 commits and the disclosure had to be reconstructed by hand before release
-  # (#1522). The last two directories were added by #1853, on the finding that every
-  # newly-normalizing row in that reconstruction attributes to one PR touching only
-  # `src/reference/` and one touching only `src/error_handling/`. The authoritative list
-  # is `WATCHED_PREFIXES` in the script this job runs; this comment restates it for the
-  # reader, and `test_the_prose_restatements_name_every_watched_directory` fails when a
-  # watched directory is missing from it — the obligation is enforced, not promised.
+  # `Representation-Change:` trailer on the squash commit; an empty section looks the same
+  # whether nothing moved or nobody declared.
   #
-  # `Representation-Change: none` passes. The point is to force the judgement, not to force
-  # a disclosure; what this rejects is silence.
+  # The authoritative list is `WATCHED_PREFIXES` in the script this job runs; this comment
+  # restates it, and `test_the_prose_restatements_name_every_watched_directory` fails when
+  # a watched directory is missing here — the obligation is enforced, not promised.
+  #
+  # `Representation-Change: none` passes: the point is to force the judgement, not a
+  # disclosure. What it rejects is silence.
   representation-change:
     name: Representation change declared
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # `pull_request` only. The check reads the PR description, which is what becomes the
-    # squash commit body and therefore what git-cliff's footer rule matches. A push to
-    # `main` has no equivalent to read, and by then the declaration is already merged.
+    # `pull_request` only: the check reads the PR description, which becomes the squash
+    # commit body git-cliff matches. A push to `main` has nothing equivalent to read, and
+    # by then the declaration is already merged.
     #
-    # UNDER `merge_group` THIS JOB IS SKIPPED, AND THAT IS DELIBERATE — but the reason is
-    # not "it would be awkward to run", it is that there is nothing there to read.
-    # `github.event.pull_request` does not exist on a `merge_group` event (nor do
-    # `github.head_ref`/`github.base_ref`), so every one of the steps below would resolve
-    # its inputs to the empty string and the checker would fail on a change that had
-    # already declared correctly.
+    # SKIPPED under `merge_group`, deliberately: `github.event.pull_request` doesn't exist
+    # there, so every step below would read empty inputs and fail a change that already
+    # declared correctly. A skipped job reports SUCCESS, satisfying the required check, so
+    # the context doesn't stall the queue. That is safe because the declaration is a
+    # property of the PR description and a base change can't turn a present trailer into an
+    # absent one — the real enforcement point is the pull request.
     #
-    # A skipped job reports a conclusion of SUCCESS, which satisfies a required status
-    # check — that is GitHub's documented behaviour for a job skipped by a job-level
-    # conditional, and it is what keeps `Representation change declared` from stalling
-    # every queue entry. (The failure mode it must not be confused with is a *workflow*
-    # that never triggers: that reports nothing, stays "Expected — waiting for status to
-    # be reported", and blocks forever. Which is why `merge_group` is in this file's `on:`
-    # block.)
-    #
-    # So in the queue this context is reported and vacuous. Nothing is lost by that,
-    # because the declaration is a property of the PR description and the queue cannot
-    # invalidate it: a merge group changes the BASE, and no base change can turn a present
-    # trailer into an absent one. That is exactly unlike the value-pinned tests the queue
-    # does exist to protect — those are properties of the merged tree. The real
-    # enforcement point is the pull request, where required checks gate entry to the queue.
-    #
-    # Do NOT "fix" this by widening the condition to run here. Reading the declaration
-    # under `merge_group` would mean parsing it back out of the merge commit message,
-    # which is a different and much weaker source than the description GitHub actually
-    # squashes.
+    # Do NOT "fix" this by running under `merge_group`: it would parse the declaration out
+    # of the merge commit message, a weaker source than the description GitHub squashes.
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -419,47 +258,25 @@ jobs:
             --changed-files changed-files.txt \
             --declaration-file pr-body.txt
 
-  # The queue's own commit has to be a commit `main` will accept, and `main`'s ruleset
-  # carries `required_signatures`. Nothing in CI looks at that, and when it is violated the
-  # queue reports it NOWHERE: every required context goes green, the merge-group run
-  # concludes `success`, and ~25 seconds later the entry is removed without merging. The
-  # pull request stays open, still reads fully green, and can be re-queued forever. That is
-  # #1978 — one PR ejected three times before the cause could be named, because the
-  # ejection leaves no failure anywhere to read.
+  # The queue's merge commit must satisfy `main`'s `required_signatures`, and nothing else
+  # in CI checks it. When it is violated the queue reports it NOWHERE: every required
+  # context goes green, the run concludes `success`, then ~25s later the entry is dropped
+  # unmerged. The PR stays open, still fully green, and re-queueable forever. This job
+  # exists to put a named red row where there is otherwise only silence.
   #
-  # This is the same family as the `paths:`/`merge_group:` notes in `lint-workflows.yml`
-  # and above, one step further along: those are about a check that never REPORTS, this is
-  # about a merge that never HAPPENS. In all three the symptom is silence, and silence is
-  # what a required-status-check rule cannot distinguish from anything else.
+  # Cause: GitHub writes the commit's `gpgsig` header after the last line matching
+  # `^committer `. So when the wrapped squash body (the PR description) puts a git header
+  # keyword at the start of a line, the signature lands inside the message and the commit
+  # verifies false. Fix: reword the description so no wrapped line starts with such a word.
   #
-  # What produced it, measured rather than reasoned: GitHub composes the squash body from
-  # the pull request description, hard-wraps it, and writes its own `gpgsig` header into
-  # the commit object after the LAST line matching `^committer `. #1965's description
-  # contained "...only the committer differs.", and the wrap put `committer` at the start
-  # of a line — so the signature header landed inside the message instead of in the header
-  # block and the commit came back `verified: false`, `reason: "invalid"`. Over the 40
-  # merge-group commits built in the surrounding fourteen hours: 3 invalid, all three that
-  # one pull request's, 37 valid.
+  # NOT a required context: when this fires the entry is already unmergeable, so requiring
+  # it buys nothing — the value is the visible red row. (Requiring it is also a ruleset
+  # change, not a workflow edit.)
   #
-  # DELIBERATELY NOT A REQUIRED CONTEXT, and not because that would be tidier to add.
-  # Requiring it would buy nothing: in every case this fires the entry is already
-  # unmergeable, so the queue drops it either way. The whole value here is putting a named
-  # red row where there was silence. (Making it required is also a ruleset change, which is
-  # a separate decision from a workflow edit.)
-  #
-  # There is deliberately no pull-request-side twin, and the reason is NOT that the wrap
-  # cannot be predicted. It largely can: a 72-column wrap that does not split long tokens
-  # reproduces #1965's affected paragraph line-for-line, and the 84/100/96-column maxima
-  # measured on three other merged squashes are that same wrap meeting an unbreakable URL
-  # or code span. What stops it being a guard is the false-positive side. The hazard is a
-  # header keyword landing at the START of a wrapped line, and `tree`, `author` and
-  # `parent` are ordinary words in this repository's PR prose ("working tree", "the author
-  # of"), so any line break that happens to fall before one produces a red on a
-  # description that is in fact fine — on undocumented wrap behaviour that GitHub can
-  # change under us. A check that is wrong sometimes becomes a check nobody reads, which
-  # this file argues against by name a few jobs down. So the question is asked in the one
-  # place it can be answered exactly rather than predicted: against the commit the queue
-  # actually built.
+  # No pull-request-side twin: the wrap is not safely predictable. `tree`, `author` and
+  # `parent` are ordinary words in PR prose, so a predictive guard reddens fine
+  # descriptions on undocumented wrap behaviour — and a check that is wrong sometimes is a
+  # check nobody reads. Ask the question against the commit the queue actually built.
   merge-commit-signature:
     name: Merge commit signature
     runs-on: ubuntu-latest
@@ -499,16 +316,13 @@ jobs:
           if [ "$verified" = "true" ]; then
             exit 0
           fi
-          # Name the known cause, not only the symptom. A line of the MESSAGE beginning
-          # with a git header keyword is what misplaces the signature header, and the
-          # message is the wrapped pull request description.
-          # The diagnostic is best-effort and MUST NOT be able to suppress the
-          # explanation below it.  Under `set -e` an unguarded `gh api` aborts
-          # the step on any transient failure, printing the bare HTTP error and
-          # none of the `::error::` text — i.e. exactly the job's whole purpose
-          # is lost to a 404.  `|| true` on the fetch, and `|| :` on the grep so
-          # a real grep error (exit 2) is not laundered into the same "(none)"
-          # as a legitimate no-match (exit 1).
+          # Name the known cause, not only the symptom: a MESSAGE line beginning with a git
+          # header keyword is what misplaces the signature header.
+          # This diagnostic is best-effort and MUST NOT suppress the `::error::` explanation
+          # below it. Under `set -e` an unguarded `gh api` would abort the step on any
+          # transient failure, losing the explanation to a bare HTTP error — hence `|| true`
+          # on the fetch, and `|| :` on the grep so a real grep error (exit 2) is not
+          # laundered into the same "(none)" as a legitimate no-match (exit 1).
           if gh api "repos/${REPO}/git/commits/${MERGE_SHA}" --jq '.message' \
                > merge-message.txt 2> merge-message.err; then
             echo "message lines that read as git commit headers:"
@@ -532,31 +346,18 @@ jobs:
 
   # Audit what the changelog's **Representation changes** section actually contains, by
   # rendering it with the real `release-plz.toml` and checking the result against the
-  # trailers on the commits.
-  #
-  # The job above asks each PR to declare; this one asks whether the declarations end up
-  # where they claim. Both halves of that have shipped broken -- #1526 listed one decline
-  # as a change, #1555 listed eight -- and neither was caught, because the test written to
-  # catch exactly this compares the two halves against *each other* and they were wrong
-  # together. So this audit derives its own answer and shares no code with the checker.
-  #
-  # Runs on every PR rather than only at release time: the section is rebuilt from the
-  # whole range since the last tag, so a mis-filed trailer is visible the day it lands
-  # rather than in the release PR, when the fix is a rebase of somebody else's merged work.
+  # commit trailers. Derives its own answer and shares no code with the declaration
+  # checker (the job above) — do not test the two against each other; a shared bug then
+  # hides in both. Runs on every PR, not just at release: the section is rebuilt from the
+  # whole range since the last tag, so a mis-filed trailer shows the day it lands.
   changelog-grouping:
     name: Changelog grouping audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Not on `merge_group`. This job judges what a SQUASH will render, and it gets there
-    # by synthesizing that squash commit from the PR title and description (the step
-    # below). A merge group carries the branch's intermediate commits, un-squashed, and
-    # no PR description to synthesize from — so here it would audit commits that will
-    # never exist after the merge and report on a changelog nobody will ship. This
-    # context is not required, so a spurious red would not block the queue; it would do
-    # something slightly worse, which is make a permanently-red check normal to look past.
-    #
-    # The question it asks is answered on the pull request and again on `push: main`
-    # after the squash lands, which are the two places the commit it audits is real.
+    # Not on `merge_group`: this job audits the SQUASH commit synthesized from the PR
+    # title and description (below), which a merge group has neither the squashed commit
+    # nor the PR description to reconstruct. Answered on the pull request and on
+    # `push: main` after the squash lands, where the commit it audits is real.
     if: github.event_name != 'merge_group'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -569,59 +370,39 @@ jobs:
           python-version: "3.12"
       - uses: taiki-e/install-action@a8fb21b85430c7a58551cf7ea87b03f355b826d9  # git-cliff
       - name: Test the changelog grouping (renders through git-cliff)
-        # This is where `tests/python/test_changelog_grouping.py`'s end-to-end tests actually
-        # run: they render throwaway repos through the real `release-plz.toml` and assert
-        # where each commit lands (e.g. a declining `fix:` under Fixed, #1557), which needs
-        # git-cliff. The Python Wheel Test job has no git-cliff, so those tests skip there —
-        # they must not be left to skip everywhere. No wheel is needed; the tests import the
-        # script by path.
+        # Where `tests/python/test_changelog_grouping.py`'s end-to-end tests run: they
+        # render throwaway repos through the real `release-plz.toml`, which needs git-cliff.
+        # The Python Wheel Test job has no git-cliff, so those tests must not be left to
+        # skip there.
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
           python -m pytest tests/python/test_changelog_grouping.py -v
       - name: Require each Representation changes entry to carry its disclosure
-        # The audit below asks whether the right commits are in the section. This asks
-        # whether each entry in the *committed* changelog says what it moved (#1556): the
-        # bullet is the commit subject and nothing else, so the rejected-vs-accepted fact
-        # the release checklist asks for had to be read out of every linked PR.
+        # Requires each entry in the *committed* changelog to say what it moved.
+        # A no-op on an ordinary PR (`CHANGELOG.md` holds only released sections); the gate
+        # on the release PR, where the fix is the command it names.
         #
-        # A no-op on an ordinary PR, because `CHANGELOG.md` holds only released sections
-        # and release-plz has not written a pending one. It becomes the gate on the
-        # release PR, where the fix is the one command it names.
-        #
-        # It runs BEFORE the synthesis step on purpose, and moving it after would be a
-        # latent red. `squash_commits()` resolves each linked PR by walking `git log`, and
-        # synthesis ends in `git reset --soft "$PR_BASE_SHA"` — which rewinds HEAD's
-        # ancestry to the base tip as of the last PR event while leaving the worktree on
-        # the merge ref. On a PR whose base has since moved, a changelog entry can then
-        # cite a PR whose commit is no longer reachable, the lookup fails, and the script
-        # exits 2 for a cause no author can fix. Same hazard the synthesis step already
-        # documents for `git describe`.
+        # Runs BEFORE the synthesis step on purpose: synthesis ends in
+        # `git reset --soft "$PR_BASE_SHA"`, which rewinds HEAD's ancestry, after which a
+        # linked-PR lookup can fail for a cause no author can fix — the same hazard the
+        # synthesis step documents for `git describe`.
         run: python scripts/inject_representation_disclosure.py --check
       - name: Synthesize the squash commit this PR will become
-        # Without this the audit cannot see the commit it exists to judge. GitHub builds
-        # the squash subject from the PR title and the body from the PR description, and
-        # the `Representation-Change:` trailer lives in the description — so on a PR
-        # branch no commit in `<latest tag>..HEAD` carries it, and a PR whose merged form
-        # files a decline under **Representation changes** passes here and is caught only
-        # after it lands. The sibling `representation-change` job already reads the
-        # description for the same reason; this is the same fact, one step further on.
+        # Without this the audit cannot see the commit it judges: GitHub builds the squash
+        # body from the PR description, where the `Representation-Change:` trailer lives, so
+        # no branch commit in `<latest tag>..HEAD` carries it.
         #
-        # `reset --soft` to the PR's base first, so the *history* is the preview and not
-        # just the message. On a `pull_request` event `actions/checkout` gives the MERGE
-        # ref, so `<latest tag>..HEAD` otherwise contains the branch's intermediate
-        # commits and the merge commit itself — none of which survive a squash. Measured
-        # on a simulated merge ref: 5 audited commits that way against 2 this way, where
-        # 2 is exactly post-merge `main`. Soft-resetting keeps the index and worktree, so
-        # the commit carries the PR's real tree and the audit still reads the PR's own
-        # `release-plz.toml` — this is the squash commit, not an approximation of it.
+        # `reset --soft` to the PR base first, so the *history* is the preview: the merge
+        # ref `actions/checkout` gives otherwise includes the branch's intermediate commits
+        # and the merge commit, none of which survive a squash. Soft-reset keeps the tree
+        # and index, so the audit reads the PR's own `release-plz.toml`.
         #
-        # `--allow-empty` is still needed: a PR that changes no files (a description-only
-        # edit re-running CI) would otherwise have nothing to commit.
+        # `--allow-empty`: a description-only PR changes no files and would otherwise have
+        # nothing to commit.
         if: github.event_name == 'pull_request'
-        # Through `env`, never interpolated into the script body: a PR title and
-        # description are attacker-controlled text and `${{ }}` inside `run` would splice
-        # them into the shell.
+        # Through `env`, never interpolated: PR title and description are
+        # attacker-controlled, and `${{ }}` inside `run` would splice them into the shell.
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -629,16 +410,10 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           printf '%s (#%s)\n\n%s\n' "$PR_TITLE" "$PR_NUMBER" "$PR_BODY" > squash-message.txt
-          # Resolve the tag BEFORE the reset, and hand it to the audit explicitly.
-          #
-          # `base.sha` is the base tip as of the last PR event, while the merge ref GitHub
-          # builds uses the *current* base — so after a release lands, an un-resynchronized
-          # PR resets to a commit from which the new tag is unreachable. `describe` would
-          # then answer with the PREVIOUS tag and silently widen the range back over an
-          # entire already-released cycle, re-judging merged work the PR author cannot
-          # touch. Measured: pre-reset `describe` gives v0.14.0, post-reset gives v0.13.1.
-          # Guarded because `describe` exits 128 on a tagless history and must not be what
-          # fails the job under `set -e`.
+          # Resolve the tag BEFORE the soft reset below: afterwards `describe` walks from
+          # the PR base, which can predate a just-landed tag, and would widen the audited
+          # range back over already-released commits. Guarded because `describe` exits 128
+          # on a tagless history, which must not fail the job.
           if AUDIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
             echo "AUDIT_RANGE=$AUDIT_TAG..HEAD" >> "$GITHUB_ENV"
           else
@@ -654,10 +429,9 @@ jobs:
             git --no-pager log --format='  %h %s' "$AUDIT_TAG..HEAD"
           fi
       - name: Audit the Representation changes section
-        # `AUDIT_RANGE` is set by the step above from the tag resolved on the merge ref,
-        # before the soft reset moved HEAD's ancestry. Empty on a push to `main` (no
-        # synthesis step runs) and on a tagless history, where the script resolves its own
-        # range — so this is an override, not a requirement.
+        # `AUDIT_RANGE` (set by the step above, before the soft reset) is an override, not
+        # a requirement: empty on `push: main` and on a tagless history, where the script
+        # resolves its own range.
         run: |
           if [ -n "${AUDIT_RANGE:-}" ]; then
             echo "auditing $AUDIT_RANGE"
@@ -679,58 +453,29 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # Cargo caching is delegated to `Swatinem/rust-cache` rather than
-      # hand-rolled `actions/cache` keys (#1218). Two reasons, both measured.
-      #
-      # **Size.** Every hand-rolled entry cached the same five paths including a
-      # full `target/`, and they had grown to ~3 GiB each: on 2026-08-04 the
-      # `-wheel`, `-clippy-all-features` and `-coverage` entries were 3.04 GB,
-      # 3.00 GB and 2.87 GB, i.e. three entries from a single PR filling 9 GB of a
-      # 10 GiB repository budget (measured usage: 11.76 GiB, already evicting).
-      # `rust-cache` saves dependency artifacts only — it deletes the workspace
-      # crate's own outputs, `incremental/`, `.d` files and stale entries before
-      # saving. #1218 records that a hand-rolled trim was tried and "did not move
-      # the needle", because it kept the bulk under `target/*/deps`.
-      #
-      # **Staleness.** `actions/cache` SKIPS the save when the primary key already
-      # exists ("Cache hit occurred on the primary key …, not saving cache"), so a
-      # lockfile-only key froze `target/` at whatever the first run for that
-      # lockfile happened to write, forever. Rotating the key was the obvious fix
-      # and #1218 records why it could not be afforded. `rust-cache` largely
-      # dissolves the problem instead of paying for it: the only thing it stores is
-      # dependency artifacts, and its key already hashes the dependency set,
-      # rustc version and job — so a frozen entry cannot disagree with what the
-      # job needs the way a frozen whole-`target/` could.
+      # Cargo caching uses `Swatinem/rust-cache`, not hand-rolled `actions/cache`
+      # keys. It saves dependency artifacts only (dropping the workspace crate's own
+      # outputs, `incremental/` and `.d` files), which keeps entries small against the
+      # ~10 GiB repo cache cap, and it keys per job + dependency hash so a restored entry
+      # cannot disagree with what the job needs (a whole-`target/` actions/cache key
+      # freezes stale — it skips its save on a primary-key hit).
       #
       # Deliberately NOT set:
-      # - `cache-on-failure` — it would save a tree per failed run, and budget is
-      #   the constraint this change exists to relieve.
-      # - `shared-key` — each job would then share one entry, which is the
-      #   cross-profile mismatch that had `generated-docs` (dev profile) and
-      #   `test-build` (`CARGO_PROFILE_TEST_DEBUG=0`) serving each other useless
-      #   trees. `rust-cache` keys per job by default; `key` below only adds a
-      #   legible name, so `gh api .../actions/caches` stays diagnosable — which
-      #   is how #1218 was diagnosed in the first place. The one deliberate
-      #   exception is the `build-lint` / `build-release-check` pair below, which
-      #   DO share one entry via `shared-key: build-release` — safe there, and only
-      #   there, because one job's deps are a strict superset of the other's.
+      # - `cache-on-failure` — would save a tree per failed run, against the budget
+      #   this exists to relieve.
+      # - `shared-key` — would make jobs share one entry across mismatched profiles;
+      #   `rust-cache` keys per job by default, and `key` below only names the entry
+      #   so `gh api .../actions/caches` stays diagnosable. The one exception is the
+      #   `build-lint` / `build-release-check` pair, safe because one job's deps are
+      #   a strict superset of the other's.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
-          # keys per job and appends a lockfile/env hash, so every PR run that
-          # differed in either minted a fresh ~0.2-0.7 GiB entry. Measured on
-          # 2026-08-08: 42 entries totalling 13.79 GiB against a 10 GiB cap — 3 to 5
-          # generations of every logical key, `coverage` alone holding 4 x ~0.69 GiB.
-          # Over cap means GitHub evicts by LRU continuously, which is the #1218
-          # failure (two generations reached 13.61 GiB and took the nightly's 3.25 GiB
-          # `ferro-manifest-v3` with them). Restoring on every run and saving only on
-          # `main` collapses it to one generation per key, ~4.2 GiB.
-          #
-          # The trade, stated: a PR that changes `Cargo.lock` no longer warms its own
-          # cache, so it restores `main`'s generation through the `restore-keys`
-          # prefix and recompiles what the lockfile moved. That is one slower job on
-          # dependency-bumping PRs, against every cache in the repo currently racing
-          # eviction.
+          # Save a new generation ONLY from `main`: saving on every PR mints a fresh entry
+          # per lockfile/env change and blows the cache cap, forcing constant LRU eviction.
+          # Restoring on every run and saving only on `main` holds one generation per key.
+          # The trade: a PR that changes `Cargo.lock` restores `main`'s generation via
+          # `restore-keys` and recompiles what moved — one slower job, against every cache
+          # racing eviction.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy
       # `--workspace` because `default-members` is the root package alone (see
@@ -771,19 +516,13 @@ jobs:
           key: clippy-all-features
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
-  # The two generated spec artifacts, split out of `test-build`.
+  # The generated spec artifacts, split out of `test-build` so generation runs
+  # concurrently with the archive compile instead of serialized ahead of it. The
+  # generators are `[[bin]]` targets that read the spec submodule at RUNTIME and
+  # emit JSON the shards download.
   #
-  # These ran as the first two steps of `test-build`, which serialized ~52s of
-  # generation ahead of the ~105s archive compile inside one job. They share
-  # nothing with the archive but the library crate: the generators are `[[bin]]`
-  # targets that read the spec submodule at RUNTIME, and what they emit is a
-  # pair of JSON files the shards download. Running them concurrently with the
-  # archive build takes that serialization off the critical path.
-  #
-  # Generation is itself the gate on the curated overrides — plain generation,
-  # not `--check` — so this job failing means the overrides no longer resolve
-  # against the spec checkout. That signal is now its own job rather than
-  # buried in a build.
+  # Plain generation (not `--check`) is itself the gate on the curated overrides:
+  # this job failing means the overrides no longer resolve against the spec checkout.
   spec-fixtures:
     name: Spec fixtures and generated docs
     runs-on: ubuntu-latest
@@ -791,15 +530,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and nothing to fetch: this repository no longer
-          # tracks anything with LFS. The 156 MB of bulk corpora are release
-          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
-          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
-          # here reads them: no `include_str!`/`include_bytes!` names a path
-          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
-          # this job only compiles.
-          # Required here, and ONLY here: the generators harvest HGVS strings
-          # from the vendored spec checkout at runtime.
+          # No bulk corpora needed (this job only compiles; nothing here reads
+          # them). `submodules` required here and ONLY here: the generators harvest
+          # HGVS strings from the vendored spec checkout at runtime.
           submodules: true
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -811,21 +544,13 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: spec-fixtures
-      # The cheapest of the three per-commit caches by a wide margin: this job
-      # spends ~120s producing roughly 0.5 MB of JSON, against 25.8 MB for the soak
-      # archive and 106.6 MB for the test archive. It is also the one that gates the
-      # `test` and `test-oracle` paths — `max(test-build, spec-fixtures) + slowest
-      # shard` — so on a re-run of an unchanged tree it is the difference between
-      # those paths costing ~120s before a single test starts and costing ~15s.
-      #
-      # The `--check` steps below are gates rather than artifact producers, and they
-      # are skipped on a hit too. That is sound only because the save is explicit
-      # and carries an implicit `success()`: an entry exists for this commit only if
-      # every check passed on it, and the tree is byte-identical, so re-running them
-      # can only reach the same verdict. With the combined `actions/cache` action
-      # this would be a false-green generator — its post-step saves even when the
-      # job failed, so a failing `--check` would publish an entry that every re-run
-      # then skipped past.
+      # Gates the `test` / `test-oracle` paths, so this per-commit fixture cache
+      # saves re-running generation on an unchanged tree. The `--check` steps below
+      # are skipped on a hit too, which is sound ONLY because the save is explicit
+      # (`actions/cache/save`, not the combined action): an entry exists for a commit
+      # only if every check passed on it, so a re-run reaches the same verdict. The
+      # combined `actions/cache` saves even on failure — a failing `--check` would
+      # publish an entry every re-run then skipped past.
       - name: Restore fixtures generated from this exact commit
         id: generated-fixtures
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -842,70 +567,29 @@ jobs:
       - name: Generate HGVS spec test enumeration
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --bin generate_spec_enumeration
-      # The two cis confluence corpora, generated here for the same reason and at
-      # far greater saving. `tests/it/cis_confluence_axis.rs` and
-      # `tests/it/cis_confluence_nr_axis.rs` regenerate theirs on demand through
-      # `common::fixture_gen`, which shells out to a nested `cargo run --features
-      # dev --example generate_cis_confluence_corpus`. The `test` / `test-oracle`
-      # shards run from a nextest **archive** and so have no warm `target/`: that
-      # nested call compiles the crate from scratch *inside the test*, and the
-      # cost lands on whichever of the nine tests the shard happens to hold.
-      #
-      # Measured on run 31268888323: `the_corpus_is_a_dense_set_of_real_confluence_classes`
-      # took 117.6s in `Test (2/6)` and 127.3s in `Test oracle (2/3)` — a test that
-      # reads an 8 MB JSON and makes a handful of cheap assertions, and that takes
-      # 0.071s once the file exists.
-      #
-      # **The `--axes n,r` corpus is the second step for the same reason, and it
-      # was missing until now.** `cis_confluence_nr_axis` landed with no wiring
-      # here, so every one of its SIX tests paid the nested build in every shard
-      # that held one — the cost is per test *process*, and nextest gives each
-      # test its own. Measured on run 31670057963 (`Test oracle (1/3)`):
-      # `the_rna_axis_is_spelled_in_the_rna_alphabet` took **129.2s** against
-      # 0.15s locally once the file exists — it normalizes nothing, it only
-      # compares strings — and `rna_five_prime_confluence_census` took **205.9s**,
-      # of which the census itself is the ~77s remainder. Its `g,c` sibling
-      # `three_prime_confluence_census` took 88.0s over *twice* the spellings,
-      # because its corpus was downloaded. That asymmetry is the whole tell.
-      #
-      # It lives in THIS job rather than one of its own, and that was measured both
-      # ways. Generation is ~3s but compiling the example is ~50s, so on run
-      # 31275077075 this job went 64s -> 117s. A job of its own looks tempting —
-      # `spec-fixtures` gates `test` and `test-oracle` — but a new job has no
-      # `rust-cache` entry and would compile the whole dependency tree cold, which
-      # is slower than the 53s it set out to save, while still gating both through
-      # `needs`. Giving it a cache instead means a new key, and the repository is
-      # only just under the 10 GiB cap (see the first `rust-cache` block above).
-      # Here it reuses this job's already-warm dev-profile tree, and it is not on
-      # the critical path: that runs through `test-build-soak` + `sweeps`.
+      # The two cis confluence corpora, generated here so the shards don't pay for
+      # them. `cis_confluence_axis.rs` / `cis_confluence_nr_axis.rs` otherwise
+      # regenerate on demand via `common::fixture_gen`, which shells out to a nested
+      # `cargo run` — and the shards run from an archive with no warm `target/`, so
+      # that call compiles the crate *inside the test*, per test process. Generated
+      # here it reuses this job's warm dev tree; kept a step in THIS job (not its own,
+      # which would compile cold and cost more than it saves) and off the critical path.
       - name: Generate the cis confluence corpus
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_cis_confluence_corpus
-      # The transcript-typed half. `--axes` defaults to `g,c` and `--output` to
-      # the corpus above, so BOTH flags are required and the path must match the
-      # one `cis_confluence_nr_axis::CORPUS_RELATIVE_PATH` reads. The example is
-      # already built by the step above, so this costs the ~3s of generation
-      # rather than another ~50s of compiling.
+      # The transcript-typed half: `--axes` defaults to `g,c` and `--output` to the
+      # corpus above, so BOTH flags are required and the path must match
+      # `cis_confluence_nr_axis::CORPUS_RELATIVE_PATH`.
       - name: Generate the cis confluence n./r. corpus
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: |
           cargo run --features dev --example generate_cis_confluence_corpus -- \
             --axes n,r --output tests/fixtures/cis/cis_confluence_nr_corpus.json
-      # Merged in from the former `generated-docs` job. Those three generators are
-      # `cargo run --features dev --example …` — the SAME profile and feature set as
-      # the four steps above — so they were compiling an identical dependency tree
-      # in a second job behind a second `rust-cache` key. Sharing this job's warm
-      # tree costs a few seconds here against the ~54s that job took, and retires a
-      # cache key (~0.36 GiB) from a repository that was over its cache cap.
-      #
-      # Gating is unchanged. `generated-docs` was a `needs:` of `test-required`;
-      # now a failure here fails `spec-fixtures`, which SKIPS `test` and
-      # `test-oracle`, and `test-required` demands `result == "success"` from both —
-      # a skip is not a success, so the required `Test` context still goes red.
-      #
-      # `generated-docs` also set `CARGO_PROFILE_TEST_DEBUG: "0"`, deliberately not
-      # carried over: it configures the *test* profile and every step here is a
-      # `cargo run` in the dev profile, so it never applied to these generators.
+      # The three doc `--check` generators, sharing this job's warm tree (same
+      # profile/features as the steps above) instead of a second cache key. A failure
+      # here fails `spec-fixtures`, which skips `test`/`test-oracle`, which `test-required`
+      # counts as not-success. `CARGO_PROFILE_TEST_DEBUG=0` is deliberately NOT set here —
+      # it configures the test profile, and these are dev `cargo run`s.
       - name: Verify conformance summary docs are up to date
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_conformance_summary -- --check
@@ -915,28 +599,13 @@ jobs:
       - name: Perf tables up to date
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_perf_tables -- --check
-      # The exhaustive spec-derived conformance corpus is enumerated at TEST time
-      # (`tests/it/spec_conformance_axis.rs` calls the library directly), so it
-      # needs no artifact and runs in the sharded `test` job with no wiring. What
-      # runs here is the other half of the job: re-deriving the committed rule
-      # inventory's citations and per-file clause-unit counts from the spec
-      # checkout, which is the ONLY place in CI the submodule is present. It
-      # refuses on a moved quote, a moved clause-unit count, a `generatable`
-      # clause no corpus row exercises, and a rule tag no clause claims — so a
-      # submodule bump that invalidates a coverage claim fails the build instead
-      # of leaving the claim standing.
-      #
-      # Deliberately a step in THIS job rather than a new one: a new job would
-      # need its own `actions/cache` entry, and the repository's Actions cache
-      # sits near its 10 GiB cap (#1218 records an earlier rotation reaching
-      # 13.61 GiB, evicting by LRU and destroying the nightly's 3.25 GiB
-      # `ferro-manifest-v3` as collateral). Adding a step reuses the existing
-      # `spec-fixtures` rust-cache key and adds no entry at all.
-      #
-      # Gated on the same cache key as the steps above: the restored entry exists
-      # only for a commit on which every check already passed, and the tree is
-      # byte-identical, so re-deriving the inventory can only reach the same
-      # verdict.
+      # Re-derives the committed rule inventory's citations and clause-unit counts
+      # from the spec checkout (the ONLY place in CI the submodule is present), so a
+      # submodule bump that invalidates a coverage claim fails the build. It refuses
+      # on a moved quote, a moved clause-unit count, a `generatable` clause no corpus
+      # row exercises, or a rule tag no clause claims. A step in THIS job (not its
+      # own) to reuse the rust-cache key and add no cache entry; skipped on a
+      # cache hit for the same reason as the steps above.
       - name: Check the spec conformance corpus rule inventory
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_spec_conformance_corpus
@@ -949,32 +618,24 @@ jobs:
             tests/fixtures/cis/cis_confluence_corpus.json
             tests/fixtures/cis/cis_confluence_nr_corpus.json
           key: generated-fixtures-${{ runner.os }}-${{ github.sha }}
-      # Only the fixtures are published from here. The two generator binaries
-      # `spec_generator_preconditions` executes need no staging: they are
-      # `[[bin]]` targets, so `test-build`'s archive already carries them and
-      # the shards extract them into place — see the note on that job.
+      # Only the fixtures are published here. The generator `[[bin]]` targets need no
+      # staging — `test-build`'s archive already carries them and the shards extract
+      # them into place (see that job).
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: spec-fixtures
           path: |
             tests/fixtures/grammar/hgvs_spec_normalization.json
             tests/fixtures/grammar/hgvs_spec_enumeration.json
-          # As on `bulk-fixtures` below, and with the same limit: this catches an
-          # EMPTY artifact, not a short one. A consumer that downloads an artifact
-          # missing a fixture falls back to `fixture_gen`'s nested `cargo run` and
-          # rebuilds the crate inside the test — silently, since the suite still
-          # passes. `warn` is the wrong default for an artifact anything reads.
+          # `error`, not the default `warn`: catches an EMPTY artifact. A consumer
+          # missing a fixture falls back to a nested `cargo run` that rebuilds the
+          # crate inside the test — silently, since the suite still passes.
           if-no-files-found: error
           retention-days: 1
-      # A second artifact rather than a second path on the one above, because the
-      # consumers download `spec-fixtures` with `path: tests/fixtures/grammar/` — a
-      # single artifact spanning two fixture directories cannot be unpacked that way.
-      #
-      # Both corpora DO share a directory, so they can ride one artifact: the
-      # upload roots it at their common ancestor (`tests/fixtures/cis`) and the
-      # consumers' `path: tests/fixtures/cis/` unpacks both onto the paths their
-      # tests read. Keep them on separate lines rather than a glob, so adding a
-      # third file to that directory cannot be swept in by accident.
+      # A second artifact, not a second path above: consumers download `spec-fixtures`
+      # with `path: tests/fixtures/grammar/`, which can't span two directories. The
+      # two cis corpora share a directory so they ride one artifact; listed on
+      # separate lines (not a glob) so a third file there can't be swept in.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: cis-corpus
@@ -985,64 +646,37 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
-  # this job's `nextest archive`, so the crate compiles a single time no matter
-  # how many shards run. (The two generated spec artifacts moved to
-  # `spec-fixtures` above; the soak and sweeps run from the optimized archive
-  # `test-build-soak` produces, not this one.)
+  # Build the test binaries ONCE: `test` and `test-oracle` consume this job's
+  # `nextest archive`, so the crate compiles a single time however many shards run.
+  # (Spec artifacts are in `spec-fixtures`; soak/sweeps run from `test-build-soak`.)
   #
-  # `--extract-to . --extract-overwrite` in the consumers is load-bearing, not
-  # tidiness. 26 call sites across 10 test files resolve the CLI binary with
-  # `env!("CARGO_BIN_EXE_ferro")`, which bakes an ABSOLUTE path to
-  # `<workspace>/target/debug/ferro` at compile time. Extracting to nextest's
-  # default temporary directory leaves that path empty and every CLI test fails
-  # -- observed directly, 4-23 failures per shard, while the proptest-only soak
-  # shards passed on the same archive. Every job in a workflow gets the same
-  # runner workspace path, so extracting INTO the workspace puts the binaries
-  # exactly where those baked paths point. Verified locally by hiding
-  # `target/debug/ferro` to reproduce the shard's condition: default extraction
-  # gave 6 failures, `--extract-to .` gave 6 passes.
+  # `--extract-to . --extract-overwrite` in the consumers is load-bearing: CLI
+  # tests resolve the binary with `env!("CARGO_BIN_EXE_ferro")`, an ABSOLUTE path to
+  # `<workspace>/target/debug/ferro` baked at compile time. Every job shares the
+  # runner workspace path, so extracting INTO the workspace puts the binary where
+  # those baked paths point; the default temp dir leaves them empty and every CLI
+  # test fails.
   #
-  # The same mechanism is why the shards need nothing staged for
-  # `spec_generator_preconditions`, which resolves the two spec generators with
-  # `env!("CARGO_BIN_EXE_generate_spec_{fixture,enumeration}")`. A nextest
-  # archive packs every non-test binary the build produced, not just the test
-  # binaries, and both generators are `[[bin]]` targets that `--features dev`
-  # builds. Verified with the archive command below: it packs
-  # `target/debug/generate_spec_fixture` and
-  # `target/debug/generate_spec_enumeration` alongside `target/debug/ferro`,
-  # all mode 755. Verified end to end too, by deleting both binaries and
-  # running that module from the archive — extraction restored them executable
-  # and all six tests passed. They were staged as a separate
-  # `generator-binaries` artifact until this was measured; `--extract-overwrite`
-  # replaced the downloaded copies before the tests ever read them.
+  # Same mechanism means the shards need nothing staged for
+  # `spec_generator_preconditions`: a nextest archive packs every non-test binary
+  # too, so the `[[bin]]` spec generators ride it and `--extract-overwrite` restores
+  # them into place.
   test-build:
     name: Build test archive
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # The Test jobs build and LINK the integration-test binary. With full
-      # debuginfo (dev/test profile default `debug = true`) the linked
-      # `target/` exhausts the stock runner's ~14 GB free disk and the linker
-      # dies with `ld terminated with signal 7 (Bus error)` — a write past a
-      # full disk. Stripping test-binary debuginfo in CI removes the bulk of
-      # that. CI-only (not in Cargo.toml), so local dev keeps full debuginfo
-      # for backtraces.
+      # The Test jobs LINK the integration-test binary; with full debuginfo the
+      # linked `target/` exhausts the runner's disk and the linker dies (`ld ...
+      # Bus error`). Stripping test-binary debuginfo in CI avoids that. CI-only (not
+      # in Cargo.toml), so local dev keeps full debuginfo for backtraces.
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and nothing to fetch: this repository no longer
-          # tracks anything with LFS. The 156 MB of bulk corpora are release
-          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
-          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
-          # here reads them: no `include_str!`/`include_bytes!` names a path
-          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
-          # this job only compiles.
-          # No `submodules: true`. The spec checkout is read at generator
-          # RUNTIME, in the `spec-fixtures` job — nothing here reads it at
-          # compile time (verified: no `include_str!`/`include_bytes!` under
-          # `src/` or `tests/` names a path below `assets/`).
+          # No bulk corpora and no `submodules`: this job only compiles, and nothing
+          # here reads a bulk fixture or the spec checkout at compile time (those are
+          # read at test/generator RUNTIME, in other jobs).
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -1056,32 +690,17 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive
-          # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a
-          # restore could extract a previously-saved `cargo-nextest` over the one
-          # `install-action` puts there and pin this job to whichever version
-          # first populated the key. This job writes an archive that other jobs
-          # read, and producer and consumer must agree on the nextest version.
-          #
-          # This used to be handled by ORDERING — the install step below sat
-          # after the cache step, with a comment saying that was deliberate. Not
-          # caching the binaries removes the hazard at the source instead (#1396),
-          # which matters because reordering two `uses:` steps looks harmless and
-          # would silently reintroduce it. `nightly-soak.yml` and `fuzz.yml`
-          # already do it this way.
-          #
-          # The cost is nil: `install-action` downloads a prebuilt binary rather
-          # than compiling one. Measured on this PR's own runs rather than
-          # assumed — see the PR body.
+          # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a restore
+          # could shadow `install-action`'s `cargo-nextest` with a stale one and pin
+          # this archive's producer to a different nextest than its consumers. Turning
+          # the bin cache off removes the hazard at the source; the download
+          # is prebuilt, so the cost is nil.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # Same per-commit archive cache as `test-build-soak`. This one is 106.6 MB
-      # against that one's 25.8 MB and was left uncached at first for exactly that
-      # reason — it is not on the critical path while `test-build-soak` takes 170s.
-      # It becomes the gate the moment the other two caches hit, though: the
-      # `test-oracle` path is `max(test-build, spec-fixtures) + slowest oracle
-      # shard`, so with `spec-fixtures` cached this 87s job is what remains.
-      # `prune-ci-caches.yml` is what keeps the three families from re-creating the
-      # over-cap problem this branch fixed.
+      # Per-commit archive cache, like `test-build-soak`. Not on the critical path
+      # while `test-build-soak` runs, but it becomes the `test-oracle` gate once
+      # `spec-fixtures` is cached; `prune-ci-caches.yml` keeps the cache families
+      # under the cap.
       - name: Restore a test archive built from this exact commit
         id: test-archive
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -1103,47 +722,30 @@ jobs:
           path: nextest.tar.zst
           retention-days: 1
 
-  # A SECOND archive, built at `opt-level = 2` (#1963), for the soak shards only.
+  # A SECOND archive at `opt-level = 2`, for the soak shards only. The soak is
+  # compute-bound in a way the other jobs are not — each shard runs its proptest cases
+  # by the hundred thousand, so a constant factor on the code under test is multiplied
+  # over and over — while the other jobs run each test once and would only pay the
+  # longer compile.
   #
-  # The soak is compute-bound in a way the other jobs are not: eight shards each
-  # run 125,000 proptest cases, so a constant factor on the code under test is
-  # multiplied a million times over. Measured locally at 5,000 cases, one
-  # confluence property costs 1.90s of user CPU in the test profile against
-  # 0.355s under this one — 5.4x. The other jobs run each test once and would
-  # only pay the longer compile.
+  # ONE PACKAGE is built, and NOT `ferro-hgvs`'s `it` target. Cargo profile overrides
+  # key on the PACKAGE, not the target, so `[profile.soak.package.ferro-hgvs]` would
+  # optimize the lib, bins AND the whole `it` driver together, with no way to spell
+  # "library optimized, driver cheap". `ferro-hgvs-soak-tests` is that second package:
+  # `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the consuming jobs
+  # select (plus any they reach into), while the files stay under `tests/it/` and
+  # declared in `tests/it/main.rs`. The saving is compiling far less, NOT optimizing it
+  # less (reasoning on `[profile.soak]` in Cargo.toml).
   #
-  # ONE PACKAGE IS BUILT, AND IT IS NOT `ferro-hgvs`'s `it` TARGET. This job used
-  # to build `--test it`, which compiles the whole 139k-line `it` crate — 6,217
-  # tests — at `opt-level = 3` so that about 45 of them can run. Measured on an
-  # M2 Max, `user` CPU with the workspace artifacts scrubbed the way `rust-cache`
-  # scrubs them here, deps warm: 394.8s for the `it` archive, of which the
-  # library is a minority. The rest was the driver, and the runtime this
-  # profile's optimization buys comes from optimizing the LIBRARY.
-  #
-  # Cargo profile overrides are keyed on the PACKAGE, never on the target, so
-  # `[profile.soak.package.ferro-hgvs]` reaches the lib, the bins and the `it`
-  # test target alike — there is no way to spell "library optimized, driver
-  # cheap" while both are one package. `ferro-hgvs-soak-tests` is that second
-  # package: `tests-soak/tests/soak/main.rs` `#[path]`-includes the modules the
-  # three consuming jobs select — plus, separately marked, any module one of
-  # those reaches into — while the modules themselves stay under `tests/it/` and
-  # stay declared in `tests/it/main.rs`.
-  #
-  # NOTE the package is NOT dropped to a lower `opt-level`, which is the half of
-  # #1964 the measurement refused; the table and the reasoning are on
-  # `[profile.soak]` in `Cargo.toml`. The saving is from compiling ~9k lines
-  # instead of 139k, not from optimizing them less.
-  #
-  # `tests/it/soak_package_membership.rs` polices both directions: a module CI
-  # selects from this archive that is not compiled into it would be negated by
+  # The archive must contain exactly what CI selects from it. A module CI selects
+  # from this archive that is not compiled into it would be negated by
   # `test`/`test-oracle` and run nowhere while CI got faster, and a module
   # compiled into it that nothing selects and nothing references is dead compile
   # cost on the critical path.
   #
-  # `debug-assertions` and `overflow-checks` stay ON in the profile (see
-  # Cargo.toml) so this buys speed without quietly weakening what the soak
-  # checks — the `#[cfg(debug_assertions)]` oracles and every `debug_assert!`
-  # in the normalizer behave exactly as they do under the test profile.
+  # `debug-assertions` and `overflow-checks` stay ON (see Cargo.toml), so this buys
+  # speed without weakening what the soak checks — the `#[cfg(debug_assertions)]`
+  # oracles and every `debug_assert!` behave as under the test profile.
   test-build-soak:
     name: Build soak archive (optimized)
     runs-on: ubuntu-latest
@@ -1151,18 +753,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and nothing to fetch: this repository no longer
-          # tracks anything with LFS. The 156 MB of bulk corpora are release
-          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
-          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
-          # here reads them: no `include_str!`/`include_bytes!` names a path
-          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
-          # this job only compiles.
-          # No `submodules: true` either, for the same reason as `test-build`:
-          # the spec checkout is read at generator RUNTIME, in `spec-fixtures`.
-          # `cargo nextest archive --test it` compiles and packs targets, and
-          # nothing under `src/` or `tests/` names a path below `assets/` at
-          # compile time.
+          # No bulk corpora and no `submodules`, same as `test-build`: this job only
+          # compiles the archive, and nothing here reads a bulk fixture or the spec
+          # checkout at compile time.
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -1173,42 +766,27 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive-soak
-          # Same reason as `test-build` above, and it applies at least as
-          # strongly here: this job writes the archive that `soak` and `sweeps`
-          # read, so a stale cached `cargo-nextest` would desynchronise three
-          # jobs rather than one (#1396).
+          # Same as `test-build`, and more so: this archive feeds `soak` and `sweeps`
+          # too, so a stale cached `cargo-nextest` would desync three jobs.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # Skip the rebuild entirely when this exact commit already produced an
-      # archive. `rust-cache` above caches DEPENDENCIES only — it deliberately
-      # deletes workspace artifacts — so `ferro_hgvs` and the `it` test crate are
-      # recompiled at `opt-level = 2` (#1963) on every run even when not one byte
-      # of Rust changed. Measured on run 31275848682: 142s of this job's 170s is that
-      # rebuild, and this job plus `sweeps` IS the critical path.
+      # Skip the rebuild when this exact commit already produced an archive.
+      # `rust-cache` caches DEPENDENCIES only (it deletes workspace artifacts), so
+      # `ferro_hgvs` and the `it` crate recompile at `opt-level = 2` on every
+      # run — and this job plus `sweeps` is the critical path.
       #
-      # Keyed on the commit SHA, deliberately, rather than on `hashFiles` over the
-      # inputs. A content-hash key is easier to hit and one forgotten input serves a
-      # STALE archive — CI green against binaries built from other code, which is
-      # the worst failure this repository could buy itself. The SHA changes whenever
-      # anything does, so a hit means the tree is byte-identical and staleness is
-      # impossible by construction. (On `pull_request` this is the merge SHA, so it
-      # also busts correctly when `main` moves under the PR.)
+      # Keyed on the commit SHA, NOT `hashFiles` over inputs: a content-hash key that
+      # forgets an input serves a STALE archive — CI green against binaries built from
+      # other code. The SHA changes whenever anything does, so a hit means the tree is
+      # byte-identical and staleness is impossible. (On `pull_request` it's the merge
+      # SHA, so it also busts when `main` moves.) What it buys is re-runs of an
+      # unchanged tree, common here because `on: pull_request` includes `edited`.
       #
-      # What it actually buys: re-runs of an unchanged tree. That is not a rare case
-      # here — `on: pull_request` includes `edited` (the representation-change check
-      # reads the PR description), so every description edit re-runs the whole
-      # workflow, today from scratch.
-      #
-      # Only the soak archive is cached, not `test-build`'s. This one is on the
-      # critical path and is 25.8 MB; the other is not on it and is 106.6 MB, so
-      # caching it would cost 4x the space against a cap this PR just brought the
-      # repository back under, to save runner-seconds rather than wall-clock.
-      # `restore` + an explicit `save`, never the combined `actions/cache`. The
-      # combined action saves in a post-step that runs even when the job FAILED, so
-      # a broken or partial archive could be published under this commit's key and
-      # every re-run would then skip the build and test whatever it contained. An
-      # explicit save carries an implicit `success()`, so only a completed build is
-      # ever cached. Same pattern on the two caches below.
+      # Only the soak archive is cached, not `test-build`'s: this one is on the
+      # critical path and smaller. `restore` + explicit `save`, never the combined
+      # `actions/cache`, whose post-step saves even on FAILURE — a broken archive could
+      # be published under this commit's key and every re-run would skip the build and
+      # test whatever it held. Same pattern on the caches below.
       - name: Restore a soak archive built from this exact commit
         id: soak-archive
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -1217,26 +795,11 @@ jobs:
           key: nextest-soak-archive-${{ runner.os }}-${{ github.sha }}
       - name: Build soak archive
         if: steps.soak-archive.outputs.cache-hit != 'true'
-        # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
-        # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
-        # futures) — an entire dependency tree compiled at `opt-level = 2` to
-        # produce one test binary that never touches any of it. None of the ten
-        # modules this package compiles is gated on the feature and none of the
-        # three consuming jobs selects a gated one, so the selections are
-        # unchanged: verified by listing under each feature set,
-        # `test(proptest)` resolves to 20 tests either way and the sweep filter
-        # to 44.
-        #
-        # Both numbers have been stale before, in opposite directions and for
-        # different reasons, which is why the re-measure commands are published
-        # rather than the totals trusted. The proptest count moves whenever a
-        # `*proptest*` module is added — it was 15 until `from_sequences_proptest.rs`
-        # added five properties the `test(proptest)` filter picks up by name. The
-        # sweep-filter count was recorded as 29 long after it had reached 44.
-        #
-        # The claim this comment exists to make is the *feature-independence* —
-        # "either way" — which held through both drifts and still holds; the
-        # totals are incidental to it. Re-measure rather than trust them:
+        # No `--features dev`: it pulls `web-service` (axum/tokio/tower) and
+        # `benchmark` (reqwest/rusqlite/postgres) — a whole tree compiled at
+        # `opt-level = 2` for a binary that never touches it. None of the modules this
+        # package compiles is feature-gated and no consuming job selects a gated one,
+        # so the selections are feature-INDEPENDENT. Re-measure rather than trust a count:
         #
         #   cargo nextest list -p ferro-hgvs-soak-tests -E 'test(proptest)' | wc -l
         #   cargo nextest list -p ferro-hgvs-soak-tests -E "$SWEEP_FILTER" | wc -l
@@ -1254,30 +817,19 @@ jobs:
           path: nextest-soak.tar.zst
           retention-days: 1
 
-  # The four large HGVS corpora the bulk-fixture and exhaustive suites read at
-  # RUNTIME (156 MB), fetched ONCE per run and handed to the ten jobs that need
-  # them as a workflow artifact.
+  # The four large HGVS corpora (156 MB) the bulk-fixture and exhaustive suites read
+  # at RUNTIME, fetched ONCE per run and handed to the jobs that need them as an
+  # artifact.
   #
-  # They used to be Git LFS objects fetched by `lfs: true` in each of those jobs.
-  # LFS bandwidth is metered even on a public repository, so ten jobs x 156 MB
-  # was ~1.56 GB of LFS egress per CI run; at 192 runs in a day that is ~146 GB,
-  # and it exhausted the account's LFS budget outright — at which point EVERY
-  # `lfs: true` job died at checkout with "This repository exceeded its LFS
-  # budget". Release-asset downloads are NOT metered, so the corpora live on the
-  # `test-fixtures-v1` release and this job fetches them over plain HTTPS.
+  # NOT Git LFS: LFS bandwidth is metered even on a public repo, and per-job
+  # `lfs: true` fetches blow the account's LFS budget, after which every `lfs: true`
+  # job dies at checkout. The corpora live on the `test-fixtures-v1` release instead
+  # (release downloads aren't metered), fetched over plain HTTPS.
   #
-  # Egress after this change is 156 MB per run against ~1.56 GB, and none of it
-  # is LFS.
-  #
-  # NOT `actions/cache`. The repository's Actions cache sits at ~9.9 GiB of a
-  # 10 GiB cap across ~137 entries, so a 156 MB entry would evict Rust build
-  # caches by LRU — which is #1218, where eviction took the nightly's 3.25 GiB
-  # entry as collateral. A workflow artifact is a different quota, and one day of
-  # retention is all a single run needs.
-  #
-  # Slots into the existing `needs: [test-build, spec-fixtures]` chain, so it
-  # adds no serialization point: it runs in parallel with the two build jobs and
-  # finishes long before either.
+  # NOT `actions/cache`: a 156 MB entry would evict Rust build caches by LRU against
+  # the ~10 GiB cap. A workflow artifact is a separate quota; one day of retention is
+  # all a run needs. Slots into the existing `needs` chain, so it adds no serialization
+  # point.
   fixtures:
     name: Fetch bulk test fixtures
     runs-on: ubuntu-latest
@@ -1285,9 +837,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # Neither `lfs: true` (nothing in this repository is LFS-tracked any
-          # more) nor `submodules: true` — this job only needs the checksum
-          # manifest and the fetch script.
+          # No `lfs`/`submodules` — this job only needs the checksum manifest and
+          # the fetch script.
           persist-credentials: false
       # Plain HTTPS against the public release assets, so no token is involved
       # and this works unchanged on a forked-PR runner.
@@ -1305,9 +856,9 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: bulk-fixtures
-          # Named explicitly, not globbed. `if-no-files-found: error` catches
-          # an EMPTY artifact, not a short one, and the four paths are exactly
-          # what `CHECKSUMS.sha256` lists and the step above verified.
+          # Named explicitly, not globbed: the four paths are exactly what
+          # `CHECKSUMS.sha256` lists and the step above verified. `if-no-files-found:
+          # error` catches an EMPTY artifact — see `spec-fixtures`.
           path: |
             tests/fixtures/bulk/clinvar_hgvs_500k.json.gz
             tests/fixtures/bulk/clinvar_hgvs_unique.json.gz
@@ -1320,10 +871,9 @@ jobs:
           # Already gzip, so re-compressing costs CPU for ~nothing.
           compression-level: 0
 
-  # The suite, split across shards. `--partition hash:K/N` assigns each test to
-  # a shard by a hash of its name, so the split is deterministic and stays
-  # stable as tests are added. Verified even on this suite: 8646 tests split
-  # 2148 / 2181 / 2162 / 2155 across four shards.
+  # The suite, split across shards. `--partition hash:K/N` assigns each test to a
+  # shard by a hash of its name, so the split is deterministic and stable as tests
+  # are added.
   test:
     name: Test (${{ matrix.shard }}/8)
     needs: [test-build, spec-fixtures, fixtures]
@@ -1338,17 +888,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
-          # The 156 MB of bulk corpora this job reads at RUNTIME arrive as the
-          # `bulk-fixtures` artifact below, fetched once per run by the
-          # `fixtures` job from the `test-fixtures-v1` release.
-          #
-          # The spec worked-examples gate resolves each row's `file:line`
-          # citation against the vendored checkout at RUN time and asserts the
-          # quote verbatim, so this job needs the submodule (4.4 MB). Without
-          # it that test fails rather than skips, which is deliberate: a
-          # citation check that quietly no-ops is the failure mode it exists to
-          # prevent.
+          # Bulk corpora arrive as the `bulk-fixtures` artifact below, not LFS.
+          # `submodules` IS needed here: the spec worked-examples gate resolves each
+          # row's `file:line` citation against the checkout at RUN time and asserts the
+          # quote verbatim — without it that test fails rather than skips, deliberately.
           submodules: true
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
@@ -1359,13 +902,9 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      # Carries BOTH confluence corpora — `cis_confluence_axis`'s `g,c` one and
-      # `cis_confluence_nr_axis`'s `n,r` one. Without it those nine tests
-      # regenerate theirs themselves, via a nested `cargo run --example` that has
-      # to compile the crate from scratch inside the test — 117.6s on run
-      # 31268888323 for the `g,c` test that only reads it, and 129.2s on run
-      # 31670057963 for the `n,r` one. See the generating steps in
-      # `spec-fixtures`.
+      # Carries BOTH confluence corpora (`g,c` and `n,r`). Without it those nine tests
+      # regenerate theirs via a nested `cargo run` that compiles the crate inside the
+      # test — see the generating steps in `spec-fixtures`.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cis-corpus
@@ -1378,117 +917,48 @@ jobs:
           name: bulk-fixtures
           path: tests/fixtures/
       - name: "Note: reference-aware tests are skipped without a manifest"
-        # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
-        # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
-        # not provision the multi-GB reference manifest). Surface a GitHub
-        # annotation so reviewers see the skip explicitly. #397 item 6.
+        # The mutalyzer / biocommons reference-aware suites silently no-op without
+        # `FERRO_MANIFEST` (PR CI provisions no multi-GB manifest). Surface an
+        # annotation so the skip is visible.
         #
-        # `FERRO_REQUIRE_MANIFEST` is deliberately NOT set anywhere in this
-        # workflow. It is the sibling of `FERRO_REQUIRE_BULK_FIXTURES` below —
-        # it promotes a manifest-absence skip to a failure — and the two differ
-        # in exactly one respect: PR CI *does* provision the bulk fixtures and
-        # *does not* provision a manifest, so requiring one here would fail
-        # every PR. It is set in `nightly-mutalyzer.yml`, the only job that runs
-        # `ferro prepare`. See `src/conformance/manifest_gate.rs`.
+        # `FERRO_REQUIRE_MANIFEST` is deliberately NOT set here (unlike
+        # `FERRO_REQUIRE_BULK_FIXTURES` below): PR CI provisions the bulk fixtures but
+        # not a manifest, so requiring one would fail every PR. Only
+        # `nightly-mutalyzer.yml` (which runs `ferro prepare`) sets it.
         #
-        # THE SKIP REPORTS AS PASS, NOT SKIP, and that is the half of #1815 this
-        # file does not close. #1815 armed `FERRO_ASSERT_SEQUENCE` in
-        # `test-oracle`, which is the only one of the four oracles that can see a
-        # wrong-bases output on these axes — but that job provisions no manifest
-        # either, so they early-return there too. The one job that sets both is
-        # `nightly-mutalyzer.yml`, and it is `continue-on-error` by design.
-        # Provisioning a reference here is not a small change: that workflow
-        # spends ~30 min in `ferro prepare` per run and the result is deliberately
-        # uncached (a 3.25 GiB entry against a 10 GiB repository budget, #1218).
+        # The skip reports as PASS, not SKIP — the gap this file cannot close: no gating
+        # job provisions a manifest, so a denoted-sequence violation on these axes still
+        # cannot redden a required check.
         if: matrix.shard == 1
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip, and nextest reports that skip path as PASS rather than SKIP. No gating job runs those axes, so a denoted-sequence violation on them still cannot redden a required check (#1815). The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest, non-gating."
       - name: Run Rust tests (shard ${{ matrix.shard }} of 8)
         env:
-          # Absence of a bulk fixture must FAIL here, never skip. The bulk and
-          # exhaustive suites `return` early on a missing file, so without this
-          # a `fixtures` artifact that failed to arrive would delete the ClinVar,
-          # CMRG and Paraphase coverage and report a faster green run — the one
-          # outcome worse than a red one. See `tests/it/common/bulk_fixtures.rs`.
+          # Absence of a bulk fixture must FAIL here, never skip: the bulk suites
+          # `return` early on a missing file, so an artifact that failed to arrive
+          # would silently delete coverage and report a faster green run.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
-        # Consumes the standard archive `test-build` produces — see the note
-        # there for why `--extract-to .` is load-bearing. Only the optimized
-        # archive from `test-build-soak` is reserved for `soak` and `sweeps`.
-        #
-        # Proptests are excluded here and owned entirely by the `soak` job,
-        # which runs them at 100k cases per shard instead of 12k. Leaving them
-        # in would run the same properties twice at strictly lower depth AND
-        # wreck shard balance: measured locally, the shard holding them took
-        # 66.6s against 8.8-13.5s for its siblings.
+        # Consumes the standard `test-build` archive — see that job for why
+        # `--extract-to .` is load-bearing. Proptests are excluded here and owned by
+        # `soak`, which runs them far deeper; leaving them in would run the same
+        # properties at lower depth AND wreck shard balance.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/8 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER) and not ($ORACLE_ONLY_FILTER)"
 
-  # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
-  # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
-  # what the oracle asserts, so re-rolling thousands of random cases here checks
-  # nothing the plain run did not already check — it just cost ~80s of every CI
-  # run. The deep random coverage lives in the `soak` job below instead.
-  # FOUR shards. The number was once load-bearing and no longer is — worth
-  # recording, because the reasoning it rested on is the reasoning that produced
-  # `CENSUS_FILTER`.
+  # The idempotency oracle re-run, sharded. EXCLUDES the proptest modules: their
+  # own property already IS `norm(norm(x)) == norm(x)`, exactly what the oracle
+  # asserts, so re-rolling them here checks nothing the plain run did not — the deep
+  # random coverage lives in `soak`.
   #
-  # `--partition hash:K/N` assigns each test by a hash of its NAME, so it
-  # balances test *counts* and is blind to duration. At N=3 the two bulk
-  # axis-preservation corpora — then the two slowest tests in the repository
-  # under the oracles — both hashed into shard 1, every run, deterministically:
-  #
-  #     Test oracle (1/3)  242s     <- axis_is_preserved_over_the_{cmrg,clinvar_unique}_corpus
-  #     Test oracle (2/3)   94s
-  #     Test oracle (3/3)   77s
-  #
-  # 413s of work split 242/94/77 instead of ~138 each, so the job's critical path
-  # was one unlucky draw. N=4 separated them (cmrg -> 1, clinvar_unique -> 3).
-  #
-  # **That fix did not hold, and could not have.** The shard count is chosen
-  # against one snapshot of the test-NAME set, and every added or renamed test
-  # re-rolls the whole assignment. #1840 added `issue_1542_direction_symmetry`,
-  # it hashed onto shard 1 next to the cmrg corpus, and the job went back to
-  # 328s against 132-160s for its siblings — the same failure the shard count
-  # had been picked to avoid, two months later and by a different draw.
-  #
-  # So the robust alternative this comment used to name and decline — "giving
-  # `normalize_axis_preserving` a job of its own and negating it here" — was
-  # taken instead. It is `CENSUS_FILTER` and the `censuses` job, and it also
-  # carries `issue_1542_direction_symmetry` and `spec_conformance_axis`. Its
-  # cost was the three-file change this comment warned about (`ci.yml`,
-  # `scripts/run_oracle_suite.sh`, `tests/it/oracle_exclude_invariant.rs`), and
-  # that was the right price: a negation is stable under a re-roll and a shard
-  # count is not.
-  #
-  # N is 10. The "no measured gain" that kept it at 4 held only while this job was
-  # NOT the whole workflow's critical path. Once the sharded test binaries stopped
-  # having a single multi-minute dominator, this job's max shard became the pole
-  # that sets the run's wall time, and lowering that pole IS a measured gain.
-  #
-  # `--partition hash` balances test COUNTS and is blind to cost, and cost is what
-  # sets the wall. A shard runs its tests ~4-up on the 4-vCPU runner, so its wall
-  # is (sum of its tests' seconds) / ~3.8 — a LOAD figure, not a slowest-test one.
-  # After #01 sliced the former heaviest censuses into per-slice tests, no single
-  # test is a hard floor, so the pole is pure load imbalance across the bins.
-  #
-  # Measured at N=4 the shards ran ~2825 tests each (balanced to 0.5%) carrying a
-  # 3.1x test-seconds spread set only by which heavy tests co-hashed. N=6 bought
-  # ~12s of whole-run wall; N=8 topped out near 107s on its heaviest shard; N=10
-  # spreads the heavy load-chunks across more bins, dropping the pure-partition
-  # max toward ~90s/shard. Past ~10 the fixed per-shard prefix (archive download
-  # ~24s) and rising cross-shard download contention stop the marginal shard from
-  # helping. One shard additionally carries the un-partitioned
-  # `oracle-rerun` step (5 tests, ~27s); it is deliberately placed on a
-  # light partition shard (see that step) so it does not become the pole — the
-  # pole is the heaviest pure-partition shard, set by hash clustering.
-  #
-  # So the number is chosen against wall time now, not left conventional. If a
-  # future test's own seconds ever approach a per-shard budget, the stable fix is
-  # to SLICE it (as #01 sliced the geometry corpus) or carve it into its own job
-  # (as CENSUS_FILTER did) — never a shard-count bump chased against one snapshot.
+  # `--partition hash:K/N` balances test COUNTS by name and is blind to cost, and
+  # cost is what sets the wall. N (10) is chosen against wall time: past ~10 the
+  # fixed per-shard prefix (archive download) and cross-shard contention stop more
+  # shards helping. If a future test's own seconds approach a per-shard budget, the
+  # stable fix is to SLICE it or carve it into its own job (as `CENSUS_FILTER` did) —
+  # never a shard-count bump chased against one snapshot of the test-name hash.
   test-oracle:
     name: Test oracle (${{ matrix.shard }}/10)
     needs: [test-build, spec-fixtures, fixtures]
@@ -1503,17 +973,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
-          # The 156 MB of bulk corpora this job reads at RUNTIME arrive as the
-          # `bulk-fixtures` artifact below, fetched once per run by the
-          # `fixtures` job from the `test-fixtures-v1` release.
-          #
-          # The spec worked-examples gate resolves each row's `file:line`
-          # citation against the vendored checkout at RUN time and asserts the
-          # quote verbatim, so this job needs the submodule (4.4 MB). Without
-          # it that test fails rather than skips, which is deliberate: a
-          # citation check that quietly no-ops is the failure mode it exists to
-          # prevent.
+          # submodules needed for the spec worked-examples gate — see the `test` job.
           submodules: true
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
@@ -1524,20 +984,12 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      # Carries BOTH confluence corpora — `cis_confluence_axis`'s `g,c` one and
-      # `cis_confluence_nr_axis`'s `n,r` one. Without it those nine tests
-      # regenerate theirs themselves, via a nested `cargo run --example` that has
-      # to compile the crate from scratch inside the test — 117.6s on run
-      # 31268888323 for the `g,c` test that only reads it, and 129.2s on run
-      # 31670057963 for the `n,r` one. See the generating steps in
-      # `spec-fixtures`.
+      # Both confluence corpora — see the `test` job for why the download is needed.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: cis-corpus
           path: tests/fixtures/cis/
-      # The four bulk corpora, fetched and digest-verified once by `fixtures`.
-      # `tests/fixtures/` preserves the artifact's two subdirectories, so the
-      # files land back on the paths the suites read.
+      # The four bulk corpora — see the `test` job.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: bulk-fixtures
@@ -1557,34 +1009,20 @@ jobs:
             --extract-to . --extract-overwrite \
             --profile oracle --partition hash:${{ matrix.shard }}/10 \
             -E "not test(proptest) and not ($SWEEP_FILTER) and not ($CENSUS_FILTER)"
-      # This step re-runs the rows `profile.oracle` withholds from the armed step
-      # above, under the three oracles those rows pass. `profile.oracle-rerun` in
-      # `.config/nextest.toml` selects those rows and arms those three. See
-      # docs/ORACLES.md, section "What the oracle profile excludes".
+      # Re-runs the rows `profile.oracle` withholds from the armed step above, under
+      # the three oracles those rows pass (`profile.oracle-rerun` selects and arms
+      # them). See docs/ORACLES.md, "What the oracle profile excludes".
       #
-      # Runs on ONE shard and UN-partitioned, deliberately. It selects the named
-      # rows, so `--partition hash:K/10` would leave some shards selecting none, and
-      # neither answer to that is acceptable: `--no-tests=fail` would redden a shard
-      # for doing its job, and `--no-tests=pass` would be a step that goes green having
-      # run nothing — the vacuous pass this repository keeps meeting. Un-partitioned
-      # on ONE shard with `--no-tests=fail` instead, so a rename that empties the
-      # filter is loud rather than silent. These rows ran exactly once per CI run
-      # before this change too, spread across the shards, so nothing runs twice and
-      # nothing runs less.
+      # ONE shard, UN-partitioned, deliberately: it selects named rows, so
+      # `--partition hash:K/10` would leave some shards selecting none —
+      # `--no-tests=fail` would redden them and `--no-tests=pass` would be a vacuous
+      # green. One un-partitioned shard with `--no-tests=fail` makes a rename that
+      # empties the filter loud. Rides a historically light shard so it does not become
+      # the straggler (a smaller-is-better placement, not load-bearing).
       #
-      # It rides shard 3, not shard 1: this short step stacks onto whichever shard
-      # runs it, so it belongs on a light one rather than adding to a heavy one and
-      # becoming the oracle's straggler. Shard 3 is a historically light partition;
-      # the choice is not load-bearing (the whole-run wall is bounded by the release
-      # build, and the pole among the pure-partition shards sits above this step
-      # either way), only a smaller-is-better placement.
-      #
-      # It carries no `if: always()`, so a red armed step on shard 3 skips it. That
-      # is the intended reading: the job is already failing and the useful signal is
-      # the armed step's own failure, not a further confirmation that the withheld
-      # rows still pass. Nothing here can turn a red job green — the concern the
-      # `.github/workflows/**` review rule raises about a skipped step is coverage
-      # lost on a PASSING run, and on a passing run this step always executes.
+      # No `if: always()`, so a red armed step skips it — intended: nothing here can
+      # turn a red job green, and on a PASSING run (where the skipped-step concern
+      # applies) this step always executes.
       - name: Run the sequence-oracle exclusions under the other three oracles
         if: matrix.shard == 3
         env:
@@ -1595,58 +1033,34 @@ jobs:
 
   # 1,000,000-case idempotency soak on every PR, split 10 ways.
   #
-  # Why this job exists: PR CI's ordinary 12k-case run has never caught one of
-  # this campaign's idempotency defects. #1210 first reproduced at ~150,000
-  # cases — two orders of magnitude past what a normal run explores. The 12k
-  # setting is a smoke test; depth is what actually finds these.
+  # Why it exists: PR CI's ordinary 12k-case run is a smoke test that misses this
+  # campaign's idempotency defects — depth is what finds them.
   #
-  # Why it is safe to gate merges on: each shard pins `PROPTEST_RNG_SEED`, and
-  # proptest's default RNG is ChaCha, so a shard explores the SAME cases every
-  # run. Verified directly: one seed reproduced a byte-identical minimal failing
-  # case across repeated runs, while a different seed explored a different
-  # stream. Without pinned seeds this would be flaky by construction — a latent
-  # bug anywhere in the normalizer would randomly redden unrelated PRs, and
-  # "re-run the job" would become the route to green.
+  # Why it is safe to gate on: each shard pins `PROPTEST_RNG_SEED` and proptest's
+  # RNG is ChaCha, so a shard explores the SAME cases every run. Without pinned
+  # seeds this would be flaky by construction and "re-run the job" would become the
+  # route to green.
   #
-  # Why sharding the SEED and not the test list: `--partition` splits at test
-  # granularity, and the cost here sits inside a handful of property functions
-  # that each run their cases serially. Partitioning bottoms out at the slowest
-  # single property. Ten shards of 100k cases under ten distinct seeds cover
-  # the same 1M cases in a fraction of the wall time, and decorrelated streams
-  # are if anything better coverage than one stream of 1M.
+  # Why shard the SEED, not the test list: `--partition` splits at test granularity,
+  # but the cost sits inside a few property functions that run their cases serially,
+  # so it bottoms out at the slowest single property. Ten seeds over ten shards cover
+  # the same 1M cases in a fraction of the wall, with decorrelated streams.
   #
-  # The nightly counterpart (nightly-soak.yml) runs the same depth UNSEEDED, so
-  # new territory still gets explored — it just reports instead of blocking.
+  # The nightly (nightly-soak.yml) runs the same depth UNSEEDED and reports instead
+  # of blocking.
   soak:
     name: Idempotency soak (${{ matrix.shard }}/10)
-    # Only the optimized archive, NOT `test-build`. Every test the selection
-    # below reaches lives in `tests/it/{cis_allele_confluence,
-    # from_sequences, minimal_alignment_enumeration,
-    # normalize_idempotency}_proptest.rs` — all four of which
-    # `tests-soak/tests/soak/main.rs` compiles, which is what puts them in this
-    # archive at all now that it holds one package rather than the whole `it`
-    # binary — and none reads the generated spec fixture or shells out to the
-    # staged generators — so the shards need neither of those artifacts, and
-    # waiting on the job that produces them would put the dev-profile compile
-    # back on the soak's critical path.
+    # Only the optimized archive, NOT `test-build`. The proptest modules the selection
+    # reaches are compiled into this archive by `tests-soak/tests/soak/main.rs`, and
+    # none reads the spec fixture or shells out to the staged generators — so the
+    # shards need neither artifact, and waiting on the job that makes them would put
+    # the dev-profile compile back on the soak's critical path.
     #
-    # `from_sequences_proptest.rs` joined this selection by being named
-    # `*proptest*`, which is worth stating because the filter is by name: a new
-    # module lands in a 1M-case job without anyone choosing that. Its five
-    # properties are pure functions of a generated triple — no provider, no
-    # fixture — so the two claims above still hold, and it earns its place here
-    # (`the_direction_does_not_decide_describability` held for 256 cases and
-    # failed at 20,000). Re-check both claims when adding another.
-    #
-    # `minimal_alignment_enumeration_proptest.rs` joined the same way, and was
-    # re-checked rather than assumed: its eight properties are pure functions of
-    # a generated `(reference, alternate)` byte pair, reading no provider and no
-    # fixture. Its cost was measured too, because the enumerator it exercises is
-    # exponential in block length — at the former `PROPTEST_CASES=125000` the
-    # module cost 56.7 s wall in the *test* profile (before this job's ~5.4x
-    # optimization); the 100k setting here scales to ~45 s. Bounded by its own
-    # `MAX_BLOCK_LEN` of 6; raising it
-    # is a soak-cost decision, not only a coverage one.
+    # The soak selection is by NAME (`*proptest*`), so a new `*proptest*` module lands
+    # in this 1M-case job without anyone choosing it. Re-check any new one is a pure
+    # function of generated input (no provider, no fixture) and fits the soak's cost —
+    # the enumeration module is exponential in block length, bounded only by its own
+    # `MAX_BLOCK_LEN`.
     needs: test-build-soak
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1670,16 +1084,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and no `bulk-fixtures` artifact. Nothing in this
-          # repository is LFS-tracked any more, and the 156 MB of bulk corpora
-          # (now release assets) are read only by the bulk-fixture and
-          # exhaustive suites, which this job never selects — verified against
-          # every module it runs.
+          # No `lfs`/`bulk-fixtures`: the bulk corpora are read only by the
+          # bulk-fixture and exhaustive suites, which this job never selects.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # Safe to run from the archive: this job runs ONLY the proptest modules,
-      # which never shell out to the `ferro` binary, so the compile-time
-      # `CARGO_BIN_EXE_ferro` paths that break the other shards are never read.
+      # Safe to run from the archive: this job runs ONLY proptest modules, which never
+      # read the compile-time `CARGO_BIN_EXE_ferro` paths that break the other shards.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: nextest-archive-soak
@@ -1688,16 +1098,12 @@ jobs:
           # 10 shards x 100k = 1,000,000 cases per property.
           PROPTEST_CASES: "100000"
           PROPTEST_RNG_SEED: ${{ matrix.seed }}
-          # `core_strategy`'s body-length filter rejects a steady ~6.7% of
-          # draws, so proptest's absolute 65_536 local-reject cap aborts a long
-          # run with "Too many local rejects" — a harness quota, not a failure.
+          # `core_strategy` rejects a steady fraction of draws, so proptest's absolute
+          # local-reject cap ("Too many local rejects") would abort a long run. Raise it.
           PROPTEST_MAX_LOCAL_REJECTS: "1000000"
-        # `--no-tests=fail` pins what nextest's default `auto` already does
-        # (verified: a filter matching nothing exits 4, "error: no tests to
-        # run"). Stated explicitly because this job's entire value is the
-        # `test(proptest)` selection: `auto` is documented as "automatically
-        # determine behavior", and a job that runs a million cases must not be
-        # one default-change or one profile setting away from a green no-op.
+        # `--no-tests=fail` pins what nextest's `auto` already does. Stated explicitly
+        # because this job's value is the `test(proptest)` selection: a million-case job
+        # must not be one default or profile change from a green no-op.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail -E 'test(proptest)'
@@ -1705,31 +1111,18 @@ jobs:
   # The three exhaustive-sweep modules, moved off the `test` / `test-oracle`
   # partitions and onto the optimized archive.
   #
-  # These were the whole workflow's critical path. `--partition hash:K/N` splits
-  # by a hash of the test NAME, which balances shards by count and is blind to
-  # cost — and all three sweeps happened to hash into the same shard. Measured
-  # on run 30681684032, with everything else in those jobs under 4s:
-  #
-  #                                            Test (3/6)   Test oracle (1/2)
-  #   cis_junction_crossing_shift                    118s                183s
-  #   repeat_span_sibling_overlap                     66s                121s
-  #   issue_1254_sibling_crossing_shift               30s                 78s
-  #
-  # They are exhaustive cross-products — the first is a six-deep nest of roughly
-  # 276,000 cases — so they are compute-bound in exactly the way the soak is,
-  # and they benefit from the optimized archive even more (user CPU, oracles on,
-  # 3 reps, spread under 2%):
-  #
-  #   cis_junction_crossing_shift        71.06s -> 8.55s   8.3x
-  #   repeat_span_sibling_overlap        40.44s -> 5.29s   7.6x
-  #   issue_1254_sibling_crossing_shift  20.14s -> 2.32s   8.7x
+  # They were the whole workflow's critical path: `--partition hash:K/N` splits by a
+  # hash of the test NAME, which balances shards by count and is blind to cost — and
+  # all three sweeps happened to hash into the same shard. They are exhaustive
+  # cross-products, compute-bound in exactly the way the soak is, so they benefit from
+  # the optimized archive even more.
   #
   # All three live in `tests/it/` and are `#[path]`-included by
   # `tests-soak/tests/soak/main.rs`, so they are inside the archive
   # `test-build-soak` produces alongside the soak's own modules — one archive for
   # the three jobs, not one per job. Adding a fourth sweep means naming it there
-  # as well as in `SWEEP_FILTER`; `tests/it/soak_package_membership.rs` fails if
-  # only one of the two is done.
+  # as well as in `SWEEP_FILTER` — do both, or the `sweeps` job selects a module
+  # that is not in the archive it runs from.
   #
   # Running them ONLY here, with both oracles on, loses no coverage. The oracles
   # add assertions at `normalize_core_checked`'s exit and change no behaviour, so
@@ -1744,11 +1137,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`, and no `bulk-fixtures` artifact. Nothing in this
-          # repository is LFS-tracked any more, and the 156 MB of bulk corpora
-          # (now release assets) are read only by the bulk-fixture and
-          # exhaustive suites, which this job never selects — verified against
-          # every module it runs.
+          # No `lfs`/`bulk-fixtures`: the bulk corpora are read only by the
+          # bulk-fixture and exhaustive suites, which this job never selects.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -1756,104 +1146,64 @@ jobs:
           name: nextest-archive-soak
       - name: Run the exhaustive sweeps with the normalization self-checks
         env:
-          # The full corpus, not the prefix a local run takes (#1295). The
-          # sweeps were 92% of a local `cargo nextest run` — 79.6s of an 86.6s
-          # suite for `cis_junction_crossing_shift` alone — so `sweep_seeds`
-          # defaults to a 4-seed prefix and this job is what asks for all of it.
-          #
-          # This job is the ONLY place that sets it, which is why the exhaustive
-          # coverage still runs on every PR: `test` and `test-oracle` negate
-          # `SWEEP_FILTER` and so never reach these modules at all. If a sweep is
-          # ever moved out of `SWEEP_FILTER`, it silently drops to the prefix
-          # here — check both when editing that filter.
+          # The full corpus, not the 4-seed prefix a local run takes:
+          # `sweep_seeds` defaults to the prefix and this job is the ONLY place that
+          # asks for all of it, which is why exhaustive coverage still runs on every PR
+          # (`test`/`test-oracle` negate `SWEEP_FILTER` and never reach these modules).
+          # A sweep moved out of `SWEEP_FILTER` silently drops to the prefix here —
+          # check both when editing it.
           FERRO_SWEEP_SEEDS: full
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
-          # The sweeps are where this one earns its keep: they enumerate members
-          # onto terminal positions in bulk, which is where every instance of the
-          # class so far has come from. See the note on the pair in the `test`
-          # job above.
+          # The sweeps are where this one earns its keep: they enumerate members onto
+          # terminal positions in bulk, the source of every instance of the class. See
+          # the note on the pair in the `test` job.
           FERRO_ASSERT_IN_BOUNDS: "1"
-          # The denoted-sequence oracle (#1615): does the normalized description
-          # denote the same bases the input does? This job is its gating home
-          # rather than `test-oracle` — see the note there for the two rows that
-          # keep it out of the wider selection for now. The sweeps are also where
-          # it has the most to say: every one of the eight defects it was built
-          # for is a cis member crossing a sibling, which is exactly the space
-          # these three modules enumerate. They already assert sequence
-          # preservation case by case through `common::cis_apply_oracle`; this
-          # extends the same question to every intermediate normalization the
-          # sweeps perform rather than only the ones a test asserts on. Measured
-          # green over the full corpus before it was set here.
+          # The denoted-sequence oracle: does the normalized description denote
+          # the same bases as the input? This job is its gating home rather than
+          # `test-oracle` (see the note there for the two rows that keep it out of the
+          # wider selection). The sweeps' cis members crossing siblings are exactly the
+          # space its defects came from, and this extends the check to every intermediate
+          # normalization, not only the ones a test asserts on.
           FERRO_ASSERT_SEQUENCE: "1"
-        # `--no-tests=fail` for the reason spelled out on `soak`, and it matters
-        # more here: `SWEEP_FILTER` names three modules explicitly, so renaming
-        # one is exactly the edit that would drop a sweep from CI silently.
+        # `--no-tests=fail` for the reason on `soak`, and more so here: `SWEEP_FILTER`
+        # names three modules explicitly, so a rename would drop a sweep silently.
         #
-        # `issue_1615_denoted_sequence_oracle` is appended to the selection
-        # because that module holds the one test which reads the oracle's
-        # counters — `the_seam_compares_when_the_flag_is_set`, the guard that a
-        # green run actually compared something rather than the seam call having
-        # been deleted — and it skips by design wherever the flag is unset.
+        # `issue_1615_denoted_sequence_oracle` is appended because it holds the one test
+        # that reads the oracle's counters (`the_seam_compares_when_the_flag_is_set`, the
+        # guard that a green run actually compared something), which skips where the flag
+        # is unset. It STAYS appended even though `test-oracle` now arms
+        # `FERRO_ASSERT_SEQUENCE` too — defence in depth, not a copy to remove.
         #
-        # It STAYS appended after #1815 armed `FERRO_ASSERT_SEQUENCE` in
-        # `test-oracle` too, and not out of redundancy: this job runs the module
-        # against `FERRO_SWEEP_SEEDS: full`, and its own selection is the
-        # cis-allele space the oracle was built for. `test-oracle` also selects
-        # that module (nothing in its `-E` negates it), so as of #1815 the counter
-        # guard is live in two gating jobs rather than one — read that as defence
-        # in depth, not as a second copy to remove. (`nightly-mutalyzer.yml` sets
-        # the flag as well, but it is non-gating and selects only the
-        # reference-aware modules.)
-        #
-        # Appended here rather than added to `SWEEP_FILTER` for two reasons.
-        # `tests/it/sweep_filter_invariant.rs`'s
-        # `every_module_named_in_the_sweep_filter_consumes_the_seed_knob` fails
-        # on a module in that filter which does not draw through `sweep_seeds(`,
-        # and this one does not — the filter is a claim about the seed knob, not
-        # a list of what this job runs. And `SWEEP_FILTER` is negated by `test`
-        # and `test-oracle`, so naming it there would REMOVE the module from both
-        # — trading the armed run for the unarmed one instead of adding it. The
-        # module is therefore run twice on purpose: unarmed in `test`, armed
-        # here. It is ~10 cheap unit tests, no sweep and no provider corpus.
+        # Appended, NOT added to `SWEEP_FILTER`: that filter is the modules drawing
+        # through `sweep_seeds(` (this one does not), and it is negated by `test` and
+        # `test-oracle`, so naming it there would REMOVE the module from both. It runs
+        # twice on purpose — unarmed in `test`, armed here — being cheap unit tests.
         run: |
           scripts/run_nextest_archive.sh --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "$SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)"
 
-  # The ARMED half of `CENSUS_FILTER`'s modules, moved off the `test` /
-  # `test-oracle` partitions and onto the optimized archive. See that filter's
-  # own comment for why they moved; this one is about how the job preserves what
-  # they were doing.
+  # The ARMED half of `CENSUS_FILTER`'s modules, moved onto the optimized archive
+  # (see that filter's comment for why they moved). Runs ONLY the armed census; the
+  # un-armed `spec_conformance_axis` runs in `censuses-plain` below, split out to run
+  # in PARALLEL and because it must NOT be armed — an armed oracle would file its
+  # counted defect as `declined` and flatter the census. This step arms three of the
+  # four `test-oracle` flags, NOT `FERRO_ASSERT_SEQUENCE`; do not restore parity by
+  # copying it down without first measuring over `ORACLE_ONLY_FILTER`'s modules. See
+  # docs/ORACLES.md, "Which oracles the CI arms, and where".
   #
-  # This job runs ONLY the armed census. The un-armed half —
-  # `spec_conformance_axis`, which must NOT be armed — runs in the separate
-  # `censuses-plain` job below, split out so the two halves run in PARALLEL
-  # rather than as two serial steps of one job (see that job's header for the
-  # wall-time measurement). They are split because the modules do not agree
-  # about the oracles. This armed step arms three of the four `test-oracle`
-  # flags and not `FERRO_ASSERT_SEQUENCE`, deliberately. An armed oracle would
-  # file `spec_conformance_axis`'s counted defect as `declined` and flatter the
-  # census, so it stays un-armed in `censuses-plain`. Do not restore parity by
-  # copying `FERRO_ASSERT_SEQUENCE` down here without first
-  # measuring it over `ORACLE_ONLY_FILTER`'s modules. See docs/ORACLES.md,
-  # section "Which oracles the CI arms, and where".
+  # No `submodules` (no module here names a path under `assets/`). `spec-fixtures` IS
+  # needed: `normalize_axis_preserving::axis_is_preserved_over_the_spec_fixture` calls
+  # `ensure_spec_fixture`, which regenerates via a nested `cargo run` when the file is
+  # absent, and this job has no crate to build from; `bulk-fixtures` is needed for the
+  # three corpus tests in that module.
   #
-  # No `submodules: true`: none of the three modules names a path under
-  # `assets/` (the spec worked-examples citation gate, which does, stays in
-  # `test`). `spec-fixtures` IS needed —
-  # `normalize_axis_preserving::axis_is_preserved_over_the_spec_fixture` calls
-  # `ensure_spec_fixture`, which regenerates via a nested `cargo run` when the
-  # file is absent, and this job has no crate to build from. `bulk-fixtures` is
-  # needed for the three corpus tests in that same module.
-  #
-  # Verified archive-safe the way `soak` and `sweeps` are: all three modules live
-  # in `tests/it/` and are `#[path]`-included by `tests-soak/tests/soak/main.rs`,
-  # so they are inside the archive `test-build-soak` produces, none is gated on
-  # the `dev` feature, and none reads `CARGO_BIN_EXE_ferro`. A module named in
-  # `CENSUS_FILTER` but missing from that driver would be negated here and absent
-  # from the archive, i.e. run nowhere;
-  # `tests/it/soak_package_membership.rs` is what makes that loud.
+  # Archive-safe like `soak`/`sweeps`: all three modules are `#[path]`-included by
+  # `tests-soak/tests/soak/main.rs` into `test-build-soak`'s archive, none gated on
+  # `dev`, none reads `CARGO_BIN_EXE_ferro`. A module named in `CENSUS_FILTER` but
+  # missing from that driver would be negated here and absent from the archive — run
+  # nowhere.
   censuses:
     name: Slow censuses (optimized)
     needs: [test-build-soak, spec-fixtures, fixtures]
@@ -1877,19 +1227,15 @@ jobs:
           path: tests/fixtures/
       - name: Run the censuses that need the oracles armed
         env:
-          # Three of the four `test-oracle` sets, and only those three. See that
-          # job for what each asserts, and this job's own header for why
-          # `FERRO_ASSERT_SEQUENCE` is not among them even though #1815 added it
-          # there.
+          # Three of the four `test-oracle` sets — see that job for what each asserts.
+          # `FERRO_ASSERT_SEQUENCE` is deliberately excluded.
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           FERRO_ASSERT_IN_BOUNDS: "1"
-          # Absence of a bulk fixture must FAIL here, never skip — the same
-          # reason as in `test`. `normalize_axis_preserving`'s three corpus
-          # tests `return` early on a missing file, so without this a
-          # `bulk-fixtures` artifact that failed to arrive would delete the
-          # ClinVar, CMRG and Paraphase axis coverage and report a *faster*
-          # green run.
+          # Absence of a bulk fixture must FAIL here, never skip — see `test`.
+          # `normalize_axis_preserving`'s three corpus tests `return` early on a missing
+          # file, so without this a `bulk-fixtures` artifact that failed to arrive would
+          # delete the ClinVar, CMRG and Paraphase axis coverage.
           FERRO_REQUIRE_BULK_FIXTURES: "1"
         # `--no-tests=fail` for the reason spelled out on `soak` and `sweeps`:
         # this step names its modules explicitly, so a rename is exactly the
@@ -1899,14 +1245,11 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(issue_1542_direction_symmetry) + test(normalize_axis_preserving) + test(clinvar_hgvs_tests)"
 
-  # The un-armed half of the censuses, split into its OWN job so it runs in
-  # PARALLEL with the armed half above rather than after it. On the optimized
-  # soak archive the two halves measured 43s (armed) and 50s (un-armed), so a
-  # single job spent ~93s of nextest serially and completed ~+4:05 from run
-  # start — over the 4-minute target. As two jobs the wall is the slower half,
-  # ~+3:30. This job carries NO bulk fixtures (its modules build their corpus in
-  # code, `conformance::spec_corpus`, and read nothing from disk), so it also
-  # skips that 156 MB download. Both jobs gate the merge through `test-required`.
+  # The un-armed half of the censuses, in its OWN job so it runs in PARALLEL
+  # with the armed half above — run serially the two overran the 4-minute
+  # target. Carries NO bulk fixtures: its modules build their corpus in code
+  # (`conformance::spec_corpus`) and read nothing from disk, so it also skips
+  # that download. Both jobs gate the merge through `test-required`.
   censuses-plain:
     name: Slow censuses plain (optimized)
     # Only the optimized archive. NOT spec-fixtures: the two modules below build
@@ -1928,7 +1271,7 @@ jobs:
       - name: Run the censuses that may not be measured with an oracle armed
         # No `FERRO_ASSERT_*` here, deliberately, and no bulk fixtures: these
         # modules build their corpus in code (`conformance::spec_corpus`) and
-        # read nothing from disk. `conformance_census_runs` (#2094) joins
+        # read nothing from disk. `conformance_census_runs` joins
         # `spec_conformance_axis` here because `run_census` refuses outright
         # with a seam oracle armed, which would fail an armed run.
         run: |
@@ -1936,46 +1279,23 @@ jobs:
             --extract-to . --extract-overwrite --no-tests=fail \
             -E "test(spec_conformance_axis) + test(conformance_census_runs)"
 
-  # src/benchmark/hgvs_rs.rs carries 3 pure-Rust `#[cfg(test)]` tests
-  # (`benchmark::hgvs_rs::tests::*`) that only compile under the `hgvs-rs`
-  # feature — and, before #2080, ran NOWHERE. `dev` does not include `hgvs-rs`,
-  # so the sharded `test` jobs never compiled them, and the only two `hgvs-rs`
-  # invocations anywhere in CI are build-only: `clippy-all-features`'s
-  # `--all-features --all-targets` compiles the `#[cfg(test)]` module but does
-  # not execute it (its own comment names `hgvs-rs` as a feature it exists to
-  # keep compiling), and `deploy-local.yml` builds the `ferro-web` binary. A
-  # break in any of the three passed every check — the #1505 / #1372 / #2046
-  # dead-coverage family, one feature over.
+  # The `benchmark::hgvs_rs::tests::*` tests compile only under the `hgvs-rs`
+  # feature, which no other CI job runs — `dev` excludes it, and the only other
+  # `hgvs-rs` builds are compile-only — so a break in them passes every other check.
+  # They are hermetic (URL parsing and a default-config constructor, no UTA/SeqRepo),
+  # so this job only compiles and runs them; `submodules` stays off (nothing here reads
+  # `assets/hgvs-nomenclature`).
   #
-  # The tests are hermetic — URL parsing and a default-config constructor, with
-  # no UTA database or SeqRepo checkout — so this job only has to compile and run
-  # them. No spec submodule is needed: the scoped selection touches nothing that
-  # reads `assets/hgvs-nomenclature` at runtime, and no `include_str!`/
-  # `include_bytes!` under `src/` names it, so `submodules` is left at its
-  # checkout default (off).
+  # SCOPED with `-E 'test(benchmark::hgvs_rs::)'` under nextest, not `cargo test`:
+  # `--features hgvs-rs` pulls in the whole lib suite, which is not safe in one
+  # process (e.g. `normalize::merge` tests assert on process-global `AtomicU64`
+  # counters). `--no-tests=fail` is the non-vacuity guard — a rename/delete exits
+  # 4 rather than reporting `0 passed`.
   #
-  # SCOPED with `-E 'test(benchmark::hgvs_rs::)'`, and run under nextest rather
-  # than `cargo test`, for the same reason #2046's `python::tests` step is:
-  # `--features hgvs-rs` pulls in `benchmark`, so a bare `--lib` run would
-  # execute the whole lib suite (4000+ tests) in one process, which is not safe
-  # — e.g. `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
-  # asserts deltas on process-global `AtomicU64` counters that any concurrent
-  # test reaching `partition_block_for_rule` corrupts. nextest is
-  # process-per-test, and the selection keeps the job to the three tests it
-  # exists to run.
-  #
-  # `--no-tests=fail` is the non-vacuity guard, and the other reason this is
-  # nextest (same reasoning as #2046's `python::tests` step and the `soak` job).
-  # If the module is renamed or the tests are deleted, an empty selection exits 4
-  # here (`error: no tests to run`) rather than reporting `0 passed` and exiting
-  # 0 — so the coverage this job exists to provide cannot silently stop running.
-  #
-  # This job's name is NOT one of the repository-required contexts (the ruleset
-  # names a fixed set — see the `test-required` comment below), so it is wired
-  # into the `Test` rollup's `needs` to gate the merge. The compile cost it buys
-  # is real and deliberate: `hgvs-rs` pulls `hgvs`, `postgres`, `seqrepo`,
-  # `biocommons-bioutils` and `indexmap`, a dependency tree no other test job
-  # builds — which is why #2080 was split out of #2072 rather than folded in.
+  # NOT a repository-required context (the ruleset names a fixed set — see
+  # `test-required`), so it is wired into the `Test` rollup's `needs` to gate the
+  # merge. It is a SEPARATE job because the `hgvs-rs` dep tree (hgvs, postgres,
+  # seqrepo, …) is one no other test job builds.
   hgvs-rs-tests:
     name: hgvs-rs Rust tests
     runs-on: ubuntu-latest
@@ -1998,42 +1318,22 @@ jobs:
         run: |
           cargo nextest run --features hgvs-rs --lib --no-tests=fail \
             -E 'test(benchmark::hgvs_rs::)'
-      # src/service/tools/hgvs_rs.rs was #2080's FOURTH dead-coverage site (#2101),
-      # which the step above cannot reach. `src/service` compiles only under
-      # `web-service` (`#[cfg(feature = "web-service")] pub mod service;`), while the
-      # enabled arm of `service::tools::hgvs_rs::tests::test_hgvs_rs_service_creation`
-      # is `#[cfg(feature = "hgvs-rs")]`. No other CI job builds BOTH features at once:
-      # `dev` (the sharded `test` jobs) has `web-service` but not `hgvs-rs`, and the
-      # step above has `hgvs-rs` but not `web-service` — so that arm ran nowhere and a
-      # break in it passed every check, the same family as the step above. It is
-      # reached here by asking for the two features together.
-      #
-      # Hermetic for the same reason: the test drives `HgvsRsService::new` with an
-      # empty seqrepo path, which fails during provider path parsing before any UTA
-      # connection is attempted, so it needs no database, SeqRepo, or spec submodule.
-      # A SEPARATE build (not folded into the step above) because `web-service` pulls
-      # axum/tokio/tower, a tree the benchmark step does not need — keeping them apart
-      # leaves #2080's proven coverage on exactly the feature set it was verified with.
-      # SCOPED and `--no-tests=fail` for the same non-vacuity reasons as above.
+      # `src/service/tools/hgvs_rs.rs`'s test the step above cannot reach: its enabled
+      # arm needs BOTH `hgvs-rs` and `web-service`, and no other job builds both at once,
+      # so it ran nowhere. Hermetic (drives `HgvsRsService::new` with an empty seqrepo
+      # path, which fails before any UTA connection). A SEPARATE build because
+      # `web-service` pulls axum/tokio/tower the benchmark step does not need. SCOPED and
+      # `--no-tests=fail` for the same non-vacuity reasons as above.
       - name: Run src/service/tools/hgvs_rs.rs unit tests
         run: |
           cargo nextest run --features hgvs-rs,web-service --lib --no-tests=fail \
             -E 'test(service::tools::hgvs_rs::)'
 
-  # The generated-doc `--check` gates. Split out of the old monolithic Test job
-  # so they no longer sit behind the whole suite on the critical path.
-  # Aggregator that reports the `Test` status context.
-  #
-  # `main` has an ACTIVE RULESET (not legacy branch protection — it does not
-  # appear under /branches/main/protection, which 404s) requiring these exact
-  # contexts: Build, Test, Clippy, Clippy (all features), Format, Python Lint,
-  # Python Wheel Test, abi3 floor ↔ requires-python.
-  #
-  # Sharding renamed the old single `Test` job to `Test (K/6)`, so the required
-  # `Test` context stopped being reported and every PR hung on "Expected —
-  # Waiting for status to be reported" with no run to link to. This job restores
-  # the contract from inside the workflow, so no repository-settings change is
-  # needed and future re-shardings cannot break it again.
+  # Aggregator that reports the required `Test` status context from inside the
+  # workflow, so re-sharding the test jobs cannot break the required context.
+  # `main` has an active ruleset requiring these exact contexts: Build, Test,
+  # Clippy, Clippy (all features), Format, Python Lint, Python Wheel Test,
+  # abi3 floor ↔ requires-python.
   test-required:
     name: Test
     runs-on: ubuntu-latest
@@ -2089,46 +1389,21 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: python-wheel
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      # src/python.rs carries 10 pure-Rust `#[cfg(test)]` tests that only
-      # compile under the `python` feature — and, before #2046, ran NOWHERE:
-      # `dev` excludes `python` so the sharded test jobs never compiled them,
-      # `maturin build` runs no Rust test, and `cargo clippy --all-features`
-      # compiles without executing. A break in one passed every check (the
-      # #1505 / #1372 dead-coverage family, one feature over).
+      # src/python.rs's `python::tests::*` compile only under the `python` feature
+      # and otherwise run NOWHERE: `dev` excludes `python`, `maturin build` runs no
+      # Rust test, and `clippy --all-features` compiles without executing. They are
+      # pure (never start the interpreter), so they only need the crate to LINK against
+      # libpython — which is why `extension-module` is NOT in Cargo.toml's `python`
+      # feature (with it, PyO3 links no libpython on Linux and this executable would
+      # fail to link). `cargo` never reads pyproject.toml, so this step gets `python`
+      # WITHOUT `extension-module`; the wheel step below names both features.
       #
-      # They are pure (they never start the interpreter), so they only need the
-      # crate to LINK, which needs libpython. That is why `extension-module` is
-      # NOT part of Cargo.toml's `python` feature: with it set, PyO3 links no
-      # libpython on Linux (`is_linking_libpython_for_target` in
-      # pyo3-build-config), so this test executable would fail to link its
-      # undefined Python symbols. `cargo` never reads pyproject.toml, so this
-      # step gets `python` WITHOUT `extension-module` and links libpython; the
-      # wheel step below asks for both features BY NAME (see its comment — the
-      # `[tool.maturin] features` list does not reach a build that passes
-      # `--features` on the command line).
-      #
-      # SCOPED, and run under nextest rather than `cargo test`, because this
-      # job reports a REQUIRED status check and the lib suite is not safe to run
-      # in one process. `cargo test --features python --lib` ran all 4240 lib
-      # tests under libtest's thread pool, where
-      # `normalize::merge::tests::a_declined_sequence_first_partition_is_counted`
-      # asserts deltas on process-global `AtomicU64` counters (`SEQFIRST_*` in
-      # src/normalize/merge.rs) that any concurrent test reaching
-      # `partition_block_for_rule` corrupts, and
-      # `parallel::tests::test_stress_concurrent_throughput` is a timing test
-      # sensitive to oversubscription. Measured on this branch at
-      # `--test-threads=32`: 4 of 6 runs failed that way, i.e. a green PR's
-      # required check would flake for reasons unrelated to the PR. nextest is
-      # process-per-test, so the corruption is not expressible at any thread
-      # count, and the selection keeps the job to the tests it exists to run
-      # (10 tests in 0.02s, against 4240 in ~14s).
-      #
-      # `--no-tests=fail` is the non-vacuity guard, and is the other reason this
-      # is nextest: a selection matching nothing exits 4 here ("error: no tests
-      # to run"), where `cargo test -- python::tests` reports
-      # `ok. 0 passed; 4240 filtered out` and exits 0 — a typo in the filter
-      # would silently delete the coverage this job was added to provide. Same
-      # reasoning as the `soak` job's `--no-tests=fail`; see its comment.
+      # SCOPED under nextest, not `cargo test`, because this reports a REQUIRED check
+      # and the lib suite is not process-safe: `normalize::merge` tests assert on
+      # process-global `AtomicU64` counters and `parallel` has a timing test, so a
+      # one-process run flakes under oversubscription. nextest is process-per-test.
+      # `--no-tests=fail` is the non-vacuity guard — a bad filter exits 4 rather than
+      # reporting `0 passed`.
       #
       # The test binary loads libpython at startup, so point the loader at the
       # interpreter's shared-library dir.
@@ -2140,17 +1415,12 @@ jobs:
             cargo nextest run --features python --lib --no-tests=fail \
               -E 'test(python::tests::)'
       # `extension-module` is named explicitly, NOT inherited from
-      # `[tool.maturin] features`. Measured with maturin 1.13.3: a `--features`
-      # flag on the command line REPLACES that list rather than merging with it,
-      # so `maturin build --features python` hands cargo `--features python`
-      # alone and the pyproject entry is never consulted. Without the name here,
-      # the wheel's non-libpython linkage would rest solely on maturin setting
-      # `PYO3_BUILD_EXTENSION_MODULE=1` (which pyo3 honours independently of the
-      # Cargo feature) — true of every maturin in use today, but an unpinned
-      # `maturin>=1.0,<2.0` that predates it would silently build a
-      # libpython-linked wheel. Naming the feature restores exactly the cargo
-      # feature resolution this repo had before the split, and costs no version
-      # floor.
+      # `[tool.maturin] features`: a `--features` flag on the command line REPLACES
+      # that list, so `maturin build --features python` alone would never consult
+      # the pyproject entry. Without the name, the wheel's non-libpython linkage
+      # would rest solely on maturin setting `PYO3_BUILD_EXTENSION_MODULE=1`, which
+      # an older unpinned maturin might not do. Naming the feature restores the
+      # cargo feature resolution this repo had before the split, at no version floor.
       - name: Build release wheel
         run: |
           python -m pip install --upgrade pip
@@ -2184,7 +1454,7 @@ jobs:
   # contract. The rollup reports the required `Build` context (the `test-required`
   # pattern): on a pull_request it gates on `build-lint` alone, otherwise on both.
   # NO new rust-cache key is added: both jobs `shared-key: build-release` (see each
-  # block) so they share ONE entry — which matters near the 10 GiB cap (#1218), and
+  # block) so they share ONE entry — which matters near the 10 GiB cap, and
   # is why the sharing had to be `shared-key`, not `key` (`key` appends the job id,
   # giving two cold per-job entries).
   build-lint:
@@ -2204,91 +1474,59 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          # This job OWNS one shared cache entry that `build-release-check`
-          # restores read-only. `shared-key` (NOT `key`) is load-bearing:
-          # `key` appends `GITHUB_JOB`, so two jobs passing the same `key` get
-          # SEPARATE entries and never share — `shared-key` omits the job id, so
-          # both land on one `build-release` entry. Sharing is sound HERE (unlike
-          # the per-job caches above — see the note on the first rust-cache block)
-          # precisely because this job's deps are the SUPERSET: clippy `--release`
-          # builds the release deps and the featureless guard below builds the
-          # debug/test deps, while `build-release-check` needs only the release
-          # half, which the shared entry always carries. `save-if: main` plus a
-          # single saver (this job) means no race over the entry, and no new key
-          # near the 10 GiB cap (#1218).
+          # This job OWNS the shared `build-release` cache entry that
+          # `build-release-check` restores read-only. `shared-key` (NOT `key`) is
+          # load-bearing: `key` appends `GITHUB_JOB` so same-`key` jobs never share.
+          # Sound HERE because this job's deps are the SUPERSET — its release clippy and
+          # featureless build cover both halves, and `build-release-check` needs only the
+          # release half. `save-if: main` + a single saver means no race and no new key
+          # near the cap.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: build-release
-      # The release-profile lint (#1383). The two `clippy` jobs both lint the debug
-      # profile, so nothing else checks the release profile, and the normalization
-      # oracles are required by convention to compile out of release entirely
-      # (`#[cfg(debug_assertions)]` on `assert_in_bounds`, `assert_reparseable`,
-      # `assert_idempotent` and their `*_self_check_enabled` flags). An oracle
-      # helper left ungated becomes dead code in release, and `dead_code` is
-      # warn-by-default, so nothing went red: #1366's pre-review head failed this
-      # command with three such errors while all three CI clippy jobs were green on
-      # the same commit.
+      # The release-profile lint. Both `clippy` jobs lint the debug profile, so
+      # nothing else checks release, and the normalization oracles compile out of
+      # release entirely (`#[cfg(debug_assertions)]`); an ungated oracle helper becomes
+      # `dead_code` in release — warn-by-default, so no debug clippy job catches it.
       #
-      # It stays a `cargo clippy` step (not folded into the release build via
-      # `RUSTFLAGS=-D warnings`) because RUSTFLAGS is part of cargo's build
-      # fingerprint, so setting it busts the whole dependency cache — ~400 crates
-      # rebuild cold, the same trap the `CARGO_INCREMENTAL` note in `docs/TESTING.md`
-      # records. `clippy -- -D warnings` passes the flag as a clippy ARG instead,
-      # leaving dependencies `--cap-lints=allow` and their fingerprints untouched.
+      # Stays a `cargo clippy` step, NOT the release build with `RUSTFLAGS=-D warnings`:
+      # RUSTFLAGS is part of cargo's build fingerprint and busts the whole dependency
+      # cache (the `CARGO_INCREMENTAL` trap in `docs/TESTING.md`); `clippy -- -D warnings`
+      # passes the flag as a clippy ARG, leaving dependency fingerprints untouched.
       #
-      # Deliberately NOT `--all-targets`: the dead code lands in the `lib` target,
-      # which the plain invocation covers. Measured by removing the four
-      # `#[cfg(any(debug_assertions, test))]` gates from
-      # `src/normalize/merge.rs` — this command then fails with all four items
-      # reported against `(lib)`, and passes with them restored. `--all-targets`
-      # would additionally compile every test and bench binary with optimisation
-      # for no gain here.
+      # NOT `--all-targets`: the dead code lands in the `lib` target, which the plain
+      # invocation covers; `--all-targets` would optimize every test/bench binary for
+      # no gain.
       - run: cargo clippy --release -- -D warnings
-      # The featureless guard (#1505). Every other Rust job in this workflow
-      # either passes `--features dev` / `--all-features`, or is scoped to the
-      # soak driver package (`test-build-soak`'s
-      # `-p ferro-hgvs-soak-tests`). So the DEFAULT
-      # feature set's unit tests — the `#[cfg(test)]` modules under `src/` — are
-      # compiled NOWHERE in CI, and a call from one of them into feature-gated
-      # code cannot turn any job red.
+      # The featureless guard. Every other Rust job passes `--features dev` /
+      # `--all-features` or is scoped to the soak driver, so the DEFAULT feature set's
+      # `#[cfg(test)]` modules under `src/` compile NOWHERE else in CI, and a call from
+      # one into feature-gated code would redden no job.
       #
-      # Not hypothetical: #1372 put exactly such a call on `main` and it survived
-      # until an external contributor ran the `cargo test` this repository's own
-      # README documents (`README.md:433`). Four `E0599`s, invisible to all 34
-      # checks, reported from outside the project.
-      #
-      # `--no-run` on purpose: the claim being defended is that the default
-      # feature set BUILDS, not that these tests run a second time. `--lib
-      # --bins` covers every `#[cfg(test)]` module under `src/`; the integration
-      # tree is already compiled featureless by `test-build-soak`.
+      # `--no-run` on purpose: the claim is that the default feature set BUILDS, not that
+      # these tests run again. `--lib --bins` covers every `#[cfg(test)]` module under
+      # `src/`; the integration tree is already compiled featureless by `test-build-soak`.
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
 
-  # The release build + binary-size guard. This is the ONE place the merge-queue
-  # gating contract is stated; other comments (the Build-gate header above, the
-  # rollup below) point here rather than restate it. It runs in the merge queue
-  # and on the post-merge push to `main`, but NOT on `pull_request`: its ~212s
+  # The release build + binary-size guard, and the ONE place the merge-queue
+  # gating contract is stated (other comments point here). Runs in the merge
+  # queue and on the post-merge push to `main`, but NOT on `pull_request`: its
   # `cargo build --release` (lto + codegen-units=1, mandated by the size cap
-  # below — a faster profile would breach it) is the workflow's slowest job and
-  # the only one over the 4-minute PR target, and it carries no per-PR coverage a
-  # reviewer iterates against (the release-profile lint that catches most release
-  # issues is `build-lint`'s `cargo clippy --release`, which does run on every push).
+  # below) is the slowest job and over the 4-minute PR target, and carries no
+  # per-PR coverage a reviewer iterates against (release-profile lint lives in
+  # `build-lint`'s `cargo clippy --release`, which runs on every push).
   #
-  # `merge_group` is where it GATES: the `Build` rollup requires it (see the
-  # rollup's `needs`), so no pull request merges without the release build and
-  # size check passing against the projected merge.
+  # `merge_group` is where it GATES: the `Build` rollup requires it, so no PR
+  # merges without the release build and size check passing.
   #
-  # `push` (to `main`) is the SAFETY NET. The merge queue is a ruleset rule that
-  # can be rolled back (campaigns/ruleset-19738231-before.json); if it is,
-  # `merge_group` stops firing, so gating there ALONE would let this check vanish
-  # silently — main would then take merges with a green `Build` (build-lint only)
-  # and no release build or size check at all. Running it on the post-merge push
-  # too means an oversized or unbuildable binary reddens `main`'s CI loudly
-  # instead, whatever the merge path. (Redundant with the queue's own run while
-  # the queue is enabled, but post-merge, so it never races the PR target.)
+  # `push` (to `main`) is the SAFETY NET: the merge queue is a rollback-able
+  # ruleset rule, and if it is rolled back `merge_group` stops firing — running
+  # on the post-merge push means an oversized or unbuildable binary still reddens
+  # `main` loudly whatever the merge path.
   #
-  # On a `pull_request` run the job is skipped, and the rollup gates on `build-lint`
-  # alone — a job skipped by a job-level `if` reports success to the required
-  # context, so `Build` still reports and the PR is not left waiting.
+  # On a `pull_request` run the job is skipped and the rollup gates on `build-lint`
+  # alone (a job skipped by a job-level `if` reports success), so `Build` still
+  # reports and the PR is not left waiting.
   build-release-check:
     name: Build release + size
     runs-on: ubuntu-latest
@@ -2319,10 +1557,7 @@ jobs:
           size=$(stat -c%s target/release/ferro 2>/dev/null || stat -f%z target/release/ferro)
           echo "Binary size: $size bytes"
           # 20 MiB (20 * 1048576). A bloat tripwire for the distributed CLI, not a
-          # hard product limit: the binary is currently ~9.9 MiB, so this leaves
-          # headroom rather than sitting one accidental dependency away from red.
-          # Raised from 10 MiB (an undocumented value carried since the initial
-          # commit), which the binary had grown to within ~120 KiB of.
+          # hard product limit -- wide headroom, so it catches gross regressions only.
           if [ "$size" -gt 20971520 ]; then
             echo "Error: Binary size exceeds 20 MiB limit"
             exit 1
