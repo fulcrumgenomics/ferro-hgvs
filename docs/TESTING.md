@@ -113,11 +113,11 @@ how to run each one locally:
   Set it locally when you have the data. `scripts/run_conformance_axis.sh` validates a supplied
   manifest, then runs the `test(axis_)` filter; that substring also selects unrelated tests, only
   some of which are manifest-gated.
-- `test-oracle`: the suite with `FERRO_ASSERT_IDEMPOTENT`, `FERRO_ASSERT_REPARSE` and
-  `FERRO_ASSERT_IN_BOUNDS` set, without the spec-corpus census modules that those oracles would
-  silence. `FERRO_ASSERT_IDEMPOTENT=1` on a bare `cargo nextest run` is always red on `main`.
-  Run `scripts/run_oracle_suite.sh` instead. It uses the same selection and flags as the job.
-  `tests/it/oracle_exclude_invariant.rs` keeps the exclusion list and the job the same.
+- `test-oracle`: the suite with the four `FERRO_ASSERT_*` seam oracles armed, over the suite minus
+  the modules those oracles would silence; a compensating step then re-runs the
+  `SEQUENCE_ORACLE_EXCLUDE` rows under the other three oracles, so those rows keep their coverage.
+  The local runner reproduces only the armed step. See `docs/ORACLES.md`, section "What CI arms, and
+  where".
 - `sweeps`: the three exhaustive sweeps at `FERRO_SWEEP_SEEDS=full`.
 - `censuses` and `censuses-plain`: the slow census modules, from the optimized soak archive.
   `censuses-plain` runs the modules that build their corpus in code. Those modules refuse to run
