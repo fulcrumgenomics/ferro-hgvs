@@ -229,6 +229,57 @@ def test_a_message_without_a_trailer_reads_as_none() -> None:
     assert trailer_value("chore: something\n\nNo declaration here.\n") is None
 
 
+def test_body_prose_that_names_the_trailer_is_not_read_as_a_trailer() -> None:
+    """A `Representation-Change:` line wrapped mid-paragraph is prose, not a footer.
+
+    This is the #2233 regression. #2222's body wrapped the CONTRIBUTING rubric so that, at
+    column 0, a bulleted item read `Representation-Change: trailer. none is a valid verdict.
+    An absent / trailer fails.`. git-cliff groups on parsed footers and ignores such a line
+    (it is preceded by body prose, not a blank line or another footer), so it filed the
+    commit under `Other`. The audit read the line as a real disclosure, disagreed with
+    git-cliff, and turned the job red on `main` and every open PR until the next release
+    tag. A genuine footer begins a trailing footer block, and the mid-paragraph occurrence
+    does not.
+    """
+    message = (
+        "docs(spec): update contributing\n\n"
+        "- C2. A change under any of the six watched directories carries a\n"
+        "Representation-Change: trailer. none is a valid verdict. An absent\n"
+        "trailer fails. [CI]\n"
+    )
+    assert trailer_value(message) is None
+
+
+def test_the_real_footer_is_read_past_earlier_body_prose_naming_the_trailer() -> None:
+    """When body prose names the trailer AND a real footer follows, read the real footer.
+
+    The #2222 shape exactly: a mid-paragraph mention of the token, then a blank line, then
+    the genuine `Representation-Change: none. …` footer. The mid-paragraph line must be
+    ignored and the blank-line-preceded footer read — which is a decline, as git-cliff also
+    concludes (it neutralizes the declining key so the commit groups by its type).
+    """
+    message = (
+        "docs(spec): update contributing\n\n"
+        "- C2. A change under any of the six watched directories carries a\n"
+        "Representation-Change: trailer. none is a valid verdict. An absent\n"
+        "trailer fails. [CI]\n\n"
+        "Representation-Change: none. Comment-only re-points in five watched files.\n"
+    )
+    value = trailer_value(message)
+    assert value == "none. Comment-only re-points in five watched files."
+    assert opens_with_a_decline(value)
+
+
+def test_a_trailer_stacked_after_another_footer_is_read() -> None:
+    """A footer preceded by another footer line (not a blank) is still a footer."""
+    message = (
+        "fix(normalize): a thing\n\nBody.\n\n"
+        "Signed-off-by: Someone <s@example.com>\n"
+        "Representation-Change: 3 rows move\n"
+    )
+    assert trailer_value(message) == "3 rows move"
+
+
 # ---------------------------------------------------------------------------
 # The squash-equivalent preview
 # ---------------------------------------------------------------------------
