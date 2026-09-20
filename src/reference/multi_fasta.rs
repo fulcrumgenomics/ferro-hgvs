@@ -2809,19 +2809,23 @@ impl MultiFastaProvider {
                 // version-falls-back to a sibling, and cloning that sibling
                 // under `acc` would carry over the wrong exon alignment / contig
                 // metadata. Only reconcile when cdot holds this exact version.
+                // `has_transcript_exact` is an index-presence check. Since #974 an
+                // archive-backed record is only tag-validated at materialization,
+                // so `get_transcript` can still decline an exactly-present record
+                // (a corrupt tag poisons it). Skip reconciling what we cannot
+                // decode rather than unwrapping `None` and panicking.
                 if cdot.has_transcript_exact(acc) {
-                    let existing = cdot
-                        .get_transcript(acc)
-                        .expect("exact cdot presence checked above");
-                    corrections.push((
-                        acc.clone(),
-                        CdotTranscript {
-                            cds_start: Some(cds_start_0based), // 1-based incl → 0-based incl
-                            cds_end: Some(cds_end),            // 1-based incl == 0-based excl
-                            protein: Some(protein.clone()),
-                            ..existing.clone()
-                        },
-                    ));
+                    if let Some(existing) = cdot.get_transcript(acc) {
+                        corrections.push((
+                            acc.clone(),
+                            CdotTranscript {
+                                cds_start: Some(cds_start_0based), // 1-based incl → 0-based incl
+                                cds_end: Some(cds_end),            // 1-based incl == 0-based excl
+                                protein: Some(protein.clone()),
+                                ..existing.clone()
+                            },
+                        ));
+                    }
                 }
             }
         }
