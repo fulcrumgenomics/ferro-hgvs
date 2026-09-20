@@ -3732,6 +3732,41 @@ fn run_prepare(
     };
 
     prepare_references(&config)?;
+
+    // Write the prepared 2-bit sequence store sidecar into the reference dir, so
+    // `normalize`/`project` load it by convention and skip the per-access FASTA
+    // decode (~76% of runtime). Identity-neutral (like `.fai`), best-effort: a
+    // failure here does not fail `prepare`, since the text path still works.
+    // Honours --force/--skip-existing (a fresh matching sidecar is kept) and is
+    // announced under --dry-run like every other prepare step.
+    let sidecar = output_dir.join("sequence_store.pac");
+    if dry_run {
+        eprintln!(
+            "[dry-run] would build the 2-bit sequence store sidecar (after references): {}",
+            sidecar.display()
+        );
+    } else {
+        let manifest = output_dir.join("manifest.json");
+        if manifest.exists() {
+            use ferro_hgvs::reference::multi_fasta::{MultiFastaProvider, SidecarOutcome};
+            eprintln!("Ensuring 2-bit sequence store sidecar...");
+            match MultiFastaProvider::from_manifest(&manifest)
+                .and_then(|p| p.write_sequence_store_sidecar(output_dir, force))
+            {
+                Ok(SidecarOutcome::Built(path)) => {
+                    eprintln!("Wrote sequence store: {}", path.display())
+                }
+                Ok(SidecarOutcome::Kept(path)) => eprintln!(
+                    "Sequence store already current: {} (use --force to rebuild)",
+                    path.display()
+                ),
+                Err(e) => eprintln!(
+                    "Warning: could not build sequence store {} ({e}); skipping",
+                    sidecar.display()
+                ),
+            }
+        }
+    }
     Ok(())
 }
 
