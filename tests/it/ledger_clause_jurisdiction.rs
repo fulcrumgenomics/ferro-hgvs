@@ -590,6 +590,7 @@ fn record(
         question: format!("A synthetic record for {id}."),
         // Not read by the jurisdiction rule either; see the comment above.
         summary: None,
+        implemented_note: None,
         equivalence_classes: Vec::new(),
         guard: rulings::Guard::Declined("a synthetic record, enforced by this file".to_string()),
         // Not a house choice: every case here names a governing clause, which is

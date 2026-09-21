@@ -294,6 +294,24 @@ pub struct Record {
     /// contents list and `shadow_spec.rs` transcludes it into the Interpretation
     /// pages.
     pub summary: Option<String>,
+    /// A note on the gap between a decided ruling and what ferro ships today,
+    /// present only on the records that have one. `None` reads as "no known
+    /// implementation gap recorded" — not a guarantee of completeness.
+    ///
+    /// The `summary` states the DECISION; where a decision is only partly live —
+    /// implemented for one shape, one axis, or only under a candidate partition
+    /// arm — that shipped status lives in the `rationale`, and this field is a
+    /// pointer into it. It is **required to be a verbatim substring of the
+    /// record's `rationale`**, enforced at the parse boundary: the ledger's
+    /// recurring failure mode is one fact written in two places that then drift,
+    /// so this field may never be independently-composed prose. Edit the
+    /// rationale and the note must be re-derived in the same change, or the
+    /// parser refuses the ledger.
+    ///
+    /// Only a `decided` record may carry it — an `undecided` record has no ruling
+    /// whose implementation could lag. Exposed because
+    /// `normalization_contract_doc.rs` renders it as its own column.
+    pub implemented_note: Option<String>,
     /// The descriptions the record declares itself to apply to, verbatim, in the
     /// ledger's own order. Absent or `null` reads as none.
     ///
@@ -652,6 +670,36 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 _ => {}
             }
 
+            // The `implemented_note` contract. A note is a pointer INTO the
+            // rationale, never a second copy of it: it must be a verbatim
+            // substring, so that editing the rationale forces the note to be
+            // re-derived in the same change rather than drifting silently — the
+            // failure mode this ledger exists to prevent. Only a decided record
+            // can carry one, because only a decided ruling has an implementation
+            // that could lag.
+            let implemented_note =
+                optional_str(record, "implemented_note", &id).map(str::to_string);
+            if let Some(note) = implemented_note.as_deref() {
+                assert!(
+                    !note.trim().is_empty(),
+                    "record {id} has a blank `implemented_note`; omit the field where the ruling \
+                     ships in full rather than carrying an empty marker"
+                );
+                assert!(
+                    status == "decided",
+                    "record {id} carries an `implemented_note` but is {status:?}; an undecided \
+                     record has no ruling whose implementation could lag"
+                );
+                assert!(
+                    rationale.contains(note),
+                    "record {id}'s `implemented_note` is not a verbatim substring of its \
+                     `rationale`. The note is a pointer into the rationale, not a second copy: \
+                     keeping it a substring is what stops the two drifting apart. Quote the \
+                     rationale exactly, or update the rationale in the same change.\n  note: \
+                     {note:?}"
+                );
+            }
+
             let governing = optional_str(record, "governing", &id);
             let deviates_from: Vec<&str> = match record.get("deviates_from") {
                 None | Some(serde_json::Value::Null) => Vec::new(),
@@ -776,6 +824,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 question,
                 rationale,
                 summary,
+                implemented_note,
                 applies_to,
                 equivalence_classes,
                 guard,
@@ -918,6 +967,88 @@ fn a_decided_summary_with_a_clause_citation_is_rejected() {
 fn a_decided_summary_with_a_test_citation_is_rejected() {
     let mut document = one_valid_record();
     document["rulings"][0]["summary"] = serde_json::json!("Pinned by tests/it/foo.rs::bar.");
+    records_from_value(&document, "<test>");
+}
+
+// --------------------------------------------------------------------------
+// `implemented_note`.
+//
+// The field's whole purpose is the anti-drift invariant: a note is a verbatim
+// substring of its record's `rationale`, so it can never become an independent
+// third copy of a fact that then rots. The mutations below are that
+// specification — a note that is NOT a substring is refused, and so are the two
+// shapes (blank, undecided) that would read as a marker while stating nothing.
+// --------------------------------------------------------------------------
+
+/// A note that quotes the rationale verbatim parses and is exposed.
+#[test]
+fn an_implemented_note_that_is_a_rationale_substring_parses() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["implemented_note"] =
+        serde_json::json!("prose that cites no other record");
+    let records = records_from_value(&document, "<test>");
+    assert_eq!(
+        records[0].implemented_note.as_deref(),
+        Some("prose that cites no other record")
+    );
+}
+
+/// The anti-drift invariant: a note that is not a verbatim substring of the
+/// rationale is refused, because it is then a second copy free to drift.
+#[test]
+#[should_panic(expected = "not a verbatim substring of its `rationale`")]
+fn an_implemented_note_not_in_the_rationale_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["implemented_note"] =
+        serde_json::json!("a claim that appears nowhere in the rationale");
+    records_from_value(&document, "<test>");
+}
+
+/// A blank note is a marker that states nothing — omit the field instead.
+#[test]
+#[should_panic(expected = "blank `implemented_note`")]
+fn a_blank_implemented_note_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["implemented_note"] = serde_json::json!("   ");
+    records_from_value(&document, "<test>");
+}
+
+/// An `undecided` record cannot carry the note: it has no ruling whose
+/// implementation could lag.
+#[test]
+#[should_panic(expected = "carries an `implemented_note` but is")]
+fn an_implemented_note_on_an_undecided_record_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["status"] = serde_json::json!("undecided");
+    document["rulings"][0]["governing"] = serde_json::Value::Null;
+    document["rulings"][0]["clauses"] = serde_json::json!([
+        { "clause": "docs/a.md:1", "quote": "a quoted clause" },
+        { "clause": "docs/b.md:2", "quote": "another quoted clause" },
+    ]);
+    // An undecided record carries no summary; drop it so this reaches the
+    // implemented-note rule rather than the summary rule.
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record")
+        .remove("summary");
+    document["rulings"][0]["implemented_note"] =
+        serde_json::json!("prose that cites no other record");
+    records_from_value(&document, "<test>");
+}
+
+/// Absence reads as none, so every record predating the field is unaffected.
+#[test]
+fn an_absent_implemented_note_reads_as_none() {
+    let records = records_from_value(&one_valid_record(), "<test>");
+    assert!(records[0].implemented_note.is_none());
+}
+
+/// A non-string note is rejected rather than read as absent.
+#[test]
+#[should_panic(expected = "non-string `implemented_note`")]
+fn a_non_string_implemented_note_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["implemented_note"] = serde_json::json!(17);
     records_from_value(&document, "<test>");
 }
 
