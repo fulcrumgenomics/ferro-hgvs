@@ -349,14 +349,6 @@ const SCOPE_DISCLAIMERS: &[(&str, &str, &str)] = &[
          `r.` needs no row only because `general.md:44`'s quote names that axis",
     ),
     (
-        "delins-merge-vs-individual-gap-two-or-more",
-        "RNA",
-        "its 2026-08-17 (#2155) cross-reference paragraph reads \"That record originally scoped \
-         the axis question to `c.` alone (2026-08-11) and was WIDENED to every DNA axis — \
-         `c./g./m./n.`; `r.` still out — by operator ruling 2026-08-17 (#2155)\" — a statement \
-         that the RNA axis stays out of the (delegated) axis question, not a ruling on it",
-    ),
-    (
         "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
         "RNA",
         "its widen paragraph reads \"`r.` stays OUT, on the same jurisdiction ground the \
