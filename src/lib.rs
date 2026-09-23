@@ -32,6 +32,7 @@ pub mod cli;
 pub mod clinvar;
 pub mod commands;
 pub mod config;
+#[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod convert;
 pub mod coords;
