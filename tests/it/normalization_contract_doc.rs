@@ -11,9 +11,9 @@
 //!
 //! But the audience for those decisions is not only ferro's own test suite. A
 //! contributor deciding a new case, and a downstream consumer trying to predict
-//! what a string will normalize to, both need to read the ladder end to end, and
-//! a JSON `rationale` blob is a poor medium for that. The document is that
-//! reading.
+//! what a string will normalize to, both need to scan every ruling at once. The
+//! document is that index: one row per record — status, governing clause, and
+//! the record's own one-sentence summary — over the full reasoning in the ledger.
 //!
 //! # Why it is GENERATED rather than written
 //!
@@ -22,10 +22,11 @@
 //! hand-maintained copies of a normative rule is the failure mode this project
 //! has already hit, with the census constants and with the counts in
 //! `clause_ruling_index.rs`'s own header. Generation is the stronger of the two
-//! options offered, so it is the one taken — every question, verdict, clause and
-//! quote below is the record's own text, copied mechanically. Nothing in the
-//! rendered body is paraphrase, and there is no editorial pass in which a
-//! paraphrase could be introduced.
+//! options offered, so it is the one taken — each record's status, governing
+//! clause and one-sentence summary below is the record's own text, copied
+//! mechanically. Nothing in the rendered body is paraphrase, and there is no
+//! editorial pass in which a paraphrase could be introduced. The full reasoning,
+//! the clause quotes and any scope are not rendered here; they live in the ledger.
 //!
 //! The hand-authored part is the preamble, and it is authored **here**, in this
 //! module, so that it too has exactly one copy.
@@ -59,7 +60,6 @@
 //! renderer is a second place a status claim could go stale. Every id in the
 //! output arrives from the ledger at render time.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -263,26 +263,22 @@ fn render() -> String {
         open.len(),
         &shipped_default_partition_arm(),
     ));
-    out.push_str(&contents(&decided, &open));
     let _ = writeln!(out, "{RECORDS_HEADING}\n");
     let _ = writeln!(
         out,
-        "### Open questions\n\nThese are recorded conflicts that ferro has **not** settled. \
-         Whatever ferro currently does with them is the status quo, not a ruling, and must not \
-         be cited as one.\n"
+        "Every ruling record on one screen: its status, the clause that governs it where one \
+         applies (a decided record names its governing clause or, as a house choice, cites none; \
+         an open record names no authority), and a one-sentence statement of the ruling. Read the \
+         ruling, not the id \
+         — an id states the record's *question*, and at least one of the questions below is \
+         answered in the negative. An `open` record names a conflict ferro has **not** settled; \
+         whatever ferro does with that case today is the status quo, not a ruling, and must not \
+         be cited as one. The full reasoning, the clauses each record quotes, and any scope on \
+         the ruling live in the ledger itself, \
+         [`hgvs_spec_normalization_overrides.json`](../tests/fixtures/grammar/hgvs_spec_normalization_overrides.json); \
+         this document is an index into it, not a copy of it.\n"
     );
-    for record in &open {
-        out.push_str(&render_record(record));
-    }
-    let _ = writeln!(
-        out,
-        "### Decided\n\nEach heading is the record's id. Read the ruling rather than the id — an \
-         id states the record's *question*, and at least one of the questions below is answered \
-         in the negative.\n"
-    );
-    for record in &decided {
-        out.push_str(&render_record(record));
-    }
+    out.push_str(&render_index(&open, &decided));
 
     // Exactly one trailing newline, and no trailing whitespace on any line.
     // Not cosmetic: `end-of-file-fixer` and `trailing-whitespace` are wired as
@@ -335,15 +331,17 @@ before that.
 
 The HGVS recommendations are, in places, silent, ambiguous, or self-contradictory. A
 normalizer still has to emit one string. Where ferro has had to decide such a question, the
-decision is recorded as a **ruling record**, and this document is a rendering of every one of
-those records: its question, its verdict, the spec clauses it names, the text each clause was
-quoted against, and the reasoning in full.
+decision is recorded as a **ruling record**, and this document is an index of every one of
+those records: its status, the clause that governs it where one applies (a decided record names
+its governing clause or, as a house choice, cites none; an open record names no authority), and
+the record's own one-sentence statement of the ruling.
 
-It is generated, not written. Every question, verdict, clause and quote below is the record's
-own text, reproduced mechanically from
-[`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`](../tests/fixtures/grammar/hgvs_spec_normalization_overrides.json).
-The one-line summary beside each decided record in the contents list is the record's own
-`summary` field, copied verbatim; nothing here is paraphrased by the renderer.
+It is generated, not written. Each ruling summary is the record's own `summary` field, copied
+verbatim from
+[`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`](../tests/fixtures/grammar/hgvs_spec_normalization_overrides.json);
+nothing here is paraphrased by the renderer. The full reasoning behind each ruling, the spec
+clauses it quotes, the text each clause was quoted against, and any scope on the ruling are
+**not** reproduced here — they live in the ledger, which is what the build enforces.
 
 ## What this document is not
 
@@ -358,22 +356,25 @@ document has a bug.
 **It is not a substitute for the records.** It is a reading of them. The records are what the
 build enforces.
 
-**It is not a spec.** The HGVS recommendations are upstream, at
-[hgvs-nomenclature.org](https://hgvs-nomenclature.org/); the clause citations below are into
-the pinned `assets/hgvs-nomenclature` checkout, spelled as `path:line`.
+**It is not a spec.** The HGVS recommendations are upstream — rendered at
+[hgvs-nomenclature.org](https://hgvs-nomenclature.org/) and sourced from the
+`HGVSnomenclature/hgvs-nomenclature` repository that `assets/hgvs-nomenclature` vendors. Each
+governing clause below is spelled as `path:line` and links to that exact line in the **pinned**
+commit of that repository, so the citation resolves to the spec version ferro actually pins
+rather than to whatever the site currently shows.
 
-## How to read a record
+## How to read the index
 
 - **The id states the QUESTION, not the ruling, and the two can be opposites.** Read the
-  ruling. One record below is titled as the position it *rejects*.
+  ruling column, not the id. One record below is titled as the position it *rejects*.
 - **`undecided` is a first-class state**, not an oversight. An open record states a conflict
   and declines to settle it; whatever ferro does with that case today is the status quo, and
   citing the behaviour as a decision is the error the record exists to prevent.
-- **A decided record is often narrower than it sounds.** Several carry an explicit scope — to
-  one axis, to one direction, to one shape — inside the ruling text. The scope is part of the
-  ruling.
-- **Counter-evidence is recorded inside the ruling, not omitted from it.** Where the spec
-  argues the other way, the record says so and says why it was outweighed.
+- **A one-line ruling states the decision, not how to carry it out.** Many records add an
+  explicit scope — one axis, one direction, one shape — and the mechanism or tie-break that
+  turns the decision into an output; this index shows neither. Read it to scan every ruling,
+  and open the ledger record before *acting* on one. A summary that reads like a complete rule
+  may still be narrower, or more conditional, than it looks.
 
 ## Which build this describes
 
@@ -394,137 +395,141 @@ for the knob and its traps.
     out
 }
 
-/// The two id lists, so a reader arriving with an id can find it.
-fn contents(decided: &[&Record], open: &[&Record]) -> String {
+/// The index table: one row per record, open records first, then decided,
+/// each already sorted by id. The columns are the record's id, its status, the
+/// clause that governs it, and a one-sentence statement of the ruling.
+fn render_index(open: &[&Record], decided: &[&Record]) -> String {
+    let commit = pinned_spec_commit();
     let mut out = String::new();
-    let _ = writeln!(out, "## Contents\n");
-    let _ = writeln!(out, "**Open questions**\n");
-    for record in open {
-        let _ = writeln!(out, "- [`{}`](#{})", record.id, anchor(&record.id));
-    }
-    let _ = writeln!(out, "\n**Decided**\n");
-    for record in decided {
-        // Every decided record carries a summary — `generate_spec_fixture`
-        // refuses one without it — so this cannot be `None`.
-        let summary = record
-            .summary
-            .as_deref()
-            .expect("decided records carry a summary (enforced by generate_spec_fixture)");
+    let _ = writeln!(out, "| Record | Status | Governing clause | Ruling |");
+    let _ = writeln!(out, "|---|---|---|---|");
+    for record in open.iter().chain(decided.iter()) {
         let _ = writeln!(
             out,
-            "- [`{}`](#{}) — {}",
+            "| `{}` | {} | {} | {} |",
             record.id,
-            anchor(&record.id),
-            summary
+            record.status,
+            governing_cell(record, &commit),
+            ruling_cell(record),
         );
     }
     let _ = writeln!(out);
     out
 }
 
-/// GitHub's anchor for a heading whose whole text is a backticked id.
-///
-/// Backticks are dropped and the id is already lowercase kebab-case, so the
-/// anchor is the id itself. Kept as a function so the assumption has one home
-/// and is stated where it is relied on.
-fn anchor(id: &str) -> String {
-    id.to_string()
+/// The governing-clause cell. A decided record either names a governing clause
+/// or is a house choice that cites none; an open record names no authority. The
+/// deviated-from and also-cited clauses are the ledger's to carry, not this
+/// index's. Each named clause links to its exact line in the pinned spec
+/// checkout (see [`clause_link`]).
+fn governing_cell(record: &Record, commit: &str) -> String {
+    if record.house_choice.is_some() {
+        return "house choice (cites none)".to_string();
+    }
+    let clauses: Vec<String> = record
+        .citations
+        .iter()
+        .filter(|c| c.role == Role::Governing)
+        .map(|c| clause_link(&c.clause, commit))
+        .collect();
+    if clauses.is_empty() {
+        "—".to_string()
+    } else {
+        clauses.join(", ")
+    }
 }
 
-/// One record.
-fn render_record(record: &Record) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "#### `{}`\n", record.id);
-    let _ = writeln!(out, "**Status:** {}\n", record.status);
-    let _ = writeln!(out, "**The question.** {}\n", record.question.trim());
+/// The upstream spec repository's blob tree, so a `path:line` clause citation
+/// can link to the exact source line it names.
+const SPEC_REPO_BLOB_BASE: &str = "https://github.com/HGVSnomenclature/hgvs-nomenclature/blob";
 
-    if !record.applies_to.is_empty() {
-        let _ = writeln!(
-            out,
-            "**Applies to.** {}\n",
-            record
-                .applies_to
-                .iter()
-                .map(|d| format!("`{d}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+/// The pinned `assets/hgvs-nomenclature` commit, read from the superproject's
+/// recorded gitlink so a clause link points at exactly the spec version ferro
+/// pins — not at a moving branch, where the line numbers would drift.
+///
+/// Derived, never hardcoded: a submodule bump changes it and fails
+/// [`the_published_document_is_current`] until the document is regenerated, so a
+/// link can never survive pointing at a version the tree no longer pins (the
+/// same discipline as the derived default-partition arm). Reading the gitlink
+/// out of `HEAD`'s tree means the submodule need not even be checked out.
+///
+/// This assumes a git checkout: it shells `git` and reads `HEAD`, so it panics
+/// rather than skips in an environment without a `.git` (a source tarball or
+/// vendored tree). That is acceptable because this whole suite is a `dev`-only
+/// generator gate that already resolves everything relative to the source tree,
+/// and CI runs it inside the checkout.
+fn pinned_spec_commit() -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root())
+        .args(["rev-parse", "HEAD:assets/hgvs-nomenclature"])
+        .output()
+        .expect("run `git rev-parse HEAD:assets/hgvs-nomenclature`");
+    assert!(
+        output.status.success(),
+        "`git rev-parse HEAD:assets/hgvs-nomenclature` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sha = String::from_utf8(output.stdout)
+        .expect("git prints utf-8")
+        .trim()
+        .to_string();
+    assert!(
+        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+        "expected a 40-char submodule commit sha, got {sha:?}"
+    );
+    sha
+}
+
+/// A clause citation rendered as a link to its source line, or as plain
+/// backticked text if it is not in `path:line` shape. The link label stays the
+/// `path:line` string a reader recognises; only the target is added.
+fn clause_link(clause: &str, commit: &str) -> String {
+    match spec_url(clause, commit) {
+        Some(url) => format!("[`{clause}`]({url})"),
+        None => format!("`{clause}`"),
     }
+}
 
-    // A house choice and an open question both reach the loop below with no
-    // governing clause, and the reason differs completely — one has chosen and
-    // has no clause to choose *under*, the other has a clause and has not
-    // chosen. The published note must not tell the reader the wrong one, so the
-    // house-choice case is stated here and the empty-governing note is suppressed
-    // for it.
-    let empty_governing_note = match &record.house_choice {
-        Some(choice) => {
-            let _ = writeln!(
-                out,
-                "**House choice.** This ruling is the project's own, made under {} where the \
-                 recommendations do not decide. It cites no governing clause and must never be \
-                 quoted as conformance.\n",
-                choice.under.label()
-            );
-            let _ = writeln!(
-                out,
-                "**Considered and rejected.** {}\n",
-                collapse(&choice.considered_and_rejected)
-            );
-            None
-        }
-        None => Some(
-            "**Governing clause.** None. An open record names a conflict without choosing a \
-             side, and the generator refuses to build one that names an authority.",
-        ),
+/// A GitHub source URL for a `path:line` (or `path:start-end`) clause citation
+/// at the pinned spec `commit`. `None` if the clause is not in that shape —
+/// including when the line component is not numeric, so a malformed citation
+/// falls back to plain text rather than minting a broken `#L…` anchor.
+///
+/// `?plain=1` forces GitHub's source view: a Markdown file otherwise renders
+/// rich, where a `#L…` anchor resolves to nothing. The plain view shows line
+/// numbers and highlights the cited span.
+fn spec_url(clause: &str, commit: &str) -> Option<String> {
+    let (path, lines) = clause.rsplit_once(':')?;
+    if path.is_empty() {
+        return None;
+    }
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let anchor = match lines.split_once('-') {
+        Some((start, end)) if numeric(start) && numeric(end) => format!("#L{start}-L{end}"),
+        None if numeric(lines) => format!("#L{lines}"),
+        _ => return None,
     };
+    Some(format!(
+        "{SPEC_REPO_BLOB_BASE}/{commit}/{path}?plain=1{anchor}"
+    ))
+}
 
-    for (role, heading, empty_note) in [
-        (
-            Role::Governing,
-            "**Governing clause.**",
-            empty_governing_note,
-        ),
-        (Role::DeviatesFrom, "**Deviates from.**", None),
-        (Role::Cited, "**Also cited.**", None),
-    ] {
-        let clauses: Vec<&_> = record.citations.iter().filter(|c| c.role == role).collect();
-        if clauses.is_empty() {
-            if let Some(note) = empty_note {
-                let _ = writeln!(out, "{note}\n");
-            }
-            continue;
-        }
-        let _ = writeln!(out, "{heading}\n");
-        for citation in clauses {
-            let _ = writeln!(
-                out,
-                "- `{}`\n  > {}",
-                citation.clause,
-                collapse(&citation.quote)
-            );
-        }
-        let _ = writeln!(out);
+/// The ruling cell. A decided record renders its one-sentence `summary`
+/// verbatim; an open record has no ruling to state, so its question stands in,
+/// marked as unsettled. Both are collapsed to one line and their pipes escaped
+/// so a Markdown table row is not broken.
+fn ruling_cell(record: &Record) -> String {
+    match record.summary.as_deref() {
+        Some(summary) => cell(summary),
+        None => format!("*Undecided.* {}", cell(record.question.trim())),
     }
+}
 
-    if !record.equivalence_classes.is_empty() {
-        let _ = writeln!(
-            out,
-            "**Convergence pinned by equivalence class.** {}\n",
-            record
-                .equivalence_classes
-                .iter()
-                .map(|c| format!("`{c}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-
-    let _ = writeln!(out, "**The ruling.**\n");
-    for paragraph in record.rationale.trim().split("\n\n") {
-        let _ = writeln!(out, "{}\n", collapse(paragraph));
-    }
-    out
+/// One table cell: whitespace collapsed to a single line, and `|` escaped so it
+/// does not terminate the cell.
+fn cell(text: &str) -> String {
+    collapse(text).replace('|', "\\|")
 }
 
 /// A quote or paragraph on one line, so a Markdown blockquote does not break
@@ -580,11 +585,11 @@ fn the_published_document_is_current() {
     }
 }
 
-/// Every record reaches the document, under a heading that states its status.
+/// Every record reaches the index as a row that states its status.
 ///
-/// The rendering groups by status, so a record with an unexpected status would
-/// be dropped rather than mis-filed. `render` asserts the partition; this
-/// asserts the result, which is the property a reader depends on.
+/// The table has no structural grouping, so a record must appear as its own row
+/// carrying its status or it silently vanishes from this document. `render`
+/// asserts the status partition; this asserts the rendered result.
 #[test]
 fn every_record_is_published_with_its_status() {
     let rendered = render();
@@ -594,78 +599,47 @@ fn every_record_is_published_with_its_status() {
         "the ledger holds no records, so this document would be vacuous"
     );
 
-    let statuses: BTreeMap<&str, &str> = records
-        .iter()
-        .map(|r| (r.id.as_str(), r.status.as_str()))
-        .collect();
-    for (id, status) in &statuses {
-        let heading = format!("#### `{id}`\n");
+    for record in &records {
+        let row_prefix = format!("| `{}` | {} |", record.id, record.status);
         assert!(
-            rendered.contains(&heading),
-            "record {id} has no heading in {DOC_RELATIVE_PATH}"
-        );
-        let body = rendered
-            .split_once(&heading)
-            .expect("the heading was just found")
-            .1;
-        assert!(
-            body.starts_with(&format!("\n**Status:** {status}\n")),
-            "record {id} is published without its `{status}` status"
-        );
-    }
-
-    let (open_half, decided_half) = rendered
-        .split_once("### Decided")
-        .expect("the document has a Decided section");
-    for (id, status) in &statuses {
-        let half = if *status == "decided" {
-            decided_half
-        } else {
-            open_half
-        };
-        assert!(
-            half.contains(&format!("#### `{id}`")),
-            "record {id} is `{status}` but is not rendered in the `{status}` half"
+            rendered.contains(&row_prefix),
+            "record {} is not published as a `{}` row in {DOC_RELATIVE_PATH}",
+            record.id,
+            record.status
         );
     }
 }
 
-/// Every record's question and ruling reach the reader, not just its id.
+/// The ruling reaches the reader, not just the id: a decided record shows its
+/// summary, an open record its question, and every record its governing clause.
 ///
-/// A document that published ids and clause citations alone would look complete
-/// and answer nothing — which is the state #1552 was filed about.
+/// A document that published ids alone would look complete and answer nothing —
+/// the state #1552 was filed about. The full quotes and reasoning are the
+/// ledger's; this index publishes the answer and the authority.
 #[test]
-fn every_record_publishes_its_question_and_its_ruling() {
+fn every_record_publishes_its_ruling_and_governing_clause() {
     let rendered = render();
     for record in records() {
-        assert!(
-            rendered.contains(&collapse(&record.question)),
-            "record {} is published without its question",
-            record.id
-        );
-        let first_paragraph = collapse(
-            record
-                .rationale
-                .trim()
-                .split("\n\n")
-                .next()
-                .expect("split always yields one element"),
-        );
-        assert!(
-            rendered.contains(&first_paragraph),
-            "record {} is published without the opening of its ruling",
-            record.id
-        );
-        for citation in &record.citations {
+        match record.summary.as_deref() {
+            Some(summary) => assert!(
+                rendered.contains(&cell(summary)),
+                "decided record {} is published without its ruling summary",
+                record.id
+            ),
+            None => assert!(
+                rendered.contains(&format!("*Undecided.* {}", cell(record.question.trim()))),
+                "open record {} is published without its question",
+                record.id
+            ),
+        }
+        for citation in record
+            .citations
+            .iter()
+            .filter(|c| c.role == Role::Governing)
+        {
             assert!(
                 rendered.contains(&format!("`{}`", citation.clause)),
-                "record {} cites {} without publishing it",
-                record.id,
-                citation.clause
-            );
-            assert!(
-                rendered.contains(&collapse(&citation.quote)),
-                "record {} publishes {} without the text it was quoted against",
+                "record {} names governing clause {} without publishing it",
                 record.id,
                 citation.clause
             );
@@ -673,27 +647,28 @@ fn every_record_publishes_its_question_and_its_ruling() {
     }
 }
 
-/// The contents list carries each decided record's one-sentence summary, so
-/// a reader can scan every ruling on one screen. An id states the question,
-/// not the answer, and the previous place this scan existed was a
-/// hand-maintained agent-guidance table that drifted three times.
+/// The index carries each decided record's full row — id, status, governing
+/// clause, and its one-sentence summary — so a reader can scan every ruling on
+/// one screen. An id states the question, not the answer, and the previous
+/// place this scan existed was a hand-maintained agent-guidance table that
+/// drifted three times.
 #[test]
-fn the_contents_list_carries_every_decided_summary() {
+fn the_index_carries_every_decided_summary() {
     let rendered = render();
-    let contents_section = rendered
-        .split("## Contents")
-        .nth(1)
-        .and_then(|rest| rest.split(RECORDS_HEADING).next())
-        .expect("the contents list sits between its heading and the records heading");
     for record in records().iter().filter(|r| r.status == "decided") {
         let summary = record
             .summary
             .as_deref()
             .unwrap_or_else(|| panic!("decided record {} has no summary", record.id));
-        let line = format!("- [`{}`](#{}) — {}", record.id, anchor(&record.id), summary);
+        let row = format!(
+            "| `{}` | decided | {} | {} |",
+            record.id,
+            governing_cell(record, &pinned_spec_commit()),
+            cell(summary)
+        );
         assert!(
-            contents_section.contains(&line),
-            "contents list is missing the summary line for {}",
+            rendered.contains(&row),
+            "index is missing the row for decided record {}",
             record.id
         );
     }
@@ -782,6 +757,64 @@ fn kebab_case_converts_every_declared_arm_name() {
     assert_eq!(kebab_case("Shadow"), "shadow");
     assert_eq!(kebab_case("Canonical"), "canonical");
     assert_eq!(kebab_case("CanonicalCoalesced"), "canonical-coalesced");
+}
+
+#[test]
+fn spec_url_links_to_the_pinned_source_line() {
+    assert_eq!(
+        spec_url("docs/recommendations/DNA/delins.md:81", "0123abc").as_deref(),
+        Some(
+            "https://github.com/HGVSnomenclature/hgvs-nomenclature/blob/0123abc/\
+             docs/recommendations/DNA/delins.md?plain=1#L81"
+        )
+    );
+    assert_eq!(
+        spec_url("docs/recommendations/DNA/delins.md:44-47", "0123abc").as_deref(),
+        Some(
+            "https://github.com/HGVSnomenclature/hgvs-nomenclature/blob/0123abc/\
+             docs/recommendations/DNA/delins.md?plain=1#L44-L47"
+        )
+    );
+    assert_eq!(spec_url("not-a-citation", "0123abc"), None);
+    assert_eq!(spec_url("trailing-colon:", "0123abc"), None);
+    // A non-numeric line component is not a citation: fall back to plain text
+    // rather than mint a broken `#L…` anchor.
+    assert_eq!(spec_url("docs/foo.md:bar", "0123abc"), None);
+    assert_eq!(spec_url("docs/foo.md:12-x", "0123abc"), None);
+}
+
+/// Every governing clause in the document links to its exact line in the pinned
+/// spec commit, so a reader clicks through to the authority rather than
+/// resolving a `path:line` by hand. Also asserts the check is non-vacuous.
+#[test]
+fn governing_clauses_link_to_the_pinned_spec() {
+    let rendered = render();
+    let commit = pinned_spec_commit();
+    let mut checked = 0;
+    for record in records() {
+        for citation in record
+            .citations
+            .iter()
+            .filter(|c| c.role == Role::Governing)
+        {
+            let url = spec_url(&citation.clause, &commit).unwrap_or_else(|| {
+                panic!(
+                    "governing clause {} is not a `path:line` citation",
+                    citation.clause
+                )
+            });
+            assert!(
+                rendered.contains(&format!("[`{}`]({url})", citation.clause)),
+                "governing clause {} is not published as a link to the pinned spec",
+                citation.clause
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 0,
+        "no governing clause was checked — the document or the role filter is wrong"
+    );
 }
 
 /// The rendered document is already in the shape the file-hygiene hooks want.

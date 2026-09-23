@@ -81,7 +81,7 @@ implementation gap, not a disagreement with the ruling; #2236 tracks the render-
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum.
+> **[inverted-duplication-is-derived-as-ins-range-inv](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — An inverted duplication is written as 'ins<range>inv', naming the span the inverted copy came from, rather than expanded to reverse-complemented literal bases; whether a payload counts as an inverted copy at all is gated by a house coincidence-probability floor, not any spec-stated minimum — and it is wired today only in normalize_genome, so c./n./r./m. still emit literals.
 <!-- why:END:inverted-duplication-is-derived-as-ins-range-inv -->
 
 </details>

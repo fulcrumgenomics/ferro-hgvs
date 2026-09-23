@@ -128,7 +128,7 @@ pieces, which then shift.
 <details class="ss-why"><summary>Why ferro reads it this way</summary>
 
 <!-- why:START -->
-> **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
+> **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro applies the edit set to the reference and re-derives the description from the resulting sequence — subject to every explicit spec tie-break, and breaking any remaining tie toward the already-shipped form — rather than preserving the input's spelling.
 <!-- why:END:canonical-form-choice-when-both-legal -->
 
 </details>
@@ -187,7 +187,7 @@ stated-flank twins, since `NM_004006.3`'s `r.775_777` is `aaa` and has no coinci
 >
 > **[unequal-length-block-a-placed-gap-is-not-a-separation](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — A lone unequal-length net-deletion delins whose payload merely coincides with the reference, and whose every member other than the placed gap would itself render as a delins, is kept whole on every DNA axis (c./g./m./n., but not r.) rather than split at that coincidence into a separate residual member.
 >
-> **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are written as one delins, whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled.
+> **[codon-carve-out-shape-restriction](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together alter a single amino acid are ruled one delins whatever the edit types — because "together affecting one amino acid" is a fact about the resulting sequence, not about how the input was spelled — though the coding-codon pass currently implements only the substitution/unchanged-base/substitution triplet.
 <!-- why:END:delins-payload-coincidence-carve-out-is-coding-dna-scoped,unequal-length-block-a-placed-gap-is-not-a-separation,codon-carve-out-shape-restriction -->
 
 </details>
@@ -238,7 +238,7 @@ instead. `NM_004006.3`'s codon 48 is `agg`, not the spec's `cga`, so the rows us
 <!-- why:START -->
 > **[delins-codon-carve-out-gap-one](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — Two changes one nucleotide apart that together affect a single amino acid are written as one delins on the coding sequence, the explicit exception the spec makes to describing them individually.
 >
-> **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro derives the form from the resulting sequence rather than preserving the input's spelling.
+> **[canonical-form-choice-when-both-legal](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/docs/NORMALIZATION_CONTRACT.md)** — When two descriptions of one variant are both legal and no clause chooses between them, ferro applies the edit set to the reference and re-derives the description from the resulting sequence — subject to every explicit spec tie-break, and breaking any remaining tie toward the already-shipped form — rather than preserving the input's spelling.
 <!-- why:END:delins-codon-carve-out-gap-one,canonical-form-choice-when-both-legal -->
 
 </details>
