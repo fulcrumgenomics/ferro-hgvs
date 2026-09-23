@@ -2419,16 +2419,18 @@ mod tests {
         // R = A or G (purine)
         let (remaining, edit) = parse_na_edit("A>R").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Substitution { alternative, .. } = edit {
-            assert_eq!(alternative, Base::R);
-        }
+        let NaEdit::Substitution { alternative, .. } = &edit else {
+            panic!("expected `NaEdit::Substitution {{ alternative, .. }}`, got {edit:?}");
+        };
+        assert_eq!(*alternative, Base::R);
 
         // Y = C or T (pyrimidine)
         let (remaining, edit) = parse_na_edit("C>Y").unwrap();
         assert_eq!(remaining, "");
-        if let NaEdit::Substitution { alternative, .. } = edit {
-            assert_eq!(alternative, Base::Y);
-        }
+        let NaEdit::Substitution { alternative, .. } = &edit else {
+            panic!("expected `NaEdit::Substitution {{ alternative, .. }}`, got {edit:?}");
+        };
+        assert_eq!(*alternative, Base::Y);
     }
 
     #[test]
@@ -3194,8 +3196,8 @@ mod tests {
 
         // `ins[ATC]` likewise collapses.
         let (_, edit) = parse_na_edit("ins[ATC]").unwrap();
-        let NaEdit::Insertion { sequence } = edit else {
-            panic!("expected insertion");
+        let NaEdit::Insertion { sequence } = &edit else {
+            panic!("expected `NaEdit::Insertion {{ sequence }}`, got {edit:?}");
         };
         assert!(
             matches!(sequence, InsertedSequence::Literal(_)),
@@ -3209,8 +3211,8 @@ mod tests {
         // repeat bracket stays `Complex` (the issue confirms `ins[180_188]` is
         // unaffected).
         let (_, edit) = parse_na_edit("ins[180_188]").unwrap();
-        let NaEdit::Insertion { sequence } = edit else {
-            panic!("expected insertion");
+        let NaEdit::Insertion { sequence } = &edit else {
+            panic!("expected `NaEdit::Insertion {{ sequence }}`, got {edit:?}");
         };
         assert!(
             matches!(&sequence, InsertedSequence::Complex(parts)
@@ -3219,8 +3221,8 @@ mod tests {
         );
 
         let (_, edit) = parse_na_edit("ins[A[10]]").unwrap();
-        let NaEdit::Insertion { sequence } = edit else {
-            panic!("expected insertion");
+        let NaEdit::Insertion { sequence } = &edit else {
+            panic!("expected `NaEdit::Insertion {{ sequence }}`, got {edit:?}");
         };
         assert!(
             matches!(&sequence, InsertedSequence::Complex(parts)
@@ -3230,8 +3232,8 @@ mod tests {
 
         // A multi-element literal bracket also stays Complex.
         let (_, edit) = parse_na_edit("ins[AT;C]").unwrap();
-        let NaEdit::Insertion { sequence } = edit else {
-            panic!("expected insertion");
+        let NaEdit::Insertion { sequence } = &edit else {
+            panic!("expected `NaEdit::Insertion {{ sequence }}`, got {edit:?}");
         };
         assert!(
             matches!(&sequence, InsertedSequence::Complex(parts) if parts.len() == 2),
