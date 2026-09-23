@@ -606,6 +606,7 @@ knowledge_base:
       - "CLAUDE.md"
       - "CONTRIBUTING.md"
       - "docs/TESTING.md"
+      - "docs/RELEASE.md"
       - "docs/ORACLES.md"
       - "docs/READING_THE_SPEC.md"
       - "docs/CONFORMANCE_HARNESS_DESIGN.md"

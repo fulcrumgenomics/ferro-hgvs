@@ -228,7 +228,7 @@ type Row = (u64, bool, &'static str, &'static str);
 /// side. Measured on this base; see the module docs.
 ///
 /// **These are change detectors, not conformance expectations.** No ruling
-/// blesses any string in this table, and the repository `CONTRIBUTING.md` is explicit
+/// blesses any string in this table, and `docs/TESTING.md` is explicit
 /// that pinning today's output is not an adjudication. What the table is *for* is
 /// the cross-axis disagreement it makes visible — 14 of 14, unanimous — and the
 /// two `same_codon == false` rows, which refute the shared-codon explanation of

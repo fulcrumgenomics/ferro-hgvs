@@ -493,11 +493,10 @@ fn workflow_files() -> Vec<(String, String)> {
 ///
 /// # The set is derived, never restated
 ///
-/// An earlier revision asserted `wrapped >= 6`, which is the shape `CONTRIBUTING.md`'s
-/// "Assert the property. Measure the count. Never let a count BE the property"
-/// names as a change detector for the literal rather than a guard — and its own
-/// failure message told the reader to edit the number, which that section calls
-/// "the defect, not a mitigation".
+/// An earlier revision asserted `wrapped >= 6`, which `docs/TESTING.md` ("Writing
+/// a test") calls a change detector for the literal rather than a guard — and its
+/// own failure message told the reader to edit the number, which that section
+/// calls "the defect, not a mitigation".
 ///
 /// So the population is computed instead. `--archive-file` appears on two kinds
 /// of line, and the split is what makes the property statable: `nextest archive`

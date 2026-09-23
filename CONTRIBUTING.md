@@ -1,48 +1,30 @@
 # Contributing to ferro-hgvs
 
-Thank you for contributing to ferro-hgvs.
+Thank you for contributing to ferro-hgvs. This page covers what you need for a first PR. The
+detail lives in the pages listed under [Where things are documented](#where-things-are-documented).
 
-## Getting started
+## Setup
 
-### Prerequisites
-
-- Rust: the toolchain pinned in `rust-toolchain.toml`, which rustup installs for you. The
-  minimum supported version is `rust-version` in `Cargo.toml`.
-- Git
-- [cargo-nextest](https://nexte.st/) (`cargo install cargo-nextest`)
-- [pre-commit](https://pre-commit.com/)
-- [uv](https://docs.astral.sh/uv/) and Python 3.10+ (for Python development)
-
-### Setup
+You need Rust (rustup installs the toolchain pinned in `rust-toolchain.toml`),
+[cargo-nextest](https://nexte.st/), [pre-commit](https://pre-commit.com/), and, for the Python
+bindings, [uv](https://docs.astral.sh/uv/) with Python 3.10+.
 
 ```bash
 git clone https://github.com/fulcrumgenomics/ferro-hgvs.git
 cd ferro-hgvs
 git submodule update --init assets/hgvs-nomenclature   # the pinned HGVS spec
-scripts/fetch-test-fixtures.sh                         # the bulk test corpora
+scripts/fetch-test-fixtures.sh                         # the bulk test corpora (optional)
 pre-commit install                                     # commit and pre-push hooks
-cargo build
 cargo nextest run --features dev
 ```
 
-`dev` is the Cargo feature that turns on the feature-gated tests, examples and
-generators. It does not include `python`/`extension-module` (build those with maturin,
-below), `hgvs-rs` (CI runs it in its own job), `slow-tests` (opt-in; no CI job runs it) or
-`dhat-heap`. The feature flags are
-declared in `Cargo.toml`.
+`dev` is the Cargo feature that turns on the feature-gated tests, examples and generators;
+the integration tests do not build without it. Skipping the corpora fetch is safe, but a few
+suites then pass without testing anything; `docs/TESTING.md` explains which, and how to make
+them fail instead.
 
-**The bulk corpora are not in the git tree.** Four large HGVS corpora are attached to the
-`test-fixtures-v1` GitHub release as downloadable assets. These were moved from Git LFS
-due to bandwidth quota limitations. `scripts/fetch-test-fixtures.sh` downloads the four
-files over HTTPS with no token, so it works on a forked-PR runner, and checks each one
-against `tests/fixtures/CHECKSUMS.sha256`; all digests must match.
-
-Skipping the fetch is safe, but `clinvar_hgvs_tests`, `cmrg_exhaustive_tests`,
-`paraphase_exhaustive_tests` and `normalize_axis_preserving` then report PASS without
-testing anything. [Testing](#testing) has the flag that makes them fail instead.
-`tests/fixtures/README.md` covers provenance and regeneration.
-
-### Python bindings setup
+For the Python bindings, build with maturin, never with plain `cargo build`, and always name
+both features (the reason is on the `extension-module` feature in `Cargo.toml`):
 
 ```bash
 uv sync --group dev
@@ -50,605 +32,112 @@ uv run maturin develop --features python,extension-module
 uv run pytest
 ```
 
-When you change the Python dependencies in `pyproject.toml`, run `uv lock` and commit the
-updated `uv.lock`. CI uses `--locked` and fails if the lockfile is out of date.
+If you change the Python dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`.
 
-#### Rules for building the bindings
-
-1. **Build an importable module with `maturin`, never with `cargo build --features python`.**
-   A plain cargo build gives a cdylib that is not a wheel, and on macOS it may not link.
-   Maturin supplies the link flags.
-
-2. **Name both features on every `maturin` command: `--features python,extension-module`.**
-   A `--features` flag replaces the `[tool.maturin] features` default in `pyproject.toml`;
-   it does not add to it. A wheel built without `extension-module` still works, but only
-   because maturin sets an env var that pyo3 honours, so its linkage would depend on which
-   maturin ran. Keep the pyproject default too: `pip install .`, `python -m build` and `uv`
-   pass no flag and rely on it.
-
-3. **Run the Rust tests in `src/python.rs` under nextest, scoped, with `--no-tests=fail`,
-   and with `--features python` alone.** The lib suite is not safe in one process, and a
-   filter typo under `cargo test` passes with zero tests run. Do not add `extension-module`
-   here: it stops the test binary linking libpython. The binary loads libpython at startup,
-   so this needs a Python built with a shared library; the `Python Wheel Test` job in
-   `ci.yml` shows the loader setup.
-
-4. **`cargo check --features python` and `cargo clippy --features python` verify that the
-   bindings compile.** They do not link and produce no module.
+## Before you push
 
 ```bash
-cargo check --features python        # typecheck the bindings (does not link)
-cargo clippy --features python       # lint the bindings (does not link)
-cargo nextest run --features python --lib --no-tests=fail -E 'test(python::tests::)'
+cargo fmt --all
+cargo clippy --workspace --features dev --all-targets -- -D warnings
+cargo clippy --all-features --all-targets -- -D warnings
+cargo clippy --release -- -D warnings
+cargo nextest run --features dev
+cargo test --doc --features dev        # nextest does not run doctests
 ```
 
-Why `extension-module` is a separate feature is recorded on its declaration in
-`Cargo.toml` and in the `[tool.maturin]` comment in `pyproject.toml`.
+These are the checks CI runs; `.github/workflows/ci.yml` is the source if they drift. A PR
+that changes Python code is also checked with `uv run poe check-lint`, `check-format` and
+`check-typing`, and one that edits a workflow with `zizmor` and `actionlint`. Document every
+public API with a doc comment.
 
-## Development workflow
+## Opening a PR
 
-### Sources of truth
+- **Give the PR a conventional-commit title**, such as `fix(normalize): correct boundary
+  detection for UTR regions`. PRs are squash-merged, so the title becomes the commit on `main`
+  and the changelog entry. Types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`,
+  `chore`. Branch names and branch commits do not matter.
+- **Put `Closes #N` in the description** when the PR resolves an issue.
+- **Add a `Representation-Change:` line to the description** if the PR touches a watched
+  directory. See the next section.
+- **A maintainer merges through the merge queue**, which re-runs the required checks against
+  the latest `main`. If the queue drops a green PR without saying why, look at the
+  `Merge commit signature` check: a description line that starts with a git commit-header word
+  such as `committer` breaks the squash commit's signature. The check's log lists those lines.
 
-Each topic below has one authoritative source. Do not copy its content into other documents.
+## Declaring a representation change
 
-| thing | authoritative source |
+Downstream users store data keyed on ferro's normalized output, so a change to that output
+matters even when it is a bug fix. The rule behind this section is rule 7 of the
+[normalization rules](docs/src/reference/normalization-rules.md).
+
+If your PR touches a watched directory, the `Representation change declared` check requires a
+`Representation-Change:` line in the PR description. The directories are `WATCHED_PREFIXES` in
+`scripts/check_representation_change.py`, and the check's message for a missing trailer
+lists them, along with the other words that decline. If the change cannot move output,
+decline, optionally with a reason:
+
+```
+Representation-Change: none. Tests only.
+```
+
+If output can move, say so, even when the change is a fix, and give four facts:
+
+1. which forms moved, old and new;
+2. in which direction, toward or away from the form that already ships;
+3. roughly how many rows moved, and in which corpus;
+4. whether the affected inputs were previously rejected or previously accepted. Only a
+   previously accepted input has stored data to migrate.
+
+Do not name a release version ("to reproduce pre-vX.Y.Z output"); say "to reproduce output
+from before this change". Which release will carry the change is not known when you write it.
+
+```
+Representation-Change: c.<cds_end>_*1ins<A> now renders as
+  c.<cds_end>delins<ref ++ A>. ~57 of 7,296 rows of the junction-spanning corpus.
+  Toward the already-shipped form. Previously-accepted inputs.
+```
+
+Write the line at the start of a line with no formatting around it (no backticks, quote marker
+or bullet), and indent any continuation lines. Do not decline and then describe a move. To
+measure what moved, the header of `examples/dump_normalized_corpus.rs` shows how to compare
+two revisions. The full parsing rules are in the docstrings of
+`scripts/check_representation_change.py`, and `docs/RELEASE.md` describes how a trailer reaches
+the changelog.
+
+## Tests
+
+`docs/TESTING.md` covers running, writing and organizing tests. The short version:
+
+- Integration tests go in `tests/it/`, one module per file, declared as a `mod` in
+  `tests/it/main.rs`, or they never run.
+- Generate test data in the test. Do not add new committed fixtures.
+- Use `cargo nextest`, not `cargo test`, except for doctests.
+- Assert the property you care about, not a number that happens to hold today, and check that
+  your test can fail.
+
+## Normalization decisions
+
+A decision about what the *correct* normalization output is must be recorded in the same PR,
+as a ruling record or a pinned test that cites the spec clause. `docs/TESTING.md` explains
+where each kind of decision goes and what to regenerate after editing the ruling ledger.
+
+## Where things are documented
+
+Each topic has one home. Link to it rather than copying it.
+
+| topic | where |
 |---|---|
 | normalization rules | `docs/src/reference/normalization-rules.md` |
-| ruling records and equivalence classes | `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, rendered into the generated `docs/NORMALIZATION_CONTRACT.md` |
-| decline words and watched directories | `scripts/check_representation_change.py`, pinned to `release-plz.toml` and this file |
-| test recipes | `docs/TESTING.md` |
-| what CI runs | `.github/workflows/ci.yml` |
-| how to read the spec | `docs/READING_THE_SPEC.md` |
+| ruling records | `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, rendered into `docs/NORMALIZATION_CONTRACT.md` |
+| reading the HGVS spec | `docs/READING_THE_SPEC.md` |
+| running and writing tests, fixtures, recording decisions, editing the ledger | `docs/TESTING.md` |
 | oracle suites | `docs/ORACLES.md` |
+| what CI runs | `.github/workflows/ci.yml` |
+| representation-change check | `scripts/check_representation_change.py` |
+| changelog and releases | `docs/RELEASE.md` |
 | tool-support tables | `docs/tool_support_matrix.json` |
-| changelog | generated by release-plz from the commit history |
+| generator rules (`CaptureLedger`) | `tests/it/generator_completeness.rs`, `src/conformance/completeness.rs` |
 | agent operating rules | `CLAUDE.md` |
-
-### Making changes
-
-1. Create a branch. Any name works; the PR title, not the branch, becomes the commit.
-2. Write your code, add tests, and document every public API with a doc comment.
-3. Run the tests: `cargo nextest run --features dev`, and the doctests, which nextest does
-   not run: `cargo test --doc --features dev`.
-4. Format and lint. These are the lints CI runs (`ci.yml` is the source if they drift):
-
-   ```bash
-   cargo fmt --all
-   cargo clippy --workspace --features dev --all-targets -- -D warnings
-   cargo clippy --all-features --all-targets -- -D warnings
-   cargo clippy --release -- -D warnings
-   ```
-
-### Commit messages and PR titles
-
-PRs are squash-merged, so the **PR title** becomes the commit subject on `main` and the
-changelog entry. Give the PR title the conventional commit format; commits on your branch
-are squashed away.
-
-```
-type(scope): description
-```
-
-Types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`, `chore`
-
-The list is a house convention. release-plz gives `feat` and `fix` their own changelog
-groups; the other types used here fall under **Other**.
-
-Examples:
-```
-feat(parser): add support for repeat variants
-fix(normalize): correct boundary detection for UTR regions
-ci: pin the workflow's action hashes
-```
-
-### Declaring a representation change
-
-This section is the mechanism for rule 7 of the project's
-[normalization rules](docs/src/reference/normalization-rules.md). That page says what must
-be disclosed. This section says how to declare it. It does not restate the rules, and
-nothing outside that page does.
-
-#### The rule
-
-If your change can alter any normalized output string, say so, even when the change is a
-bug fix. A downstream consumer keys its stored data on the normalized string, and a form
-that changes between releases re-buckets everything they hold whatever the reason for the
-change. Put a `Representation-Change:` trailer in the commit message and in the PR
-description. If your change touches `src/normalize/`, `src/hgvs/`, `src/spdi/`,
-`src/project/`, `src/reference/` or `src/error_handling/`, the trailer is required even
-when the answer is `none`: the `Representation change declared` CI check fails a PR that
-touches those directories with no trailer, because an absent trailer and an unconsidered
-one look the same. The list is `WATCHED_PREFIXES` in
-`scripts/check_representation_change.py`. Its docstring holds the reasons for each entry
-and for the two neighbours left out. Read it before proposing a change.
-
-Trailered commits are collected under **Representation changes** at the top of the
-changelog and shown on the release PR. See [Changelog](#changelog) for how the trailer
-text gets there.
-
-A trailer that declares a move:
-
-```
-fix(normalize): clamp a derived insertion at the CDS/3'UTR junction
-
-Representation-Change: c.<cds_end>_*1ins<A> now renders as
-  c.<cds_end>delins<ref ++ A>. ~57 of 7,296 rows of the junction-spanning
-  corpus slice (48 seeds x both directions x three shape families).
-  Toward the already-shipped form: it is what a second normalize already
-  produced. Previously-accepted inputs, so a real migration on paper — but
-  anyone normalizing to a fixed point sees no change.
-```
-
-A trailer that declines:
-
-```
-ci: pin the workflow's action hashes
-
-Representation-Change: none
-```
-
-A trailer that declines with a reason:
-
-```
-test(conformance): gate the harvested unguarded cases on every PR
-
-Representation-Change: none. Test-only plus two new `src/conformance/`
-  modules; nothing under a watched directory is touched, and no existing
-  expectation was re-blessed.
-```
-
-**Stability is not a rule.** Every confluence fix picks a winner between two spellings,
-and the losing spelling is a representation change for whoever stored it. Where the spec
-permits either form and confluence is unaffected, prefer the form that already ships.
-Otherwise confluence wins, and the move is disclosed.
-
-#### What a disclosure must contain
-
-Four facts. The fourth is the one a consumer acts on.
-
-1. **Which forms moved**, old and new.
-2. **In which direction**: toward or away from the already-shipped form.
-3. **Roughly how many corpus rows**, and which corpus you measured over. An order of
-   magnitude is fine. A number with no corpus named is not.
-4. **Whether the affected inputs were previously rejected or previously accepted.** Only a
-   previously accepted input has a stored string to migrate, and nobody can recover this
-   distinction from the diff later.
-
-**"Fixes non-confluence" is not a description.** It names the property that improved, not
-the strings that moved. Describe the move.
-
-**Do not name a release version.** Say "to reproduce output from before this change", not
-"to reproduce pre-vX.Y.Z output". You cannot know which release will carry your change,
-and the changelog heading names it anyway.
-
-#### How to measure
-
-If the answer is not obviously `none`, measure it. `examples/dump_normalized_corpus.rs`
-diffs two revisions over a synthetic shape-family corpus: run `--out` on each side, then
-`--compare`. Read its `--verify-spdi` report to separate "moved" from "denotes different
-bases". That corpus is enriched for churn-prone shapes. Quote its rate as *of the affected
-family*, never as a repo-wide figure. For consumer impact, normalize a real corpus through
-both revisions with `ferro normalize -i <inputs> --reference <dir> -f tsv`.
-
-#### How the trailer must be formatted
-
-- **Column 0, undecorated.** No backticks, no `>`, no `-`, `*` or `+`, no `#`, no
-  emphasis. The separator is a hyphen. Anything else is prose to git, to release-plz and
-  to both checkers, and a code-spanned trailer is invisible to all three.
-- **Indent continuation lines**, as in the examples above. Git folds a continuation line
-  into the trailer only when it is whitespace-prefixed.
-- **Quote an example only beneath a real, unindented declaration**, and indent the quoted
-  line. An indented line with no real declaration above it is reported as a near miss,
-  because nothing distinguishes it from a declaration that will never be read.
-- **The value ends at the next column-0 trailer token, Markdown heading or HTML comment.**
-  GitHub appends CodeRabbit's summary after your description, so "put it last" is not
-  something the tooling can rely on. Do not put a heading inside the disclosure.
-- **Put it in the PR description as well as the commit.** The changelog parsers match the
-  commit footer, and GitHub builds the squash commit body from the PR description.
-
-#### How the trailer is read
-
-`scripts/check_representation_change.py` is the checker. It runs on every PR, and these
-are its rules.
-
-- **The verdict is the first word.** `none`, `no`, `n/a` and `na` all count as a decline,
-  in any casing.
-- **A full stop, semicolon, colon or dash may introduce a reason.** `none. Tests only` is
-  a decline. Explain a decline when the reason is not obvious.
-- **A comma is not a terminator.** `none, except two rows` is filed as a move, because a
-  comma usually introduces a qualification that changes the verdict. `no rows move` has no
-  terminator, so the verdict is not `no`, and it is filed as a move. Both err toward
-  disclosing a change.
-- **Do not decline and then describe a move.** `no. 3 rows move` is a decline by the first
-  word, so the described move would never reach the changelog. CI rejects a declining
-  trailer that also claims `<n> rows move` (or merge, split, respell) for any nonzero `n`.
-- **A quantified zero passes.** `none. 0 of 950 rows move` is a decline. The count is the
-  count, never the denominator: `3 of 500,004 rows move` discloses three moved rows. The
-  recognised phrasings live on `MOVEMENT_CLAIM_RE`. Extend that docstring when a new
-  phrasing appears.
-
-`scripts/check_changelog_grouping.py` is the audit. It renders the changelog through real
-git-cliff over `<latest tag>..HEAD` and checks that nothing under **Representation
-changes** opens with a decline word and nothing that declares a move is filed elsewhere.
-Run it locally with `python scripts/check_changelog_grouping.py`; it needs `git-cliff` on
-your `PATH`.
-
-**This document is one of four copies.** The decline words appear here, in
-`release-plz.toml`, in the checker, and in `DECLINE_WORDS` in
-`scripts/check_changelog_grouping.py`; the six watched directories appear in the first
-three. `tests/python/test_representation_change_trailer.py` and
-`tests/python/test_changelog_grouping.py` pin every copy to the checker. If you change
-either list here, change every other copy too, or a test fails.
-
-### Adjudications
-
-**Record every decision about the *correct* normalization behaviour in a committed test or
-ruling record, in the same PR.** The record states the question, the ruling, and the
-authority. An adjudication that lives only in a PR description, an issue comment or a
-working document is lost, and the next person re-derives it differently.
-
-**What counts as an adjudication:**
-
-- a ruling that one clause governs another where they conflict;
-- a determination that ferro's output is right or wrong against a cited clause;
-- a decision to follow or deviate from Mutalyzer;
-- a choice between two competing representations of one variant;
-- a question deliberately left open.
-
-Implementation choices, refactors and performance work are not adjudications and need no
-record.
-
-**Where it goes:**
-
-| the adjudication is about | record it in |
-|---|---|
-| two spec clauses in tension | a `rulings` record in `hgvs_spec_normalization_overrides.json` |
-| two spellings that must converge on one output | an `equivalence_classes` entry + `EQUIVALENCE_CLASS_VERDICTS` |
-| a deliberate, known deviation from the spec's stated form | `KNOWN_DIVERGENT_INPUTS`, which pins it *as* a deviation |
-| a deliberate deviation from Mutalyzer where the spec is silent | a `rulings` record. There is no spec form to diverge *from*, so `KNOWN_DIVERGENT_INPUTS` is the wrong home (see `adjudication-precedence-order`) |
-| a concrete input whose correct output is now settled | an ordinary `tests/it/*` test pinning the exact string |
-
-For the shape of a `rulings` record, read `adjudication-precedence-order` in
-`tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`.
-
-**State which kind of record it is.** The kinds are not interchangeable.
-
-- **adjudicated-correct**: pin the exact expected output and cite the clause. It fails when
-  behaviour regresses away from a decided answer.
-- **adjudicated-deviation**: pin it as a deviation in `KNOWN_DIVERGENT_INPUTS`, so a fixed
-  deviation cannot stay in the list unnoticed.
-- **undecided**: a first-class state, and better than no record. The generator refuses an
-  `undecided` record that names a governing or deviated-from clause, or that cites fewer
-  than two clauses: an open question carries no ruling and must state a conflict.
-- **house-choice**: decided, and ours rather than the spec's. A `rulings` record with a
-  `house_choice` object, made under rule 5's silent limb or rule 6 of
-  `docs/src/reference/normalization-rules.md`. It names no governing and no deviated-from
-  clause, is never citable as conformance, and must say what was considered and rejected.
-
-Every record except an `undecided` one has `"status": "decided"` and carries a one-sentence
-`summary`; the generator refuses a decided record without one.
-
-**A test that pins today's output is not an adjudication record.** It is a change
-detector: `pinned_v21_normalization_behavior` compares ferro against itself (see
-`docs/TESTING.md`, "Generated spec fixture"). What makes a record an adjudication is the
-authority: an exact `file:line` into `assets/hgvs-nomenclature`, a named Mutalyzer
-measurement, or an explicit "undecided, and here is why". Without one, you have frozen the
-current behaviour, including whatever is wrong with it.
-
-**Deviating from Mutalyzer needs a record, not just a rationale.** Where the spec is
-explicit, it governs, and a Mutalyzer mismatch there is a deliberate divergence that gets a
-record saying so. Where the spec is silent, the maintainers choose under rule 6, and a
-choice that differs from Mutalyzer also gets a record. Otherwise the next person measures
-Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
-
-**Mutalyzer is not a spec oracle.** It minimizes a weighted description length and has no
-separation rule, so a separation disagreement with it is two objectives meeting, not
-evidence about the spec. The forensics are on the `adjudication-precedence-order` record.
-
-**Record what was refuted, not only what was decided.** A measurement that kills a
-plausible belief is worth as much as the ruling, because the belief will recur. Put it in
-the ruling record, the issue or the PR, not in a code comment. Code comments explain the
-code as it is now; history in them goes stale and misleads the next reader. A test's doc
-comment may name the belief it guards against in one line and link the record.
-
-**Cite the clause exactly, and quote it.** In prose comments too: `general.md:33`, not
-"the separation rule". A clause's directory is its jurisdiction: a claim about an `r.`
-axis needs a clause under `RNA/`, because a `DNA/` clause cannot scope `r.`.
-
-**A green citation check does not prove a quote is exact.** The check is a
-whitespace-collapsed substring match, which is what lets a quote span lines. A quote that
-differs from the spec only in spacing or line breaks passes, and citations in the ledger do
-exactly that. If a claim rests on exactness, measure it against the spec file.
-
-**Never hand-edit `tests/it/clause_ruling_index.rs`.** The file is committed, but the
-index between its `BEGIN`/`END` markers is generated, and `the_rendered_index_is_current`
-compares it against what the code renders. When that test fails it prints the complete
-replacement block. Capture that block to a file rather than retyping it, and splice it in
-on the markers. Retyping a ~100-row block drops rows silently, and the result reads as an
-ordinary diff.
-
-### Changelog
-
-`CHANGELOG.md` is generated by [release-plz](https://release-plz.dev/) from the
-conventional-commit history when a release PR is opened.
-
-**Do not hand-edit `CHANGELOG.md` in a feature PR.** Two PRs that both add bullets under
-`## [Unreleased]` conflict on the same lines. Give the PR a clean conventional-commit
-title and release-plz picks it up.
-
-**Do not hand-write a note into an open release PR either.** release-plz regenerates the
-pending section on every run, so the note is lost the next time the PR updates. A
-`Representation-Change:` trailer is the way to get a note into the changelog; its format
-rules are under [How the trailer must be formatted](#how-the-trailer-must-be-formatted).
-
-**A declining commit is grouped by its conventional type** ([#1557]), so a `fix:` that
-declined is listed under **Fixed**, not under **Other**.
-
-**The generated bullet is the commit subject only** ([#1556]). For every commit filed
-under **Representation changes**, `scripts/inject_representation_disclosure.py` reads the
-trailer from the raw commit message and quotes it under that commit's bullet. A decline's
-reason stays in the commit; a declining commit is never filed under **Representation
-changes**, so the injector never quotes it. Run the script on the release PR, and again
-after any push that regenerates the pending section. It is idempotent. CI runs its
-`--check` form in the `Changelog grouping audit` job, so the release PR stays red until
-the script has run.
-
-```bash
-python scripts/inject_representation_disclosure.py          # attach; idempotent
-python scripts/inject_representation_disclosure.py --check   # what CI asks
-```
-
-**A released section can take a retrospective note.** A release only prepends to
-`CHANGELOG.md`, and the GitHub release body is never revisited once its tag exists. So a
-representation summary for a cycle that shipped without trailers can be added afterwards:
-edit the released section and run `gh release edit <tag>`. This is not a substitute for
-declaring changes as you make them, because the rejected-or-accepted distinction cannot be
-reconstructed after the fact.
-
-**Correct a merged disclosure through the injector, never by hand.** A merged trailer
-cannot be changed, and a hand edit to `CHANGELOG.md` is regenerated away and fails
-`--check`. Register the correction in the injector's `EDITORIAL_CORRECTIONS` table, keyed
-by PR number, and re-run the script. A correction:
-
-- opens by naming itself editorial and citing the issue that raised it;
-- states a fact the trailer got wrong or left out, and does not re-word the disclosure;
-- is appended as a new paragraph, never written over an old one.
-
-The docstring on `EDITORIAL_CORRECTIONS` carries the reasons and the one limit: in a
-released section, delete the stale block first so the re-run can write it back.
-
-[#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
-[#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
-
-### Submitting a pull request
-
-1. Push your branch and open a PR on GitHub.
-2. Give the PR a conventional-commit title, and put `Closes #N` in the description when
-   it resolves an issue.
-3. If your change touches a watched directory, put the `Representation-Change:` trailer in
-   the PR description. See [The rule](#the-rule).
-4. Wait for CI to pass, and request review from maintainers.
-5. A maintainer merges through the merge queue, which re-runs the required checks against
-   the latest `main` before merging. If the queue drops a green PR without saying why, look
-   at the `Merge commit signature` check. When GitHub wraps the description into the squash
-   commit, a line that starts with a git commit-header word such as `committer` breaks the
-   commit's signature. The check's log lists those lines; reword them.
-
-## Testing
-
-`docs/TESTING.md` is the reference for running the suites. Use `cargo nextest`, not
-`cargo test`; that page says why, and covers doctests, the one exception.
-
-### Where tests go
-
-- **Integration tests** go in `tests/it/`, one module per file, declared as a `mod` in
-  `tests/it/main.rs`, or they never run. They compile into one binary, `it`, which needs
-  `--features dev`. Do not add another standalone Rust test file directly under `tests/`.
-- **Test data**: generate it in the test. The committed corpora under `tests/fixtures/`
-  are deliberate; do not add new ones.
-
-### Terms
-
-- **Property test**: a [proptest](https://docs.rs/proptest) test in `tests/it/`. Name a
-  new module `*_proptest` and also `#[path]`-include it in `tests-soak/tests/soak/main.rs`.
-  CI leaves `*proptest*` modules out of the normal test shards and runs them only in its
-  optimized soak job, which sees just the modules listed there; miss the second step and
-  the test runs in no required job. Seeds of past failures are kept under
-  `tests/proptest-regressions/`.
-- **Fuzz test**: a [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html) target
-  in `fuzz/fuzz_targets/`. It needs the nightly toolchain and runs weekly in CI
-  (`.github/workflows/fuzz.yml`), not in the normal suite.
-
-Use each word only for its own kind.
-
-### Bulk corpora: a skip that reports PASS
-
-Without the fetched corpora, the suites that read them return early and report PASSED, not
-skipped. `FERRO_REQUIRE_BULK_FIXTURES=1` turns that skip into a failure. CI sets it
-wherever it fetches the corpora; leave it unset locally unless you have fetched them.
-
-```bash
-scripts/fetch-test-fixtures.sh --verify   # are they present and correct?
-FERRO_REQUIRE_BULK_FIXTURES=1 cargo nextest run --features dev --lib --test it
-```
-
-### Conformance axis (manifest-backed)
-
-The `axis_*` tests return early and report PASSED when `FERRO_MANIFEST` is unset or points
-at a missing file, so a bare `-E 'test(axis_)'` filter can pass while testing nothing. Run
-them through `scripts/run_conformance_axis.sh`, which validates the manifest first. Build a
-manifest with `ferro prepare`; `scripts/README.md` has the details.
-
-```bash
-FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
-```
-
-### Assert the property, not the number
-
-**A guard that pins a number is a change detector for that number.** It guards the
-property only while the two agree, and nothing makes them agree.
-
-**When you write a guard:**
-
-- **Assert the property, and import the constant you guard.** `longest > 1024` is a
-  number; `longest_block > <the cap the normalizer applies>` is a property. A comment
-  telling the reader to update a literal when the constant moves is the defect, not a
-  mitigation.
-- **Prefer a unit test next to the item over widening the public API.** When an example
-  or `tests/it` must reach an item, re-export that one item with `#[doc(hidden)]`, as
-  `ShuffleDirection` is in `src/lib.rs`; never make a whole module public for it. Where a
-  consumer needs a debug-only item, it refuses to run without it rather than reporting a
-  zero, as `measure_spec_conformance_per_arm.rs` does for `partition_blocks_cut`.
-- **If a count is the right assertion, say what it counts and against which denominator.**
-  Pin it where a change to the counted thing must touch.
-- **Prove the guard can fail.** Sabotage it once, watch it go red, restore.
-- **When you report a count, say what it is made of.** "42 pass, 1 skipping, 3 cancelled"
-  is usable; "46 checks" is not.
-- **Name the property before you quote a zero, and show the generator can vary it.** A
-  zero you cannot attribute to the change is a claim about the instrument: report it as a
-  structural zero, in those words. Fixing one blindness in an instrument does not reveal
-  the next.
-- **One reproducer proves a defect exists, not its extent.** Measure the extent and scope
-  the fix against it.
-- **A passing case is evidence only once you know what made it pass.** A provider that
-  rejects the input passes the test for you.
-- **Two confirmations from one stale source are one observation.**
-
-The header of `examples/dump_normalized_corpus.rs` records the cases these rules came from.
-
-### Adding or changing a generator under `examples/`
-
-**A generator must account for what it dropped.** Generators share one failure mode: a
-fallible step whose failure is representable as a legitimate value, such as
-`unwrap_or_default()`, `else { continue }` or a discarded `Result`. The dropped population
-is never counted, so a partial run and a clean run write indistinguishable artifacts.
-
-Two rules. `tests/it/generator_completeness.rs` has a guard for each, and neither guard is
-exact. Know which guard covers your case.
-
-**1. A generator that writes an artifact routes its population through `CaptureLedger`**
-(`src/conformance/completeness.rs`).
-
-- Record a success or a drop for every record. `ledger.record(id, fallible())` is a
-  drop-in for `let Ok(v) = fallible() else { continue };`.
-- Call `finish()` before writing. It returns a `Result` and refuses on any shortfall,
-  including a pass that attempted nothing. Waive an expected shortfall by naming it:
-  `finish_with(Allowance::at_most(2, "bare LRG_ ids have no versioned index entry"))`.
-- Route the **last** fallible step before the write, not the first. The ledger accounts
-  for the step you hand it and never sees the artifact, so an unaccounted drop downstream
-  stamps a clean count onto a short file.
-- Stamp the counts into the artifact and let the consuming test assert on them. Nothing
-  checks that an artifact carries its `CaptureCounts`; stamping them is a convention.
-- If you are not adopting the ledger, add the generator to `LEDGER_EXEMPT` in that test,
-  with a reason. What the check rejects is silence. The list is shrink-only: a row that is
-  no longer needed fails the test.
-
-**A green completeness test means the question was asked, not that the accounting is
-right.** The guard is a substring scan. It looks for a few write idioms (`fs::write(`,
-`File::create(`, `OpenOptions::new(`, `from_path(`) and, if it finds one, for a `use` line
-naming `conformance::completeness`, the word `CaptureLedger` and a `finish` call in the
-same file. Another write idiom evades it; a fully-qualified or rustfmt-wrapped import reads
-as un-adopted. The accounting is yours and your reviewer's.
-
-**2. A generator carrying `#[cfg(test)]` sets `test = true` on its `[[example]]` or
-`[[bin]]` entry in `Cargo.toml`.** Cargo does not build a target's tests unless the target
-opts in, so without it the tests never run and read as coverage. The guard reads
-`test = true` from parsed TOML but finds `#[cfg(test)]` by token, so
-`#[cfg(all(test, feature = "dev"))]` slips past it. It follows `#[path]` includes, because
-`test = true` is per target and a `#[cfg(test)]` in a shared `examples/common/` module is
-dead in every target that does not opt in; a plain `mod helper;` is the one boundary it
-does not cross.
-
-## Updating the spec normalization fixture
-
-`tests/fixtures/grammar/hgvs_spec_normalization.json` records ferro's current output for
-every variant string in the pinned spec, and `tests/it/hgvs_spec_normalization_tests.rs`
-fails when a row drifts from it. `docs/TESTING.md`, "Generated spec fixture", explains what
-a failing replay test means. When your PR changes normalization output:
-
-1. **Snapshot the fixture, then regenerate it.** The fixture is gitignored, so `git diff`
-   shows nothing and the snapshot is your only baseline. On a fresh worktree there is no
-   fixture to snapshot; regenerate it on `main` first and snapshot that.
-
-   ```bash
-   git submodule update --init assets/hgvs-nomenclature
-   cp tests/fixtures/grammar/hgvs_spec_normalization.json /tmp/spec-fixture-before.json
-   cargo run --features dev --bin generate_spec_fixture
-   ```
-
-2. **Diff against the snapshot**, and check each changed row against the spec text under
-   `assets/hgvs-nomenclature/docs/recommendations/`. A row whose new output matches the
-   spec's canonical form shows `current == spec_expected`.
-
-   ```bash
-   diff -u /tmp/spec-fixture-before.json tests/fixtures/grammar/hgvs_spec_normalization.json
-   ```
-
-3. **Tell the generator where the spec's canonical form differs from the input; otherwise
-   it expects the input unchanged.** For a row such as `c.79GC>TT`, which the spec
-   canonicalizes to `c.79_80delinsTT`, add an entry to
-   `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` keyed on `c.79GC>TT`
-   with `spec_expected` set to `c.79_80delinsTT`. A key that matches no fixture input fails
-   generation. See [Override entry shape](#override-entry-shape).
-
-4. **Do not use `--check` as a gate.** Generation is what validates every override against
-   the spec checkout, so a stale override fails the build; `--check` only asks whether your
-   local artifact is current. The tool-support tables are the opposite case: their outputs
-   are committed, and there `--check` is the gate.
-
-5. **To bump the spec:** move the submodule pointer with
-   `git -C assets/hgvs-nomenclature checkout <new-tag>`, re-validate the default accessions
-   in `prefix::DEFAULTS` (`examples/common/spec_harvest.rs`) against the new spec, then
-   regenerate and review against a snapshot as in steps 1 and 2.
-
-### Override entry shape
-
-```jsonc
-{
-  "by_input": {
-    "<exact input string>": {
-      "status": "diverges",                 // optional; see Status taxonomy
-      "spec_expected": "<canonical form>",  // optional; null means the spec rejects the input
-      "input_prefixed": "<accession:c.…>",  // optional; accession to force for a bare fragment
-      "requires_reference": true,           // optional; skip at test time, needs reference bases
-      "note": "<why>"                       // optional; why this override exists
-    }
-  }
-}
-```
-
-Bare fragments such as `c.1083A>C` get a default accession from `prefix::DEFAULTS` in
-`examples/common/spec_harvest.rs`, recorded in the row's `input_prefixed`.
-
-### Status taxonomy
-
-| status               | meaning                                                                             |
-|----------------------|-------------------------------------------------------------------------------------|
-| `preserved`          | ferro accepts the input and round-trips it (`current == spec_expected`)             |
-| `diverges`           | ferro accepts the input but rewrites it (`current != spec_expected`)                |
-| `correctly-rejected` | spec marks invalid (via `<code class="invalid">…</code>`), ferro also rejects       |
-| `false-acceptance`   | spec marks invalid, **ferro accepts**. These are bug candidates                     |
-| `parse-error`        | spec mentions the input as a canonical form, ferro cannot parse it                  |
-| `needs-reference`    | parse succeeds, normalization needs reference data the test cannot supply           |
-
-The generator sets `spec_expected: null` itself for inputs the spec marks
-`<code class="invalid">…</code>`. The rule that assigns a status is `classify`, in the same
-file as the defaults.
-
-## Tool-support comparison tables
-
-The ferro/mutalyzer/biocommons/hgvs-rs support tables in
-`docs/src/reference/comparison.md` and `docs/BENCHMARK_GUIDE.md` are generated, and so is
-`src/service/web/static/data/tool_support_matrix.json`, which the web help tab reads. To
-change a cell, edit `docs/tool_support_matrix.json` and run:
-
-```bash
-cargo run --features dev --example generate_tool_support_tables
-```
-
-Do not edit the tables in those files directly: CI runs the generator with `--check` and
-fails on a hand edit. The JSON file's inline `_comment` field carries the schema and
-authoring notes.
 
 ## License
 

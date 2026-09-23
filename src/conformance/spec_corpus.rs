@@ -2494,8 +2494,9 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 /// any of what follows. An earlier revision of this change carried the
 /// floor-of-two rationale in seven places and the sub-floor figure in three, and
 /// two of those copies had already drifted into contradicting each other 406
-/// lines apart inside one file — the repository `CONTRIBUTING.md` names that as this
-/// project's recurring failure mode, and it had happened within a single change.
+/// lines apart inside one file — the `adjudication-precedence-order` ruling record
+/// names that as this project's recurring failure mode, and it had happened within
+/// a single change.
 ///
 /// # This is an instrument, not a holding — and read the ledger before it
 ///
@@ -2506,8 +2507,8 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 /// **not** as a "delins"".
 ///
 /// **Those two clauses are not the whole authority over this population**, and
-/// citing them alone is the mistake the repository `CONTRIBUTING.md` warns about
-/// first: do not adjudicate from spec text before reading the ruling ledger.
+/// citing them alone is the mistake the repository `CLAUDE.md` warns about: read
+/// the ruling ledger before arguing from spec text.
 /// `tests/it/clause_ruling_index.rs` marks both clauses `[MULTI]`, and three
 /// records in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`
 /// govern parts of exactly these rows:

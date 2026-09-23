@@ -573,7 +573,7 @@ pub mod prefix {
     ///
     /// The choices match the most-cited accessions in the v21.0 spec corpus.
     /// They are load-bearing constants — re-validate when bumping the spec
-    /// submodule (see CONTRIBUTING.md).
+    /// submodule (see `docs/TESTING.md`).
     pub const DEFAULTS: &[(char, &str)] = &[
         ('c', "NM_004006.2"),
         ('n', "NR_002196.1"),

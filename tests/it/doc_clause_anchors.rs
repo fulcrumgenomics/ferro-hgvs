@@ -13,7 +13,8 @@
 //! (#2009/#2014) reached the ledger; the CLAUDE.md guards (#2057) reached
 //! CLAUDE.md. When the CLAUDE.md guards were retired, the clause citations they
 //! protected had moved into `docs/READING_THE_SPEC.md`, `docs/TESTING.md` and
-//! `CONTRIBUTING.md`, where nothing scanned them — this file closes that gap.
+//! `CONTRIBUTING.md`, where nothing scanned
+//! them — this file closes that gap.
 //!
 //! # Why a line-keyed check, and how it stays honest
 //!

@@ -28,7 +28,7 @@ maturin build   --features python,extension-module     # wheel
 
 `extension-module` is a separate feature from `python`. Always name it explicitly on
 maturin commands; `[tool.maturin] features` in `pyproject.toml` is a default that a
-`--features` flag replaces. See `CONTRIBUTING.md` for why.
+`--features` flag replaces. The reason is on the `extension-module` feature in `Cargo.toml`.
 
 ## Test
 
@@ -52,7 +52,7 @@ Rules that will bite you. The reasons and the recipes are in `docs/TESTING.md`.
 - `tests/fixtures/grammar/hgvs_spec_normalization.json` is generated and gitignored.
   Tests regenerate it on demand; it needs the `assets/hgvs-nomenclature` submodule.
 - Manifest-backed and bulk-corpus suites report PASS when their data is absent. Set
-  `FERRO_REQUIRE_BULK_FIXTURES=1` to make the skip fail. See `CONTRIBUTING.md`.
+  `FERRO_REQUIRE_BULK_FIXTURES=1` to make the skip fail. See `docs/TESTING.md`.
 
 ## Lint and format
 
@@ -66,11 +66,11 @@ pre-commit run --all-files
 
 ## Required PR checks that are easy to miss
 
-- A PR touching `src/normalize/`, `src/hgvs/`, `src/spdi/`, `src/project/`,
-  `src/reference/` or `src/error_handling/` must carry a `Representation-Change:`
-  trailer **in the PR description**. `Representation-Change: none` is a valid answer.
-  How to measure and how to phrase it: `CONTRIBUTING.md`, "Declaring a representation
-  change". Keep the six paths above backticked; a Python test reads them from this file.
+- A PR touching a watched directory (`WATCHED_PREFIXES` in
+  `scripts/check_representation_change.py`; `src/normalize/` and `src/hgvs/` among them)
+  must carry a `Representation-Change:` trailer **in the PR description**.
+  `Representation-Change: none` is a valid answer. How to phrase it: `CONTRIBUTING.md`,
+  "Declaring a representation change"; the parsing rules are in the script's docstring.
 - The required `Test` context is a rollup over several jobs. If it is red while every
   `Test (n/N)` shard is green, read the rollup's log to find the upstream job. Read the
   `needs:` list from `.github/workflows/ci.yml`, not from prose.
@@ -97,8 +97,9 @@ is a no-op kept for compatibility.
 
 - **No machine-local absolute paths in committed files.** Take locations from a CLI
   argument, an env var (`FERRO_MANIFEST`), or a repo-relative default.
-- **Never hand-edit `tests/it/clause_ruling_index.rs`.** It embeds a generated block; the
-  test that fails tells you how to regenerate it.
+- **Do not retype the generated index in `tests/it/clause_ruling_index.rs`.** Paste the
+  block the failing test prints. `docs/TESTING.md`, "After you edit the ledger", lists everything
+  to update after a ledger edit.
 - **Record every adjudication in the same change.** A decision about what the *correct*
   normalization is goes into a ruling record in
   `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`, an equivalence class,
@@ -111,7 +112,7 @@ is a no-op kept for compatibility.
   restate it. A pinned count is a change detector, not a guard. Before quoting a `0` from
   a corpus, show the generator can build the shape you changed.
 - **A generator must account for what it dropped.** Route the last fallible step before a
-  write through `CaptureLedger` and call `finish()`. See `CONTRIBUTING.md`.
+  write through `CaptureLedger` and call `finish()`. See `tests/it/generator_completeness.rs`.
 - **Do not put measurements, dates, issue narratives or line numbers in this file.**
   They go stale within days here. Put them in the PR, the issue, or a `docs/*.md` page.
 

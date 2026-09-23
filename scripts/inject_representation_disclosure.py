@@ -34,7 +34,7 @@ The fourth route is not through the template at all. **Read the trailer from the
 message with git, and attach it to the rendered bullet afterwards.** That is exactly what
 `scripts/check_changelog_grouping.py` already does in CI to attribute trailers to commits,
 using the same column-anchored `trailer_value` this script imports rather than re-implements
--- three copies of one rule drift silently, which is the lesson `CONTRIBUTING.md` records
+-- three copies of one rule drift silently, which is the lesson `docs/RELEASE.md` records
 about the decline vocabulary.
 
 The bullet is matched to its commit by the **PR number** GitHub puts in the squash subject,
@@ -204,9 +204,9 @@ def squash_commits(repo: Path) -> dict[str, str]:
 #: A line that ends the disclosure because it opens a block the trailer cannot own: another
 #: column-0 trailer token, a Markdown heading, or an HTML comment.
 #:
-#: **The HTML-comment arm is not defensive, it is load-bearing.** `CONTRIBUTING.md` requires
-#: the trailer to be the last thing in the PR description, and in the squash bodies on this
-#: repo it is *not*: GitHub appends CodeRabbit's auto-generated summary after it, opening
+#: **The HTML-comment arm is not defensive, it is load-bearing.** A trailer is often assumed
+#: to be the last thing in the PR description, and in the squash bodies on this repo it is
+#: *not*: GitHub appends CodeRabbit's auto-generated summary after it, opening
 #: with `<!-- This is an auto-generated comment: release notes by coderabbit.ai -->`. Taken
 #: literally to end-of-message, #1484's disclosure came out with three paragraphs of
 #: "Summary by CodeRabbit" quoted under it as though the author had written them.
@@ -228,8 +228,8 @@ def disclosure_value(message: str) -> str | None:
     at all for #1537, #1535 or #1547, since their continuation lines are unindented (#1556).
     So indentation cannot delimit the value.
 
-    **Do not rest this on "the trailer is last".** It is not, and `CONTRIBUTING.md` says so
-    as of #1556: GitHub appends CodeRabbit's auto-generated summary after the description,
+    **Do not rest this on "the trailer is last".** It is not, and the docstring of
+    `scripts/check_representation_change.py` says so: GitHub appends CodeRabbit's auto-generated summary after the description,
     so end-of-message would quote three paragraphs of "Summary by CodeRabbit" as the
     author's disclosure -- which is exactly what happened to #1484 before the terminator
     existed. Nothing enforces position either; the trailer checker is column-0-anchored and

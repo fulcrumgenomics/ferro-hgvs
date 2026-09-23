@@ -73,7 +73,7 @@ def test_a_leading_decline_word_is_a_decline(value: str) -> None:
         "3 rows of 500,004 move",
         "nothing moves under src/normalize/",
         "not measured yet",
-        # `CONTRIBUTING.md` ("How the trailer is read") documents both of these as filed as
+        # `check_representation_change.py` ("How a trailer is read") documents both as filed as
         # real changes: a comma is not a terminator, and `no rows move` has no terminator at
         # all. "Both err toward disclosing a change." The audit used to call them declines,
         # which made them unsatisfiable — release-plz filed them one way and the audit failed
@@ -93,7 +93,7 @@ def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
     checker's — first word, punctuation stripped, no terminator logic — on the reasoning that
     a second opinion derived the same way is worth nothing. But a *disagreement* is not a
     second opinion, it is a red build: `no rows move` and `none, except two rows that merge`
-    are filed as real changes by design (`CONTRIBUTING.md`, "How the trailer is read") and
+    are filed as real changes by design (the checker's docstring, "How a trailer is read") and
     the audit called them declines, so neither of those two trailers could satisfy both
     halves. Once such a commit is on `main` the job is red for every open PR until the next
     release tag.
@@ -114,7 +114,7 @@ def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
     spec.loader.exec_module(checker)
 
     for value in [
-        # declines, including every terminator CONTRIBUTING.md names
+        # declines, including every terminator the checker accepts
         "none",
         "NONE",
         "none.",
@@ -122,6 +122,7 @@ def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
         "none: comments only",
         "none; one fixture JSON",
         "none — 0 of 950 rows move",
+        "none – docs only",
         "none.Tests only.",
         "no. Nothing reaches a normalizer.",
         "n/a: docs",
@@ -133,6 +134,14 @@ def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
         "none, except two rows that merge",
         "nothing moves",
         "not measured yet",
+        # every decline word the checker accepts, bare and with each terminator, so a word
+        # added to `NONE_VALUES` and not to this audit's `DECLINE_WORDS` fails here
+        *sorted(checker.NONE_VALUES),
+        *(
+            f"{word}{end} reason"
+            for word in sorted(checker.NONE_VALUES)
+            for end in checker.DECLINE_TERMINATORS
+        ),
     ]:
         assert opens_with_a_decline(value) == checker.declines(value), (
             f"{value!r}: the audit calls it "
