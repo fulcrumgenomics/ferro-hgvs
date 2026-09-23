@@ -14,7 +14,7 @@ bindings. It supports all HGVS coordinate systems (g/c/n/r/p/m/o) and edit types
 ```bash
 cargo build                          # debug
 cargo build --release
-cargo build --features dev           # everything testable
+cargo build --features dev           # with the `dev` feature (see below)
 cargo build --features benchmark     # ferro-benchmark binary
 ```
 
@@ -58,7 +58,7 @@ Rules that will bite you. The reasons and the recipes are in `docs/TESTING.md`.
 
 ```bash
 cargo fmt --all
-cargo clippy --features dev -- -D warnings
+cargo clippy --workspace --features dev --all-targets -- -D warnings
 ruff check python/ tests/python/ && ruff format python/ tests/python/
 mypy python/ferro_hgvs/
 pre-commit run --all-files
@@ -89,7 +89,8 @@ pre-commit run --all-files
 - `src/python.rs` PyO3 bindings; `python/ferro_hgvs/` package and `.pyi` stubs
 - `src/bin/ferro.rs` CLI; `benchmark.rs` and `ferro-web.rs` are feature-gated
 
-Feature flags are declared in `Cargo.toml`. `dev` turns on everything testable. `parallel`
+Feature flags are declared in `Cargo.toml`. `dev` turns on the feature-gated tests; it
+excludes `python`/`extension-module`, `hgvs-rs`, `slow-tests` and `dhat-heap`. `parallel`
 is a no-op kept for compatibility.
 
 ## Conventions

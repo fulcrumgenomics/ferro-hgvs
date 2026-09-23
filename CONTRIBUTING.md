@@ -6,10 +6,12 @@ Thank you for contributing to ferro-hgvs.
 
 ### Prerequisites
 
-- Rust (stable)
+- Rust: the toolchain pinned in `rust-toolchain.toml`, which rustup installs for you. The
+  minimum supported version is `rust-version` in `Cargo.toml`.
 - Git
 - [cargo-nextest](https://nexte.st/) (`cargo install cargo-nextest`)
-- [uv](https://docs.astral.sh/uv/) (for Python development)
+- [pre-commit](https://pre-commit.com/)
+- [uv](https://docs.astral.sh/uv/) and Python 3.10+ (for Python development)
 
 ### Setup
 
@@ -18,11 +20,15 @@ git clone https://github.com/fulcrumgenomics/ferro-hgvs.git
 cd ferro-hgvs
 git submodule update --init assets/hgvs-nomenclature   # the pinned HGVS spec
 scripts/fetch-test-fixtures.sh                         # the bulk test corpora
+pre-commit install                                     # commit and pre-push hooks
 cargo build
 cargo nextest run --features dev
 ```
 
-`dev` is the Cargo feature that turns on everything testable. The feature flags are
+`dev` is the Cargo feature that turns on the feature-gated tests, examples and
+generators. It does not include `python`/`extension-module` (build those with maturin,
+below), `hgvs-rs` (CI runs it in its own job), `slow-tests` (opt-in; no CI job runs it) or
+`dhat-heap`. The feature flags are
 declared in `Cargo.toml`.
 
 **The bulk corpora are not in the git tree.** Four large HGVS corpora are attached to the
@@ -100,15 +106,24 @@ Each topic below has one authoritative source. Do not copy its content into othe
 
 ### Making changes
 
-1. Create a branch: `git checkout -b feature/your-feature-name`
+1. Create a branch. Any name works; the PR title, not the branch, becomes the commit.
 2. Write your code, add tests, and document every public API with a doc comment.
-3. Run the tests: `cargo nextest run --features dev`
-4. Format and lint: `cargo fmt --all && cargo clippy --features dev -- -D warnings`. CI
-   runs `cargo fmt --all -- --check`.
+3. Run the tests: `cargo nextest run --features dev`, and the doctests, which nextest does
+   not run: `cargo test --doc --features dev`.
+4. Format and lint. These are the lints CI runs (`ci.yml` is the source if they drift):
 
-### Commit messages
+   ```bash
+   cargo fmt --all
+   cargo clippy --workspace --features dev --all-targets -- -D warnings
+   cargo clippy --all-features --all-targets -- -D warnings
+   cargo clippy --release -- -D warnings
+   ```
 
-Use the conventional commit format:
+### Commit messages and PR titles
+
+PRs are squash-merged, so the **PR title** becomes the commit subject on `main` and the
+changelog entry. Give the PR title the conventional commit format; commits on your branch
+are squashed away.
 
 ```
 type(scope): description
@@ -328,12 +343,13 @@ Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
 
 **Mutalyzer is not a spec oracle.** It minimizes a weighted description length and has no
 separation rule, so a separation disagreement with it is two objectives meeting, not
-evidence about the spec. The forensics are on the `adjudication-precedence-order` record
-and on `MIN_PIECE_SEPARATION` in `src/normalize/merge.rs`.
+evidence about the spec. The forensics are on the `adjudication-precedence-order` record.
 
 **Record what was refuted, not only what was decided.** A measurement that kills a
-plausible belief is worth as much as the ruling, because the belief will recur. The doc
-comment on `MIN_SEPARATION_NO_FRAME` in `src/normalize/merge.rs` is a worked example.
+plausible belief is worth as much as the ruling, because the belief will recur. Put it in
+the ruling record, the issue or the PR, not in a code comment. Code comments explain the
+code as it is now; history in them goes stale and misleads the next reader. A test's doc
+comment may name the belief it guards against in one line and link the record.
 
 **Cite the clause exactly, and quote it.** In prose comments too: `general.md:33`, not
 "the separation rule". A clause's directory is its jurisdiction: a claim about an `r.`
@@ -357,8 +373,8 @@ ordinary diff.
 conventional-commit history when a release PR is opened.
 
 **Do not hand-edit `CHANGELOG.md` in a feature PR.** Two PRs that both add bullets under
-`## [Unreleased]` conflict on the same lines. Write a clean conventional-commit subject
-and release-plz picks it up.
+`## [Unreleased]` conflict on the same lines. Give the PR a clean conventional-commit
+title and release-plz picks it up.
 
 **Do not hand-write a note into an open release PR either.** release-plz regenerates the
 pending section on every run, so the note is lost the next time the PR updates. A
@@ -407,15 +423,43 @@ released section, delete the stale block first so the re-run can write it back.
 ### Submitting a pull request
 
 1. Push your branch and open a PR on GitHub.
-2. If your change touches a watched directory, put the `Representation-Change:` trailer in
+2. Give the PR a conventional-commit title, and put `Closes #N` in the description when
+   it resolves an issue.
+3. If your change touches a watched directory, put the `Representation-Change:` trailer in
    the PR description. See [The rule](#the-rule).
-3. Wait for CI to pass.
-4. Request review from maintainers.
+4. Wait for CI to pass, and request review from maintainers.
+5. A maintainer merges through the merge queue, which re-runs the required checks against
+   the latest `main` before merging. If the queue drops a green PR without saying why, look
+   at the `Merge commit signature` check. When GitHub wraps the description into the squash
+   commit, a line that starts with a git commit-header word such as `committer` breaks the
+   commit's signature. The check's log lists those lines; reword them.
 
 ## Testing
 
-`docs/TESTING.md` is the reference for running the suites. Use `cargo nextest`, never
-`cargo test`; that page says why.
+`docs/TESTING.md` is the reference for running the suites. Use `cargo nextest`, not
+`cargo test`; that page says why, and covers doctests, the one exception.
+
+### Where tests go
+
+- **Integration tests** go in `tests/it/`, one module per file, declared as a `mod` in
+  `tests/it/main.rs`, or they never run. They compile into one binary, `it`, which needs
+  `--features dev`. Do not add another standalone Rust test file directly under `tests/`.
+- **Test data**: generate it in the test. The committed corpora under `tests/fixtures/`
+  are deliberate; do not add new ones.
+
+### Terms
+
+- **Property test**: a [proptest](https://docs.rs/proptest) test in `tests/it/`. Name a
+  new module `*_proptest` and also `#[path]`-include it in `tests-soak/tests/soak/main.rs`.
+  CI leaves `*proptest*` modules out of the normal test shards and runs them only in its
+  optimized soak job, which sees just the modules listed there; miss the second step and
+  the test runs in no required job. Seeds of past failures are kept under
+  `tests/proptest-regressions/`.
+- **Fuzz test**: a [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html) target
+  in `fuzz/fuzz_targets/`. It needs the nightly toolchain and runs weekly in CI
+  (`.github/workflows/fuzz.yml`), not in the normal suite.
+
+Use each word only for its own kind.
 
 ### Bulk corpora: a skip that reports PASS
 
@@ -450,14 +494,11 @@ property only while the two agree, and nothing makes them agree.
   number; `longest_block > <the cap the normalizer applies>` is a property. A comment
   telling the reader to update a literal when the constant moves is the defect, not a
   mitigation.
-- **An example target sees only the `pub` API.** `pub(crate)` is unreachable from
-  `examples/`. Make the item `pub` with `#[doc(hidden)]` on the re-export, as
-  `ShuffleDirection` is in `src/lib.rs`.
-- **Do not gate that re-export behind `dev`.** A constant present in only some builds
-  re-creates the restated literal wherever the feature is off. Where a gate is unavoidable,
-  the consumer refuses to run without the item rather than reporting a zero, as
-  `measure_spec_conformance_per_arm.rs` does for the debug-only counter
-  `partition_blocks_cut`.
+- **Prefer a unit test next to the item over widening the public API.** When an example
+  or `tests/it` must reach an item, re-export that one item with `#[doc(hidden)]`, as
+  `ShuffleDirection` is in `src/lib.rs`; never make a whole module public for it. Where a
+  consumer needs a debug-only item, it refuses to run without it rather than reporting a
+  zero, as `measure_spec_conformance_per_arm.rs` does for `partition_blocks_cut`.
 - **If a count is the right assertion, say what it counts and against which denominator.**
   Pin it where a change to the counted thing must touch.
 - **Prove the guard can fail.** Sabotage it once, watch it go red, restore.
