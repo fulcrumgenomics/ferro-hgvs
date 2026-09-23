@@ -90,7 +90,7 @@
 //! names `checklist.md:33` in its own clause list: strict fails at PARSE,
 //! lenient does not validate input conformance and fails only when it cannot
 //! NORMALIZE, silent is lenient without messages. The normalize rung is not
-//! mode-gated, because rule 1 of the README ruleset is about *output* and no
+//! mode-gated, because rule 1 of the normalization rules is about *output* and no
 //! mode may trade it. See `parser::apply_insertion_size_count_rule` and
 //! `Normalizer::normalize_core_checked`.
 

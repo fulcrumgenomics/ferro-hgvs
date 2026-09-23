@@ -122,7 +122,7 @@ fn project_to_genomic_splits_raw_vs_normalized_for_transcript_input() {
 /// Relocated from `tests/python/test_variant_projection.py`'s
 /// `test_normalize_follows_projector_direction`, which built a
 /// `VariantProjector(direction="5prime")`. That keyword was removed with the
-/// rest of ferro's public 5' surface (`README.md` rule 6), so the property is
+/// rest of ferro's public 5' surface (`normalization-rules.md` rule 6), so the property is
 /// pinned here instead, against the internal `ShuffleDirection` — the test is
 /// relocated, not dropped.
 ///

@@ -83,7 +83,7 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
 }
 
 // `parse_direction` was removed with the ten Python `direction=` keywords it
-// backed (`README.md` rule 6: there are no user options for normalization
+// backed (`normalization-rules.md` rule 6: there are no user options for normalization
 // form). #1016's property — reject an unrecognized spelling rather than
 // silently defaulting to 3' — is preserved and strengthened by the removal:
 // PyO3 raises `TypeError` for a keyword it does not know, so no spelling of

@@ -187,7 +187,7 @@ mod overrides {
         Undecided,
     }
 
-    /// The `README.md` rule a clause-free house choice is made under.
+    /// The `normalization-rules.md` rule a clause-free house choice is made under.
     ///
     /// Only two rules can carry one, and naming which is the whole point of the
     /// field: rule 5's *silent* limb says in terms that ferro "decides under
@@ -199,11 +199,11 @@ mod overrides {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(rename_all = "kebab-case")]
     pub enum HouseRule {
-        /// `README.md` rule 5, **silent** limb — the recommendations are merely
+        /// `normalization-rules.md` rule 5, **silent** limb — the recommendations are merely
         /// incomplete here, so ferro decides under rule 6 and violates nothing.
         /// Filing upstream is a feature request, not a bug report.
         RuleFiveSilent,
-        /// `README.md` rule 6 — among multiple conformant forms, the maintainers
+        /// `normalization-rules.md` rule 6 — among multiple conformant forms, the maintainers
         /// choose. Use this when every competing form is already conformant and
         /// no clause ranks them.
         RuleSix,
@@ -230,7 +230,7 @@ mod overrides {
     ///
     /// # What it must state, and why each part
     ///
-    /// * [`Self::under`] — which `README.md` rule the choice is made under. A
+    /// * [`Self::under`] — which `normalization-rules.md` rule the choice is made under. A
     ///   house choice that cannot name its own authority is not a house choice,
     ///   it is an unrecorded preference.
     /// * [`Self::considered_and_rejected`] — what was weighed and put aside.
@@ -262,7 +262,7 @@ mod overrides {
     #[derive(Debug, Clone, Deserialize, Serialize)]
     #[serde(deny_unknown_fields)]
     pub struct HouseChoice {
-        /// The `README.md` rule the choice is made under.
+        /// The `normalization-rules.md` rule the choice is made under.
         pub under: HouseRule,
         /// What was considered and rejected in reaching it, in prose. Must not
         /// be blank.
@@ -300,7 +300,7 @@ mod overrides {
         pub deviates_from: Vec<String>,
         /// Present when the ruling is **ours** rather than the spec's: the
         /// recommendations are silent on the point and the project chose under
-        /// `README.md` rule 5's silent limb or rule 6. See [`HouseChoice`].
+        /// `normalization-rules.md` rule 5's silent limb or rule 6. See [`HouseChoice`].
         ///
         /// Mutually exclusive with [`Self::governing`] and
         /// [`Self::deviates_from`], and refused on an `undecided` record —
@@ -1084,10 +1084,10 @@ mod decisions {
             if ruling.governing.is_some() {
                 anyhow::bail!(
                     "{owner}: a `house_choice` names a governing clause. A house choice is made \
-                     under `README.md` rule 5's silent limb or rule 6, which are what the project \
-                     does where the recommendations do NOT decide — so it cannot also hold a \
-                     clause to govern. Either drop `house_choice` and rule on the clause, or drop \
-                     `governing` and record why no clause reaches"
+                     under `normalization-rules.md` rule 5's silent limb or rule 6, which are \
+                     what the project does where the recommendations do NOT decide — so it \
+                     cannot also hold a clause to govern. Either drop `house_choice` and rule \
+                     on the clause, or drop `governing` and record why no clause reaches"
                 );
             }
             if !ruling.deviates_from.is_empty() {
@@ -1111,8 +1111,8 @@ mod decisions {
             {
                 anyhow::bail!(
                     "{owner}: a `decided` ruling must name the clause it holds to govern, or \
-                     declare itself a `house_choice` under `README.md` rule 5's silent limb or \
-                     rule 6"
+                     declare itself a `house_choice` under `normalization-rules.md` rule 5's \
+                     silent limb or rule 6"
                 )
             }
             // The whole point of the `undecided` state is that nobody has

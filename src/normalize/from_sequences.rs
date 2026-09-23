@@ -28,9 +28,9 @@
 //!
 //! # What it owns, and what it does not
 //!
-//! `README.md`'s four normalization rules split cleanly here. This module
-//! delivers rules **1 (conformant)** and **4 (deterministic)** — the two the
-//! README calls always achievable. Rules **2 (recommended form)** and
+//! The four output rules in `normalization-rules.md` split cleanly here. This
+//! module delivers rules **1 (conformant)** and **4 (deterministic)** — the two
+//! that page calls always achievable. Rules **2 (recommended form)** and
 //! **3 (confluent)** stay with [`crate::Normalizer::normalize`], because both
 //! need the reference: rule 2's scope names the 3' rule explicitly, and a
 //! reference-anchored shift is precisely what a window-local function cannot do.
@@ -92,7 +92,7 @@ use crate::normalize::ShuffleDirection;
 /// Cost knobs for [`from_sequences`].
 ///
 /// Nothing here changes which *forms* the function is willing to emit — that is
-/// fixed by the rules, not by the caller (`README.md` rule 6). `max_grid_cells`
+/// fixed by the rules, not by the caller (`normalization-rules.md` rule 6). `max_grid_cells`
 /// is a memory bound. `direction` is **not** a caller-facing knob: it mirrors
 /// `NormalizeConfig`'s internal test instrument, is `#[doc(hidden)]` for the
 /// same reason, and is always `ThreePrime` on every shipped path.

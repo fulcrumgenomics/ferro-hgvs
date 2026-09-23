@@ -33,6 +33,8 @@
 //!   suites edit real bases at real coordinates without needing a prepared
 //!   reference (which CI does not have, and whose absence would make those
 //!   suites skip green).
+//! - `ruleset_page`: reads the normalization rules page's rule names, for
+//!   the guards that check a document links to the rules instead of copying them.
 //! - `rulings`: reads the adjudication ledger's `rulings` section into typed
 //!   records, so the citation-currency scan and the clause index share one
 //!   definition of what a record is.
@@ -55,6 +57,7 @@ pub mod fixture_gen;
 pub mod hg38_window;
 pub mod manifest;
 pub mod minimal_alignment;
+pub mod ruleset_page;
 pub mod rulings;
 pub mod spec_enumeration;
 pub mod spec_fixture;

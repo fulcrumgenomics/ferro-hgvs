@@ -620,8 +620,8 @@ fn the_clauses_three_offset_symbols_are_refused_alike() {
                     assert!(
                         refusal.is_empty(),
                         "ADJUDICATED CORRECT, REGRESSED: {mode} mode emitted `{refusal}` for \
-                         `{form}` instead of refusing it ({clause}). Rule 1 of the README \
-                         ruleset is about OUTPUT and has no mode escape."
+                         `{form}` instead of refusing it ({clause}). Rule 1 of the \
+                         normalization rules is about OUTPUT and has no mode escape."
                     );
                 }
             }
@@ -837,7 +837,7 @@ fn an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash() {
         for direction in DIRECTIONS {
             for probe in [input, allele] {
                 // All three modes refuse at normalize. Output conformance is
-                // rule 1 of the README ruleset and has no mode escape, so this
+                // rule 1 of the normalization rules and has no mode escape, so this
                 // rung is deliberately NOT mode-gated.
                 for (label, outcome) in [
                     ("strict", strict(frame, probe, direction)),
@@ -1341,7 +1341,7 @@ fn output_still_violates(clause: &str, output: &str) -> bool {
 /// without messages.
 ///
 /// **The second half is not a mode question and is asserted in all three.**
-/// Rule 1 of the README ruleset — "Output follows the HGVS recommendations.
+/// Rule 1 of the normalization rules — "Output follows the HGVS recommendations.
 /// Absolute — never traded." — is about OUTPUT, so it has no mode escape. That
 /// is precisely why the ruling's mode gate costs nothing: accepting a
 /// non-conformant input and *normalizing it to a conformant output* trades
@@ -1433,9 +1433,9 @@ fn the_decided_target_is_a_mode_gated_refusal() {
                     assert!(
                         !output_still_violates(clause, &output),
                         "{mode} mode emitted `{output}`, which still violates {clause}. Rule 1 \
-                         of the README ruleset is about OUTPUT and has no mode escape: lenient \
-                         may decline to validate the input, but it must then either normalize \
-                         it to a conformant description or fail because it cannot."
+                         of the normalization rules is about OUTPUT and has no mode escape: \
+                         lenient may decline to validate the input, but it must then either \
+                         normalize it to a conformant description or fail because it cannot."
                     );
                 }
             }

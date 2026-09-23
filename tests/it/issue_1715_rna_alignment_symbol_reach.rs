@@ -323,7 +323,7 @@ fn a_lowercase_masked_nucleotide_on_the_rna_axis_is_refused_at_the_ruled_stage()
         );
 
         // All three modes refuse to NORMALIZE. Output conformance is rule 1 of
-        // the README ruleset and has no mode escape, so this rung is not
+        // the normalization rules and has no mode escape, so this rung is not
         // mode-gated — lenient fails on the ruling's own ground, because a
         // masked base names no nucleotide to normalize.
         for (label, config) in [

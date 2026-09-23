@@ -315,7 +315,7 @@ fn no_provider_data_substitution_passes_through() {
 /// is a rule-1 output violation — and the alternative the fallback was written
 /// to avoid, silently dropping it, answers for a different nucleotide. There is
 /// no third spelling, so the honest answer is a refusal, and it is unconditional
-/// because rule 1 of the README ruleset has no mode escape.
+/// because rule 1 of the normalization rules has no mode escape.
 ///
 /// **The routing this pinned is still live and still needed**: the fallback runs
 /// before `get_sequence` and is what keeps the drop from happening on any path

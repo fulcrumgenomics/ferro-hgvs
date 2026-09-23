@@ -166,7 +166,7 @@ impl Guard {
     }
 }
 
-/// The `README.md` rule a clause-free house choice is made under.
+/// The `normalization-rules.md` rule a clause-free house choice is made under.
 ///
 /// A closed set of two, mirroring `generate_spec_fixture`'s `overrides::HouseRule`.
 /// Free text here would let a record write a spec clause into the slot reserved
@@ -174,10 +174,10 @@ impl Guard {
 /// exists to prevent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HouseRule {
-    /// `README.md` rule 5, silent limb — the recommendations are incomplete
+    /// `normalization-rules.md` rule 5, silent limb — the recommendations are incomplete
     /// here, so ferro decides under rule 6 and violates nothing.
     RuleFiveSilent,
-    /// `README.md` rule 6 — among multiple conformant forms, the maintainers
+    /// `normalization-rules.md` rule 6 — among multiple conformant forms, the maintainers
     /// choose.
     RuleSix,
 }
@@ -194,8 +194,8 @@ impl HouseRule {
     /// Human-readable form, for rendered documents.
     pub fn label(self) -> &'static str {
         match self {
-            HouseRule::RuleFiveSilent => "`README.md` rule 5 (silent limb)",
-            HouseRule::RuleSix => "`README.md` rule 6",
+            HouseRule::RuleFiveSilent => "`normalization-rules.md` rule 5 (silent limb)",
+            HouseRule::RuleSix => "`normalization-rules.md` rule 6",
         }
     }
 
@@ -225,7 +225,7 @@ impl HouseRule {
 /// what it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HouseChoice {
-    /// The `README.md` rule the choice is made under.
+    /// The `normalization-rules.md` rule the choice is made under.
     pub under: HouseRule,
     /// What was weighed and put aside in reaching it. Never blank.
     pub considered_and_rejected: String,
@@ -554,9 +554,9 @@ fn house_choice_from(record: &serde_json::Value, id: &str) -> Option<HouseChoice
     let under = HouseRule::from_token(under_token).unwrap_or_else(|| {
         panic!(
             "record {id} makes its house choice under {under_token:?}, which is not one of \
-             {:?}. `under` names the `README.md` rule the project chose under, never a spec \
-             clause — a house choice that could name a clause here would be claiming the \
-             authority it exists to disclaim",
+             {:?}. `under` names the `normalization-rules.md` rule the project chose under, \
+             never a spec clause — a house choice that could name a clause here would be \
+             claiming the authority it exists to disclaim",
             [
                 HouseRule::RuleFiveSilent.token(),
                 HouseRule::RuleSix.token()
@@ -1010,7 +1010,7 @@ fn an_undecided_house_choice_is_rejected() {
     records_from_value(&document, "<test>");
 }
 
-/// `under` names a `README.md` rule and nothing else — in particular not a spec
+/// `under` names a `normalization-rules.md` rule and nothing else — in particular not a spec
 /// clause, which is the value a drifting record would most plausibly reach for.
 #[test]
 #[should_panic(expected = "which is not one of")]

@@ -117,7 +117,7 @@ def test_the_partitioner_places_a_pure_indel_three_prime():
     """The derivation is 3'-most, and there is no keyword that can change it.
 
     This pinned both directions before the public ``direction=`` keyword was
-    removed (``README.md`` rule 6). The 3' row it asserted is kept verbatim —
+    removed (``normalization-rules.md`` rule 6). The 3' row it asserted is kept verbatim —
     a single-base deletion inside the ``AAAA`` run, placed at 14 — because it is
     the shipped answer and this is the only test that pins it against a
     hand-written window. The 5' half moved to

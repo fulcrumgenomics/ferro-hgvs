@@ -914,7 +914,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `delins` nor all substitutions but a MIX of lone substitutions and
     // multi-column members. **Decided for the `inv` by operator ruling
     // (2026-08-12)**, governing `inversion.md:5` as a PERMISSION — so it is a
-    // `README.md` rule 6 choice among conformant forms and must never be cited
+    // `normalization-rules.md` rule 6 choice among conformant forms and must never be cited
     // as conformance. It deliberately does NOT rest on `general.md:56`: every
     // competitor contains a substitution, so `:56` read plainly argues against
     // the `inv` on every row, and the only reading that saves either gate is
@@ -950,7 +950,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // variants one nucleotide apart, together affecting one amino acid —
     // regardless of edit type, because edit type is a property of the SPELLING
     // and the precondition is a property of the RESULTING SEQUENCE (rule 3 of
-    // the README ruleset; the same argument that decided
+    // the normalization rules; the same argument that decided
     // `separation-is-a-property-of-the-spelling-not-of-the-variant`). The two
     // limits survive: a frameshift pair fails the precondition, and
     // `duplication.md:18` still forbids merging a describable duplication
@@ -1001,7 +1001,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // separation-ZERO half and left this untouched. **Decided by operator
     // ruling (2026-08-10)**: the separation is read off the partition
     // RE-DERIVED FROM THE RESULTING SEQUENCE, never off the input's spelling —
-    // rule 3 of the README ruleset — which on the record's genomic case makes
+    // rule 3 of the normalization rules — which on the record's genomic case makes
     // `g.[1001009_1001010del;1001013del]` the answer from both spellings. The
     // sequence-first arms (`FERRO_PARTITION=shadow`/`canonical`) already
     // produce it; the shipping path does not, and that gap is #1617, so the
@@ -1076,7 +1076,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // fails only when it cannot NORMALIZE, silent is lenient without messages.
     // That is a third option the record did not enumerate, and it answers the
     // record's own objection to unconditional parse refusal: rule 1 of the
-    // README ruleset is about OUTPUT conformance, so accepting a non-conformant
+    // normalization rules is about OUTPUT conformance, so accepting a non-conformant
     // input and normalizing it to a conformant output trades nothing.
     // Implementation is #1630; the rule-1 output bugs it does not cover are
     // #1627 and #1628, and the silent arm needs #1629.
@@ -1173,7 +1173,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ),
     // Whether `general.md:34`'s negation — "should be described individually
     // and **not** as a 'delins'" — carries prohibition force of its own, making
-    // the clause a README rule 1, or whether the modal grades the whole clause,
+    // the clause a `normalization-rules.md` rule 1, or whether the modal grades the whole clause,
     // making it rule 2. **Decided by operator ruling (2026-08-12): rule 2**, and
     // the general reading is what makes the record reusable — "and not Y" names
     // the excluded alternative, the MODAL grades the clause. Decisive because
@@ -1183,7 +1183,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // outright, restating this very rule with "**preferably**"; and the spec
     // pairs "and not" with "must" only where the alternatives are NOT exhaustive
     // (`duplication.md:18`'s "and not as, **e.g.**, an insertion"). Changes the
-    // CLASSIFICATION only — rule 2 still binds, and README says a preference
+    // CLASSIFICATION only — rule 2 still binds, and the rules page says a preference
     // clause outranks maintainer judgment — but it means such an output is a
     // deviation to disclose rather than a rule-7 bug, so it does not by itself
     // block a release. Every negative guard measuring it is KEPT and pinned at
@@ -1381,7 +1381,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ),
     // Should an `N`-unit (or `N`-containing) repeat be REFUSED on the HGVS->SPDI
     // path, or emitted as a run of literal `N`s? **House choice, decided 2026-08-16
-    // under `README.md` rule 5's silent limb** — the recommendations govern HGVS
+    // under `normalization-rules.md` rule 5's silent limb** — the recommendations govern HGVS
     // descriptions and say nothing about SPDI conversion. `N[341]` carries a
     // *length*, not bases (`background/standards.md:30`: `N` = "A, C, G or T"), so
     // emitting `insN[341]` as 341 literal `N`s asserts specific bases the input
@@ -1404,7 +1404,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ("past-cds-end-coordinate-is-non-conformant", "decided"),
     // Should `CoordinateMapper::cds_to_tx` COERCE a `c.?` (unknown position) into
     // a concrete transcript coordinate, or REFUSE it? **House choice, decided
-    // under `README.md` rule 5's silent limb** — the recommendations define what
+    // under `normalization-rules.md` rule 5's silent limb** — the recommendations define what
     // `?` MEANS (`general.md:87`: an unknown position) but say nothing about
     // coordinate conversion, so no clause governs the choice. `cds_to_tx` used to
     // answer `c.1`'s own coordinate (base 0 == `CDS_BASE_UNKNOWN` took the 5'UTR
@@ -1417,7 +1417,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ("cds-unknown-position-is-refused-at-conversion", "decided"),
     // On what basis are two `c.` positions in DIFFERENT numbering zones
     // (`c.-n` 5'UTR / `c.n` CDS / `c.*n` 3'UTR) ordered, for member sort,
-    // overlap and separation? **House choice, decided under `README.md` rule 5's
+    // overlap and separation? **House choice, decided under `normalization-rules.md` rule 5's
     // silent limb** — `background/numbering.md` defines each zone (`:21`/`:29`/`:30`)
     // and the flat `n.` numbering (`:52`) but states no cross-zone comparison, and
     // never speaks of alleles. Ferro orders by the TRANSCRIPT-SEQUENCE OFFSET
@@ -1436,7 +1436,7 @@ const RULING_STATUSES: &[(&str, &str)] = &[
 /// spec supplied nothing that decides between the candidates satisfying it.
 ///
 /// **This is a census, and its whole job is to make growth loud.** The canonical
-/// ruleset is in `README.md`; `adjudication-precedence-order` points at it and
+/// ruleset is in `normalization-rules.md`; `adjudication-precedence-order` points at it and
 /// holds this register. Under that ruleset, producing the recommended form is
 /// rule 2 — so an override of rule 2 is the rare, deliberate act this register
 /// exists to count. Left uncounted, overrides would accumulate into a second,
@@ -1571,7 +1571,7 @@ fn ruling_records_are_intact() {
             ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
         // The other half of the load-bearing pair below. A `house_choice` says
         // the recommendations do not reach the point and the project chose under
-        // `README.md` rule 5's silent limb or rule 6; naming a clause that
+        // `normalization-rules.md` rule 5's silent limb or rule 6; naming a clause that
         // governs — or one deviated from, which requires the clause to reach —
         // takes that choice and dresses it as compliance. That is the exact
         // failure the field was added for, so it is checked here and not only in
@@ -1592,8 +1592,8 @@ fn ruling_records_are_intact() {
             );
             assert!(
                 matches!(house.under.as_str(), "rule-five-silent" | "rule-six"),
-                "ruling {:?} makes its house choice under {:?}, which is not a `README.md` rule \
-                 that admits one",
+                "ruling {:?} makes its house choice under {:?}, which is not a \
+                 `normalization-rules.md` rule that admits one",
                 ruling.id,
                 house.under
             );

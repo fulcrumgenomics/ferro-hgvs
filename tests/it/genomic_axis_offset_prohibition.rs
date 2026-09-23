@@ -42,7 +42,7 @@
 //! governs: **strict** validates input conformance and so fails at PARSE;
 //! **lenient** does not validate input conformance and fails only when it cannot
 //! NORMALIZE; **silent** is lenient without messages. The output half is not a
-//! mode question — rule 1 of the README ruleset ("Output follows the HGVS
+//! mode question — rule 1 of the normalization rules ("Output follows the HGVS
 //! recommendations. Absolute — never traded.") is about OUTPUT and has no mode
 //! escape — so normalize refuses in every mode, and that is what
 //! [`no_mode_may_emit_the_prohibited_spelling`] asserts.
@@ -187,7 +187,7 @@ fn lenient_and_silent_accept_a_genomic_offset_at_parse() {
 
 /// **Question.** May a permissive mode hand the description back?
 ///
-/// **No.** Rule 1 of the README ruleset is about OUTPUT and carries no mode
+/// **No.** Rule 1 of the normalization rules is about OUTPUT and carries no mode
 /// escape, so `normalize` refuses in every mode. There is nothing to be lenient
 /// *toward*: a genomic accession has no exon table, so the offset is measured
 /// from nothing and the position names no nucleotide.

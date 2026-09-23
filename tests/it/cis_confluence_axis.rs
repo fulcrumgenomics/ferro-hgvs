@@ -443,7 +443,7 @@ const THREE_PRIME: Census = Census {
 /// rather than of one shuffle direction, so it is measured in full rather than
 /// spot-checked.
 ///
-/// The 5' direction is **no longer a public option** — see `README.md` rule 6
+/// The 5' direction is **no longer a public option** — see `normalization-rules.md` rule 6
 /// and `tests/it/five_prime_public_surface_removed.rs`. That changes the reason
 /// this census exists, not its scope: the 5' arm is ferro's differential oracle over its own 3' output — the instrument that found #1542, where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only the shipped `live`/3' arm diverged. An arm that is only spot-checked
 /// cannot serve as that oracle.

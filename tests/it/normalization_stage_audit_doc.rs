@@ -39,8 +39,8 @@
 //!
 //! This inventory says *which* record governs a stage. The records themselves —
 //! question, verdict, clauses, quotes and reasoning — are published separately.
-//! Neither document restates `README.md`'s ruleset; that is stated once, there,
-//! and both link to it.
+//! Neither document restates the normalization rules; they are stated once, in
+//! `docs/src/reference/normalization-rules.md`, and both link to it.
 //!
 //! Regenerate with:
 //!
@@ -740,45 +740,23 @@ fn every_ungoverned_decision_is_published_with_its_verdict() {
     );
 }
 
-/// The document does not restate the README ruleset.
+/// The document does not restate the ruleset page.
 ///
 /// Same reason as its sibling: single-sourcing that ruleset is part of a ruling
 /// in the ledger this audit indexes.
 #[test]
-fn the_document_does_not_restate_the_readme_ruleset() {
+fn the_document_does_not_restate_the_ruleset() {
     let rendered = render();
     assert!(
         rendered.contains("src/reference/normalization-rules.md"),
         "the document must send the reader to the ruleset page rather than restating it"
     );
 
-    let page = read("docs/src/reference/normalization-rules.md");
-    let section = page
-        .split_once("# Normalization rules\n")
-        .expect("the ruleset page has a title heading")
-        .1;
-    let openers: Vec<&str> = section
-        .lines()
-        .filter_map(|line| {
-            let rest = line
-                .trim_start()
-                .strip_prefix(char::is_numeric)?
-                .strip_prefix(". **")?;
-            rest.split_once("**").map(|(opener, _)| opener)
-        })
-        .collect();
+    let restated = crate::common::ruleset_page::restated_rule_openers(&rendered);
     assert!(
-        openers.len() >= 7,
-        "found {} rule openers in the README ruleset, expected seven — the section's shape moved \
-         and this guard is no longer reading it",
-        openers.len()
+        restated.is_empty(),
+        "the document restates the ruleset page's rules {restated:?}; link to it instead"
     );
-    for opener in openers {
-        assert!(
-            !rendered.contains(&format!("**{opener}**")),
-            "the document restates the README ruleset's rule {opener:?}; link to it instead"
-        );
-    }
 }
 
 /// The render is already in the shape the file-hygiene pre-commit hooks want, so

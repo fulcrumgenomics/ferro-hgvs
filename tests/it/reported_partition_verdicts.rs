@@ -618,7 +618,7 @@ const REPORTED_ROWS: &[Row] = &[
                    which the spec states a ranking, and the derivation does not \
                    consult it after re-partitioning. `rulings[separation-rule-\
                    force-modal-or-negation]` (decided 2026-08-12) grades \
-                   `general.md`'s modals as README rule 2 — a deviation to \
+                   `general.md`'s modals as `normalization-rules.md` rule 2 — a deviation to \
                    DISCLOSE AND PIN WITH A TRIPWIRE, not a rule-7 blocker — so \
                    this is pinned here and disclosed in the PR's \
                    `Representation-Change:` trailer rather than blocking. The \
@@ -647,7 +647,7 @@ const REPORTED_ROWS: &[Row] = &[
         // authored form, so the pair converges but neither spelling reaches
         // `wanted`. Here `general.md:56` ranks (1) substitution above
         // (5) insertion, and the surviving form spells the change as an `ins`.
-        // A README rule-2 preference miss, disclosed and filed as #1878.
+        // A `normalization-rules.md` rule-2 preference miss, disclosed and filed as #1878.
         output: "TEMPLATE:g.[36_37insC;40del]",
         five_prime: "TEMPLATE:g.[36_37insC;40del]",
         verdict: Verdict::Gap,

@@ -123,7 +123,7 @@
 //! accepts today, with no escape for a caller round-tripping a real-world
 //! corpus". For `n.*N` that objection is measurably empty: there is no such
 //! caller in 103,762 rows. So this is a **maintainer's decision** under rule 6
-//! of the `README.md` ruleset, disclosed under rule 7, and it is **revisitable
+//! of the normalization rules, disclosed under rule 7, and it is **revisitable
 //! on user demand** — if someone reports a real `n.*N` corpus, the honest
 //! response is to move it onto the `n.-N` schedule, not to defend the refusal.
 //!

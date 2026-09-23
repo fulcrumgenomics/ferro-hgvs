@@ -236,7 +236,7 @@ fn a_size_count_insertion_is_refused_at_the_ruled_stage() {
         );
 
         // All three modes refuse to NORMALIZE. Output conformance is rule 1 of
-        // the README ruleset and has no mode escape, so this rung is not
+        // the normalization rules and has no mode escape, so this rung is not
         // mode-gated: lenient fails on the ruling's own ground, because a count
         // names no bases to normalize.
         for (label, config) in [

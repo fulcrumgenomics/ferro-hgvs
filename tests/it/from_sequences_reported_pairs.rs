@@ -36,7 +36,7 @@
 //!
 //! Do not read this as "`from_sequences` beats `normalize`". They answer
 //! different questions: `normalize` is handed a description and owes rules 2 and
-//! 3 (`README.md`), which need the reference; this is handed bases and owes
+//! 3 (`normalization-rules.md`), which need the reference; this is handed bases and owes
 //! rules 1 and 4. The pairs are exactly the case where being handed a
 //! description is the problem, because the difference between the two spellings
 //! is precisely what should not survive. Discarding the spelling is not a better

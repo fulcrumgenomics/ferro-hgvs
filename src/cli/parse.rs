@@ -30,7 +30,7 @@ pub fn parse_genome_build(build: &str) -> GenomeBuild {
 }
 
 // `parse_shuffle_direction` was removed here with the `ferro normalize
-// --direction` flag it existed to serve (`README.md` rule 6: there are no user
+// --direction` flag it existed to serve (`normalization-rules.md` rule 6: there are no user
 // options for normalization form). Its fallback arm was `_ => ThreePrime`, so
 // an unrecognized value 3'-shifted and reported success — the #1863 footgun,
 // and the reason removing the flag had to be a hard clap rejection rather than

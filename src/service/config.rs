@@ -72,7 +72,7 @@ pub struct ToolConfigs {
 /// Ferro tool configuration
 ///
 /// `deny_unknown_fields` is load-bearing rather than tidiness. The
-/// `shuffle_direction` key was removed from this struct (`README.md` rule 6 —
+/// `shuffle_direction` key was removed from this struct (`normalization-rules.md` rule 6 —
 /// there are no user options for normalization form), and serde's default is to
 /// *ignore* a key it does not recognize. Without this attribute an operator's
 /// existing `shuffle_direction = "5prime"` would be silently dropped and the

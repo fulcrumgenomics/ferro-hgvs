@@ -200,8 +200,8 @@ fn issue_1691_a_tract_past_the_growth_cap_refuses_to_shift_and_is_stable() {
 /// flanking the insertion point, not by how far the tract runs, so it is
 /// available at the growth cap and must still be given there.
 ///
-/// Refusing it traded rule 1 (conformant output, README:176-179, "absolute —
-/// never traded") for idempotency, which is not one of the four output rules at
+/// Refusing it traded rule 1 of `normalization-rules.md` (conformant output,
+/// "Absolute — never traded") for idempotency, which is not one of the four output rules at
 /// all. The capped answer has to be **both**: a `dup`, and a fixed point.
 ///
 /// Both axes, because the growth loop is shared and a per-axis fix would be the

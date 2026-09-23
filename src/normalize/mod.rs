@@ -3,7 +3,7 @@
 //! Implements the core HGVS variant normalization algorithm including
 //! 3' shifting and boundary detection. (A 5' arm exists as an internal
 //! differential oracle and is not reachable from any entry point — see
-//! [`config::ShuffleDirection`] and `README.md` rule 6.)
+//! [`config::ShuffleDirection`] and `normalization-rules.md` rule 6.)
 //!
 //! # Coordinate Systems
 //!
@@ -4526,7 +4526,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // The mode gate belongs at parse, not here. Per the decided
         // `rulings[absolute-prohibition-enforcement-stage]`, it governs whether
         // the INPUT is judged; it "does not, and cannot, govern whether the
-        // output conforms", because rule 1 of the README ruleset — "Output
+        // output conforms", because rule 1 of the normalization rules — "Output
         // follows the HGVS recommendations. Absolute — never traded." — is about
         // output. `X` is a masked nucleotide: the base it stands for was not
         // resolved, so there is no sequence to shuffle, no denotation to derive,
@@ -6594,7 +6594,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// they must be answered ("when a variant can be described as a duplication,
     /// it **must** be described as a duplication and not as, e.g., an
     /// insertion"). Refusing them alongside the shift bought idempotency with
-    /// conformance, which is the one thing the README ruleset never trades.
+    /// conformance, which is the one thing the normalization rules never trade.
     ///
     /// `fetch_end_of` maps a raw `end + window` upper bound to the one the
     /// caller wants read (each axis clamps differently), and is re-consulted on

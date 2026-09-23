@@ -42,7 +42,7 @@ impl FerroService {
         // Create normalization config.
         //
         // The service used to read a `shuffle_direction` key here. It is gone:
-        // `README.md` rule 6 says there are no user options for normalization
+        // `normalization-rules.md` rule 6 says there are no user options for normalization
         // form, and a direction is not orthogonal to the form. The service
         // normalizes 3', the only direction the HGVS recommendations describe.
         // `FerroConfig` is `deny_unknown_fields` so a stale

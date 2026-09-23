@@ -576,7 +576,7 @@ pub enum ErrorType {
     /// or merely warns; `Normalizer::normalize_core_checked` refuses
     /// **unconditionally** and consults no config at all. So ignoring the code
     /// suppresses the diagnostic without making the description normalizable —
-    /// which is the intended asymmetry, not a gap: rule 1 of the README ruleset
+    /// which is the intended asymmetry, not a gap: rule 1 of the normalization rules
     /// is about *output* conformance, and no per-code override may trade it.
     AlignmentOnlySymbolInDescription,
 
@@ -611,8 +611,8 @@ pub enum ErrorType {
     ///
     /// **An override on this code moves the PARSE stage only**, exactly as for
     /// `W3028` above: `Normalizer::normalize_core_checked` refuses
-    /// unconditionally and consults no config, because rule 1 of the README
-    /// ruleset is about *output* conformance and no per-code override may trade
+    /// unconditionally and consults no config, because rule 1 of the normalization
+    /// rules is about *output* conformance and no per-code override may trade
     /// it.
     InsertionSizeCountWithoutSequence,
 
@@ -697,7 +697,7 @@ pub enum ErrorType {
     /// **An override on this code moves the PARSE stage only**, exactly as for
     /// `AlignmentOnlySymbolInDescription`: `Normalizer::normalize_core_checked`
     /// refuses unconditionally and consults no config, because rule 1 of the
-    /// README ruleset is about *output* conformance and no per-code override may
+    /// normalization rules is about *output* conformance and no per-code override may
     /// trade it.
     ///
     /// The code is `W4009` rather than the next free `W4008`, which

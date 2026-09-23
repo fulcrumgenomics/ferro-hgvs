@@ -2606,8 +2606,8 @@ const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
 /// `origin/main` `e98fa77e`, which carries #1725's
 /// `separation-rule-force-modal-or-negation`. That record is **decided**
 /// (operator ruling 2026-08-12) and grades `general.md:34` — the clause these
-/// rows fall back to once `general.md:35`'s exception declines — as README
-/// **rule 2** in its entirety: "'and not Y' names the excluded alternative; it
+/// rows fall back to once `general.md:35`'s exception declines — as
+/// `normalization-rules.md` **rule 2** in its entirety: "'and not Y' names the excluded alternative; it
 /// does not grade the clause. The modal grades the clause." So an output
 /// merging across unchanged nucleotides where the exception cannot reach is a
 /// deviation to **disclose and pin with a tripwire**, not the rule-7 bug a rule

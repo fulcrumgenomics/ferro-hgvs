@@ -404,7 +404,7 @@ fn adjudication_shaped_prose_points_at_a_ruling_record_or_is_allowlisted() {
          \n\
          Record the decision instead of restating it. If the recommendations settle it, add a \
          `rulings` record naming the governing clause; if they are silent, add one with a \
-         `house_choice` under `README.md` rule 5's silent limb or rule 6 — see \
+         `house_choice` under `normalization-rules.md` rule 5's silent limb or rule 6 — see \
          `generate_spec_fixture`'s `overrides::HouseChoice`. Then cite the record's id here \
          rather than repeating its content, because a rule written in several places is how \
          this project's rulings have drifted apart before.\n\

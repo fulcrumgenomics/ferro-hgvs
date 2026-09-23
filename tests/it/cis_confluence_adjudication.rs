@@ -371,7 +371,7 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_c
 /// `separation-is-a-property-of-the-spelling-not-of-the-variant`. The
 /// separation `general.md:34` keys on is read off the partition re-derived from
 /// the resulting sequence, never off the input's spelling — rule 3 of the
-/// README ruleset.
+/// normalization rules.
 ///
 /// **No longer `#[ignore]`d: #1617 is closed.** It was `#[ignore]`d because
 /// ferro did not do this yet, never because the answer was in doubt — the

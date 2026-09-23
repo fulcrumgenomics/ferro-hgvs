@@ -1,6 +1,6 @@
 //! The 5' shuffling direction is not reachable from any ferro entry point.
 //!
-//! `README.md` rule 6 states that there are no user options for normalization
+//! `normalization-rules.md` rule 6 states that there are no user options for normalization
 //! form, and then concedes in its next sentence that the 3'/5' knob is not
 //! orthogonal — it selects the frame every other rule is evaluated in. The knob
 //! was therefore a user option for normalization form sitting inside the rule

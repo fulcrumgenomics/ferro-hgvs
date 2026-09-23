@@ -29,7 +29,7 @@
 //! reached only for a pair that **diverges**. Driving these tests through
 //! `check` therefore made every one of them depend on the normalizer staying
 //! non-confluent over some pair, and reducing divergence is the project's own
-//! goal (README rule 3). Twice now a confluence PR has destroyed the pair a
+//! goal (`normalization-rules.md` rule 3). Twice now a confluence PR has destroyed the pair a
 //! test here was standing on: #1649 converged #1419's `[19_23del;27_33del]` /
 //! `19_33delinsCGG`, and #1616 converges #1420-v2's `c.[48dup;52del]` /
 //! `c.49_52delinsATTG` and its genomic sibling.

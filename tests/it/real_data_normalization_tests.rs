@@ -16,8 +16,8 @@
 //!
 //! # The one property that needs no adjudication
 //!
-//! Which of two legal spellings ferro ships is a rule 6 choice (`README.md`'s
-//! ruleset) and needs an operator to settle. Whether the shipped spelling still
+//! Which of two legal spellings ferro ships is a `normalization-rules.md` rule 6
+//! choice and needs an operator to settle. Whether the shipped spelling still
 //! denotes the input's bases is rule 1, and a failure there is a bug under
 //! every reading of the recommendations. So [`assert_denotes_the_same_bases`]
 //! carries the load wherever the spelling question is open, and no guard here
@@ -195,7 +195,7 @@ fn bases_or_skip<'a>(transcript: &'a Transcript, accession: &str) -> Option<&'a 
 /// Asserts on the **bases** rather than on the output string, so it keeps its
 /// meaning if a canonical spelling is ever revised: the property is that
 /// normalization does not change what the description means, which is rule 1 of
-/// `README.md`'s ruleset and is not open to a rule 6 choice. That makes it the
+/// the normalization rules and is not open to a rule 6 choice. That makes it the
 /// assertion the guards below can carry without an operator settling which of
 /// two conformant spellings ferro should ship.
 ///
@@ -455,7 +455,7 @@ fn test_potential_bug_deletion_shift_nm033517() {
 ///
 /// **The guard's original premise is withdrawn.** It read "HGVS spec: delins
 /// should NOT be 3' shifted like del/dup", which grades a description by its
-/// *edit type* — a property of the input's spelling. `README.md` rule 3 says
+/// *edit type* — a property of the input's spelling. `normalization-rules.md` rule 3 says
 /// every rule is evaluated over the resulting sequence "never over the input's
 /// spelling", and `canonical-form-choice-when-both-legal` (decided 2026-08-07)
 /// says ferro derives from the resulting sequence and emits what falls out. So

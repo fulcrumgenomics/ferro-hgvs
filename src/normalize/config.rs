@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// no `--direction` flag, the Python bindings take no `direction=` keyword, and
 /// the web service has no `shuffle_direction` key. Every shipped path
 /// normalizes 3', which is the only direction the HGVS recommendations
-/// describe. `README.md` rule 6 — "there are no user options for normalization
+/// describe. `normalization-rules.md` rule 6 — "there are no user options for normalization
 /// form" — is what removed them: a direction is not orthogonal to the form,
 /// because it selects the frame every other rule is evaluated in.
 ///

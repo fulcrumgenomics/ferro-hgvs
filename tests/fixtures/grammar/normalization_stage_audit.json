@@ -116,7 +116,7 @@
         {
           "decision": "What the 5' direction does — at an exon/exon junction, in a repeat tract, and at a reference boundary.",
           "verdict": "genuine-gap",
-          "why": "The recommendations state a 3' rule and only a 3' rule; `5' rule` and `5'-rule` occur nowhere in the checkout. Ferro nevertheless offers a 5' direction, and the direction is not an orthogonal knob — it selects the frame every other rule is evaluated in, which is why the README claims its best-effort rules per direction rather than across the two. So every clause and every ruling at this stage is authority for the 3' arm; the 5' arm's answers are ferro's own, mirrored by construction rather than by a decision anyone recorded. That is defensible and may well be the only possible answer, but it is nowhere adjudicated, and the mirroring is not obviously right at a junction, where the 3' answer is itself an exception."
+          "why": "The recommendations state a 3' rule and only a 3' rule; `5' rule` and `5'-rule` occur nowhere in the checkout. Ferro nevertheless offers a 5' direction, and the direction is not an orthogonal knob — it selects the frame every other rule is evaluated in, which is why the ruleset used to claim its best-effort rules per direction rather than across the two. So every clause and every ruling at this stage is authority for the 3' arm; the 5' arm's answers are ferro's own, mirrored by construction rather than by a decision anyone recorded. That is defensible and may well be the only possible answer, but it is nowhere adjudicated, and the mirroring is not obviously right at a junction, where the 3' answer is itself an exception."
         }
       ],
       "note": null

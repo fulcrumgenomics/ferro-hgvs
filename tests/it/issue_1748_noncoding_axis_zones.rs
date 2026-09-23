@@ -99,7 +99,7 @@
 //! refusal for **one stated reason** — it "would newly refuse inputs ferro
 //! accepts today, with no escape for a caller round-tripping a real-world
 //! corpus". For `n.*N` that objection is measurably empty. So the unconditional
-//! arm is a **maintainer's decision** under rule 6 of the `README.md` ruleset,
+//! arm is a **maintainer's decision** under rule 6 of the normalization rules,
 //! disclosed under rule 7, and **revisitable on user demand**: a real `n.*N`
 //! corpus is grounds to move it onto the `n.-N` schedule, not to defend it.
 //!
@@ -439,7 +439,7 @@ fn the_rna_axis_is_left_alone() {
 ///
 /// - `n.*N` — refused at parse in **every** mode, as `E1003`. Authority for the
 ///   *invalidity* is `background/numbering.md:52`; authority for the *stage* is
-///   the maintainer, under rule 6 of the `README.md` ruleset and disclosed under
+///   the maintainer, under rule 6 of the normalization rules and disclosed under
 ///   rule 7. This **departs** from the decided
 ///   `rulings[absolute-prohibition-enforcement-stage]`, which makes enforcement
 ///   mode-dependent uniformly. The departure is justified empirically and not by
