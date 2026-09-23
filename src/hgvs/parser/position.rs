@@ -6,9 +6,16 @@ use crate::hgvs::location::{AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, TxPos
 use nom::{
     branch::alt,
     character::complete::{char, digit1},
-    combinator::opt,
+    combinator::{map_res, opt},
     IResult, Parser,
 };
+use std::str::FromStr;
+
+/// Parse a run of ASCII digits as a `T`, failing the parse when the value does
+/// not fit rather than substituting a default.
+pub(crate) fn parse_number<T: FromStr>(input: &str) -> IResult<&str, T> {
+    map_res(digit1, str::parse::<T>).parse(input)
+}
 
 /// Length of a leading `pter`/`qter`/`cen` special-position marker, if `bytes`
 /// starts with one. Single source of truth for the three special markers.

@@ -8,7 +8,8 @@ use crate::hgvs::edit::{
 };
 use crate::hgvs::location::AminoAcid;
 use crate::hgvs::parser::position::{
-    parse_amino_acid, parse_amino_acid_one_letter, parse_genome_pos, special_pos_marker_len,
+    parse_amino_acid, parse_amino_acid_one_letter, parse_genome_pos, parse_number,
+    special_pos_marker_len,
 };
 use nom::{
     branch::alt,
@@ -252,12 +253,12 @@ fn parse_deletion(input: &str) -> IResult<&str, NaEdit> {
     match bytes[0] {
         b'0'..=b'9' => {
             // Length: del101
-            let (remaining, len_str) = digit1::<&str, nom::error::Error<&str>>(input)?;
+            let (remaining, length) = parse_number::<u64>(input)?;
             Ok((
                 remaining,
                 NaEdit::Deletion {
                     sequence: None,
-                    length: Some(len_str.parse().unwrap_or(0)),
+                    length: Some(length),
                 },
             ))
         }
@@ -499,15 +500,12 @@ fn parse_bracketed_inserted_sequence(input: &str) -> IResult<&str, InsertedSeque
 
     // Check for (min_max) range inside brackets
     if let Ok((remaining, _)) = char::<_, nom::error::Error<&str>>('(').parse(input) {
-        let (remaining, min) = digit1.parse(remaining)?;
+        let (remaining, min) = parse_number::<u64>(remaining)?;
         let (remaining, _) = char('_').parse(remaining)?;
-        let (remaining, max) = digit1.parse(remaining)?;
+        let (remaining, max) = parse_number::<u64>(remaining)?;
         let (remaining, _) = char(')').parse(remaining)?;
         let (remaining, _) = char(']').parse(remaining)?;
-        return Ok((
-            remaining,
-            InsertedSequence::Range(min.parse().unwrap_or(0), max.parse().unwrap_or(0)),
-        ));
+        return Ok((remaining, InsertedSequence::Range(min, max)));
     }
 
     // Parse parts separated by semicolon
@@ -837,8 +835,12 @@ fn parse_cds_position_range(input: &str) -> IResult<&str, crate::hgvs::edit::Ins
         // Parse as simple numbers
         let parts: Vec<&str> = range_str.split('_').collect();
         if parts.len() == 2 {
-            let start: u64 = parts[0].parse().unwrap_or(0);
-            let end: u64 = parts[1].parse().unwrap_or(0);
+            let (Ok(start), Ok(end)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>()) else {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Digit,
+                )));
+            };
             if has_inv {
                 Ok((remaining, InsertedPart::PositionRangeInv { start, end }))
             } else {
@@ -885,36 +887,25 @@ fn parse_parenthesized_count(input: &str) -> IResult<&str, InsertedSequence> {
     }
 
     // Check for uncertain range: (min_?)
-    if let Ok((remaining, min_str)) = digit1::<_, nom::error::Error<&str>>.parse(input) {
+    if let Ok((remaining, start1)) = parse_number::<u64>(input) {
         if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("_?)").parse(remaining) {
-            return Ok((
-                remaining,
-                InsertedSequence::Range(min_str.parse().unwrap_or(0), u64::MAX),
-            ));
+            return Ok((remaining, InsertedSequence::Range(start1, u64::MAX)));
         }
 
         // Check for range: (min_max)
         if let Ok((remaining, _)) = char::<_, nom::error::Error<&str>>('_').parse(remaining) {
-            let (remaining, max_str) = digit1.parse(remaining)?;
+            let (remaining, end1) = parse_number::<u64>(remaining)?;
             let (remaining, _) = char(')').parse(remaining)?;
-
-            let start1: u64 = min_str.parse().unwrap_or(0);
-            let end1: u64 = max_str.parse().unwrap_or(0);
 
             // Check if followed by _(pos_pos) for complex position ranges
             // e.g., ins(23632682_23625413)_(23625324_23619334)
             if let Some(rest) = remaining.strip_prefix("_(") {
-                if let Ok((rest, start2_str)) = digit1::<_, nom::error::Error<&str>>.parse(rest) {
+                if let Ok((rest, start2)) = parse_number::<u64>(rest) {
                     if let Ok((rest, _)) = char::<_, nom::error::Error<&str>>('_').parse(rest) {
-                        if let Ok((rest, end2_str)) =
-                            digit1::<_, nom::error::Error<&str>>.parse(rest)
-                        {
+                        if let Ok((rest, end2)) = parse_number::<u64>(rest) {
                             if let Ok((rest, _)) =
                                 char::<_, nom::error::Error<&str>>(')').parse(rest)
                             {
-                                let start2: u64 = start2_str.parse().unwrap_or(0);
-                                let end2: u64 = end2_str.parse().unwrap_or(0);
-
                                 // A trailing `inv` marks an orientation-reversed
                                 // insertion of the single uncertain-boundary
                                 // region — the HGVS-sanctioned form for what the
@@ -956,10 +947,7 @@ fn parse_parenthesized_count(input: &str) -> IResult<&str, InsertedSequence> {
         }
 
         let (remaining, _) = char(')').parse(remaining)?;
-        return Ok((
-            remaining,
-            InsertedSequence::Count(min_str.parse().unwrap_or(0)),
-        ));
+        return Ok((remaining, InsertedSequence::Count(start1)));
     }
 
     Err(nom::Err::Error(nom::error::Error::new(
@@ -979,13 +967,11 @@ fn parse_repeated_base_insertion(input: &str) -> IResult<&str, InsertedSequence>
 /// Parse a simple count: 10 (just digits)
 #[inline]
 fn parse_simple_count(input: &str) -> IResult<&str, InsertedSequence> {
-    let (remaining, count_str) = digit1.parse(input)?;
-    let start: u64 = count_str.parse().unwrap_or(0);
+    let (remaining, start) = parse_number::<u64>(input)?;
 
     // Check for position range: start_end or start_endinv
     if let Ok((remaining, _)) = char::<_, nom::error::Error<&str>>('_').parse(remaining) {
-        let (remaining, end_str) = digit1.parse(remaining)?;
-        let end: u64 = end_str.parse().unwrap_or(0);
+        let (remaining, end) = parse_number::<u64>(remaining)?;
 
         // Check for inversion suffix
         if let Ok((remaining, _)) = tag::<_, _, nom::error::Error<&str>>("inv").parse(remaining) {
@@ -1105,11 +1091,9 @@ fn parse_delins_with_deleted_count(
     allow_special_positions: bool,
 ) -> IResult<&str, NaEdit> {
     let (input, _) = tag("del").parse(input)?;
-    let (input, deleted_count_str) = digit1.parse(input)?;
+    let (input, deleted_count) = parse_number::<u64>(input)?;
     let (input, _) = tag("ins").parse(input)?;
     let (input, inserted_seq) = parse_inserted_sequence(input, allow_special_positions)?;
-
-    let deleted_count: u64 = deleted_count_str.parse().unwrap_or(0);
 
     Ok((
         input,
@@ -1160,8 +1144,8 @@ fn parse_duplication(input: &str) -> IResult<&str, NaEdit> {
             (remaining, Some(seq), None)
         }
         b'0'..=b'9' => {
-            let (remaining, len_str) = digit1::<&str, nom::error::Error<&str>>(input)?;
-            (remaining, None, Some(len_str.parse().unwrap_or(0)))
+            let (remaining, length) = parse_number::<u64>(input)?;
+            (remaining, None, Some(length))
         }
         _ => (input, None, None),
     };
@@ -1178,20 +1162,14 @@ fn parse_duplication(input: &str) -> IResult<&str, NaEdit> {
                 let remaining = &input[1..];
                 if let Some(stripped) = remaining.strip_prefix("?)") {
                     (stripped, Some(UncertainDupExtent::Unknown))
-                } else if let Ok((remaining, start_str)) =
-                    digit1::<&str, nom::error::Error<&str>>(remaining)
-                {
+                } else if let Ok((remaining, start)) = parse_number::<u64>(remaining) {
                     if let Ok((remaining, _)) =
                         char::<_, nom::error::Error<&str>>('_').parse(remaining)
                     {
-                        if let Ok((remaining, end_str)) =
-                            digit1::<&str, nom::error::Error<&str>>(remaining)
-                        {
+                        if let Ok((remaining, end)) = parse_number::<u64>(remaining) {
                             if let Ok((remaining, _)) =
                                 char::<_, nom::error::Error<&str>>(')').parse(remaining)
                             {
-                                let start = start_str.parse().unwrap_or(0);
-                                let end = end_str.parse().unwrap_or(0);
                                 (remaining, Some(UncertainDupExtent::Range(start, end)))
                             } else {
                                 (input, None)
@@ -1258,16 +1236,19 @@ fn parse_inversion(input: &str) -> IResult<&str, NaEdit> {
     ))
 }
 
-/// Scan ASCII digits from bytes, returning (parsed_value, bytes_consumed)
+/// Scan leading ASCII digits, returning `(value, bytes_consumed)`, or `None`
+/// when there are no digits or the value does not fit in `u64`.
 #[inline]
-fn scan_digits(bytes: &[u8]) -> (u64, usize) {
+fn scan_digits(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut end = 0;
     let mut value = 0u64;
     while end < bytes.len() && bytes[end].is_ascii_digit() {
-        value = value * 10 + (bytes[end] - b'0') as u64;
+        value = value
+            .checked_mul(10)?
+            .checked_add((bytes[end] - b'0') as u64)?;
         end += 1;
     }
-    (value, end)
+    (end > 0).then_some((value, end))
 }
 
 /// Parse a repeat count (e.g., [12], [10_15], [?], [?_?], [10_?], [?_10])
@@ -1315,8 +1296,7 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
                         }
                     } else {
                         // [(?_num)]
-                        let (num, consumed) = scan_digits(after_underscore);
-                        if consumed > 0 {
+                        if let Some((num, consumed)) = scan_digits(after_underscore) {
                             let check_pos = consumed;
                             if after_underscore.len() > check_pos + 1
                                 && after_underscore[check_pos] == b')'
@@ -1336,13 +1316,12 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
                 )));
             }
 
-            let (num1, consumed1) = scan_digits(after_paren);
-            if consumed1 == 0 {
+            let Some((num1, consumed1)) = scan_digits(after_paren) else {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Digit,
                 )));
-            }
+            };
             let after_num1 = &after_paren[consumed1..];
             // Expect _
             if after_num1.is_empty() || after_num1[0] != b'_' {
@@ -1372,13 +1351,12 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
             }
 
             // Parse second number for [(num1_num2)]
-            let (num2, consumed2) = scan_digits(after_underscore);
-            if consumed2 == 0 {
+            let Some((num2, consumed2)) = scan_digits(after_underscore) else {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Digit,
                 )));
-            }
+            };
             let after_num2 = &after_underscore[consumed2..];
             // Expect )]
             if after_num2.len() < 2 || after_num2[0] != b')' || after_num2[1] != b']' {
@@ -1407,8 +1385,7 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
                     }
                 } else {
                     // [?_<digits>] - max uncertain
-                    let (value, consumed) = scan_digits(&inner[2..]);
-                    if consumed > 0 {
+                    if let Some((value, consumed)) = scan_digits(&inner[2..]) {
                         let bracket_pos = 2 + consumed;
                         if inner.len() > bracket_pos && inner[bracket_pos] == b']' {
                             return Ok((
@@ -1429,13 +1406,12 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
         }
         b'0'..=b'9' => {
             // Could be: [12], [10_?], [10_15]
-            let (num1, consumed1) = scan_digits(inner);
-            if consumed1 == 0 {
+            let Some((num1, consumed1)) = scan_digits(inner) else {
                 return Err(nom::Err::Error(nom::error::Error::new(
                     input,
                     nom::error::ErrorKind::Digit,
                 )));
-            }
+            };
 
             let after_num1 = &inner[consumed1..];
             if after_num1.is_empty() {
@@ -1457,8 +1433,7 @@ pub(crate) fn parse_repeat_count(input: &str) -> IResult<&str, RepeatCount> {
                     }
                 } else {
                     // [10_15] - range
-                    let (num2, consumed2) = scan_digits(&after_num1[1..]);
-                    if consumed2 > 0 {
+                    if let Some((num2, consumed2)) = scan_digits(&after_num1[1..]) {
                         let bracket_pos = consumed1 + 1 + consumed2;
                         if inner.len() > bracket_pos && inner[bracket_pos] == b']' {
                             return Ok((&input[bracket_pos + 2..], RepeatCount::Range(num1, num2)));
@@ -1632,8 +1607,7 @@ fn parse_methylation(input: &str) -> IResult<&str, NaEdit> {
 /// Parse copy number (copy2, copy4, etc.)
 fn parse_copy_number(input: &str) -> IResult<&str, NaEdit> {
     let (input, _) = tag("copy").parse(input)?;
-    let (input, count_str) = digit1.parse(input)?;
-    let count = count_str.parse::<u64>().unwrap_or(2);
+    let (input, count) = parse_number::<u64>(input)?;
     Ok((input, NaEdit::CopyNumber { count }))
 }
 
@@ -1641,7 +1615,7 @@ fn parse_copy_number(input: &str) -> IResult<&str, NaEdit> {
 /// This represents a repeat with uncertain count.
 fn parse_parenthesized_repeat(input: &str) -> IResult<&str, NaEdit> {
     let (input, _) = char('(').parse(input)?;
-    let (input, min_str) = digit1.parse(input)?;
+    let (input, min) = parse_number::<u64>(input)?;
 
     // Check for range: (min_max)
     if let Ok((remaining, _)) = char::<_, nom::error::Error<&str>>('_').parse(input) {
@@ -1652,23 +1626,20 @@ fn parse_parenthesized_repeat(input: &str) -> IResult<&str, NaEdit> {
                 remaining,
                 NaEdit::Repeat {
                     sequence: None,
-                    count: RepeatCount::MinUncertain(min_str.parse().unwrap_or(0)),
+                    count: RepeatCount::MinUncertain(min),
                     additional_counts: Vec::new(),
                     trailing: None,
                 },
             ));
         }
 
-        let (remaining, max_str) = digit1.parse(remaining)?;
+        let (remaining, max) = parse_number::<u64>(remaining)?;
         let (remaining, _) = char(')').parse(remaining)?;
         return Ok((
             remaining,
             NaEdit::Repeat {
                 sequence: None,
-                count: RepeatCount::Range(
-                    min_str.parse().unwrap_or(0),
-                    max_str.parse().unwrap_or(0),
-                ),
+                count: RepeatCount::Range(min, max),
                 additional_counts: Vec::new(),
                 trailing: None,
             },
@@ -1681,7 +1652,7 @@ fn parse_parenthesized_repeat(input: &str) -> IResult<&str, NaEdit> {
         input,
         NaEdit::Repeat {
             sequence: None,
-            count: RepeatCount::Exact(min_str.parse().unwrap_or(0)),
+            count: RepeatCount::Exact(min),
             additional_counts: Vec::new(),
             trailing: None,
         },
@@ -1850,12 +1821,12 @@ fn parse_protein_del_extension(input: &str) -> IResult<&str, ProteinEdit> {
         map(tag("Ter?"), |_| (ExtDirection::CTerminal, None)),
         map(tag("*?"), |_| (ExtDirection::CTerminal, None)),
         // delextTer17 (extension with stop position)
-        map(preceded(tag("Ter"), digit1), |n: &str| {
-            (ExtDirection::CTerminal, Some(n.parse::<i64>().unwrap_or(0)))
+        map(preceded(tag("Ter"), parse_number::<i64>), |n| {
+            (ExtDirection::CTerminal, Some(n))
         }),
         // delext*17 (extension with stop position, alternate notation)
-        map(preceded(tag("*"), digit1), |n: &str| {
-            (ExtDirection::CTerminal, Some(n.parse::<i64>().unwrap_or(0)))
+        map(preceded(tag("*"), parse_number::<i64>), |n| {
+            (ExtDirection::CTerminal, Some(n))
         }),
         // delext? (unknown extension)
         map(tag("?"), |_| (ExtDirection::CTerminal, None)),
@@ -2090,22 +2061,19 @@ fn parse_protein_extension(input: &str) -> IResult<&str, ProteinEdit> {
     // C-terminal: extTer17 or ext*17 or extTer? or ext*? (downstream of stop)
     let (input, result) = alt((
         // ext-5 (N-terminal extension)
-        map(preceded(char('-'), digit1), |n: &str| {
-            (
-                ExtDirection::NTerminal,
-                Some(-(n.parse::<i64>().unwrap_or(0))),
-            )
+        map(preceded(char('-'), parse_number::<i64>), |n| {
+            (ExtDirection::NTerminal, Some(-n))
         }),
         // extTer? or ext*? (C-terminal extension with unknown stop - VEP notation)
         map(tag("Ter?"), |_| (ExtDirection::CTerminal, None)),
         map(tag("*?"), |_| (ExtDirection::CTerminal, None)),
         // extTer17 (C-terminal extension with stop position)
-        map(preceded(tag("Ter"), digit1), |n: &str| {
-            (ExtDirection::CTerminal, Some(n.parse::<i64>().unwrap_or(0)))
+        map(preceded(tag("Ter"), parse_number::<i64>), |n| {
+            (ExtDirection::CTerminal, Some(n))
         }),
         // ext*17 (C-terminal extension with stop position, alternate notation)
-        map(preceded(tag("*"), digit1), |n: &str| {
-            (ExtDirection::CTerminal, Some(n.parse::<i64>().unwrap_or(0)))
+        map(preceded(tag("*"), parse_number::<i64>), |n| {
+            (ExtDirection::CTerminal, Some(n))
         }),
         // ext? (unknown extension)
         map(tag("?"), |_| (ExtDirection::CTerminal, None)),
@@ -2128,6 +2096,10 @@ fn parse_protein_extension(input: &str) -> IResult<&str, ProteinEdit> {
 /// This is used in non-standard notation to indicate uncertain C-terminal extension
 /// Pattern: (N_?) or (?_N) where N is a position number
 fn parse_uncertain_extension_annotation(input: &str) -> IResult<&str, ProteinEdit> {
+    // The position is stored as `i64`; a larger one is rejected, not wrapped.
+    let scan_i64 = |bytes: &[u8]| {
+        scan_digits(bytes).and_then(|(num, consumed)| Some((i64::try_from(num).ok()?, consumed)))
+    };
     let bytes = input.as_bytes();
 
     // Must start with '('
@@ -2148,8 +2120,7 @@ fn parse_uncertain_extension_annotation(input: &str) -> IResult<&str, ProteinEdi
 
     // Try (N_?) pattern - position followed by unknown end
     if inner[0].is_ascii_digit() {
-        let (num, consumed) = scan_digits(inner);
-        if consumed > 0 {
+        if let Some((position, consumed)) = scan_i64(inner) {
             let after_num = &inner[consumed..];
             // Check for _?)
             if after_num.len() >= 3
@@ -2163,7 +2134,7 @@ fn parse_uncertain_extension_annotation(input: &str) -> IResult<&str, ProteinEdi
                     ProteinEdit::Extension {
                         new_aa: None,
                         direction: ExtDirection::CTerminal,
-                        count: Some(num as i64), // Start position of extension
+                        count: Some(position), // Start position of extension
                     },
                 ));
             }
@@ -2172,8 +2143,7 @@ fn parse_uncertain_extension_annotation(input: &str) -> IResult<&str, ProteinEdi
 
     // Try (?_N) pattern - unknown start followed by position
     if inner.len() >= 2 && inner[0] == b'?' && inner[1] == b'_' {
-        let (num, consumed) = scan_digits(&inner[2..]);
-        if consumed > 0 {
+        if let Some((position, consumed)) = scan_i64(&inner[2..]) {
             let after_num = &inner[2 + consumed..];
             // Check for )
             if !after_num.is_empty() && after_num[0] == b')' {
@@ -2183,7 +2153,7 @@ fn parse_uncertain_extension_annotation(input: &str) -> IResult<&str, ProteinEdi
                     ProteinEdit::Extension {
                         new_aa: None,
                         direction: ExtDirection::CTerminal,
-                        count: Some(num as i64), // End position of extension
+                        count: Some(position), // End position of extension
                     },
                 ));
             }

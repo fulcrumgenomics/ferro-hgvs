@@ -223,6 +223,16 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "MYTX.007:c.100A>G",
     "MYSEQ.1(MYTX.007):c.100A>G",
     "MYTX.0:c.100A>G",
+    // The same version edges on the accession families the fast path parses
+    // itself (the rows above use a custom accession, which always falls back),
+    // plus accession numbers too long for `u64` (#2239).
+    "NM_000088.4294967295:c.459A>G",
+    "NM_000088.4294967296:c.459A>G",
+    "NM_000088.18446744073709551616:c.459A>G",
+    "ENST00000357033.4294967296:c.100A>G",
+    "NM_18446744073709551616.3:c.459A>G",
+    "LRG_18446744073709551616:g.100A>G",
+    "LRG_199t18446744073709551616:c.100A>G",
     // both must reject (the inner-is-compound rejection, which the #1151 nesting
     // cap preserves)
     "NC_000013.11(NC_000013.11(NM_004119.3)):c.100A>G",

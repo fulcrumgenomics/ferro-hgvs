@@ -99,16 +99,26 @@ const fn is_iupac_base(b: u8) -> bool {
     )
 }
 
-/// Scan consecutive ASCII digits and compute their numeric value
+/// Return the index just past the run of ASCII digits starting at `start`.
 #[inline]
-fn scan_digits(bytes: &[u8], start: usize) -> (u64, usize) {
+fn scan_digits(bytes: &[u8], start: usize) -> usize {
     let mut end = start;
-    let mut value = 0u64;
     while end < bytes.len() && bytes[end].is_ascii_digit() {
-        value = value * 10 + (bytes[end] - b'0') as u64;
         end += 1;
     }
-    (value, end)
+    end
+}
+
+/// Scan an optional `.<version>` at `at`, returning the version and the index just
+/// past it. `None` (defer to the generic parser) for a dot with no digits or a
+/// version too large for `u32`.
+#[inline]
+fn scan_version(input: &str, at: usize) -> Option<(Option<u32>, usize)> {
+    if input.as_bytes().get(at) != Some(&b'.') {
+        return Some((None, at));
+    }
+    let end = scan_digits(input.as_bytes(), at + 1);
+    Some((Some(input[at + 1..end].parse().ok()?), end))
 }
 
 /// True for a base byte the fast path may parse in a DNA substitution. This is
@@ -355,21 +365,14 @@ fn try_refseq_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastP
     }
 
     // Parse accession number (digits)
-    let (_number_value, number_end) = scan_digits(bytes, 3);
+    let number_end = scan_digits(bytes, 3);
     if number_end == 3 {
         return FastPathResult::Fallback; // No digits found
     }
     let number_str = &input[3..number_end];
 
-    // Parse optional version
-    let (version, version_end) = if number_end < bytes.len() && bytes[number_end] == b'.' {
-        let (v, ve) = scan_digits(bytes, number_end + 1);
-        if ve == number_end + 1 {
-            return FastPathResult::Fallback; // Dot but no version
-        }
-        (Some(v as u32), ve)
-    } else {
-        (None, number_end)
+    let Some((version, version_end)) = scan_version(input, number_end) else {
+        return FastPathResult::Fallback;
     };
 
     // Expect colon
@@ -417,22 +420,15 @@ fn try_ensembl_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> Fast
     }
 
     // Parse digits (Ensembl IDs have 11-15 digits to accommodate various formats)
-    let (_number_value, number_end) = scan_digits(bytes, 4);
+    let number_end = scan_digits(bytes, 4);
     let digit_count = number_end - 4;
     if number_end == 4 || !(11..=15).contains(&digit_count) {
         return FastPathResult::Fallback;
     }
     let number_str = &input[4..number_end];
 
-    // Parse optional version
-    let (version, version_end) = if number_end < bytes.len() && bytes[number_end] == b'.' {
-        let (v, ve) = scan_digits(bytes, number_end + 1);
-        if ve == number_end + 1 {
-            return FastPathResult::Fallback;
-        }
-        (Some(v as u32), ve)
-    } else {
-        (None, number_end)
+    let Some((version, version_end)) = scan_version(input, number_end) else {
+        return FastPathResult::Fallback;
     };
 
     // Expect colon
@@ -478,7 +474,7 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPath
     }
 
     // Parse LRG number
-    let (_number_value, number_end) = scan_digits(bytes, 4);
+    let number_end = scan_digits(bytes, 4);
     if number_end == 4 {
         return FastPathResult::Fallback;
     }
@@ -488,7 +484,7 @@ fn try_lrg_fast_path(input: &str, bytes: &[u8], edit_kind: FastEdit) -> FastPath
     let (full_number, version_end) =
         if number_end < bytes.len() && (bytes[number_end] == b't' || bytes[number_end] == b'p') {
             // LRG with transcript: LRG_123t1
-            let (_tx_num, tx_end) = scan_digits(bytes, number_end + 1);
+            let tx_end = scan_digits(bytes, number_end + 1);
             if tx_end == number_end + 1 {
                 return FastPathResult::Fallback;
             }
