@@ -6,7 +6,7 @@
 //! one variant, each stable, none agreeing. A consumer keying on the normalized
 //! string then silently over-splits one variant into several.
 //!
-//! `normalize_idempotency_proptest` already fuzzes confluence for *homopolymer
+//! `normalize_idempotency_proptest` already checks confluence for *homopolymer
 //! boundary* spellings of a single edit. This file covers the cis-allele case:
 //! several encodings of one haplotype must all reach one form. Two models
 //! generate those haplotypes — a substitution-only one and a length-changing
@@ -594,7 +594,7 @@ proptest! {
     /// nothing. The sibling example test
     /// `issue_1235_cis_allele_confluence::normalized_cis_members_are_disjoint_and_ordered`
     /// pins the same contract on the specific #1229-#1234 reproducers; this is
-    /// its fuzzed counterpart and must not be weaker.
+    /// its property-test counterpart and must not be weaker.
     #[test]
     fn members_are_disjoint_and_ascending(haplotype in haplotype_strategy()) {
         let provider = SyntheticBuilder::genomic(&haplotype.core).build();

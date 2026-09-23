@@ -600,8 +600,8 @@ fn assert_cross_product(direction: ShuffleDirection) {
 }
 
 /// One cell's per-surface, per-run assertion — factored out of
-/// [`assert_cross_product`] so the exhaustive enumeration and the proptest fuzzer
-/// (`fuzz_the_cross_product`) check the identical property on their respective
+/// [`assert_cross_product`] so the exhaustive enumeration and the property test
+/// (`sample_the_cross_product`) check the identical property on their respective
 /// corpora.
 fn assert_cell(cell: &Cell, direction: ShuffleDirection) {
     let (reference, offsets) = cell.reference();
@@ -795,7 +795,7 @@ proptest! {
     // malformed input.
     #![proptest_config(ProptestConfig::with_cases(512))]
     #[test]
-    fn fuzz_the_cross_product(
+    fn sample_the_cross_product(
         base_idx in proptest::collection::vec(0usize..BASE_TEMPLATES.len(), 1..=6),
         dup_pos in proptest::option::of(0usize..=6),
         five_prime in any::<bool>(),
