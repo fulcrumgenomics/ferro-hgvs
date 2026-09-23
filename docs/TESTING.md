@@ -8,10 +8,10 @@ to write one. It also tells you what CI runs and which settings keep a local edi
 Run the suite with nextest:
 
 ```bash
-cargo nextest run --features dev              # the whole suite
-cargo nextest run -E 'test(parse)'            # one test, or a name pattern
-cargo nextest run --features dev --no-capture # with test output
-cargo bench --features dev                    # benchmarks; `seqfirst_align` requires `dev`
+cargo nextest run --features dev                   # the whole suite
+cargo nextest run --features dev -E 'test(parse)'  # one test, or a name pattern
+cargo nextest run --features dev --no-capture      # with test output
+cargo bench --features dev                         # benchmarks; `seqfirst_align` requires `dev`
 ```
 
 Use `cargo nextest`, not `cargo test`. `cargo test` runs each test target in its own binary, and

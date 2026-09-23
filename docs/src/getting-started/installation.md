@@ -27,7 +27,7 @@ Add the crate to your project:
 
 ```toml
 [dependencies]
-ferro-hgvs = "0.14"
+ferro-hgvs = "1"
 ```
 
 ## Verify the install

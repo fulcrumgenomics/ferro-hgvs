@@ -225,7 +225,7 @@ Test cases from VariantValidator.
 
 1. Add test cases to the appropriate fixture file
 2. Ensure the schema matches this documentation
-3. Run tests to verify: `cargo test`
+3. Run tests to verify: `cargo nextest run --features dev`
 
 ### Type Consistency
 

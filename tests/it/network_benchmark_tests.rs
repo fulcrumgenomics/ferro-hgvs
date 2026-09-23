@@ -8,7 +8,7 @@
 //! test.
 //!
 //! Run the ignored test with:
-//!   cargo test --features benchmark --test network_benchmark_tests -- --ignored
+//!   cargo nextest run --features dev --run-ignored only -E 'test(network_benchmark_tests::)'
 
 #![cfg(feature = "benchmark")]
 

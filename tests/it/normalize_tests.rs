@@ -3091,7 +3091,7 @@ mod real_repeat_tests {
 // Ferro's output is expected to be correct per HGVS specification.
 // Mutalyzer outputs are documented in comments for reference.
 //
-// Run with: cargo test ferro_mutalyzer_differences --ignored
+// Run with: cargo nextest run --features dev --run-ignored only -E 'test(ferro_mutalyzer_differences)'
 // Requires: benchmark-output/ with reference data
 // =============================================================================
 
@@ -3289,7 +3289,7 @@ mod ferro_mutalyzer_differences {
 // the same variant. These tests verify that Ferro normalizes inputs to
 // the correct canonical form.
 //
-// Run with: cargo test equivalence_derived_normalize --ignored
+// Run with: cargo nextest run --features dev --run-ignored only -E 'test(equivalence_derived_normalize)'
 // Requires: benchmark-output/ with reference data
 // =============================================================================
 
@@ -3449,7 +3449,7 @@ mod equivalence_derived_normalize {
 // Systematic tests for all 12 normalization rules, using MockProvider with
 // synthetic sequences for isolated, predictable testing.
 //
-// Run with: cargo test comprehensive_normalization
+// Run with: cargo nextest run --features dev -E 'test(comprehensive_normalization)'
 // =============================================================================
 
 #[cfg(test)]

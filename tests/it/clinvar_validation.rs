@@ -3,7 +3,7 @@
 //! This test validates against ALL ClinVar HGVS expressions (~42M).
 //! Takes ~23 seconds in release mode, ~7 minutes in debug mode.
 //!
-//! Run with: cargo test --release --features slow-tests test_clinvar_validation -- --nocapture
+//! Run with: cargo nextest run --release --features dev,slow-tests --test it --no-capture -E 'test(test_clinvar_validation)'
 
 #![cfg(feature = "slow-tests")]
 

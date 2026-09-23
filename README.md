@@ -50,7 +50,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ferro-hgvs = "0.1"
+ferro-hgvs = "1"
 ```
 
 Or install the CLI:
@@ -236,19 +236,23 @@ See [docs/BENCHMARK_GUIDE.md](docs/BENCHMARK_GUIDE.md) for detailed usage.
 
 ## Development
 
+The tests run under [cargo-nextest](https://nexte.st/) (`cargo install cargo-nextest`);
+see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ```bash
 cargo build
-cargo test                        # default features
+cargo nextest run                 # default features
 cargo clippy -- -D warnings
 ```
 
-The commands above use the default feature set, and CI keeps them compiling (see
-the `build` job). They do not cover the whole suite — the feature-gated tests and
-the integration tree need `dev`, which is what CI runs and what you want before
-opening a PR:
+The commands above use the default feature set, and CI keeps the library and
+binaries compiling under it (see the `build` job). They do not cover the whole suite — the feature-gated tests and
+the integration tree need `dev` (without it, cargo skips the `it` integration
+target), which is what CI runs and what you want before opening a PR:
 
 ```bash
 cargo nextest run --features dev
+cargo test --doc --features dev     # nextest does not run doctests
 cargo clippy --features dev --all-targets -- -D warnings
 ```
 

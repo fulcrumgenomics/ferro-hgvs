@@ -65,8 +65,9 @@ fn scratch(name: &str) -> PathBuf {
 /// escape hatch for CI's nextest archives all become unnecessary. That is why
 /// the generators are declared as `[[bin]]` in `Cargo.toml`.
 ///
-/// The whole module is `dev`-gated: `CARGO_BIN_EXE_*` exists only for targets
-/// cargo actually builds, and both generators are `required-features = ["dev"]`.
+/// `CARGO_BIN_EXE_*` exists only for targets cargo actually builds, and both
+/// generators are `required-features = ["dev"]`; the `it` target requires `dev`
+/// too, so they are always built when this module is.
 fn spec_fixture_bin() -> &'static str {
     env!("CARGO_BIN_EXE_generate_spec_fixture")
 }

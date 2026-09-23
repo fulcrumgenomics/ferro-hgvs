@@ -135,7 +135,7 @@ curl -o tests/fixtures/bulk/hgvs4variation.txt.gz \
 Used by `tests/clinvar_validation.rs` (requires `--features slow-tests`):
 
 ```bash
-cargo test --release --features slow-tests test_clinvar_validation -- --nocapture
+cargo nextest run --release --features dev,slow-tests --test it --no-capture -E 'test(test_clinvar_validation)'
 ```
 
 ## Fixtures committed to git
