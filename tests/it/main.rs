@@ -564,6 +564,7 @@ mod web_service_tests;
 mod weight_bound_worked_examples;
 mod workflow_gh_repo_context;
 mod workflow_pipefail_gate;
+mod workflow_script_references;
 
 mod fragmentation_corpus;
 mod issue_1618_anchored_repeat_semantics;
