@@ -1,7 +1,7 @@
 //! Integration tests for local biocommons/hgvs setup.
 //!
 //! These tests require local UTA and SeqRepo infrastructure and are ignored by default.
-//! Run with: `cargo test --features benchmark --test biocommons_local_tests -- --ignored`
+//! Run with: `cargo nextest run --features dev --run-ignored only -E 'test(biocommons_local_tests::)'`
 
 #![cfg(feature = "benchmark")]
 

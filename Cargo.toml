@@ -151,7 +151,8 @@ benchmark = ["conformance", "dep:num_cpus", "dep:urlencoding", "dep:rand", "dep:
 hgvs-rs = ["benchmark", "dep:hgvs", "dep:postgres", "dep:biocommons-bioutils", "dep:indexmap", "dep:seqrepo"]
 # Web service for multi-tool HGVS variant normalization
 web-service = ["dep:axum", "dep:tokio", "dep:tower", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:toml", "dep:async-trait", "dep:urlencoding", "dep:open", "benchmark"]
-# Long-running tests (e.g., full ClinVar validation). Run with: cargo test --release --features slow-tests
+# Long-running tests (e.g., full ClinVar validation). Run with:
+# cargo nextest run --release --features dev,slow-tests --test it
 slow-tests = []
 # The conformance-corpus tooling (`src/conformance/`): schema and helper types
 # shared by the `examples/` generators, the `ferro-benchmark` binary and the
@@ -271,10 +272,10 @@ optional = true
 # dev-dependencies. Both are optional and reached only through the non-default
 # `dev` feature, so an ordinary consumer resolves neither.
 #
-# They deliberately REMAIN in `[dev-dependencies]` as well. Other test and
-# example targets use them, and `tests/it` still compiles without `--features
-# dev`; dropping the dev-dependency would break those configurations. Cargo
-# permits a crate in both sections and unifies them for test targets.
+# They also REMAIN in `[dev-dependencies]`. That is defensive, not required
+# today: every target that uses them requires `dev`, which enables the optional
+# copies. Keeping them means a future target without `dev` still resolves them.
+# Cargo permits a crate in both sections and unifies them for test targets.
 [dependencies.anyhow]
 version = "1"
 optional = true
@@ -302,9 +303,9 @@ anyhow = "1"
 # Cargo.toml (`test = true` on every generator carrying `#[cfg(test)]`), so it
 # has to parse the manifest rather than substring-match it — a `test = true`
 # inside a comment, or under a `[[bench]]`, must not count. `toml` is already an
-# optional runtime dependency (`web-service`); it is repeated here because
-# `tests/it` compiles without `--features dev`, so the optional copy is not
-# guaranteed to be enabled. Cargo unifies the two for test targets.
+# optional runtime dependency (`web-service`); it is repeated here defensively,
+# so the test does not depend on `dev` pulling `web-service` in. Cargo unifies
+# the two for test targets.
 toml = "0.8"
 # Used by examples/build_conformance_snapshot.rs to record a per-entry SHA-256 of
 # the harvested bases (snapshot provenance). Examples have access to
@@ -491,6 +492,14 @@ test = true
 [[test]]
 name = "conformance_reference_snapshot_tests"
 required-features = ["conformance"]
+
+# The single integration-test binary. It needs `dev`: its modules call
+# `dev`-gated library hooks and run the `dev`-only generator binaries. Without
+# the feature cargo skips it rather than failing to compile it.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+required-features = ["dev"]
 
 [[bin]]
 name = "ferro"

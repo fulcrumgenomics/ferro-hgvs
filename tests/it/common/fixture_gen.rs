@@ -257,16 +257,12 @@ fn ensure_generated(
     // Deliberately a nested `cargo run`, NOT `CARGO_BIN_EXE_<generator>`.
     //
     // The generator-executing test modules (`spec_generator_preconditions`,
-    // `issue_1046_generator_gitdir_leak`) do use `CARGO_BIN_EXE_*`, and should:
-    // they are `#[cfg(feature = "dev")]`. This helper is not. It is reached from
-    // `hgvs_spec_normalization_tests`, `idempotency_tests` and
-    // `spec_enumeration_tests`, which are ungated so that a plain `cargo test`
-    // still runs them. `env!` resolves at *compile* time and cargo defines
-    // `CARGO_BIN_EXE_*` only for bins it builds — and both generators are
-    // `required-features = ["dev"]` — so expanding it here would fail to compile
-    // the whole `it` target without `--features dev`. `generator` is also a
-    // runtime string, which `env!` cannot take. Resolving the generator at run
-    // time is what keeps this callable from ungated modules.
+    // `issue_1046_generator_gitdir_leak`) name their binary statically and do use
+    // `CARGO_BIN_EXE_*`. This helper cannot: `generator` is a runtime string,
+    // which `env!` cannot take, and this file is also compiled into the
+    // `ferro-hgvs-soak-tests` package, where cargo defines no `CARGO_BIN_EXE_*`
+    // for this crate's generators. Resolving the generator at run time keeps it
+    // callable from both.
     let status = Command::new(env!("CARGO"))
         .current_dir(manifest_dir)
         .args([

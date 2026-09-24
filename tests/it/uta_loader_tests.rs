@@ -6,7 +6,7 @@
 //! spawning `cargo run --release` from inside a test.
 //!
 //! Run the ignored tests with:
-//!   cargo test --features benchmark --test uta_loader_tests -- --ignored
+//!   cargo nextest run --features dev --run-ignored only -E 'test(uta_loader_tests::)'
 
 #![cfg(feature = "benchmark")]
 

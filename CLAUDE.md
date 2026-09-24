@@ -35,7 +35,7 @@ maturin commands; `[tool.maturin] features` in `pyproject.toml` is a default tha
 ```bash
 cargo t                              # alias: nextest, --features dev, --lib --test it
 cargo ta                             # alias: the full suite. Run before pushing.
-cargo nextest run -E 'test(parse)'   # by name
+cargo nextest run --features dev -E 'test(parse)'   # by name
 pytest tests/python/ -v              # Python bindings (needs maturin develop first)
 ```
 
@@ -45,7 +45,7 @@ Rules that will bite you. The reasons and the recipes are in `docs/TESTING.md`.
   shared thread pool.
 - Declare every new test file as a `mod` in `tests/it/main.rs`, or it never runs.
 - Do not export `CARGO_INCREMENTAL=0`. It makes every one-line test edit a full rebuild.
-- `FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run` is always red on `main`. Run the oracles
+- `FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev` is always red on `main`. Run the oracles
   through `scripts/run_oracle_suite.sh`. Details: `docs/ORACLES.md`.
 - The exhaustive sweeps run a short seed prefix by default. `FERRO_SWEEP_SEEDS=full` is
   what CI runs.

@@ -659,7 +659,7 @@ impl ReferenceProvider for CachedFastaProvider {
 ///
 /// This requires the `mmap` feature to be enabled:
 /// ```toml
-/// ferro-hgvs = { version = "0.1", features = ["mmap"] }
+/// ferro-hgvs = { version = "1", features = ["mmap"] }
 /// ```
 #[cfg(feature = "mmap")]
 pub struct MmapFastaProvider {

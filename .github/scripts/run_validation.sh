@@ -25,7 +25,7 @@ run_validation() {
     # `--test it`: every integration test lives in the single `it` binary since
     # #725. `$module` is a filter on the test *name*, which is
     # `<module>::<test>`, so it selects that module's tests and nothing else.
-    cargo test --test it "$module" -- --nocapture "$@" 2>&1 | tee "$output"
+    cargo test --features dev --test it "$module" -- --nocapture "$@" 2>&1 | tee "$output"
 
     # `cargo test` prints one `running N tests` line per binary. Sum them, so a
     # filter that matched nothing is an error rather than a fast pass.
