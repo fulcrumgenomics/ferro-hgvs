@@ -1982,7 +1982,7 @@ impl PyNormalizer {
         error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
         // 3' is the only direction ferro shifts; there is no `direction=`
-        // keyword to validate any more (`README.md` rule 6).
+        // keyword to validate any more (`normalization-rules.md` rule 6).
         let config = NormalizeConfig::for_entry_point(
             ShuffleDirection::ThreePrime,
             error_config_or_default(error_config),

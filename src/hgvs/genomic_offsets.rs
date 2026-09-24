@@ -57,7 +57,7 @@
 //! precisely the silent flattening #1641 and #1734 were filed to stop; and
 //! rewriting `g.266-268del` as the range `g.266_268del` turns a one-base
 //! deletion into a three-base one on nothing more than a guess about intent.
-//! Rule 1 of the README ruleset governs the output half and has no mode escape,
+//! Rule 1 of the normalization rules governs the output half and has no mode escape,
 //! so the honest answer in the permissive modes is to fail rather than to
 //! re-emit or to invent.
 //!

@@ -6,7 +6,7 @@ front". Before this fix the derived member reached ``hgvs_pos_to_index`` with
 
 **The 5' arm is no longer reachable from Python.** ``direction=`` was removed
 from every Python entry point with the rest of ferro's public 5' surface
-(``README.md`` rule 6), so the reproducers below can no longer be driven into
+(``normalization-rules.md`` rule 6), so the reproducers below can no longer be driven into
 the underflowing path from here. The behavioural coverage is unchanged and
 lives in ``tests/it/issue_1282_position_zero.rs``, whose five tests all pin the
 5' arm against the internal direction type — nothing was dropped, the guard

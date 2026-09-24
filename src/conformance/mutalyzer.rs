@@ -652,7 +652,7 @@ pub enum Policy {
     ///
     /// **Rule 2, not rule 1.** Both forms are conformant.
     /// `rulings[separation-rule-force-modal-or-negation]` grades `general.md:34`
-    /// as a README rule-2 preference (its modal governs the whole clause and its
+    /// as a `normalization-rules.md` rule-2 preference (its modal governs the whole clause and its
     /// "and not" names the excluded alternative rather than prohibiting it), so
     /// this is a preferred-form divergence and not a conformance claim. The
     /// prohibition line in this family sits at separation ZERO
@@ -1319,7 +1319,7 @@ pub enum SpecSection {
     /// A ferro-internal label rather than a spec heading, for the reason
     /// [`SpecSection::Prioritization`] records: the upstream submodule has no
     /// stable anchor for it, so the human label is the catalog key. Graded as a
-    /// README **rule 2** preference by
+    /// `normalization-rules.md` **rule 2** preference by
     /// `rulings[separation-rule-force-modal-or-negation]` — both the split and
     /// the merged form are conformant, so this section must never be cited as a
     /// conformance finding.

@@ -742,7 +742,7 @@ class TestProjectToGenomicNormalize:
         ``normalize=True`` honoured it rather than hard-coding 3' — the only
         check that could tell a re-shuffle from a pass-through, since ``c.8del``
         pivots to the 3'-anchored ``g.1007del`` already. The keyword was removed
-        with the rest of ferro's public 5' surface (``README.md`` rule 6), and
+        with the rest of ferro's public 5' surface (``normalization-rules.md`` rule 6), and
         that property moved to
         ``tests/it/issue_867_project_to_genomic_normalized.rs``'s
         ``project_to_genomic_normalized_follows_the_configured_direction``,

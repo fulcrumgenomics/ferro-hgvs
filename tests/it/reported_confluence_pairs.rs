@@ -203,7 +203,7 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 ///
 /// Two of the six have a further, separate finding: `1420-v2` and `1420-v3`
 /// converge on a form `general.md:56` ranks BELOW the one they left (a `dup`
-/// and an `ins` where a substitution was available). That is a README rule-2
+/// and an `ins` where a substitution was available). That is a `normalization-rules.md` rule-2
 /// preference miss, filed as issue #1878. `1420-v4` is licensed instead — the
 /// `g.` axis is outside `delins.md:47` by
 /// `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
@@ -389,7 +389,7 @@ fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
     // What the convergence DOES cost is that neither spelling now reaches
     // #1420's wanted form, because the surviving form spells the change at 38 as
     // a `dup` where `general.md:56` ranks a substitution above it. That is a
-    // README rule-2 preference miss, disclosed in the PR trailer, pinned in
+    // `normalization-rules.md` rule-2 preference miss, disclosed in the PR trailer, pinned in
     // `reported_partition_verdicts.rs` (`1420-v2/span` -> `Gap`, the pair ->
     // `NeitherReaches`, `OPEN_GAPS` 12 -> 13) and filed as issue #1878.
     //

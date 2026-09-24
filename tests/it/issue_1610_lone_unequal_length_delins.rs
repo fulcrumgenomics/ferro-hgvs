@@ -26,9 +26,9 @@
 //! protein level." So the spec names the decomposition as the *alternative* and
 //! recommends the span; ferro emitted the alternative.
 //!
-//! Both forms are conformant, so this is a `README.md` **rule 6** choice — the
+//! Both forms are conformant, so this is a `normalization-rules.md` **rule 6** choice — the
 //! maintainers choose among conformant forms — disclosed under rule 7. It is not
-//! a conformance finding and must not be cited as one. `README.md`'s own ruleset
+//! a conformance finding and must not be cited as one. The normalization rules page itself
 //! supplies the ground:
 //!
 //! > The variant's decomposition is not recoverable. Recovering one means

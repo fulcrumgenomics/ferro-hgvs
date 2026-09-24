@@ -198,7 +198,7 @@ proptest! {
     ///
     /// Direction chooses a placement within the window; it must not decide
     /// whether the input is describable at all, because an option that gates
-    /// capability is what `README.md` rule 6 forbids.
+    /// capability is what `normalization-rules.md` rule 6 forbids.
     ///
     /// There is exactly one honest exception, and stating it is the point of
     /// this test rather than a weakening of it. HGVS writes an insertion

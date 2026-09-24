@@ -772,7 +772,7 @@
 //! what the *rejected* SVD-WG010 proposal would have required
 //! (`consultation/SVD-WG010.md:8`). `separation-rule-force-modal-or-negation`
 //! (decided) is what makes that a deviation to **disclose and pin with a
-//! tripwire**, under README rule 6's "should" reading, rather than a rule-7 bug
+//! tripwire**, under `normalization-rules.md` rule 6's "should" reading, rather than a rule-7 bug
 //! that blocks a release outright — the same classification the coding-axis
 //! ruling already uses. So this pin is not "0 of 210, a fault we do not have";
 //! it is "12 of 210, a disclosed house choice", and it carries the same
@@ -1107,7 +1107,7 @@ pub(crate) const THREE_PRIME: Census = Census {
     // is superseded from `c.`-only to all DNA axes (`c./g./m./n.`), which puts
     // this guard's own domain (the frameless `g.`/non-coding-multi-exon `n.`
     // axes) inside the widened carve-out's reach for the first time. This is a
-    // DISCLOSED house deviation (README rule 6), not a fault: see the module
+    // DISCLOSED house deviation (`normalization-rules.md` rule 6), not a fault: see the module
     // docs' "`guard_violations` is reframed" section. Any further change to this
     // figure, up or down, must name the clause or ruling that carried it —
     // exactly the obligation `coding-axis-merges-are-a-disclosed-general-34-deviation`
@@ -1157,7 +1157,7 @@ pub(crate) const THREE_PRIME: Census = Census {
 /// different numbers would mean a fix was treating a symptom of the shuffle
 /// rather than the partitioner.
 ///
-/// The 5' direction is **no longer a public option** — see `README.md` rule 6
+/// The 5' direction is **no longer a public option** — see `normalization-rules.md` rule 6
 /// and `tests/it/five_prime_public_surface_removed.rs`. It is measured in full
 /// for a different reason now: the 5' arm is ferro's differential oracle over its own 3' output — the instrument that found #1542, where 7 of 8 `FERRO_PARTITION` x direction configurations agreed and only the shipped `live`/3' arm diverged.
 ///

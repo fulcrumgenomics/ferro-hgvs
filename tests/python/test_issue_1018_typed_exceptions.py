@@ -206,7 +206,7 @@ class TestArgumentValidationStaysPlain:
     """Pure argument-validation errors are plain ValueError, not FerroError."""
 
     def test_a_removed_direction_keyword_is_a_plain_type_error(self) -> None:
-        """``direction=`` was removed from every entry point (``README.md``
+        """``direction=`` was removed from every entry point (``normalization-rules.md``
         rule 6), so the fault it used to raise — a ``ValueError`` naming an
         unrecognized *value* — no longer exists. What replaces it is a
         ``TypeError`` about the *keyword*, and it must stay just as plain: a

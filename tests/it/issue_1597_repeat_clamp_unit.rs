@@ -30,7 +30,7 @@
 //!
 //! **Not an adjudication.** There is no competing-legal-forms question here, so
 //! `canonical-form-choice-when-both-legal` does not reach it: the output denotes
-//! a different sequence than the input, which `README.md`'s ruleset makes a
+//! a different sequence than the input, which the normalization rules make a
 //! rule-7 **bug** rather than a house-style choice ("best effort is bounded by
 //! the spec's determinacy … not by ferro's implementation quality"). Hence an
 //! ordinary regression test and no `rulings` record.

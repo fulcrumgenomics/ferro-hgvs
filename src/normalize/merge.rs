@@ -7685,7 +7685,7 @@ fn coalesce_inversion_runs(
 /// answer is *yes, there is such an alternative*, and the gate admits anyway.
 /// The doc described a predicate other than the one executing. What licenses
 /// admitting is the ledger record `inversion-vs-a-mixed-member-competitor`, a
-/// `README.md` rule 6 choice among conformant forms rather than a `:56` ranking.
+/// `normalization-rules.md` rule 6 choice among conformant forms rather than a `:56` ranking.
 fn inversion_gate_admits(pieces: &[Piece]) -> bool {
     !pieces.is_empty()
         && (every_separation_is_a_single_base(pieces)
@@ -7872,7 +7872,7 @@ fn block_inversion(
 /// The fifth admission route, and the only one this change adds. It is
 /// [`no_piece_is_a_lone_substitution`] with `all` weakened to `any`, and what
 /// licenses the weakening is the ledger record
-/// `inversion-vs-a-mixed-member-competitor` — a `README.md` rule 6 choice among
+/// `inversion-vs-a-mixed-member-competitor` — a `normalization-rules.md` rule 6 choice among
 /// conformant forms, grounded on the ground stated at the end of this comment:
 /// notation must not turn on base coincidence.
 ///
@@ -7918,7 +7918,7 @@ fn block_inversion(
 /// competitor. That is now a **settled** question rather than an inherited
 /// contest: `inversion-vs-a-mixed-member-competitor` decides it, as a rule 6
 /// choice and explicitly not as a conformance claim, so a build emitting the
-/// mixed multi-member form violates rule 1 of the `README.md` ruleset in no way.
+/// mixed multi-member form violates rule 1 of the normalization rules in no way.
 /// `tests/it/issue_1517_inv_priority_over_delins.rs` records the separate,
 /// still-contested reading of `:56` that the *sibling* predicate rests on; this
 /// one does not inherit it.
@@ -9008,7 +9008,7 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
 /// split only where an *inserted sequence* re-aligned, i.e. only where some
 /// member supplies bases while consuming a different number of reference bases.
 ///
-/// So what follows is no longer ferro's provisional answer under README rule 6.
+/// So what follows is no longer ferro's provisional answer under `normalization-rules.md` rule 6.
 /// It is a decided record on `adjudication-precedence-order`'s **first** rung,
 /// argued from `:46`'s stated mechanism, and it may be cited as settled. The
 /// deciding ground was that this is the only reading under which BOTH worked
@@ -9466,7 +9466,7 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
     // RATIFIED, 2026-08-12: the ruling record whose question this answers —
     // `delins-recommendation-reach-when-the-input-arrives-split` — is `decided`,
     // for `:46`, on exactly this reading. It is no longer a provisional choice
-    // under README rule 6. The predicate's own doc comment carries the full
+    // under `normalization-rules.md` rule 6. The predicate's own doc comment carries the full
     // statement, including the two scopes this line sits under.
     if !split_carries_a_gap_bearing_insert(pieces) {
         return;
@@ -9858,7 +9858,7 @@ fn piece_renders_as_delins(piece: &Piece, reference: &[u8]) -> bool {
 /// a pure deletion, because a `del` is a higher-priority type than a `delins`.
 /// That reading treats the deletion as a variant the sequences separated. On an
 /// unequal-length block it is not: it is *the gap the aligner placed*, and where
-/// it lands is the alignment choice `README.md`'s ruleset names —
+/// it lands is the alignment choice the normalization rules name —
 ///
 /// > The variant's decomposition is not recoverable. Recovering one means
 /// > *choosing* an alignment, and the spec does not say which, so there is no
@@ -9874,7 +9874,7 @@ fn piece_renders_as_delins(piece: &Piece, reference: &[u8]) -> bool {
 ///
 /// # Rule 6, not conformance
 ///
-/// Both forms are conformant, so this is a `README.md` rule 6 choice, disclosed
+/// Both forms are conformant, so this is a `normalization-rules.md` rule 6 choice, disclosed
 /// under rule 7, and it must never be cited as a conformance finding.
 ///
 /// **The length gate is NOT justified by any equal-length uniqueness claim.**

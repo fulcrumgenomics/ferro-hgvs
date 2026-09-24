@@ -7,7 +7,7 @@ changing normalization output — and #1017 fixed it by raising ``ValueError`` a
 the Python boundary.
 
 The ``direction=`` keyword has since been **removed** from every Python entry
-point. ``README.md`` rule 6 says there are no user options for normalization
+point. ``normalization-rules.md`` rule 6 says there are no user options for normalization
 form, and a shuffle direction is not orthogonal to the form: it selects the
 frame every other rule is evaluated in. ferro normalizes 3', the only direction
 the HGVS recommendations describe.

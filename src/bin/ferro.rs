@@ -283,7 +283,7 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
         #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json", "tsv"])]
         format: String,
 
-        // There is deliberately no `--direction` flag. `README.md` rule 6:
+        // There is deliberately no `--direction` flag. `normalization-rules.md` rule 6:
         // there are no user options for normalization form, and a shuffle
         // direction is not orthogonal to the form — it selects the frame every
         // other rule is evaluated in. `ferro normalize` shifts 3', which is the
@@ -1635,7 +1635,7 @@ fn run_normalize(
     // so the omission cannot recur at this call site (#1197). It is not a
     // whole-crate guarantee — see the constructor's docs and the entry-point
     // scan in `tests/it/issue_1197_required_error_config.rs`.
-    // 3' is the only direction ferro shifts (`README.md` rule 6); naming it
+    // 3' is the only direction ferro shifts (`normalization-rules.md` rule 6); naming it
     // explicitly here rather than relying on `Default` matches how `project`
     // has always done it below.
     let config = NormalizeConfig::for_entry_point(

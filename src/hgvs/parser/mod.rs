@@ -323,7 +323,7 @@ pub fn parse_hgvs_with_config(
 ///
 /// The four rules above this one each pair a mode-gated *input* check with an
 /// unconditional *output* refusal, because their shapes denote no sequence and
-/// so rule 1 of the README ruleset bites in every mode. This one does not, and
+/// so rule 1 of the normalization rules bites in every mode. This one does not, and
 /// must not: `rulings[bare-transcript-intronic-position]` decided that lenient
 /// **accepts** the bare form and that "an input that already names one is still
 /// left as authored". A bare intronic description denotes a perfectly good

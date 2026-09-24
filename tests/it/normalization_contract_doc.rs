@@ -49,9 +49,9 @@
 //!
 //! # What this module deliberately does not do
 //!
-//! It states none of `README.md`'s normalization rules, and
-//! [`the_preamble_does_not_restate_the_readme_ruleset`] enforces that against
-//! `README.md` itself rather than against a copy of it. Single-sourcing that
+//! It states none of the normalization rules, and
+//! [`the_preamble_does_not_restate_the_ruleset`] enforces that against the
+//! ruleset page itself rather than against a copy of it. Single-sourcing that
 //! ruleset is part of a ruling in the ledger this document renders, so a
 //! document that restated it would contradict its own contents.
 //!
@@ -82,7 +82,7 @@ const PARTITION_SOURCE_RELATIVE_PATH: &str = "src/normalize/merge.rs";
 
 /// Heading that separates the hand-authored preamble from the rendered records.
 ///
-/// [`the_preamble_does_not_restate_the_readme_ruleset`] scopes itself to the
+/// [`the_preamble_does_not_restate_the_ruleset`] scopes itself to the
 /// text above this line, because the text below it is the ledger's and is not
 /// this module's to police.
 const RECORDS_HEADING: &str = "## The records";
@@ -674,18 +674,18 @@ fn the_index_carries_every_decided_summary() {
     }
 }
 
-/// The preamble points at the README ruleset and does not restate it.
+/// The preamble points at the ruleset page and does not restate it.
 ///
 /// Single-sourcing that ruleset is part of a ruling this very document renders,
-/// so a preamble that restated it would contradict its own contents. The check
-/// is against `README.md` itself — a copy of the rule openers kept here would be
-/// the third copy of the thing being guarded.
+/// so a preamble that restated it would contradict its own contents. The rule
+/// openers are read from the page itself — a copy of them kept here would be
+/// a second copy of the thing being guarded.
 ///
 /// Scoped to the preamble deliberately. Below [`RECORDS_HEADING`] the text is
 /// the ledger's own, and a record is entitled to quote the ruleset it rules
 /// under; policing that would be policing the ledger from a renderer.
 #[test]
-fn the_preamble_does_not_restate_the_readme_ruleset() {
+fn the_preamble_does_not_restate_the_ruleset() {
     let rendered = render();
     let preamble = rendered
         .split_once(RECORDS_HEADING)
@@ -697,32 +697,11 @@ fn the_preamble_does_not_restate_the_readme_ruleset() {
         "the preamble must send the reader to the ruleset page rather than restating it"
     );
 
-    let page = read("docs/src/reference/normalization-rules.md");
-    let section = page
-        .split_once("# Normalization rules\n")
-        .expect("the ruleset page has a title heading")
-        .1;
-
-    let openers: Vec<&str> = section
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let rest = line.strip_prefix(char::is_numeric)?.strip_prefix(". **")?;
-            rest.split_once("**").map(|(opener, _)| opener)
-        })
-        .collect();
+    let restated = crate::common::ruleset_page::restated_rule_openers(preamble);
     assert!(
-        openers.len() >= 7,
-        "found {} rule openers in the README ruleset, expected the seven rules — the section's \
-         shape moved and this guard is no longer reading it",
-        openers.len()
+        restated.is_empty(),
+        "the preamble restates the ruleset page's rules {restated:?}; link to it instead"
     );
-    for opener in openers {
-        assert!(
-            !preamble.contains(&format!("**{opener}**")),
-            "the preamble restates the README ruleset's rule {opener:?}; link to it instead"
-        );
-    }
 }
 
 /// The published default partition arm is the one the code actually selects.
