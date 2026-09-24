@@ -40,9 +40,13 @@ jobs:
           persist-credentials: false
 
       - name: Install system dependencies
+        # Wait for the dpkg lock rather than failing on it. This runner is a
+        # persistent host with `unattended-upgrades`, which takes the lock for
+        # minutes after every boot; without a timeout the first deploy after a
+        # reboot dies with `Could not get lock /var/lib/dpkg/lock-frontend`.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev libsqlite3-dev
+          sudo apt-get -o DPkg::Lock::Timeout=900 update
+          sudo apt-get -o DPkg::Lock::Timeout=900 install -y pkg-config libssl-dev libsqlite3-dev
 
       - name: Setup Rust
         run: |
