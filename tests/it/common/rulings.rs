@@ -814,8 +814,7 @@ pub fn statuses() -> BTreeMap<String, String> {
 //
 // Plain `#[test]`, deliberately **not** inside a `#[cfg(test)] mod tests`: this
 // tree is an integration-test binary, which compiles without `cfg(test)`, so a
-// gated module would never run and would read as coverage it does not provide
-// (see the repository `CONTRIBUTING.md` on committed tests that have never executed).
+// gated module would never run and would read as coverage it does not provide.
 //
 // A well-formed document plus one mutation per field. The mutations are the
 // point: every one of them used to parse as "field absent", which converts a

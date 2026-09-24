@@ -57,7 +57,7 @@ REPRESENTATION_GROUP = "Representation changes"
 DECLINE_WORDS = frozenset({"none", "no", "n/a", "na"})
 
 #: Punctuation that may introduce the reason for a decline. A comma is deliberately absent,
-#: matching `CONTRIBUTING.md`: it usually introduces a qualification that changes the answer
+#: matching `scripts/check_representation_change.py`: it usually introduces a qualification that changes the answer
 #: ("none, except two rows"), which is filed as a real change.
 DECLINE_TERMINATORS = ".;:—–"
 
@@ -68,11 +68,11 @@ DECLINE_TERMINATORS = ".;:—–"
 #: has to.** An earlier revision was deliberately coarser — first word, punctuation stripped,
 #: no terminator logic — on the reasoning that "a second opinion derived the same way is not
 #: a second opinion". That reasoning confused *deriving the answer differently* with *giving
-#: a different answer*, and the coarse rule failed CI on trailer forms `CONTRIBUTING.md`
-#: documents as correct, in both directions:
+#: a different answer*, and the coarse rule failed CI on trailer forms the checker's
+#: docstring documents as correct, in both directions:
 #:
 #: - `no rows move` and `none, except two rows that merge` are filed as real changes **by
-#:   design** (`CONTRIBUTING.md`, "How the trailer is read": "Both err toward disclosing a change"),
+#:   design** (the checker's docstring, "How a trailer is read": "Both err toward disclosing a change"),
 #:   and the coarse rule called them declines — so the audit failed, and no trailer text
 #:   could satisfy both halves at once.
 #: - `none.Tests only.` — a missing space after the terminator — went the other way:

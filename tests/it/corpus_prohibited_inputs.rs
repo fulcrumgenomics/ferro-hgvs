@@ -11,8 +11,8 @@
 //! clause and by geometry, states what ferro **should** do per clause with the
 //! clause quoted, and pins both halves.
 //!
-//! Per `CONTRIBUTING.md`, a test that merely pins today's output is a change detector,
-//! not an adjudication record. Every expectation below therefore carries the
+//! Per `docs/TESTING.md`, a test that merely pins today's output is a change
+//! detector, not an adjudication record. Every expectation below therefore carries the
 //! `file.md:line` it is argued from, and every one states whether it is
 //! **adjudicated-correct** (ferro already does the right thing — the assertion
 //! is a guard) or a **pinned defect** (ferro does not — the assertion records
@@ -1753,7 +1753,7 @@ fn the_three_conflicting_geometries_are_refused_in_strict_mode_on_every_axis() {
 /// That is also how ferro already behaves — both are `W5002` — so this test
 /// pins the *reason*, which is the part a future simplification could lose.
 ///
-/// Recorded per `CONTRIBUTING.md`'s "record what was refuted, not only what was
+/// Recorded per `docs/TESTING.md`'s "record what was refuted, not only what was
 /// decided": "nested is just redundant, absorb it" is the plausible belief this
 /// kills.
 #[test]

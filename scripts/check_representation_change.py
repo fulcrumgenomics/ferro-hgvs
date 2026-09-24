@@ -19,6 +19,37 @@ This closes that loop: a change under a watched directory must *say* whether it 
 output. Saying "no" is a first-class answer — `Representation-Change: none` — because the
 point is to force the judgement, not to force a disclosure. What is rejected is silence.
 
+How a trailer must be written (the reasons are on the named constants and functions below):
+
+- **Column 0, undecorated.** No backticks, no `>`, no `-`, `*` or `+`, no `#`, no emphasis.
+  Anything else is prose to git, to release-plz and to this check. A decorated line is
+  reported as a near miss (`find_near_misses`).
+- **Indent continuation lines.** Git folds a line into the trailer only when it is
+  whitespace-prefixed.
+- **Quote an example only beneath a real declaration, and indent it.** An indented line with
+  no real declaration above it is a near miss. An indented line also becomes part of the
+  declaration's value, so beneath a decline it must not state a nonzero `<n> rows move`. A
+  trailer inside a fenced code block is not a declaration (`fenced_line_numbers`).
+- **The value ends at the next column-0 trailer token, Markdown heading or HTML comment**
+  (`full_declaration_value`). GitHub appends CodeRabbit's summary after the description, so
+  the trailer is not reliably last.
+- **Exactly one trailer.** Two are refused, because this check and git-cliff resolve them
+  differently.
+- **Put it in the PR description.** GitHub builds the squash commit body from it, and that
+  is what the changelog reads.
+
+How a trailer is read:
+
+- **The verdict is the first word.** The words in `NONE_VALUES` decline, in any casing.
+- **A terminator may introduce a reason** (`DECLINE_TERMINATORS`): `none. Tests only` is a
+  decline. **A comma is not a terminator**, so `none, except two rows` is filed as a move, and
+  `no rows move` has no terminator, so it is a move too. Both err toward disclosing a change.
+- **Do not decline and then describe a move.** `no. 3 rows move` is refused
+  (`contradicted_decline`), because the verdict would file it as `none` and the move would
+  never reach the changelog.
+- **A quantified zero is a decline.** `none. 0 of 950 rows move` passes. The count is the
+  number of rows moved, never the denominator (`MOVEMENT_CLAIM_RE`).
+
 Usage:
     python scripts/check_representation_change.py \\
         --changed-files changed.txt --declaration-file body.txt
@@ -140,7 +171,7 @@ def fenced_line_numbers(text: str) -> set[int]:
     hint. This one **passed**, which is worse: the author is recorded as disclosing a
     migration they explicitly said they had not worked out.
 
-    `CONTRIBUTING.md` publishes three such blocks, so the text that triggers it is
+    `CONTRIBUTING.md` publishes example blocks, so the text that triggers it is
     copy-pasteable straight out of the contributor documentation — which is exactly how it
     would be met in practice, by someone quoting the docs to ask what to write.
 
@@ -258,7 +289,7 @@ def declines(declaration: str) -> bool:
 #:
 #: This used to be written as "the count must sit immediately before `rows`", which reads
 #: the second form's *denominator* as the count. That made `none. 0 of 950 rows move` --
-#: the form `CONTRIBUTING.md` offers as the way to quantify a zero, and
+#: the documented way to quantify a zero (see the module docstring), and
 #: states a pass -- fire on the 950 and fail the build. The documented form was a merge
 #: blocker.
 #:
@@ -347,7 +378,7 @@ def find_trailers_as_git_cliff_would(text: str) -> list[str]:
     a body carrying a quoted example **beside** a real trailer would then pass here while
     git-cliff still saw two footers, and the quoted 577-row example could land in the
     changelog under an author who declared `none`. The refusal is what forces the author to
-    indent or remove the quotation, which is the escape hatch `CONTRIBUTING.md` documents.
+    indent or remove the quotation, which is the escape hatch the module docstring documents.
 
     So the split is deliberate and the asymmetry is the point: **fenced text may not BE the
     declaration, but it still COUNTS toward how many the changelog will see.**
@@ -478,7 +509,7 @@ def find_near_misses(text: str) -> list[tuple[int, str, str]]:
     property of this function rather than a rule its callers have to remember. An author who
     declared at column 0 has demonstrated they know the form, and the same author routinely
     *discusses* that declaration in prose: #1742 and #1837 each quote their own trailer in a
-    code span, on a line beside a real one. `CONTRIBUTING.md` also documents indenting a
+    code span, on a line beside a real one. The module docstring also documents indenting a
     quoted example as the way to keep it out of the trailer count, and the two-trailer
     refusal's own message recommends exactly that — so reporting here would contradict the
     escape hatch this checker already offers.
@@ -641,8 +672,8 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
         # as *documentation*, and which a Markdown reader renders as code. The advice
         # happens to work — indenting inside the fence drops the line from `TRAILER_RE` —
         # but naming the wrong construct is what sends someone hunting for a declaration
-        # they never made. `CONTRIBUTING.md` publishes three such blocks, so quoting two of
-        # them to ask which form applies is the ordinary way into this path.
+        # they never made. `CONTRIBUTING.md` publishes more than one such block, so quoting two
+        # of them to ask which form applies is the ordinary way into this path.
         #
         # `find_near_misses` is the half that holds the right diagnosis and it is
         # unreachable from here otherwise: the duplicate refusal returns first, and the
@@ -724,6 +755,8 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "  Representation-Change: none\n\n"
             "Declining is a declaration and passes this check. Silence does not, because an\n"
             "absent trailer is indistinguishable from an unconsidered one.\n\n"
+            f"Words that decline: {', '.join(sorted(NONE_VALUES))}.\n"
+            f"Watched directories: {', '.join(WATCHED_PREFIXES)}.\n\n"
             "Measure with: cargo run --release --features dev --example dump_normalized_corpus"
         )
 

@@ -14,7 +14,7 @@
 //!
 //! It asserts the **property**, never the string. Pinning today's five outputs
 //! would make this a change detector, not a guard: the repo's adjudication
-//! policy (`CONTRIBUTING.md`, #1531) is explicit that "a test that merely pins today's
+//! policy (`docs/TESTING.md`, #1531) is explicit that "A test that pins today's
 //! output is not an adjudication record". The authority here is
 //! `assets/hgvs-nomenclature/docs/recommendations/general.md:34-35`, quoted in
 //! [`adjudicate_member`], and the ruling is: whatever ferro chooses to emit for

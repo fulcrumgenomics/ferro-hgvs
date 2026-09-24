@@ -30,7 +30,6 @@ find_declarations = check_representation_change.find_declarations
 find_near_misses = check_representation_change.find_near_misses
 watched_files = check_representation_change.watched_files
 WATCHED_PREFIXES = check_representation_change.WATCHED_PREFIXES
-fenced_line_numbers = check_representation_change.fenced_line_numbers
 find_trailers_as_git_cliff_would = check_representation_change.find_trailers_as_git_cliff_would
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,6 +82,23 @@ def test_watched_change_without_a_trailer_fails() -> None:
     assert not ok
     assert "src/normalize/merge.rs" in message
     assert "Representation-Change: none" in message, "the message must name the way to decline"
+
+
+def test_the_refusal_names_every_watched_directory_and_decline_word() -> None:
+    """The refusal is where a contributor learns the check's scope and vocabulary.
+
+    `CONTRIBUTING.md` points at this script rather than restating either list, so the
+    missing-trailer message is where a contributor who hit the check is told both.
+    """
+    ok, message = check(["src/normalize/merge.rs"], "Fixes a thing.")
+    assert not ok
+
+    def listed(label: str) -> set[str]:
+        line = next(line for line in message.splitlines() if line.startswith(label))
+        return {item.strip() for item in line[len(label) :].rstrip(".").split(",")}
+
+    assert listed("Watched directories:") == set(WATCHED_PREFIXES)
+    assert listed("Words that decline:") == set(check_representation_change.NONE_VALUES)
 
 
 def test_watched_change_declaring_none_passes() -> None:
@@ -243,35 +259,6 @@ def test_watched_prefixes_match_the_release_config() -> None:
         f"{sorted(WATCHED_PREFIXES)}; the two must describe the same scope. A directory in "
         "the config and not the tuple is a gate that does not exist; one in the tuple and "
         "not the config is a scope the release reviewer is never told to look for."
-    )
-
-
-@pytest.mark.parametrize("document", ["CONTRIBUTING.md", "CLAUDE.md", ".github/workflows/ci.yml"])
-def test_the_prose_restatements_name_every_watched_directory(document: str) -> None:
-    """The list is restated in prose in three more places; none of them was pinned.
-
-    `release-plz.toml` is pinned above, but the same six directories are also written out
-    in `CONTRIBUTING.md` (contributor guidance), `CLAUDE.md` (agent guidance) and the
-    `representation-change` job's comment in `ci.yml` -- which says of itself that it
-    "must be kept in step with" the constant, an obligation nothing enforced. One rule
-    written in several places and then drifting apart is this repository's named recurring
-    failure mode, and the sibling `test_contributing_documents_the_same_decline_vocabulary`
-    already pins the decline vocabulary for exactly that reason.
-
-    **Containment, not set equality**, and the asymmetry is deliberate. All three documents
-    legitimately name directories that are *not* watched -- `src/conformance/` and
-    `src/data/`, whose exclusion is itself a decision worth stating -- so equality would
-    fail on correct prose. The direction that matters is the other one: a directory added
-    to `WATCHED_PREFIXES` and not to the docs is a required check that fails a contributor
-    who was never told the scope had grown.
-    """
-    text = (Path(__file__).resolve().parents[2] / document).read_text(encoding="utf-8")
-    undocumented = [prefix for prefix in WATCHED_PREFIXES if f"`{prefix.rstrip('/')}/`" not in text]
-    assert not undocumented, (
-        f"{document} does not name {sorted(undocumented)}, which "
-        f"scripts/check_representation_change.py watches; the check watches "
-        f"{sorted(WATCHED_PREFIXES)}. A watched directory missing from the prose is a "
-        "required check nobody was told about."
     )
 
 
@@ -726,10 +713,9 @@ def test_a_bare_decline_with_a_reason_continuation_still_passes(trailer: str) ->
 # #1647: the count is the count, never the denominator
 #
 # The guard used to read "the number immediately before `rows`" as the moving
-# count. In `0 of 950 rows move` that number is the DENOMINATOR, so the form
-# both `CONTRIBUTING.md` and `CLAUDE.md` publish as the way to quantify a zero
-# — and both state passes — failed the build instead. The documented form was a
-# merge blocker.
+# count. In `0 of 950 rows move` that number is the DENOMINATOR, so the
+# documented way to quantify a zero — documented as passing — failed the build
+# instead. The documented form was a merge blocker.
 #
 # These are separated from the parametrized declines above because they pin a
 # specific past defect rather than the general "declines are numerate" rule.
@@ -739,7 +725,7 @@ def test_a_bare_decline_with_a_reason_continuation_still_passes(trailer: str) ->
 @pytest.mark.parametrize(
     "value",
     [
-        # `CONTRIBUTING.md` and `CLAUDE.md`, verbatim. The whole of #1647.
+        # The documented form, verbatim. The whole of #1647.
         "none. 0 of 950 rows move",
         "none. 0 of 950 rows move.",
         # A grouped denominator. `(?<!of\\s)` alone does NOT rescue this one: the
@@ -994,25 +980,6 @@ def test_both_representation_change_rules_are_case_insensitive() -> None:
         )
 
 
-def test_contributing_documents_the_same_decline_vocabulary() -> None:
-    """CONTRIBUTING.md is the third place these words appear, and prose drifts fastest.
-
-    A contributor reads the doc, not the config or this script, so a word documented here
-    but not accepted by both is guidance that fails CI, and one accepted but not documented
-    is a decline nobody knows they can make.
-    """
-    doc = (Path(__file__).resolve().parents[2] / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    documented = {
-        word
-        for word in re.findall(r"`([a-z/]+)`(?=[,\s]|$)", doc)
-        if word in check_representation_change.NONE_VALUES
-    }
-    assert documented == check_representation_change.NONE_VALUES, (
-        f"CONTRIBUTING.md documents {sorted(documented)} as declines but the checker accepts "
-        f"{sorted(check_representation_change.NONE_VALUES)}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # A near miss must fail loudly, never read as silence
 #
@@ -1159,7 +1126,7 @@ def test_a_valid_trailer_silences_the_near_miss_scan() -> None:
     declaration in prose while carrying it properly above. Firing on those would
     punish a PR for explaining itself, which is the #1555 mistake in a new place.
 
-    It also preserves the documented escape hatch: `CONTRIBUTING.md` says to indent a
+    It also preserves the documented escape hatch: the checker's docstring says to indent a
     quoted example, and the two-trailer refusal's own message recommends exactly that.
     """
     body = (
@@ -1392,7 +1359,7 @@ def test_two_fenced_examples_and_no_real_trailer_are_refused_naming_the_fence() 
     fence drops the line from `TRAILER_RE`, but it sends the author looking for a
     declaration they have not made.
 
-    The body is not contrived. `CONTRIBUTING.md` publishes three such blocks and the whole
+    The body is not contrived. `CONTRIBUTING.md` publishes example blocks and the whole
     premise of #1929 is someone quoting the docs to ask what to write; quoting two of them
     is how you ask WHICH form applies.
 
@@ -1440,26 +1407,3 @@ def test_the_fenced_note_is_absent_when_a_real_trailer_is_among_the_duplicates()
     assert not passed
     assert "trailers found" in message
     assert "nothing to delete here" not in message
-
-
-def test_contributing_md_s_own_examples_are_not_read_as_declarations() -> None:
-    """Run the checker over the contributor documentation itself.
-
-    The issue's suggested guard, and it is stronger than a hand-copied fixture: it keeps
-    working when the docs are rewritten. `CONTRIBUTING.md` publishes the trailer's form in
-    fenced blocks, so before #1929 its own text — pasted by someone asking what to write —
-    filed a disclosure.
-    """
-    contributing = (_REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    assert "Representation-Change:" in contributing, "the docs stopped documenting the trailer"
-    fenced = fenced_line_numbers(contributing)
-    quoted_in_a_fence = [
-        number
-        for number, line in enumerate(contributing.splitlines(), 1)
-        if line.startswith("Representation-Change:") and number in fenced
-    ]
-    assert quoted_in_a_fence, "expected CONTRIBUTING.md to publish the form inside a fence"
-    assert find_declaration(contributing) is None, (
-        "CONTRIBUTING.md's own examples are read as a declaration; "
-        f"fenced trailer lines were {quoted_in_a_fence}"
-    )

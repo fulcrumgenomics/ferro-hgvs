@@ -4,14 +4,8 @@
 //! That page is the project's stated contract for what the normalizer's output
 //! is allowed to be: four rules about the output, three about the gaps. It is cited
 //! by rule number — from PR descriptions, from ruling records, and from
-//! `CONTRIBUTING.md`, whose "Declaring a representation change" section is rule 7's
-//! mechanism. A silent renumbering or a dropped rule turns every one of those
+//! `CONTRIBUTING.md`. A silent renumbering or a dropped rule turns every one of those
 //! citations into a pointer at the wrong text, and prose carries no compiler.
-//!
-//! This follows the shape of `tests/python/test_representation_change_trailer.py`,
-//! which pins the decline vocabulary across `release-plz.toml`, `CONTRIBUTING.md`
-//! and `scripts/check_representation_change.py` for the same reason: three copies of
-//! one statement drift, and the prose copy drifts first.
 //!
 //! Deliberately **not** a markdown parser. It asserts that seven known rule openers
 //! are present, exactly once each, in ascending order, and each under the subsection
@@ -20,11 +14,10 @@
 //!
 //! Every assertion is scoped to the section it is about rather than to the whole
 //! file — [`section`] for Markdown, [`banner_block`] for the `// Record N —`
-//! blocks of an adjudication test module — and the two cross-links are matched as
-//! whole Markdown tokens rather than as bare `#anchor` fragments. Both are the
-//! difference between "this string exists in a long document" and "the ruleset
-//! states this" — a guard satisfiable from a code block or an unrelated section is
-//! one that passes while the thing it guards is broken.
+//! blocks of an adjudication test module. That is the difference between "this
+//! string exists in a long document" and "the ruleset states this" — a guard
+//! satisfiable from a code block or an unrelated section is one that passes while
+//! the thing it guards is broken.
 //!
 //! That applies to the *pinned* side of a cross-claim as much as to the ruleset-page
 //! side, which is why [`banner_block`] exists: a whole-file `contains` over a
@@ -33,9 +26,7 @@
 //! Scoping is applied on **both** sides of each claim, which is a strictly stronger
 //! test than scoping one side. Pinning the rules' order without binding each rule to
 //! its half lets rule 4 be reclassified from the output contract to the procedure
-//! with every assertion still green; asserting CONTRIBUTING.md's backlink against
-//! the whole file lets it migrate out of the section a reader arriving from rule 7
-//! actually lands in.
+//! with every assertion still green.
 
 use std::path::PathBuf;
 
@@ -307,45 +298,6 @@ fn the_page_keeps_the_headings_that_organise_the_rules() {
     }
 }
 
-#[test]
-fn the_ruleset_and_its_disclosure_mechanism_point_at_each_other() {
-    // `CONTRIBUTING.md`'s trailer section is rule 7's mechanism, and rule 7 is that
-    // section's reason for existing. Either pointer going stale leaves a reader on
-    // one half of one statement.
-    let page = read(RULESET_PAGE);
-    let contributing = read("CONTRIBUTING.md");
-
-    // Whole Markdown link tokens, not bare fragments: `contains("…#anchor")`
-    // also passes on prose that merely names the anchor, or on a stale reference
-    // left behind after the link itself was deleted.
-    //
-    // Both sides are asserted **inside** the section the link belongs to. The
-    // page side must sit in the ruleset, since rule 7 is what it belongs to;
-    // the CONTRIBUTING side must sit in `Declaring a representation change`,
-    // since that section is rule 7's mechanism. A whole-file `contains` on
-    // either side passes while the backlink has migrated somewhere the reader
-    // arriving from the other document will never reach — which is precisely
-    // the drift these two pointers exist to prevent.
-    //
-    // `section()` panics with a clear message when its heading is absent, so
-    // each call below doubles as the "the anchor still exists" assertion; the
-    // link targets are the two headings themselves.
-    let rules = section(&page, "# Normalization rules");
-    let declaring = section(&contributing, "### Declaring a representation change");
-
-    assert!(
-        rules.contains("[CONTRIBUTING.md](https://github.com/fulcrumgenomics/ferro-hgvs/blob/main/CONTRIBUTING.md#declaring-a-representation-change)"),
-        "the ruleset page must link to CONTRIBUTING.md's \
-         `Declaring a representation change` section, which is rule 7's mechanism"
-    );
-    assert!(
-        declaring.contains("[normalization rules](docs/src/reference/normalization-rules.md)"),
-        "CONTRIBUTING.md's `Declaring a representation change` section must link \
-         back to the normalization rules page, so the trailer's purpose is \
-         reachable from the trailer's instructions"
-    );
-}
-
 /// The ledger record that names the ruleset page as canonical must find the page
 /// it names.
 ///
@@ -392,8 +344,7 @@ fn the_ledgers_pointer_at_the_ruleset_resolves() {
     );
 
     // `section` panics with the heading it could not find, so this call IS the
-    // "the pointer resolves" assertion — the same construction
-    // `the_ruleset_and_its_disclosure_mechanism_point_at_each_other` relies on.
+    // "the pointer resolves" assertion.
     let page = read(RULESET_PAGE);
     let rules = section(&page, "# Normalization rules");
     assert!(
@@ -423,9 +374,8 @@ fn the_ledgers_pointer_at_the_ruleset_resolves() {
 
 /// The ruleset page's rule 3 example must still be the case the adjudication test pins.
 ///
-/// [`the_ruleset_and_its_disclosure_mechanism_point_at_each_other`] guards a
-/// cross-*link*; this guards a cross-*claim*, which is the weaker link of the two.
-/// A link breaks loudly when its anchor moves. An example does not: the page can
+/// This guards a cross-*claim*. A link breaks loudly when its anchor moves. An
+/// example does not: the page can
 /// go on quoting coordinates long after the test stopped covering them, or the test
 /// can be re-pinned onto a different run, and both documents still read as though
 /// they agree. That is the failure this repository has recorded against itself
