@@ -73,9 +73,9 @@ def test_a_leading_decline_word_is_a_decline(value: str) -> None:
         "3 rows of 500,004 move",
         "nothing moves under src/normalize/",
         "not measured yet",
-        # `CONTRIBUTING.md:103-105` documents both of these as filed as real changes: a comma
-        # is not a terminator, and `no rows move` has no terminator at all. "Both err toward
-        # listing a change rather than hiding one." The audit used to call them declines,
+        # `CONTRIBUTING.md` ("How the trailer is read") documents both of these as filed as
+        # real changes: a comma is not a terminator, and `no rows move` has no terminator at
+        # all. "Both err toward disclosing a change." The audit used to call them declines,
         # which made them unsatisfiable — release-plz filed them one way and the audit failed
         # them the other, with no trailer text able to satisfy both.
         "none, except two rows that merge",
@@ -93,9 +93,10 @@ def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
     checker's — first word, punctuation stripped, no terminator logic — on the reasoning that
     a second opinion derived the same way is worth nothing. But a *disagreement* is not a
     second opinion, it is a red build: `no rows move` and `none, except two rows that merge`
-    are filed as real changes by design (`CONTRIBUTING.md:103-105`) and the audit called them
-    declines, so no trailer text could satisfy both halves. Once such a commit is on `main`
-    the job is red for every open PR until the next release tag.
+    are filed as real changes by design (`CONTRIBUTING.md`, "How the trailer is read") and
+    the audit called them declines, so neither of those two trailers could satisfy both
+    halves. Once such a commit is on `main` the job is red for every open PR until the next
+    release tag.
 
     What is still independent is the derivation — this check renders the changelog through
     real git-cliff and reads the result; the checker regexes the PR body. That is pinned

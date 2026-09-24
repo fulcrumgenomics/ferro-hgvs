@@ -72,7 +72,7 @@ DECLINE_TERMINATORS = ".;:—–"
 #: documents as correct, in both directions:
 #:
 #: - `no rows move` and `none, except two rows that merge` are filed as real changes **by
-#:   design** (`CONTRIBUTING.md`: "Both err toward listing a change rather than hiding one"),
+#:   design** (`CONTRIBUTING.md`, "How the trailer is read": "Both err toward disclosing a change"),
 #:   and the coarse rule called them declines — so the audit failed, and no trailer text
 #:   could satisfy both halves at once.
 #: - `none.Tests only.` — a missing space after the terminator — went the other way:

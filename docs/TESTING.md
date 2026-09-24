@@ -19,6 +19,8 @@ the test cases within a binary share that one process. Two lib tests, `normalize
 `parallel::tests`, are not safe in that shared pool. nextest runs each test in its own process, so
 they pass.
 
+The one exception is doctests, which nextest cannot run: use `cargo test --doc --features dev`.
+
 ### Layout: one `it` binary
 
 All integration tests are under `tests/it/`. They compile into one binary, `it`, not one binary
