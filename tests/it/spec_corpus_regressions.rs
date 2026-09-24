@@ -758,34 +758,101 @@ fn the_cds_end_flush_pair_is_its_two_members_normalized_separately() {
     );
 }
 
-/// **Question.** The mirror shape at the 5'UTR/CDS boundary preserves its
-/// sequence. Is that boundary handled correctly?
+/// **Question.** The mirror shape at the 5'UTR/CDS boundary was once masked — the
+/// lone deletion did not shift, so the pair survived by accident rather than by
+/// handling. #1816 extends the sequence-first fold to the 5'UTR
+/// (`ExtendedBody`'s `FivePrimeUtr` arm). Is the boundary now handled?
 ///
-/// **No — it is masked.** With an identical `CCC` run straddling
-/// `c.-1`/`c.1`/`c.2` and the identical flush shape, the lone deletion does not
-/// shift **at all**: `c.-1del` normalizes to `c.-1del`, not to `c.2del`. With
-/// nothing to shift there is nothing to transpose, so the pair survives by
-/// accident rather than by handling.
+/// **Yes — and correctly, where the 3' sibling still pins a defect.** With the
+/// identical `CCC` run straddling `c.-1`/`c.1`/`c.2`, the group
+/// `c.[-1del;-1_1insG]` now crosses the 5' seam into
+/// `canonicalize_from_sequence` and re-derives to `c.-1C>G`, the substitution it
+/// denotes. The independent applier (`denotation_of`, not the normalizer)
+/// confirms both spellings denote the same bases, so this is meaning-preserving —
+/// where the 3' `the_cds_end_flush_pair_is_its_two_members_normalized_separately`
+/// re-derives the same shape but keeps a residual partition defect, the 5'
+/// boundary comes out clean.
 ///
-/// **Why this matters for the fix.** It would be natural to read the failing
-/// class as "the CDS end is special" and key a fix on that boundary. This test
-/// is the counter-evidence: the two boundaries differ in whether the *shift*
-/// happens, not in whether the members interfere. A fix keyed on the CDS end
-/// would be keyed on the mask.
+/// **The lone `c.-1del` is unchanged** — a single 5'UTR member is not a
+/// boundary-crossing group (`c_hi >= 1` is false), so the fold does not admit it
+/// and it still declines. That was once the whole story here; it is now half of
+/// it, and the half that moved is the one that matters.
 #[test]
-fn the_five_prime_boundary_masks_the_same_per_member_defect() {
+fn the_five_prime_boundary_pair_now_collapses_to_its_substitution() {
     let frame = boundary_run_frame(11);
     assert_eq!(
         normalize_3prime(&frame, "NM_TEST.1:c.-1del"),
         "NM_TEST.1:c.-1del",
-        "PINNED — the lone deletion does not shift 3' across the 5'UTR/CDS \
-         boundary, which is what masks the pair below"
+        "the lone 5'UTR deletion is not a boundary-crossing group, so the fold \
+         does not admit it and it still declines"
     );
+    let pair = normalize_3prime(&frame, "NM_TEST.1:c.[-1del;-1_1insG]");
     assert_eq!(
-        normalize_3prime(&frame, "NM_TEST.1:c.[-1del;-1_1insG]"),
+        pair, "NM_TEST.1:c.-1C>G",
+        "#1816 — the 5'UTR fold re-derives the boundary-crossing pair to the \
+         substitution it denotes, instead of leaving it masked"
+    );
+    // Meaning-preserving, verified with the independent applier rather than the
+    // normalizer: the collapsed substitution must denote exactly the bases the
+    // input pair does (this is the sequence-preservation class). Both sides must
+    // denote a concrete sequence — `Unparseable`/`Inexpressible`/`NoSequence`
+    // compare equal to themselves, so a bare `==` could pass without proving
+    // preservation; require `Sequence(_)` on both before comparing.
+    let collapsed = denotation_of(frame.provider(), frame.served(), &pair);
+    let input_pair = denotation_of(
+        frame.provider(),
+        frame.served(),
         "NM_TEST.1:c.[-1del;-1_1insG]",
-        "the pair is left alone — sequence-preserving, but by the mask above \
-         rather than by collapsing to the substitution it denotes"
+    );
+    match (&collapsed, &input_pair) {
+        (Denotation::Sequence(collapsed), Denotation::Sequence(input_pair)) => assert_eq!(
+            collapsed, input_pair,
+            "the collapse must denote the same bases as the input pair"
+        ),
+        other => panic!(
+            "both the collapse and the input pair must denote a concrete sequence, got {other:?}"
+        ),
+    }
+}
+
+/// #2187 boundary regression: the 5'UTR fold moves the window's lower floor to
+/// `i64::MIN` (`lo_floor`) so the derivation window can reach 5' of the CDS
+/// start. Every other path clamps `w_lo >= 1`, but on this one `w_lo` is a
+/// large-negative authored `c.-N`, so `w_hi - w_lo + 1` in
+/// `canonicalize_from_sequence`'s width test overflows *before* the test can
+/// refuse the window — a debug panic, and in release a wrapped nonsense window
+/// derived against silently. The width is computed with checked arithmetic, so
+/// the derivation must DECLINE, not panic.
+///
+/// This is the mirror, on the 5'UTR path this PR introduces, of the three
+/// `i64`-extreme sites `issue_1487_canonical_window_overflow` already pins on
+/// the positive-body path. Pinned per the coordinate-arithmetic regression
+/// rule: a change to window arithmetic requires a boundary guard.
+#[test]
+fn a_five_prime_straddle_at_an_extreme_coordinate_declines_without_panicking() {
+    let frame = boundary_run_frame(11);
+    // `c.-9223372036854775807` is a legal 5'UTR spelling one step inside
+    // `i64::MIN`; paired with `c.1del` the group crosses the 5' seam
+    // (`c_lo <= 0`, `c_hi >= 1`), so the fold admits it and the window
+    // computation is reached with `w_lo` at that extreme. Verified against the
+    // arithmetic: with `w_hi = 2` the pre-fix `w_hi - w_lo` is
+    // `2 - (-9223372036854775806) = 9223372036854775808`, one past `i64::MAX`.
+    const EXTREME_5PRIME: &str = "-9223372036854775807";
+    let input = format!("NM_TEST.1:c.[{EXTREME_5PRIME}del;1del]");
+    // The one hard contract is "does not overflow": reaching this line at all
+    // means the width computation returned instead of panicking (a pre-fix debug
+    // build unwinds in `canonicalize_from_sequence` with `attempt to subtract
+    // with overflow`). The extreme window is unrepresentable, so the derivation
+    // declines and the per-member pipeline result stands — the pair is *not*
+    // collapsed, the extreme member survives verbatim, and the CDS member
+    // 3'-shifts on its own. We assert those structural properties rather than the
+    // exact sibling shift, which is not what this regression is about.
+    let out = normalize_3prime_result(&frame, &input)
+        .expect("the extreme window is declined, not a hard error");
+    assert!(
+        out.contains(EXTREME_5PRIME) && out.contains(';'),
+        "the i64-extreme 5'UTR straddle must decline the re-derivation — staying a two-member \
+         allele that preserves the extreme coordinate — not overflow the window width: got {out}"
     );
 }
 
