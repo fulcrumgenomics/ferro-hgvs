@@ -14,7 +14,8 @@ use crate::hgvs::parser::accession::{
 };
 use crate::hgvs::parser::edit::{parse_genome_na_edit, parse_na_edit, parse_protein_edit};
 use crate::hgvs::parser::position::{
-    parse_amino_acid, parse_cds_pos, parse_genome_pos, parse_prot_pos, parse_rna_pos, parse_tx_pos,
+    parse_amino_acid, parse_cds_pos, parse_genome_pos, parse_number, parse_prot_pos, parse_rna_pos,
+    parse_tx_pos,
 };
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
@@ -823,16 +824,12 @@ fn parse_prot_aa_with_range(
     input: &str,
 ) -> IResult<&str, UncertainBoundary<crate::hgvs::location::ProtPos>> {
     use crate::hgvs::location::ProtPos;
-    use nom::character::complete::digit1;
 
     let (remaining, aa) = parse_amino_acid(input)?;
 
     // Check for AminoAcid + Number + (?) pattern: e.g., Glu2(?)
-    if let Ok((number_remaining, num_str)) =
-        digit1::<&str, nom::error::Error<&str>>.parse(remaining)
-    {
+    if let Ok((number_remaining, pos)) = parse_number::<u64>(remaining) {
         if number_remaining.starts_with("(?)") {
-            let pos = num_str.parse::<u64>().unwrap_or(0);
             let (final_remaining, _) =
                 tag::<&str, &str, nom::error::Error<&str>>("(?)").parse(number_remaining)?;
             return Ok((
@@ -856,17 +853,15 @@ fn parse_prot_aa_with_range(
     let (remaining, boundary) = alt((
         // (?_NUMBER) - unknown to known number (e.g., (?_1))
         map(
-            (tag("?"), tag("_"), digit1),
-            |(_, _, end): (&str, &str, &str)| {
-                let pos = end.parse::<u64>().unwrap_or(0);
+            (tag("?"), tag("_"), parse_number::<u64>),
+            |(_, _, pos): (&str, &str, u64)| {
                 UncertainBoundary::range(Mu::Unknown, Mu::certain(ProtPos::new(aa, pos)))
             },
         ),
         // (NUMBER_?) - known number to unknown (e.g., (1_?))
         map(
-            (digit1, tag("_"), tag("?")),
-            |(start, _, _): (&str, &str, &str)| {
-                let pos = start.parse::<u64>().unwrap_or(0);
+            (parse_number::<u64>, tag("_"), tag("?")),
+            |(pos, _, _): (u64, &str, &str)| {
                 UncertainBoundary::range(Mu::certain(ProtPos::new(aa, pos)), Mu::Unknown)
             },
         ),
@@ -898,8 +893,8 @@ fn parse_prot_boundary(
             UncertainBoundary::uncertain,
         ),
         // Unknown amino acid with position: ?NUMBER (e.g., ?4 means unknown amino acid at position 4)
-        map(preceded(char('?'), digit1), |n: &str| {
-            UncertainBoundary::certain(ProtPos::new(AminoAcid::Xaa, n.parse().unwrap_or(0)))
+        map(preceded(char('?'), parse_number::<u64>), |n| {
+            UncertainBoundary::certain(ProtPos::new(AminoAcid::Xaa, n))
         }),
         // Unknown: ?
         map(tag("?"), |_| UncertainBoundary::unknown()),
@@ -8105,22 +8100,27 @@ fn validate_no_multibase_substitution_at(
     // The canonical repair names both endpoints. Extending a point anchor is
     // only safe for a plain positive coordinate with no intronic offset and no
     // `*`/`-`/pter-style qualifier — the same restriction the preprocessor's
-    // textual rewrite applies. When it does not hold the repair keeps the
-    // stated anchor rather than guessing.
+    // textual rewrite applies. When it does not hold, or the widened coordinate
+    // would not fit its type, the repair keeps the stated anchor rather than
+    // guessing.
+    fn checked_add_i64(base: i64, extra: u64) -> Option<i64> {
+        base.checked_add(i64::try_from(extra).ok()?)
+    }
     fn wider_genome(p: &GenomePos, extra: u64) -> Option<GenomePos> {
-        (p.special.is_none() && p.offset.is_none() && p.base >= 1)
-            .then(|| GenomePos::new(p.base + extra))
+        (p.special.is_none() && p.offset.is_none() && p.base >= 1).then_some(())?;
+        p.base.checked_add(extra).map(GenomePos::new)
     }
     fn wider_cds(p: &CdsPos, extra: u64) -> Option<CdsPos> {
-        (p.special.is_none() && p.offset.is_none() && !p.utr3 && p.base >= 1)
-            .then(|| CdsPos::new(p.base + extra as i64))
+        (p.special.is_none() && p.offset.is_none() && !p.utr3 && p.base >= 1).then_some(())?;
+        checked_add_i64(p.base, extra).map(CdsPos::new)
     }
     fn wider_tx(p: &TxPos, extra: u64) -> Option<TxPos> {
-        (p.offset.is_none() && !p.downstream && p.base >= 1)
-            .then(|| TxPos::new(p.base + extra as i64))
+        (p.offset.is_none() && !p.downstream && p.base >= 1).then_some(())?;
+        checked_add_i64(p.base, extra).map(TxPos::new)
     }
     fn wider_rna(p: &RnaPos, extra: u64) -> Option<RnaPos> {
-        (p.offset.is_none() && !p.utr3 && p.base >= 1).then(|| RnaPos::new(p.base + extra as i64))
+        (p.offset.is_none() && !p.utr3 && p.base >= 1).then_some(())?;
+        checked_add_i64(p.base, extra).map(RnaPos::new)
     }
 
     fn make_error(canonical: &str, edit_respelling: &str, leaf_is_whole: bool) -> FerroError {

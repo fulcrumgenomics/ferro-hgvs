@@ -115,9 +115,9 @@ impl HgvsInput {
             VariantType::Mitochondrial => "m",
         };
 
-        let pos1 = self.position.abs() % 100000;
+        let pos1 = self.position.unsigned_abs() % 100000;
         let pos_str = if let Some(p2) = self.position2 {
-            let pos2 = (p2.abs() % 100000).max(pos1 + 1);
+            let pos2 = (p2.unsigned_abs() % 100000).max(pos1 + 1);
             format!("{}_{}", pos1, pos2)
         } else {
             pos1.to_string()

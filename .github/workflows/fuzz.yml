@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       fuzz_seconds:
-        description: 'Seconds to fuzz each target'
+        description: 'Seconds to fuzz each target (1 to 2400)'
         required: false
         default: '300'
 
@@ -23,12 +23,9 @@ jobs:
   # 360-minute default. This is the half #1994 scoped out (see #2004): a nightly
   # schedule nobody watches is the worse place to leave a six-hour hang.
   #
-  # 60 = at least 5x the slowest SUCCESSFUL run observed (296s, measured
-  # 2026-08-16 over the last 8 nightlies). The fuzz step itself is ALREADY
-  # self-bounded — `timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run` with
-  # FUZZ_SECONDS defaulting to 300 — so this job bound exists to cap the
-  # surrounding nightly toolchain install and target build, not the fuzzing. A
-  # `workflow_dispatch` run with a large `fuzz_seconds` may need this raised.
+  # 60 minutes covers the toolchain install, the target build, the default
+  # 300 s of fuzzing and the step's 300 s grace with a wide margin. The run step
+  # caps `fuzz_seconds` at 2400 so the longest run still fits; raise both together.
   # (`report-failure` is a reusable-workflow `uses:` call, on which GitHub
   # rejects `timeout-minutes`; the callee's own `report` job carries one.)
   fuzz:
@@ -113,11 +110,19 @@ jobs:
           FUZZ_TARGET: ${{ matrix.target }}
         run: |
           cd fuzz
-          if ! [[ "$FUZZ_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Invalid fuzz_seconds='$FUZZ_SECONDS' (must be a positive integer)" >&2
+          # The cap keeps fuzzing, the 300 s grace, the install and the build inside
+          # the job's 60-minute timeout, so a crash artifact is still uploaded.
+          if ! [[ "$FUZZ_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || (( FUZZ_SECONDS > 2400 )); then
+            echo "Invalid fuzz_seconds='$FUZZ_SECONDS' (must be an integer from 1 to 2400)" >&2
             exit 1
           fi
-          timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run "${FUZZ_TARGET}" -- -max_len=1024 || true
+          cargo +nightly fuzz build "${FUZZ_TARGET}"
+          # libFuzzer stops itself after -max_total_time and exits 0. A crash, a
+          # leak, or one input running past -timeout exits non-zero, fails the
+          # job and leaves the input under fuzz/artifacts/. The outer `timeout`
+          # only guards against a hang libFuzzer itself does not catch.
+          timeout "$((FUZZ_SECONDS + 300))s" cargo +nightly fuzz run "${FUZZ_TARGET}" \
+            -- -max_len=1024 -max_total_time="${FUZZ_SECONDS}" -timeout=60
 
       - name: Save corpus
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -142,12 +147,17 @@ jobs:
       contents: read
       issues: write
     with:
-      title: "fuzz: a target found a crash"
+      title: "fuzz: the weekly fuzz run failed"
       summary: >-
-        A fuzz target failed. The parser is expected to reject bad input, never panic on it.
+        A fuzz target crashed, hung, or failed to build. The parser is expected to
+        reject bad input, never panic on it.
       hint: |
-          The crashing input is in the run artifacts. Reproduce:
+          A crash or hang is reported in the step log as `SUMMARY: libFuzzer: ...`,
+          and the offending input is in the `fuzz-crashes-<target>` artifact. Reproduce:
           ```
           cargo fuzz run <target> <artifact>
           ```
-          Commit the artifact as a regression seed alongside the fix.
+          Add a regression test for the input alongside the fix. With no `SUMMARY`
+          line, either the target failed to build (read the `cargo fuzz build`
+          output) or the outer `timeout` stopped the run (the log ends without a
+          libFuzzer summary); read the end of the fuzz step's log to tell which.

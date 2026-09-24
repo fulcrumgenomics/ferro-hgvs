@@ -497,6 +497,7 @@ mod normalize_warning_seam;
 mod one_unknown_offset_sentinel_definition;
 mod oracle_exclude_invariant;
 mod paraphase_exhaustive_tests;
+mod parser_numeric_overflow;
 mod parser_tests;
 mod partition_switch_wiring;
 mod pastcds_star_canonicalization;

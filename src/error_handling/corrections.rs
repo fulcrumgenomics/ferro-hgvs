@@ -1815,10 +1815,8 @@ pub fn correct_old_substitution_syntax(input: &str) -> (Cow<'_, str>, Vec<Detect
             // when pos1 is a simple positive integer; otherwise leave as-is.
             let pos1_text = &input[pos1_start..pos1_end];
             let pos1_num: Option<i64> = pos1_text.parse().ok();
-            match pos1_num {
-                Some(n) if n >= 1 => {
-                    format!("{}_{}", n, n + ref_count as i64 - 1)
-                }
+            match pos1_num.and_then(|n| Some((n, n.checked_add(ref_count as i64 - 1)?))) {
+                Some((n, end)) if n >= 1 => format!("{}_{}", n, end),
                 _ => pos1_text.to_string(),
             }
         } else {
