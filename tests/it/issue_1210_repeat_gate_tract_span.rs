@@ -28,7 +28,7 @@
 //! point both passes now agree on. Pass 1's suppression was the error, not pass
 //! 2's spelling.
 //!
-//! Found by the widened idempotency fuzz in #1180, at ~150k cases — well past
+//! Found by the widened idempotency property test in #1180, at ~150k cases — well past
 //! the 12k that suite runs by default, which is why `FERRO_ASSERT_IDEMPOTENT=1`
 //! plus a soak are the gates that actually cover this class.
 

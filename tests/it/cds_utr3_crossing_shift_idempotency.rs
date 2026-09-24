@@ -7,16 +7,16 @@
 //! finding was filed as #1185 and fixed by PR #1189 (complete the shift in one
 //! pass) together with the #1192 codon-frame gate. Every case below is now
 //! idempotent on the first pass and is pinned here as a regression over a
-//! **hand-built** transcript, complementing the random synthetic fuzz that
+//! **hand-built** transcript, complementing the random synthetic sampling that
 //! found them.
 //!
 //! The `ins` sibling — an insertion resting at `cds_end` that the #387 clamp
 //! rewrote instead of letting it shift on — was #1209, fixed by PR #1211. It is
 //! pinned in its own module, `issue_1209_cds_end_insertion_shift`, rather than
-//! duplicated here. With both fixed, the `c.`-with-3'UTR systems are fuzzed
+//! duplicated here. With both fixed, the `c.`-with-3'UTR systems are sampled
 //! directly as `Sys::CdsUtr3Plus` / `Sys::CdsUtr3Minus` in
 //! `tests/it/normalize_idempotency_proptest.rs`, so this module is now a
-//! deterministic backstop rather than a stand-in for missing fuzz coverage.
+//! deterministic backstop rather than a stand-in for missing property-test coverage.
 //!
 //! ## Why these cases were real bugs and not fixture artifacts
 //!

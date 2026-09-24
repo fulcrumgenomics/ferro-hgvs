@@ -16,8 +16,8 @@
 //!      its fallback counterparts (substitutions on every accession flavor,
 //!      plus intronic / UTR / non-coding / RNA / del / ins / dup / delins /
 //!      inv that must route to the generic parser), and
-//!   2. a `proptest` fuzzer that assembles structurally-varied HGVS strings
-//!      and asserts agreement on each.
+//!   2. a `proptest` property test that assembles structurally-varied HGVS
+//!      strings and asserts agreement on each.
 
 use ferro_hgvs::hgvs::parser::variant::parse_variant;
 use ferro_hgvs::parse_hgvs;
@@ -27,7 +27,7 @@ use proptest::prelude::*;
 ///
 /// Agreement means: both `Err`, or both `Ok` with equal variants. Returns a
 /// human-readable description of the divergence on mismatch (so both the
-/// table test and the proptest fuzzer can surface the exact offending input)
+/// table test and the property test can surface the exact offending input)
 /// or `None` when they agree.
 fn divergence(input: &str) -> Option<String> {
     let standard = parse_variant(input);

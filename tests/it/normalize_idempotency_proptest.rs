@@ -2,7 +2,7 @@
 //! synthetic fixtures (issue #1157 follow-up campaign).
 //!
 //! The pre-existing idempotency coverage is reference-free (empty provider, so
-//! nothing shifts) or substitution-only (subs never shift). This fuzzes random
+//! nothing shifts) or substitution-only (subs never shift). This samples random
 //! **repeat-biased** cores (homopolymers + short tandems, where del/dup/ins
 //! actually 3'-shift) across `g.`, `c.`, `n.`, and `r.` — the last on a coding
 //! *and* a non-coding transcript, which are two different axes — each
@@ -19,7 +19,7 @@
 //! which reads the `r.` axis as transcript-relative rather than CDS-relative
 //! (issue #1177) and would fail for that unrelated reason.
 //!
-//! Three properties are fuzzed:
+//! Three properties are checked:
 //!   * `norm(norm(x)) == norm(x)` (idempotency), covering the full edit/coord
 //!     matrix in the **3' (default, HGVS-canonical)** direction;
 //!   * the same idempotency property in the **5'** direction — the mirror of the
@@ -34,15 +34,15 @@
 //!     clamps + the dup-routing recursion in `normalize_na_edit`) so those
 //!     spellings now converge.
 //!
-//! 5' scope note: the general 5' idempotency fuzz is now enabled. Reaching green
-//! required fixing three separate pre-existing 5' bugs the fuzzer surfaced, all
+//! 5' scope note: the general 5' idempotency property test is now enabled. Reaching
+//! green required fixing three separate pre-existing 5' bugs the sampler surfaced, all
 //! outside the boundary rework: the boundary dup/insertion→delins family, an
 //! insertion→dup step that selected the wrong tract for heterogeneous content
 //! (#7), a tandem-repeat `dup` whose `unit[N]` phase rotated on re-normalization
 //! (#8, `normalize_repeat` now direction-aware), and the ins→dup sibling of #8 —
 //! a single-copy dup over a dinucleotide tract that under-shifted by one when the
 //! run continued off-phase 5' (fixed by mirroring the 3' branch's tract
-//! alignment). Each has an explicit regression test alongside this fuzz.
+//! alignment). Each has an explicit regression test alongside this property test.
 //!
 //! Cases are generated **valid by construction** (edit endpoints derived from
 //! the core length), so there is no skip path at all: an unparseable render or a

@@ -26,7 +26,7 @@
 //!   both shuffle directions, idempotency.
 //! * **Tier 2** — confluence, net-sign symmetry, window-perturbation stability,
 //!   a structured window corpus.
-//! * **Tier 3** — a neighbourhood fuzzer proven able to fail, and an opt-in
+//! * **Tier 3** — a neighbourhood search proven able to fail, and an opt-in
 //!   corpus replay.
 //! * **Tier 4** — shape coverage (#2206) across the regression's sibling
 //!   geometries the del-run+ins tests do not reach: near-miss anchors, a `dup`
@@ -257,7 +257,7 @@ fn window_ref_alt(
 
 /// A tiny deterministic xorshift64 PRNG. Deterministic on purpose: `Math.random`
 /// equivalents are banned in this repo's harnessed contexts, and a fixed seed
-/// makes any counterexample the fuzzer finds reproducible.
+/// makes any counterexample the search finds reproducible.
 struct Rng(u64);
 impl Rng {
     fn next_u64(&mut self) -> u64 {
@@ -841,15 +841,15 @@ fn t2d_structured_window_corpus() {
 }
 
 // ===========================================================================
-// Tier 3 — a fuzzer proven able to fail, and an opt-in corpus replay
+// Tier 3 — a search proven able to fail, and an opt-in corpus replay
 // ===========================================================================
 
-/// Neighbourhood fuzzer, seeded from the known trigger.
+/// Neighbourhood search, seeded from the known trigger.
 ///
-/// A uniform-random / flank-homology fuzzer is BLIND here — an earlier version
+/// A uniform-random / flank-homology search is BLIND here — an earlier version
 /// found **0 collisions in 4000 cases**, which refuted the "accidental flank
 /// homology" hypothesis rather than proving safety. Per this repo's doctrine a
-/// guard must be *shown able to fail*, so this fuzzer explores the NEIGHBOURHOOD
+/// guard must be *shown able to fail*, so this search explores the NEIGHBOURHOOD
 /// of the reported reproducer: it starts from the hotspot with `PAYLOAD30` (known
 /// to collide) and applies small random perturbations — payload point-mutations,
 /// ±1 length, run length 7–9, gap 0–1. The base case collides without the fix, so
@@ -857,7 +857,7 @@ fn t2d_structured_window_corpus() {
 /// wide the colliding region was. The pure-random search is re-run and its
 /// (expected zero) rate reported, so the blindness is recorded, not hidden.
 #[test]
-fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
+fn t3a_neighborhood_search_seeded_from_the_trigger() {
     const CASES: usize = 4000;
     let (win_lo, win_hi) = HOTSPOT_WINDOW;
 
@@ -922,7 +922,7 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
         }
     }
 
-    eprintln!("\n=== T3a: neighbourhood fuzzer ===");
+    eprintln!("\n=== T3a: neighbourhood search ===");
     eprintln!("  pure-random control: {random_collisions}/{CASES} collisions (blind — expected 0)");
     eprintln!("  neighbourhood: {collisions}/{CASES} collisions, {others} other errors");
     if let Some(payload) = &smallest {
@@ -937,7 +937,7 @@ fn t3a_neighborhood_fuzzer_seeded_from_the_trigger() {
     assert_eq!(
         (collisions, others),
         (0, 0),
-        "neighbourhood fuzzer found {collisions}/{CASES} colliding and {others}/{CASES} otherwise-failing derivations"
+        "neighbourhood search found {collisions}/{CASES} colliding and {others}/{CASES} otherwise-failing derivations"
     );
 }
 

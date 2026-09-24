@@ -1,7 +1,8 @@
 //! Idempotency of **repeat-notation (`unit[N]`) inputs**.
 //!
-//! The idempotency proptest generates only `del`/`dup`/`ins`/`delins` inputs, so
-//! `unit[N]` spelled *as input* was never fuzzed. `normalize_repeat` must be a
+//! The general idempotency property test does not generate `unit[N]` spelled *as
+//! input*; `repeat_input_is_idempotent` in `normalize_idempotency_proptest.rs`
+//! samples it, and this module pins concrete cases. `normalize_repeat` must be a
 //! fixed point for these too: `norm(norm(x)) == norm(x)`.
 //!
 //! Core `TCAGCAGCAGCAGTT` places exactly 4 clean copies of `CAG` at g.258..269,
@@ -135,7 +136,7 @@ fn five_prime_repeat_double_contraction_spans_the_whole_tract() {
 /// `unit_len % 3 == 0`) routes a >=2-copy expansion of a non-codon-aligned unit
 /// to a literal `ins`. That insertion point was named against the tract's **3'**
 /// flank regardless of direction, so under 5' it re-shuffled to the 5' flank
-/// (`c.6_7insAA` -> `c.3_4insAA`). Found by the repeat-input fuzz.
+/// (`c.6_7insAA` -> `c.3_4insAA`). Found by the repeat-input property test.
 ///
 /// Core `CCCAAACCC`: an `AAA` tract at c.4..6 (unit `A`, len 1, gate blocks),
 /// expanded to 5 copies = +2 copies.
