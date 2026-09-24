@@ -14,14 +14,14 @@ Key endpoints:
 
 Rate Limit: 3 requests/second
 
-This script performs live network fetches and is provided for ad-hoc exploration
-only. It does NOT regenerate the committed test fixture: by default it writes to
+This script performs live network fetches. By default it writes to
 `tests/fixtures/validation/ncbi_variation.live.json`, NOT the curated, hand-authored
-`tests/fixtures/validation/ncbi_variation.json` that `tests/it/spdi_tests.rs` parses
-and asserts semantic invariants against (exact SPDI/variant equality on the parsed
-JSON, not a byte-level file comparison). Overwriting the curated fixture with live
-data would re-introduce network variability and break those assertions. Point
-`--output` somewhere else (e.g. a scratch path) if you want the raw live response.
+`tests/fixtures/validation/ncbi_variation.json` that `tests/it/spdi_tests.rs` parses,
+so an ad-hoc run cannot clobber the committed fixture.
+
+The weekly External API Validation workflow deliberately writes over the curated path,
+inside its CI checkout only, so that `spdi_tests` runs against NCBI's live answers; the
+module docs of `tests/it/spdi_tests.rs` say how. Never commit a live fetch over it.
 
 Usage:
     python scripts/fetch_ncbi_variation.py [--output OUTPUT_PATH]
@@ -42,6 +42,12 @@ RATE_LIMIT_DELAY = 0.5  # seconds between requests
 
 # Test HGVS variants for SPDI conversion
 TEST_HGVS_VARIANTS = [
+    # Genomic substitutions first: they are the only inputs spdi_tests
+    # round-trips, so any `--limit` must still include some.
+    "NC_000017.11:g.7674220C>T",
+    "NC_000017.11:g.7673802C>T",
+    "NC_000007.14:g.140753336A>T",
+    "NC_000013.11:g.32316461A>T",
     # Simple substitutions
     "NM_000546.6:c.215C>G",
     "NM_000546.6:c.524G>A",  # TP53 R175H
@@ -55,11 +61,6 @@ TEST_HGVS_VARIANTS = [
     # Insertions
     "NM_000546.6:c.375_376insA",
     "NM_000546.6:c.722_723insGTACC",
-    # Genomic coordinates
-    "NC_000017.11:g.7674220C>T",
-    "NC_000017.11:g.7673802G>A",
-    "NC_000007.14:g.140753336A>T",
-    "NC_000013.11:g.32316461C>T",
     # Complex indels
     "NM_000546.6:c.100_102delinsTTT",
     "NM_000546.6:c.743_744delinsTT",
@@ -304,6 +305,8 @@ def generate_fixture(
         output_path: Path to write fixture file
     """
     fixture = {
+        # tests/it/spdi_tests.rs keys its live-data rules on this exact string
+        # (LIVE_FETCH_SOURCE); change both together.
         "source": "NCBI Variation Services API",
         "api_base": NCBI_API,
         "generated": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
@@ -344,9 +347,8 @@ def main() -> None:
         "--output",
         type=Path,
         # NOT the committed fixture: tests/fixtures/validation/ncbi_variation.json is a
-        # curated, hand-authored offline oracle whose parsed contents the SPDI tests
-        # assert semantic invariants against (not a byte-level file comparison).
-        # Default to a distinct, non-asserted live path so a stray run cannot clobber it.
+        # curated, hand-authored offline oracle. Default to a distinct live path so a
+        # stray run cannot clobber it; the weekly workflow overrides this on purpose.
         default=Path("tests/fixtures/validation/ncbi_variation.live.json"),
         help=(
             "Output path for the live NCBI response. Defaults to a non-asserted "

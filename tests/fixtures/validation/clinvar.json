@@ -296,7 +296,7 @@
       "clinvar_id": "13961"
     },
     {
-      "input": "NC_000017.11:g.43094466G>A",
+      "input": "NC_000017.11:g.43094466C>T",
       "type": "Genome",
       "valid": true,
       "category": "substitutions",
@@ -332,7 +332,7 @@
       "clinvar_id": "7105"
     },
     {
-      "input": "NC_000001.11:g.155235843G>A",
+      "input": "NC_000001.11:g.155235843T>C",
       "type": "Genome",
       "valid": true,
       "category": "substitutions",
@@ -2375,7 +2375,7 @@
       "clinvar_id": "60001"
     },
     {
-      "input": "NC_000017.11:g.7673802G>A",
+      "input": "NC_000017.11:g.7673802C>T",
       "type": "Genome",
       "valid": true,
       "category": "substitutions",
@@ -2384,7 +2384,7 @@
       "clinvar_id": "60002"
     },
     {
-      "input": "NC_000013.11:g.32316461C>T",
+      "input": "NC_000013.11:g.32316461A>T",
       "type": "Genome",
       "valid": true,
       "category": "substitutions",

@@ -10,7 +10,7 @@
       "description": "Simple substitution in COL1A1"
     },
     {
-      "input": "NC_000017.11:g.43094466G>A",
+      "input": "NC_000017.11:g.43094466C>T",
       "type": "Genome",
       "valid": true,
       "description": "BRCA1 genomic variant"
