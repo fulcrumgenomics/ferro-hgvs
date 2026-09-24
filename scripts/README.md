@@ -8,7 +8,7 @@ Utility scripts for generating and updating test fixtures used by ferro-hgvs.
 |--------|-------------|----------------|
 | `extract_hgvs_spec_examples.py` | Scrapes HGVS examples from [hgvs-nomenclature.org](https://hgvs-nomenclature.org) | `tests/fixtures/grammar/hgvs_spec_examples.json` |
 | `extract_mutalyzer_github.py` | Extracts test patterns from the [mutalyzer-hgvs-parser](https://github.com/mutalyzer/mutalyzer-hgvs-parser) repo | `tests/fixtures/grammar/mutalyzer_github.json` |
-| `fetch_ncbi_variation.py` | Ad-hoc live fetch of HGVS/SPDI conversions from the [NCBI Variation Services API](https://api.ncbi.nlm.nih.gov/variation/v0/). **Does not regenerate the committed fixture** (see note below). | `tests/fixtures/validation/ncbi_variation.live.json` (live; not committed) |
+| `fetch_ncbi_variation.py` | Ad-hoc live fetch of HGVS/SPDI conversions from the [NCBI Variation Services API](https://api.ncbi.nlm.nih.gov/variation/v0/). **Does not regenerate the committed fixture** (see note below). | `tests/fixtures/validation/ncbi_variation.live.json` (live; not committed; the weekly workflow writes over the curated fixture instead, see below) |
 | `fetch_variantvalidator.py` | Fetches validated HGVS variants from the [VariantValidator API](https://rest.variantvalidator.org) | `tests/fixtures/validation/variantvalidator_api.json` |
 | `benchmark_python.py` | Benchmarks ferro-hgvs Python bindings against biocommons/hgvs | N/A (prints results) |
 | `run_conformance_axis.sh` | Runs the manifest-backed conformance axis (`axis_*` tests) with a validated `FERRO_MANIFEST` | N/A (runs tests) |
@@ -45,7 +45,9 @@ python scripts/extract_mutalyzer_github.py
 # against (not a byte-level file comparison). This script
 # does NOT regenerate it — by default it writes the live response to
 # tests/fixtures/validation/ncbi_variation.live.json instead. To inspect live data,
-# point --output at a scratch path; do not overwrite the curated fixture.
+# point --output at a scratch path; do not commit a live fetch over the curated
+# fixture. (The weekly External API Validation workflow does write over it, in its
+# own checkout; the module docs of tests/it/spdi_tests.rs explain why and how.)
 python scripts/fetch_ncbi_variation.py --output /tmp/ncbi_variation.live.json
 
 # Regenerate VariantValidator fixture (rate-limited, takes several minutes)

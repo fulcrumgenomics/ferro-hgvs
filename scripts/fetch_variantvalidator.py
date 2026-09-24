@@ -31,6 +31,11 @@ RATE_LIMIT_DELAY = 1.0  # seconds between requests (conservative)
 
 # Test variants for validation
 TEST_VARIANTS = [
+    # Genomic variants first, so a `--limit` run still includes some.
+    ("GRCh38", "NC_000017.11:g.7674220C>T"),
+    ("GRCh38", "NC_000017.11:g.7673802C>T"),
+    ("GRCh38", "NC_000007.14:g.140753336A>T"),  # BRAF region
+    ("GRCh38", "NC_000013.11:g.32316461A>T"),  # BRCA2 region
     # Clinically important substitutions
     ("GRCh38", "NM_000546.6:c.215C>G"),
     ("GRCh38", "NM_000546.6:c.524G>A"),  # TP53 R175H
@@ -60,11 +65,6 @@ TEST_VARIANTS = [
     ("GRCh38", "NM_000546.6:c.375delCinsAA"),
     ("GRCh38", "NM_000546.6:c.100_102delinsTTT"),
     ("GRCh38", "NM_000546.6:c.743_744delinsTT"),
-    # Genomic variants
-    ("GRCh38", "NC_000017.11:g.7674220C>T"),
-    ("GRCh38", "NC_000017.11:g.7673802G>A"),
-    ("GRCh38", "NC_000007.14:g.140753336A>T"),  # BRAF region
-    ("GRCh38", "NC_000013.11:g.32316461C>T"),  # BRCA2 region
     # GRCh37 variants for testing build support
     ("GRCh37", "NM_000546.5:c.215C>G"),
     ("GRCh37", "NM_000546.5:c.524G>A"),

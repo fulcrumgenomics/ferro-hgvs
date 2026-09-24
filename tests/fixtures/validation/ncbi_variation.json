@@ -4,7 +4,7 @@
   "generated": "2026-06-21 00:00:00 UTC",
   "hgvs_conversions": {
     "total": 6,
-    "successful": 4,
+    "successful": 5,
     "variants": [
       {
         "input_hgvs": "NC_000017.11:g.7674220C>T",
@@ -22,28 +22,28 @@
         },
         "roundtrip_hgvs": {
           "data": {
-            "hgvs_list": ["NC_000017.11:g.7674220C>T"]
+            "hgvs": "NC_000017.11:g.7674220C>T"
           }
         },
         "vcf": null
       },
       {
-        "input_hgvs": "NC_000017.11:g.7673802G>A",
+        "input_hgvs": "NC_000017.11:g.7673802C>T",
         "spdi_result": {
           "data": {
             "spdis": [
               {
                 "seq_id": "NC_000017.11",
                 "position": 7673801,
-                "deleted_sequence": "G",
-                "inserted_sequence": "A"
+                "deleted_sequence": "C",
+                "inserted_sequence": "T"
               }
             ]
           }
         },
         "roundtrip_hgvs": {
           "data": {
-            "hgvs_list": ["NC_000017.11:g.7673802G>A"]
+            "hgvs": "NC_000017.11:g.7673802C>T"
           }
         },
         "vcf": null
@@ -64,20 +64,20 @@
         },
         "roundtrip_hgvs": {
           "data": {
-            "hgvs_list": ["NC_000007.14:g.140753336A>T"]
+            "hgvs": "NC_000007.14:g.140753336A>T"
           }
         },
         "vcf": null
       },
       {
-        "input_hgvs": "NC_000013.11:g.32316461C>T",
+        "input_hgvs": "NC_000013.11:g.32316461A>T",
         "spdi_result": {
           "data": {
             "spdis": [
               {
                 "seq_id": "NC_000013.11",
                 "position": 32316460,
-                "deleted_sequence": "C",
+                "deleted_sequence": "A",
                 "inserted_sequence": "T"
               }
             ]
@@ -85,14 +85,25 @@
         },
         "roundtrip_hgvs": {
           "data": {
-            "hgvs_list": ["NC_000013.11:g.32316461C>T"]
+            "hgvs": "NC_000013.11:g.32316461A>T"
           }
         },
         "vcf": null
       },
       {
         "input_hgvs": "NM_000546.6:c.215C>G",
-        "spdi_result": null,
+        "spdi_result": {
+          "data": {
+            "spdis": [
+              {
+                "seq_id": "NM_000546.6",
+                "position": 356,
+                "deleted_sequence": "C",
+                "inserted_sequence": "G"
+              }
+            ]
+          }
+        },
         "roundtrip_hgvs": null,
         "vcf": null
       },

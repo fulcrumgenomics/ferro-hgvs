@@ -6,6 +6,33 @@
 //! the tests run deterministically without network access. SPDI (Sequence Position
 //! Deletion Insertion) is NCBI's canonical representation for sequence variants.
 //!
+//! # Live data (#2256)
+//!
+//! The weekly External API Validation workflow deliberately writes a live NCBI
+//! fetch over the fixture and runs these tests against it, with
+//! `FERRO_SPDI_LIVE_FIXTURE=1` set. That is the only place ferro's genomic
+//! HGVS -> SPDI conversion is compared with NCBI's own answers. Everywhere else
+//! (PR CI, a local run) the committed curated fixture is read. [`FixtureKind`]
+//! requires the marker and the fixture's `source` to agree, so a live fetch
+//! committed over the fixture fails PR CI, and a weekly run that silently fell
+//! back to the curated file fails too.
+//!
+//! What differs on live data, and how the tests handle it:
+//!
+//! - NCBI returns SPDIs for transcript (`c.`) inputs as well, in transcript-
+//!   sequence coordinates (e.g. `NM_000546.6:356:C:G`). The round-trip checks
+//!   apply only to single-base genomic substitutions, the one shape the offline
+//!   oracle and converter handle, so those SPDIs are counted and skipped, not
+//!   verified.
+//! - NCBI's SPDI -> HGVS endpoint returns one `hgvs` string. The curated fixture
+//!   uses the same shape.
+//! - NCBI can be partly down (22 of 25 conversions returned HTTP 502 on
+//!   2026-08-30). A genomic input may lack an SPDI only when its error is
+//!   transient (HTTP 5xx, HTTP 429, or a network exception). A permanent error
+//!   such as HTTP 400, which is what a wrong reference base in the input gets,
+//!   fails the test. At least one genomic SPDI must be verified, so a total
+//!   outage fails rather than passing having checked nothing.
+//!
 //! Tests verify that:
 //! 1. HGVS expressions parse correctly
 //! 2. When the fixture records an SPDI, we can parse the corresponding HGVS
@@ -86,8 +113,10 @@ struct RoundtripResult {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct RoundtripData {
+    /// The HGVS the SPDI converts back to. NCBI's `/spdi/{spdi}/hgvs` endpoint
+    /// returns a single string, and the curated fixture uses the same shape.
     #[serde(default)]
-    hgvs_list: Vec<String>,
+    hgvs: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,23 +145,27 @@ struct RsidLookup {
 struct SpdiTestReport {
     total_hgvs: usize,
     hgvs_parsed: usize,
+    genomic_substitutions: usize,
     hgvs_with_spdi: usize,
-    roundtrip_available: usize,
     roundtrip_parsed: usize,
     roundtrip_verified: usize,
+    transient_failures: usize,
+    spdi_skipped_not_genomic_substitution: usize,
     parse_failures: Vec<String>,
 }
 
 impl SpdiTestReport {
     fn summary(&self) -> String {
         format!(
-            "HGVS total: {}, parsed: {}, with SPDI: {}, SPDI roundtrips verified: {}, roundtrip available: {}, roundtrip parsed: {}",
+            "HGVS total: {}, parsed: {}, genomic substitutions: {}, with SPDI: {}, SPDI roundtrips verified: {}, roundtrip HGVS checked: {}, transient fetch failures: {}, SPDIs skipped (not a genomic substitution): {}",
             self.total_hgvs,
             self.hgvs_parsed,
+            self.genomic_substitutions,
             self.hgvs_with_spdi,
             self.roundtrip_verified,
-            self.roundtrip_available,
-            self.roundtrip_parsed
+            self.roundtrip_parsed,
+            self.transient_failures,
+            self.spdi_skipped_not_genomic_substitution
         )
     }
 }
@@ -144,6 +177,8 @@ impl SpdiTestReport {
 #[test]
 fn test_hgvs_to_spdi_parsing() {
     let fixture = load_fixture();
+    let expect_live = std::env::var(LIVE_FIXTURE_ENV).is_ok_and(|value| value == "1");
+    let kind = FixtureKind::from_source(&fixture.source, expect_live);
 
     assert!(
         !fixture.hgvs_conversions.variants.is_empty(),
@@ -165,86 +200,192 @@ fn test_hgvs_to_spdi_parsing() {
         "hgvs_conversions.successful must equal the number of conversions with a successful SPDI result"
     );
 
+    println!("\n=== SPDI Roundtrip Test Report ===");
+    println!(
+        "fixture: {:?} ({kind:?}), generated {}",
+        fixture.source, fixture.generated
+    );
+    let report = check_hgvs_conversions(&fixture.hgvs_conversions.variants, kind);
+    println!("{}", report.summary());
+
+    // The curated fixture must also exercise the live shape the skip handles: a
+    // conversion that carries an SPDI but is not a genomic substitution.
+    if kind == FixtureKind::Curated {
+        assert!(
+            report.spdi_skipped_not_genomic_substitution >= 1,
+            "the curated fixture must include a conversion that carries an SPDI but is not a genomic substitution"
+        );
+    }
+}
+
+/// Which NCBI fixture a run is reading. See the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixtureKind {
+    /// The committed, hand-authored fixture.
+    Curated,
+    /// The live fetch the weekly workflow writes over it.
+    Live,
+}
+
+impl FixtureKind {
+    /// Decide the kind from the fixture's `source` and whether the run expects
+    /// live data (`FERRO_SPDI_LIVE_FIXTURE=1`). The two must agree: a live
+    /// source without the marker is a live fetch committed over the curated
+    /// fixture, and the marker without a live source is a weekly run whose fetch
+    /// never replaced the file.
+    fn from_source(source: &str, expect_live: bool) -> Self {
+        let is_live = source == LIVE_FETCH_SOURCE;
+        match (expect_live, is_live) {
+            (true, true) => FixtureKind::Live,
+            (false, false) => FixtureKind::Curated,
+            (true, false) => panic!(
+                "{LIVE_FIXTURE_ENV}=1 but the fixture's source is {source:?}: the live NCBI \
+                 fetch did not replace the committed fixture, so live data is not being tested"
+            ),
+            (false, true) => panic!(
+                "the fixture's source is the live fetch's ({LIVE_FETCH_SOURCE:?}) but \
+                 {LIVE_FIXTURE_ENV} is unset: a live fetch must never be committed over the \
+                 curated fixture"
+            ),
+        }
+    }
+}
+
+/// Whether a fetch error recorded by `scripts/fetch_ncbi_variation.py` may be
+/// transient: an HTTP 5xx or 429, or a network exception (anything that is not
+/// an `HTTP <status>` string). Any other HTTP status, typically a 400 for an
+/// input NCBI rejects, is permanent.
+fn is_transient_fetch_error(error: &str) -> bool {
+    match error
+        .strip_prefix("HTTP ")
+        .and_then(|status| status.parse::<u16>().ok())
+    {
+        Some(status) => status == 429 || (500..600).contains(&status),
+        None => true,
+    }
+}
+
+/// Check every conversion and return the report. Per genomic substitution:
+///
+/// - with an SPDI, the HGVS -> SPDI -> HGVS round trip must hold exactly, and
+///   any SPDI -> HGVS string recorded must denote the input variant;
+/// - on the curated fixture, the SPDI and the SPDI -> HGVS string are required;
+/// - on live data, either may be missing only for a transient fetch error.
+///
+/// Conversions that are not genomic substitutions are skipped (counted when
+/// they carry an SPDI). At least one genomic SPDI must be verified.
+fn check_hgvs_conversions(conversions: &[HgvsConversion], kind: FixtureKind) -> SpdiTestReport {
     let mut report = SpdiTestReport {
-        total_hgvs: fixture.hgvs_conversions.variants.len(),
+        total_hgvs: conversions.len(),
         ..Default::default()
     };
 
-    for conversion in &fixture.hgvs_conversions.variants {
+    for conversion in conversions {
+        let input_hgvs = conversion.input_hgvs.as_str();
         // Every input HGVS in the fixture must parse.
-        let parse_result = parse_hgvs(&conversion.input_hgvs);
-        match parse_result {
+        match parse_hgvs(input_hgvs) {
             Ok(_) => report.hgvs_parsed += 1,
-            Err(_) => report.parse_failures.push(conversion.input_hgvs.clone()),
+            Err(_) => report.parse_failures.push(input_hgvs.to_string()),
         }
 
-        // When the fixture carries an SPDI for this variant, verify the full
-        // HGVS -> SPDI -> HGVS roundtrip is exact. We only assert SPDI equality
-        // for variants whose HGVS -> SPDI conversion is computable offline (i.e.
-        // without a reference provider): genomic substitutions. Such variants
-        // need no reference bases, so `hgvs_to_spdi_simple` resolves them fully.
-        // The asserted SPDI values therefore come from ferro's own converter,
-        // never a hand-guessed relationship.
-        if let Some(ref spdi_result) = conversion.spdi_result {
-            if let Some(ref data) = spdi_result.data {
-                if let Some(expected) = data.spdis.first() {
-                    report.hgvs_with_spdi += 1;
-                    verify_spdi_roundtrip(&conversion.input_hgvs, expected, &mut report);
-                }
+        // Only genomic substitutions convert to SPDI without a reference, so
+        // only they are round-tripped; the oracle decides the shape.
+        let Some(oracle) = expected_spdi_from_genomic_substitution(input_hgvs) else {
+            let carries_spdi = conversion
+                .spdi_result
+                .as_ref()
+                .and_then(|result| result.data.as_ref())
+                .is_some_and(|data| !data.spdis.is_empty());
+            if carries_spdi {
+                report.spdi_skipped_not_genomic_substitution += 1;
             }
-        }
+            continue;
+        };
+        report.genomic_substitutions += 1;
 
-        // Any roundtrip HGVS strings the fixture records must parse AND be
-        // semantically equal to the input variant — not merely syntactically
-        // valid. For these genomic substitutions NCBI's SPDI->HGVS roundtrip
-        // reproduces the input exactly, so we assert full variant equality
-        // (catches silent position/allele drift, which an is_ok() check would
-        // miss).
-        if let Some(ref roundtrip) = conversion.roundtrip_hgvs {
-            if let Some(ref data) = roundtrip.data {
-                if !data.hgvs_list.is_empty() {
-                    report.roundtrip_available += 1;
-                    let input_variant = parse_hgvs(&conversion.input_hgvs).unwrap_or_else(|e| {
-                        panic!("input HGVS should parse: {}: {e:?}", conversion.input_hgvs)
-                    });
-                    for hgvs in &data.hgvs_list {
-                        let round = parse_hgvs(hgvs).unwrap_or_else(|e| {
-                            panic!("roundtrip HGVS should parse: {hgvs}: {e:?}")
-                        });
-                        assert_eq!(
-                            round, input_variant,
-                            "roundtrip HGVS {hgvs} should be semantically equal to input {}",
-                            conversion.input_hgvs
-                        );
-                    }
-                    report.roundtrip_parsed += 1;
-                }
-            }
-        }
+        let spdi_result = conversion.spdi_result.as_ref();
+        let expected = spdi_result
+            .and_then(|result| result.data.as_ref())
+            .and_then(|data| data.spdis.first());
+        let Some(expected) = expected else {
+            require_transient_failure(
+                kind,
+                input_hgvs,
+                "SPDI",
+                spdi_result.and_then(|result| result.error.as_deref()),
+                &mut report,
+            );
+            continue;
+        };
+        report.hgvs_with_spdi += 1;
+        verify_spdi_roundtrip(input_hgvs, expected, &oracle, &mut report);
+
+        // The SPDI -> HGVS string NCBI recorded must parse AND denote the input
+        // variant, not merely be syntactically valid: full variant equality
+        // catches silent position or allele drift.
+        let roundtrip = conversion.roundtrip_hgvs.as_ref();
+        let Some(hgvs) = roundtrip
+            .and_then(|result| result.data.as_ref())
+            .and_then(|data| data.hgvs.as_ref())
+        else {
+            require_transient_failure(
+                kind,
+                input_hgvs,
+                "SPDI -> HGVS roundtrip",
+                roundtrip.and_then(|result| result.error.as_deref()),
+                &mut report,
+            );
+            continue;
+        };
+        let input_variant = parse_hgvs(input_hgvs)
+            .unwrap_or_else(|e| panic!("input HGVS should parse: {input_hgvs}: {e:?}"));
+        let round = parse_hgvs(hgvs)
+            .unwrap_or_else(|e| panic!("roundtrip HGVS should parse: {hgvs}: {e:?}"));
+        assert_eq!(
+            round, input_variant,
+            "roundtrip HGVS {hgvs} should be semantically equal to input {input_hgvs}"
+        );
+        report.roundtrip_parsed += 1;
     }
 
-    println!("\n=== SPDI Roundtrip Test Report ===");
-    println!("{}", report.summary());
-
-    // All input HGVS in the synthetic fixture are valid and must parse.
     assert!(
         report.parse_failures.is_empty(),
         "all input HGVS should parse; failures: {:?}",
         report.parse_failures
     );
-    assert_eq!(report.hgvs_parsed, report.total_hgvs);
-
-    // The fixture carries genomic-substitution SPDIs; each must roundtrip
-    // exactly. Guard against the assertions becoming a no-op.
     assert!(
-        report.hgvs_with_spdi >= 4,
-        "expected at least 4 variants with verifiable SPDI, found {}",
-        report.hgvs_with_spdi
+        report.genomic_substitutions >= 1,
+        "the fixture holds no genomic substitution, so nothing can be round-tripped; \
+         a live fetch run with a small `--limit` requests none"
     );
-    assert_eq!(
-        report.roundtrip_verified, report.hgvs_with_spdi,
-        "every variant with an SPDI should pass the exact HGVS<->SPDI roundtrip"
+    assert!(
+        report.hgvs_with_spdi >= 1,
+        "none of the {} genomic substitutions has an SPDI, so nothing was verified \
+         (a total upstream outage on a live fetch)",
+        report.genomic_substitutions
     );
+    report
+}
+
+/// A genomic substitution lacks a result: fail unless this is live data and the
+/// recorded error may be transient. A missing record (`null`) is never
+/// transient; the fetch script records an attempted call as data or an error.
+fn require_transient_failure(
+    kind: FixtureKind,
+    input_hgvs: &str,
+    what: &str,
+    error: Option<&str>,
+    report: &mut SpdiTestReport,
+) {
+    match (kind, error) {
+        (FixtureKind::Live, Some(error)) if is_transient_fetch_error(error) => {
+            report.transient_failures += 1;
+        }
+        _ => panic!(
+            "{input_hgvs}: no {what} in the {kind:?} fixture (error: {error:?}); \
+             only a live fetch may lack one, and only for a transient error"
+        ),
+    }
 }
 
 /// Regression guard for issue #2017: a failed HGVS->SPDI conversion is recorded
@@ -308,6 +449,137 @@ fn errored_conversions_are_excluded_from_the_successful_count() {
     );
 }
 
+/// Parse an inline `hgvs_conversions.variants` array for the checker tests.
+fn conversions_from(json: &str) -> Vec<HgvsConversion> {
+    serde_json::from_str(json).expect("checker test JSON should deserialize")
+}
+
+/// One genomic substitution NCBI answered, in the live shape.
+const GENOMIC_SUCCESS: &str = r#"{
+    "input_hgvs": "NC_000017.11:g.7674220C>T",
+    "spdi_result": {"data": {"spdis": [{"seq_id": "NC_000017.11", "position": 7674219,
+        "deleted_sequence": "C", "inserted_sequence": "T"}]}},
+    "roundtrip_hgvs": {"data": {"hgvs": "NC_000017.11:g.7674220C>T"}}
+}"#;
+
+#[test]
+fn a_live_partial_outage_still_verifies_what_came_back() {
+    let conversions = conversions_from(&format!(
+        r#"[{GENOMIC_SUCCESS},
+            {{"input_hgvs": "NC_000007.14:g.140753336A>T",
+              "spdi_result": {{"error": "HTTP 502", "input": "NC_000007.14:g.140753336A>T"}}}},
+            {{"input_hgvs": "NC_000013.11:g.32316461A>T",
+              "spdi_result": {{"error": "HTTPSConnectionPool: Read timed out."}}}},
+            {{"input_hgvs": "NM_000546.6:c.215C>G",
+              "spdi_result": {{"data": {{"spdis": [{{"seq_id": "NM_000546.6", "position": 356,
+                  "deleted_sequence": "C", "inserted_sequence": "G"}}]}}}},
+              "roundtrip_hgvs": {{"data": {{"hgvs": "NM_000546.6:c.215C>G"}}}}}},
+            {{"input_hgvs": "NM_001126112.3:c.35G>T",
+              "spdi_result": {{"error": "HTTP 400"}}}}]"#
+    ));
+    let report = check_hgvs_conversions(&conversions, FixtureKind::Live);
+    assert_eq!(report.roundtrip_verified, 1);
+    assert_eq!(report.roundtrip_parsed, 1);
+    assert_eq!(report.transient_failures, 2);
+    assert_eq!(report.spdi_skipped_not_genomic_substitution, 1);
+}
+
+#[test]
+#[should_panic(expected = "only a live fetch may lack one, and only for a transient error")]
+fn a_permanent_rejection_of_a_genomic_input_fails_on_live_data() {
+    // A wrong reference base gets HTTP 400; that must not pass as an outage.
+    let conversions = conversions_from(&format!(
+        r#"[{GENOMIC_SUCCESS},
+            {{"input_hgvs": "NC_000017.11:g.7673802G>A",
+              "spdi_result": {{"error": "HTTP 400"}}}}]"#
+    ));
+    check_hgvs_conversions(&conversions, FixtureKind::Live);
+}
+
+#[test]
+#[should_panic(expected = "so nothing was verified")]
+fn a_total_live_outage_fails() {
+    let conversions = conversions_from(
+        r#"[{"input_hgvs": "NC_000017.11:g.7674220C>T",
+             "spdi_result": {"error": "HTTP 502"}},
+            {"input_hgvs": "NC_000007.14:g.140753336A>T",
+             "spdi_result": {"error": "HTTP 503"}}]"#,
+    );
+    check_hgvs_conversions(&conversions, FixtureKind::Live);
+}
+
+#[test]
+#[should_panic(expected = "holds no genomic substitution")]
+fn a_fetch_that_requested_no_genomic_substitution_fails_with_its_own_message() {
+    let conversions = conversions_from(
+        r#"[{"input_hgvs": "NM_000546.6:c.215C>G",
+             "spdi_result": {"data": {"spdis": [{"seq_id": "NM_000546.6", "position": 356,
+                 "deleted_sequence": "C", "inserted_sequence": "G"}]}}}]"#,
+    );
+    check_hgvs_conversions(&conversions, FixtureKind::Live);
+}
+
+#[test]
+#[should_panic(expected = "only a live fetch may lack one")]
+fn the_curated_fixture_may_not_lack_a_genomic_spdi_even_for_a_transient_error() {
+    let conversions = conversions_from(&format!(
+        r#"[{GENOMIC_SUCCESS},
+            {{"input_hgvs": "NC_000007.14:g.140753336A>T",
+              "spdi_result": {{"error": "HTTP 502"}}}}]"#
+    ));
+    check_hgvs_conversions(&conversions, FixtureKind::Curated);
+}
+
+#[test]
+#[should_panic(expected = "no SPDI -> HGVS roundtrip")]
+fn the_curated_fixture_may_not_lack_a_roundtrip_hgvs() {
+    let conversions = conversions_from(
+        r#"[{"input_hgvs": "NC_000017.11:g.7674220C>T",
+             "spdi_result": {"data": {"spdis": [{"seq_id": "NC_000017.11", "position": 7674219,
+                 "deleted_sequence": "C", "inserted_sequence": "T"}]}}}]"#,
+    );
+    check_hgvs_conversions(&conversions, FixtureKind::Curated);
+}
+
+#[test]
+fn only_http_5xx_429_and_network_errors_are_transient() {
+    for transient in [
+        "HTTP 500",
+        "HTTP 502",
+        "HTTP 503",
+        "HTTP 429",
+        "Read timed out.",
+    ] {
+        assert!(is_transient_fetch_error(transient), "{transient}");
+    }
+    for permanent in ["HTTP 400", "HTTP 404", "HTTP 422"] {
+        assert!(!is_transient_fetch_error(permanent), "{permanent}");
+    }
+}
+
+#[test]
+fn the_fixture_kind_requires_the_marker_and_the_source_to_agree() {
+    assert_eq!(
+        FixtureKind::from_source(LIVE_FETCH_SOURCE, true),
+        FixtureKind::Live
+    );
+    assert_eq!(
+        FixtureKind::from_source("synthetic (hand-authored)", false),
+        FixtureKind::Curated
+    );
+    let committed_live = std::panic::catch_unwind(|| {
+        FixtureKind::from_source(LIVE_FETCH_SOURCE, false);
+    });
+    assert!(committed_live.is_err(), "a committed live fetch must fail");
+    let silent_fallback = std::panic::catch_unwind(|| {
+        FixtureKind::from_source("synthetic (hand-authored)", true);
+    });
+    assert!(
+        silent_fallback.is_err(),
+        "a weekly run on curated data must fail"
+    );
+}
+
 /// Verify that an input genomic-substitution HGVS converts to exactly the
 /// SPDI recorded in the fixture, and that converting that SPDI back yields an
 /// HGVS expression that parses and re-expresses the original variant.
@@ -318,7 +590,12 @@ fn errored_conversions_are_excluded_from_the_successful_count() {
 /// provider (`hgvs_to_spdi_simple`); transcript/`c.` variants are exercised
 /// on the parse path only (their conversion requires CDS metadata / reference
 /// bases that a unit fixture cannot supply offline).
-fn verify_spdi_roundtrip(input_hgvs: &str, expected: &Spdi, report: &mut SpdiTestReport) {
+fn verify_spdi_roundtrip(
+    input_hgvs: &str,
+    expected: &Spdi,
+    oracle: &SpdiVariant,
+    report: &mut SpdiTestReport,
+) {
     let variant = parse_hgvs(input_hgvs)
         .unwrap_or_else(|e| panic!("input HGVS should parse: {input_hgvs}: {e:?}"));
 
@@ -332,7 +609,6 @@ fn verify_spdi_roundtrip(input_hgvs: &str, expected: &Spdi, report: &mut SpdiTes
     // coordinate, deleted = ref base, inserted = alt base). This check does not
     // call any ferro converter, so passing it is not circular with the forward
     // conversion asserted below.
-    let oracle = expected_spdi_from_genomic_substitution(input_hgvs);
     assert_eq!(
         (
             expected.seq_id.as_str(),
@@ -393,38 +669,77 @@ fn verify_spdi_roundtrip(input_hgvs: &str, expected: &Spdi, report: &mut SpdiTes
 /// string of the form `<accession>:g.<pos><ref>><alt>`, using only the SPDI
 /// specification's coordinate arithmetic (0-based interbase position =
 /// 1-based HGVS position − 1; deleted = ref base; inserted = alt base).
+/// Returns `None` for any other shape: another axis, a gene selector, a
+/// non-substitution, a multi-base or non-`ACGT` allele, or a position that is
+/// not a plain number of at least 1. This is also the definition of which
+/// conversions the round-trip checks cover.
 ///
 /// This deliberately does not call any ferro conversion routine so it can
 /// serve as an external oracle for the fixture's recorded SPDI values, rather
 /// than re-deriving them from the same code under test.
-fn expected_spdi_from_genomic_substitution(input_hgvs: &str) -> SpdiVariant {
-    let (accession, rest) = input_hgvs
-        .split_once(":g.")
-        .unwrap_or_else(|| panic!("expected a genomic (g.) substitution: {input_hgvs}"));
-
+fn expected_spdi_from_genomic_substitution(input_hgvs: &str) -> Option<SpdiVariant> {
+    let (accession, rest) = input_hgvs.split_once(":g.")?;
+    if accession.is_empty() || accession.contains('(') {
+        return None;
+    }
     // rest looks like "<pos><ref>><alt>", e.g. "7674220C>T".
-    let (lhs, alt) = rest
-        .split_once('>')
-        .unwrap_or_else(|| panic!("expected a substitution (`>`): {input_hgvs}"));
-    let ref_base = lhs
-        .chars()
-        .next_back()
-        .unwrap_or_else(|| panic!("missing reference base: {input_hgvs}"));
+    let (lhs, alt) = rest.split_once('>')?;
+    let is_base = |c: &char| matches!(c, 'A' | 'C' | 'G' | 'T');
+    let mut alt_chars = alt.chars();
+    let alt_base = alt_chars.next().filter(is_base)?;
+    if alt_chars.next().is_some() {
+        return None;
+    }
+    let ref_base = lhs.chars().next_back().filter(is_base)?;
     let pos_str = &lhs[..lhs.len() - ref_base.len_utf8()];
-    let one_based: u64 = pos_str
-        .parse()
-        .unwrap_or_else(|_| panic!("invalid position {pos_str:?} in {input_hgvs}"));
-    assert!(
-        one_based >= 1,
-        "1-based position must be >= 1: {input_hgvs}"
-    );
-
-    SpdiVariant::substitution(
+    if pos_str.is_empty() || !pos_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let one_based: u64 = pos_str.parse().ok()?;
+    let zero_based = one_based.checked_sub(1)?;
+    Some(SpdiVariant::substitution(
         accession,
-        one_based - 1,
+        zero_based,
         ref_base.to_string(),
-        alt.to_string(),
-    )
+        alt_base.to_string(),
+    ))
+}
+
+#[test]
+fn only_single_base_genomic_substitutions_reach_the_roundtrip_oracle() {
+    assert_eq!(
+        expected_spdi_from_genomic_substitution("NC_000017.11:g.7674220C>T"),
+        Some(SpdiVariant::substitution(
+            "NC_000017.11",
+            7_674_219,
+            "C",
+            "T"
+        ))
+    );
+    // The lowest position maps to interbase 0.
+    assert_eq!(
+        expected_spdi_from_genomic_substitution("NC_000017.11:g.1C>T"),
+        Some(SpdiVariant::substitution("NC_000017.11", 0, "C", "T"))
+    );
+    for input in [
+        "NM_000546.6:c.215C>G",        // transcript axis
+        "NC_000017.11(TP53):g.100C>T", // gene selector on the accession
+        "NC_000017.11:g.100del",       // not a substitution
+        "NC_000017.11:g.100AC>T",      // multi-base reference
+        "NC_000017.11:g.100C>TT",      // multi-base alternate
+        "NC_000017.11:g.100N>T",       // not an ACGT base
+        "NC_000017.11:g.100\u{c4}>T",  // a non-ASCII reference must not panic
+        "NC_000017.11:g.C>T",          // no position
+        "NC_000017.11:g.+100C>T",      // a signed position
+        "NC_000017.11:g.0C>T",         // position below 1
+        "NC_000017.11:g.100_101C>T",   // a range, not a position
+    ] {
+        assert_eq!(
+            expected_spdi_from_genomic_substitution(input),
+            None,
+            "{input} must not reach the genomic-substitution oracle"
+        );
+    }
 }
 
 /// Count the conversions that carry a *successful* SPDI result — an
@@ -451,8 +766,17 @@ fn count_successful_conversions(conversions: &[HgvsConversion]) -> usize {
         .count()
 }
 
-/// Load the synthetic, committed NCBI variation fixture. The fixture is a
-/// checked-in test asset (not a network fetch), so its absence is a real test
+/// The `source` value `scripts/fetch_ncbi_variation.py` writes into a live
+/// fetch. See [`FixtureKind`].
+const LIVE_FETCH_SOURCE: &str = "NCBI Variation Services API";
+
+/// Set to `1` by the weekly External API Validation workflow on the step that
+/// runs these tests against a live fetch. See [`FixtureKind`].
+const LIVE_FIXTURE_ENV: &str = "FERRO_SPDI_LIVE_FIXTURE";
+
+/// Load the NCBI variation fixture: the committed curated one, or in the weekly
+/// External API Validation run the live fetch written over it (see the module
+/// docs). Either way the file is expected, so its absence is a real test
 /// failure rather than a reason to skip.
 fn load_fixture() -> NcbiVariationFixture {
     let fixture_path = Path::new("tests/fixtures/validation/ncbi_variation.json");
@@ -555,6 +879,10 @@ fn test_rsid_hgvs_parsing() {
 
     println!("\n=== rsID HGVS Parsing Report ===");
     println!(
+        "fixture: {:?}, generated {}",
+        fixture.source, fixture.generated
+    );
+    println!(
         "rsIDs with HGVS: {}/{}",
         rsids_with_hgvs,
         fixture.rsid_lookups.variants.len()
@@ -598,7 +926,9 @@ fn test_spdi_format_understanding() {
 
 #[test]
 fn test_spdi_deletion_equivalence() {
-    // SPDI deletion: NM_000492.4:1653:CTT: (empty insertion = deletion)
+    // NCBI gives this deletion as NM_000492.4:1589:TCTT:T. SPDI counts along the
+    // transcript sequence, not in c. numbering, and NCBI writes a deletion in a
+    // repeat over the whole repeat with the kept base on both sides.
     // HGVS: NM_000492.4:c.1521_1523del
 
     let result = parse_hgvs("NM_000492.4:c.1521_1523del");
@@ -652,7 +982,8 @@ fn test_spdi_zero_based_understanding() {
     // SPDI uses 0-based coordinates
     // HGVS uses 1-based coordinates
 
-    // SPDI: NM_000546.6:214:C:G (0-based position 214)
+    // SPDI: NM_000546.6:356:C:G. SPDI counts from 0 along the transcript
+    // sequence, and c.1 is n.143 on NM_000546.6, so c.215 is n.357, position 356.
     // HGVS: NM_000546.6:c.215C>G (1-based position 215)
 
     let result = parse_hgvs("NM_000546.6:c.215C>G");
@@ -665,8 +996,9 @@ fn test_spdi_half_open_intervals() {
     // HGVS uses closed intervals [start, end]
 
     // For a 3bp deletion:
-    // SPDI: position=1520, deleted_sequence=CTT (deletes positions 1520,1521,1522)
-    // HGVS: c.1521_1523del (deletes positions 1521,1522,1523 in 1-based)
+    // On a genomic reference, g.1521_1523del is SPDI position 1520 deleting the
+    // 3 bases in [1520, 1523). For the c. input below, SPDI counts along the
+    // transcript sequence instead (NCBI: NM_000492.4:1589:TCTT:T).
 
     let result = parse_hgvs("NM_000492.4:c.1521_1523del");
     assert!(result.is_ok());

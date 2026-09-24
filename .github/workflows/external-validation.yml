@@ -210,6 +210,11 @@ jobs:
       - name: Run SPDI tests
         if: ${{ !cancelled() }}
         shell: bash
+        env:
+          # Tells spdi_tests it must be reading the live NCBI fetch, not the
+          # committed fixture: without it a fetch that never wrote its file would
+          # pass on curated data. Unset when the fetch is skipped (#2256).
+          FERRO_SPDI_LIVE_FIXTURE: ${{ github.event.inputs.skip_api_fetch != 'true' && '1' || '' }}
         run: |
           source .github/scripts/run_validation.sh
           # No `--ignored`: spdi_tests carries no #[ignore] any more.
