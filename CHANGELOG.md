@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v1.0.0...v1.0.1) - 2026-09-24
+
+### Representation changes
+
+- *(parser)* reject numbers that overflow their type; let fuzzing fail ([#2240](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2240))
+
+### Fixed
+
+- re-anchor the numbered normalization ruleset in README.md ([#2168](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2168))
+- *(ci)* read Representation-Change only from genuine footers in changelog audit ([#2234](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2234))
+
+### Other
+
+- *(spdi)* make the SPDI tests hold on live NCBI data ([#2259](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2259))
+- stop calling property tests fuzz tests ([#2253](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2253))
+- make if-let tests fail when the value has the wrong shape ([#2252](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2252))
+- fix install versions and make the integration tests require dev ([#2244](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2244))
+- gate the conformance tooling behind a feature ([#2242](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2242))
+- stop pinning the ruleset's prose, and cite the rules page instead of README ([#2249](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2249))
+- *(contributing)* cut CONTRIBUTING.md to a first-PR guide and give each topic one home ([#2248](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2248))
+- *(contributing)* correct wrong facts and add what blocks a first PR ([#2246](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2246))
+- *(ledger)* render the normalization contract as an index and debulk the ledger prose ([#2237](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2237))
+- *(normalize)* flag the superseded 26/26 inversion probe at its source ([#2221](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2221))
+- shadow spec — ferro's reading of the HGVS recommendations ([#2216](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2216))
+- *(normalize)* cover the lone-member fast-path Mt arm and unequal-length lone-delins gate ([#2191](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2191))
+- *(normalize)* reuse block_hull_and_payload in coalesce_payload_alignment_split ([#2190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2190))
+- *(reference)* prepared 2-bit sequence store (bwa .pac style, ~32% faster) ([#2227](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2227))
+- *(cdot)* serve transcripts lazily from the mmap'd rkyv archive ([#1156](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1156))
+- retire the ci.yml partition-guard tests and trim its comments to rules ([#2231](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2231))
+- *(oracles)* move the armed run's exclusions into nextest profiles; finish the ORACLES.md editorial pass ([#2224](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2224))
+- First pass cleanup of ORACLES.md & friends ([#2223](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2223))
+- docs(spec) Update CONTRIBUTING.md for readability/agentic understanding ([#2222](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2222))
+- docs(spec) Attempt to make READING_THE_SPEC more understandable to me… ([#2217](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2217))
+- Debulk the CLAUDE.md ([#2215](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2215))
+- *(cli)* buffer stdout so batch output is not one syscall per line ([#2230](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2230))
+- *(error-handling)* drop 11 per-variant String allocations in the accession-prefix corrector ([#2229](https://github.com/fulcrumgenomics/ferro-hgvs/pull/2229))
+
 ## [1.0.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.17.2...v1.0.0) - 2026-08-25
 
 ### Added
