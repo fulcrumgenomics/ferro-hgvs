@@ -9822,15 +9822,20 @@ mod tests {
         if let HgvsVariant::Allele(allele) = &variant {
             assert_eq!(allele.phase, AllelePhase::Cis);
             assert_eq!(allele.variants.len(), 2);
-            // First variant should be identity
-            if let HgvsVariant::Genome(v) = &allele.variants[0] {
-                assert!(matches!(
-                    v.loc_edit.edit,
-                    crate::hgvs::uncertainty::Mu::Certain(
-                        crate::hgvs::edit::NaEdit::Identity { .. }
-                    )
-                ));
-            }
+            // First variant should be a position-specific identity
+            let HgvsVariant::Genome(v) = &allele.variants[0] else {
+                panic!(
+                    "expected `HgvsVariant::Genome`, got {:?}",
+                    allele.variants[0]
+                );
+            };
+            assert!(matches!(
+                v.loc_edit.edit,
+                crate::hgvs::uncertainty::Mu::Certain(crate::hgvs::edit::NaEdit::Identity {
+                    whole_entity: false,
+                    ..
+                })
+            ));
         }
 
         // Test with uncertain intervals (actual ClinVar pattern)

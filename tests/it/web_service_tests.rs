@@ -70,20 +70,20 @@ fn test_effect_parse_substitution() {
     let input = "NM_000249.4:c.350C>T";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            // Verify it's a substitution
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Substitution {
-                    reference,
-                    alternative,
-                } => {
-                    assert_eq!(reference.to_string(), "C");
-                    assert_eq!(alternative.to_string(), "T");
-                }
-                _ => panic!("Expected substitution"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    // Verify it's a substitution
+    match edit {
+        ferro_hgvs::hgvs::edit::NaEdit::Substitution {
+            reference,
+            alternative,
+        } => {
+            assert_eq!(reference.to_string(), "C");
+            assert_eq!(alternative.to_string(), "T");
         }
+        _ => panic!("Expected substitution"),
     }
 }
 
@@ -92,15 +92,15 @@ fn test_effect_parse_deletion() {
     let input = "NM_000249.4:c.350del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Deletion { .. } => {
-                    // Correct
-                }
-                _ => panic!("Expected deletion"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        ferro_hgvs::hgvs::edit::NaEdit::Deletion { .. } => {
+            // Correct
         }
+        _ => panic!("Expected deletion"),
     }
 }
 
@@ -109,13 +109,13 @@ fn test_effect_parse_intronic() {
     let input = "NM_000249.4:c.117-2del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        // Verify offset is present
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 117);
-            assert_eq!(start.offset, Some(-2));
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    // Verify offset is present
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 117);
+    assert_eq!(start.offset, Some(-2));
 }
 
 #[test]
@@ -123,15 +123,15 @@ fn test_effect_parse_insertion() {
     let input = "NM_000249.4:c.350_351insATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence } => {
-                    assert_eq!(sequence.to_string(), "ATG");
-                }
-                _ => panic!("Expected insertion"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence } => {
+            assert_eq!(sequence.to_string(), "ATG");
         }
+        _ => panic!("Expected insertion"),
     }
 }
 
@@ -355,9 +355,8 @@ fn test_hgvs_to_vcf_parse_genomic() {
     match &result.result {
         ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) => {
             assert!(v.accession.to_string().contains("NC_000007"));
-            if let Some(start) = v.loc_edit.location.start.inner() {
-                assert_eq!(start.base, 117559593);
-            }
+            let start = v.loc_edit.location.start.inner().expect("start position");
+            assert_eq!(start.base, 117559593);
         }
         _ => panic!("Expected Genome variant"),
     }
@@ -368,19 +367,19 @@ fn test_hgvs_to_vcf_extract_substitution_alleles() {
     let input = "NC_000007.14:g.117559593G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                ferro_hgvs::hgvs::edit::NaEdit::Substitution {
-                    reference,
-                    alternative,
-                } => {
-                    assert_eq!(reference.to_string(), "G");
-                    assert_eq!(alternative.to_string(), "A");
-                }
-                _ => panic!("Expected substitution"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result else {
+        panic!("expected `HgvsVariant::Genome`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        ferro_hgvs::hgvs::edit::NaEdit::Substitution {
+            reference,
+            alternative,
+        } => {
+            assert_eq!(reference.to_string(), "G");
+            assert_eq!(alternative.to_string(), "A");
         }
+        _ => panic!("Expected substitution"),
     }
 }
 
@@ -436,12 +435,12 @@ fn test_intronic_position_negative_offset() {
     let input = "NM_000249.4:c.117-5G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 117);
-            assert_eq!(start.offset, Some(-5));
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 117);
+    assert_eq!(start.offset, Some(-5));
 }
 
 #[test]
@@ -449,12 +448,12 @@ fn test_intronic_position_positive_offset() {
     let input = "NM_000249.4:c.117+5G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 117);
-            assert_eq!(start.offset, Some(5));
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 117);
+    assert_eq!(start.offset, Some(5));
 }
 
 // ==================== 5' and 3' UTR Tests ====================
@@ -464,12 +463,12 @@ fn test_5_prime_utr_position() {
     let input = "NM_000249.4:c.-20G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, -20);
-            assert!(!start.utr3);
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, -20);
+    assert!(!start.utr3);
 }
 
 #[test]
@@ -477,12 +476,12 @@ fn test_3_prime_utr_position() {
     let input = "NM_000249.4:c.*50G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 50);
-            assert!(start.utr3);
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 50);
+    assert!(start.utr3);
 }
 
 // ==================== VCF Intronic Variant Tests ====================
@@ -494,13 +493,13 @@ fn test_vcf_intronic_variant_negative_offset() {
     let input = "NM_000249.4:c.117-2G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 117);
-            assert_eq!(start.offset, Some(-2));
-            // Verify offset indicates position BEFORE the exon
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 117);
+    assert_eq!(start.offset, Some(-2));
+    // Verify offset indicates position BEFORE the exon
 }
 
 #[test]
@@ -509,13 +508,13 @@ fn test_vcf_intronic_variant_positive_offset() {
     let input = "NM_000249.4:c.117+5del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(start) = v.loc_edit.location.start.inner() {
-            assert_eq!(start.base, 117);
-            assert_eq!(start.offset, Some(5));
-            // Verify offset indicates position AFTER the exon
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    assert_eq!(start.base, 117);
+    assert_eq!(start.offset, Some(5));
+    // Verify offset indicates position AFTER the exon
 }
 
 #[test]
@@ -526,20 +525,20 @@ fn test_vcf_extract_alleles_substitution() {
     let input = "NC_000007.14:g.117559593G>A";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Substitution {
-                    reference,
-                    alternative,
-                } => {
-                    // Substitution should directly provide ref and alt
-                    assert_eq!(reference.to_string(), "G");
-                    assert_eq!(alternative.to_string(), "A");
-                }
-                _ => panic!("Expected substitution"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result else {
+        panic!("expected `HgvsVariant::Genome`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => {
+            // Substitution should directly provide ref and alt
+            assert_eq!(reference.to_string(), "G");
+            assert_eq!(alternative.to_string(), "A");
         }
+        _ => panic!("Expected substitution"),
     }
 }
 
@@ -553,16 +552,16 @@ fn test_vcf_extract_alleles_deletion_with_sequence() {
     let input = "NC_000007.14:g.117559593delG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Deletion { sequence, .. } => {
-                    // After W3025 preprocessing the explicit sequence is stripped.
-                    assert!(sequence.is_none());
-                }
-                _ => panic!("Expected deletion"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result else {
+        panic!("expected `HgvsVariant::Genome`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Deletion { sequence, .. } => {
+            // After W3025 preprocessing the explicit sequence is stripped.
+            assert!(sequence.is_none());
         }
+        _ => panic!("Expected deletion"),
     }
 }
 
@@ -574,15 +573,15 @@ fn test_vcf_extract_alleles_insertion() {
     let input = "NC_000007.14:g.117559593_117559594insATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Insertion { sequence } => {
-                    assert_eq!(sequence.to_string(), "ATG");
-                }
-                _ => panic!("Expected insertion"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result else {
+        panic!("expected `HgvsVariant::Genome`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Insertion { sequence } => {
+            assert_eq!(sequence.to_string(), "ATG");
         }
+        _ => panic!("Expected insertion"),
     }
 }
 
@@ -596,16 +595,16 @@ fn test_vcf_extract_alleles_duplication() {
     let input = "NC_000007.14:g.117559593_117559595dupATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Duplication { sequence, .. } => {
-                    // After W3024 preprocessing the explicit sequence is stripped.
-                    assert!(sequence.is_none());
-                }
-                _ => panic!("Expected duplication"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Genome(v) = &result.result else {
+        panic!("expected `HgvsVariant::Genome`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Duplication { sequence, .. } => {
+            // After W3024 preprocessing the explicit sequence is stripped.
+            assert!(sequence.is_none());
         }
+        _ => panic!("Expected duplication"),
     }
 }
 
@@ -622,11 +621,10 @@ fn test_validate_extract_cds_variant_details() {
         ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) => {
             assert_eq!(v.accession.to_string(), "NM_000249.4");
             // Can extract edit info
-            if let Some(edit) = v.loc_edit.edit.inner() {
-                match edit {
-                    ferro_hgvs::hgvs::edit::NaEdit::Substitution { .. } => {}
-                    _ => panic!("Expected substitution"),
-                }
+            let edit = v.loc_edit.edit.inner().expect("an edit");
+            match edit {
+                ferro_hgvs::hgvs::edit::NaEdit::Substitution { .. } => {}
+                _ => panic!("Expected substitution"),
             }
         }
         _ => panic!("Expected Cds variant"),
@@ -679,15 +677,15 @@ fn test_validate_na_edit_info_deletion() {
     let input = "NM_000249.4:c.350_352del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                // Deletion info may have sequence, length, or both — the
-                // test exists to lock in that we land in this arm.
-                NaEdit::Deletion { .. } => {}
-                _ => panic!("Expected deletion"),
-            }
-        }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        // Deletion info may have sequence, length, or both — the
+        // test exists to lock in that we land in this arm.
+        NaEdit::Deletion { .. } => {}
+        _ => panic!("Expected deletion"),
     }
 }
 
@@ -698,15 +696,15 @@ fn test_validate_na_edit_info_delins() {
     let input = "NM_000249.4:c.350delinsATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Delins { sequence, .. } => {
-                    assert_eq!(sequence.to_string(), "ATG");
-                }
-                _ => panic!("Expected delins"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Delins { sequence, .. } => {
+            assert_eq!(sequence.to_string(), "ATG");
         }
+        _ => panic!("Expected delins"),
     }
 }
 
@@ -717,24 +715,18 @@ fn test_validate_na_edit_info_repeat() {
     let input = "NM_000249.4:c.350CAG[25]";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(edit) = v.loc_edit.edit.inner() {
-            match edit {
-                NaEdit::Repeat {
-                    sequence, count, ..
-                } => {
-                    assert!(sequence.is_some());
-                    // Count may include brackets in its display format
-                    let count_str = count.to_string();
-                    assert!(
-                        count_str.contains("25"),
-                        "Count should contain 25, got: {}",
-                        count_str
-                    );
-                }
-                _ => panic!("Expected repeat"),
-            }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let edit = v.loc_edit.edit.inner().expect("an edit");
+    match edit {
+        NaEdit::Repeat {
+            sequence, count, ..
+        } => {
+            assert!(sequence.is_some());
+            assert_eq!(*count, ferro_hgvs::hgvs::edit::RepeatCount::Exact(25));
         }
+        _ => panic!("Expected repeat"),
     }
 }
 
@@ -828,21 +820,26 @@ fn test_effect_frameshift_detection_single_base_del() {
     let input = "NM_000249.4:c.350del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { length, .. }) =
-            v.loc_edit.edit.inner()
-        {
-            // `c.350del` is a point-position deletion, so the parsed `length`
-            // is None and 1 is the correct default. Range deletions (e.g.
-            // `c.350_352del`) also yield None but their length must instead
-            // be derived from the position range — do not copy this default.
-            let len = length.unwrap_or(1) as usize;
-            assert!(
-                !len.is_multiple_of(3),
-                "Single base deletion should cause frameshift"
-            );
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { length, .. }) = v.loc_edit.edit.inner()
+    else {
+        panic!(
+            "expected `Some(NaEdit::Deletion {{ length, .. }})`, got {:?}",
+            v.loc_edit.edit
+        );
+    };
+    // `c.350del` is a point-position deletion, so the parsed `length`
+    // is None and 1 is the correct default. Range deletions (e.g.
+    // `c.350_352del`) also yield None but their length must instead
+    // be derived from the position range — do not copy this default.
+    let len = length.unwrap_or(1) as usize;
+    assert_eq!(len, 1);
+    assert!(
+        !len.is_multiple_of(3),
+        "Single base deletion should cause frameshift"
+    );
 }
 
 #[test]
@@ -851,18 +848,23 @@ fn test_effect_inframe_deletion_three_bases() {
     let input = "NM_000249.4:c.350_352del";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { .. }) = v.loc_edit.edit.inner() {
-            let start = v.loc_edit.location.start.inner().expect("start position");
-            let end = v.loc_edit.location.end.inner().expect("end position");
-            let len = (end.base - start.base + 1) as usize;
-            assert_eq!(len, 3);
-            assert!(
-                len.is_multiple_of(3),
-                "Three base deletion should be in-frame"
-            );
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let Some(ferro_hgvs::hgvs::edit::NaEdit::Deletion { .. }) = v.loc_edit.edit.inner() else {
+        panic!(
+            "expected `Some(NaEdit::Deletion {{ .. }})`, got {:?}",
+            v.loc_edit.edit
+        );
+    };
+    let start = v.loc_edit.location.start.inner().expect("start position");
+    let end = v.loc_edit.location.end.inner().expect("end position");
+    let len = (end.base - start.base + 1) as usize;
+    assert_eq!(len, 3);
+    assert!(
+        len.is_multiple_of(3),
+        "Three base deletion should be in-frame"
+    );
 }
 
 #[test]
@@ -871,18 +873,22 @@ fn test_effect_frameshift_insertion() {
     let input = "NM_000249.4:c.350_351insAT";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) =
-            v.loc_edit.edit.inner()
-        {
-            let len = sequence.to_string().len();
-            assert_eq!(len, 2);
-            assert!(
-                !len.is_multiple_of(3),
-                "Two base insertion should cause frameshift"
-            );
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) = v.loc_edit.edit.inner()
+    else {
+        panic!(
+            "expected `Some(NaEdit::Insertion {{ sequence }})`, got {:?}",
+            v.loc_edit.edit
+        );
+    };
+    let len = sequence.to_string().len();
+    assert_eq!(len, 2);
+    assert!(
+        !len.is_multiple_of(3),
+        "Two base insertion should cause frameshift"
+    );
 }
 
 #[test]
@@ -890,18 +896,22 @@ fn test_effect_inframe_insertion_three_bases() {
     let input = "NM_000249.4:c.350_351insATG";
     let result = ferro_hgvs::hgvs::parser::parse_hgvs_lenient(input).unwrap();
 
-    if let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-        if let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) =
-            v.loc_edit.edit.inner()
-        {
-            let len = sequence.to_string().len();
-            assert_eq!(len, 3);
-            assert!(
-                len.is_multiple_of(3),
-                "Three base insertion should be in-frame"
-            );
-        }
-    }
+    let ferro_hgvs::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+        panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+    };
+    let Some(ferro_hgvs::hgvs::edit::NaEdit::Insertion { sequence }) = v.loc_edit.edit.inner()
+    else {
+        panic!(
+            "expected `Some(NaEdit::Insertion {{ sequence }})`, got {:?}",
+            v.loc_edit.edit
+        );
+    };
+    let len = sequence.to_string().len();
+    assert_eq!(len, 3);
+    assert!(
+        len.is_multiple_of(3),
+        "Three base insertion should be in-frame"
+    );
 }
 
 #[test]

@@ -338,9 +338,8 @@ mod tests {
         let result = projector.project("chr1", 1050).unwrap();
 
         // MANE Select should be first
-        if let Some(first) = result.best() {
-            assert_eq!(first.mane_status, ManeStatus::Select);
-        }
+        let first = result.best().expect("a best projection");
+        assert_eq!(first.mane_status, ManeStatus::Select);
     }
 
     #[test]

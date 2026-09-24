@@ -516,22 +516,20 @@ mod tests {
     fn test_parse_vcf_line_too_few_fields() {
         let line = "chr1\t12345\t.\tA";
         let result = parse_vcf_line(line);
-        assert!(result.is_err());
-
-        if let Err(FerroError::Parse { msg, .. }) = result {
-            assert!(msg.contains("not enough fields"));
-        }
+        let Err(FerroError::Parse { msg, .. }) = &result else {
+            panic!("expected `Err(FerroError::Parse {{ msg, .. }})`, got {result:?}");
+        };
+        assert!(msg.contains("not enough fields"));
     }
 
     #[test]
     fn test_parse_vcf_line_invalid_position() {
         let line = "chr1\tnotanumber\t.\tA\tG";
         let result = parse_vcf_line(line);
-        assert!(result.is_err());
-
-        if let Err(FerroError::Parse { msg, .. }) = result {
-            assert!(msg.contains("Invalid position"));
-        }
+        let Err(FerroError::Parse { msg, .. }) = &result else {
+            panic!("expected `Err(FerroError::Parse {{ msg, .. }})`, got {result:?}");
+        };
+        assert!(msg.contains("Invalid position"));
     }
 
     #[test]

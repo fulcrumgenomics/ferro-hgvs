@@ -2129,13 +2129,13 @@ mod tests {
     #[test]
     fn test_analyze_substitution() {
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350C>T").unwrap();
-        if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-            if let Some(edit) = v.loc_edit.edit.inner() {
-                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, None);
-                assert_eq!(edit_type, "substitution");
-                assert!(!is_frameshift);
-            }
-        }
+        let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+            panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+        };
+        let edit = v.loc_edit.edit.inner().expect("an edit");
+        let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, None);
+        assert_eq!(edit_type, "substitution");
+        assert!(!is_frameshift);
     }
 
     #[test]
@@ -2145,14 +2145,14 @@ mod tests {
         // Single-position `c.350del` → span_len = 1 → 1 bp deletion =
         // frameshift.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350del").unwrap();
-        if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-            if let Some(edit) = v.loc_edit.edit.inner() {
-                let span_len = span_len_from_cds_interval(&v.loc_edit.location);
-                let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, span_len);
-                assert_eq!(edit_type, "deletion");
-                assert!(is_frameshift); // Single base deletion causes frameshift
-            }
-        }
+        let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+            panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+        };
+        let edit = v.loc_edit.edit.inner().expect("an edit");
+        let span_len = span_len_from_cds_interval(&v.loc_edit.location);
+        let (edit_type, is_frameshift, _, _) = analyze_na_edit(edit, span_len);
+        assert_eq!(edit_type, "deletion");
+        assert!(is_frameshift); // Single base deletion causes frameshift
     }
 
     #[test]
@@ -2161,16 +2161,16 @@ mod tests {
         // pre-#427 code. The 3-bp range deletion `c.350_352del` is now
         // correctly identified as in-frame via `span_len = 3`.
         let result = crate::hgvs::parser::parse_hgvs_lenient("NM_000249.4:c.350_352del").unwrap();
-        if let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result {
-            if let Some(edit) = v.loc_edit.edit.inner() {
-                let span_len = span_len_from_cds_interval(&v.loc_edit.location);
-                let (edit_type, is_frameshift, ref_len, alt_len) = analyze_na_edit(edit, span_len);
-                assert_eq!(edit_type, "deletion");
-                assert_eq!(ref_len, 3);
-                assert_eq!(alt_len, 0);
-                assert!(!is_frameshift, "3 bp deletion is in-frame");
-            }
-        }
+        let crate::hgvs::variant::HgvsVariant::Cds(v) = &result.result else {
+            panic!("expected `HgvsVariant::Cds`, got {:?}", result.result);
+        };
+        let edit = v.loc_edit.edit.inner().expect("an edit");
+        let span_len = span_len_from_cds_interval(&v.loc_edit.location);
+        let (edit_type, is_frameshift, ref_len, alt_len) = analyze_na_edit(edit, span_len);
+        assert_eq!(edit_type, "deletion");
+        assert_eq!(ref_len, 3);
+        assert_eq!(alt_len, 0);
+        assert!(!is_frameshift, "3 bp deletion is in-frame");
     }
 
     // ---- delins frame-undecidability → NMD declines (issue #806 review) ----
