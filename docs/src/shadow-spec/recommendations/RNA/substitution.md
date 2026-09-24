@@ -225,13 +225,13 @@ and an expected-but-unpredictable effect, respectively. Each is preserved verbat
 >   always described first.
 
 Ferro: mosaic (`/`) and chimeric (`//`) mixtures are valid on the `r.` axis; the recommendations
-write the reference allele first, and ferro's output is reference-first when the input is.
+write the reference allele first, and ferro reorders a variant-first substitution to that form.
 
 | Input | Verdict | Normalizes to | Notes |
 |---|---|---|---|
 | `NM_004006.3:r.85=/u>c` | recommended | self | mosaic: reference `=` written first, then `u>c` |
 | `NM_004006.3:r.85=//u>c` | recommended | self | chimeric: a mix of `r.85=` and `r.85u>c` cells |
-| `NM_004006.3:r.85u>c/=` | conformant | self | valid, but the spec writes the reference first; ferro does not yet reorder this to the recommended `r.85=/u>c` — same limitation as the DNA axis, tracked by [#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034) |
+| `NM_004006.3:r.85u>c/=` | recommended | `NM_004006.3:r.85=/u>c` | variant-first spelling; ferro reorders it to the recommended reference-first form, since `substitution.md:58` writes the reference first ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
 
 ## `substitution.md:71-73` — Q&A: polymorphisms are described as `r.76a>g`
 

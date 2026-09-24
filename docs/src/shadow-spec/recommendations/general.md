@@ -61,7 +61,7 @@ Ferro: `=` marks a tested-unchanged position; `/` marks a mosaic mixture, writte
 |---|---|---|---|
 | `NM_004006.3:c.76=` | recommended | self | `c.76` tested, unchanged |
 | `NM_004006.3:c.76=/A>G` | recommended | self | mosaic, reference (`=`) written first |
-| `NM_004006.3:c.76A>G/=` | conformant | self | valid, but the reference should be written first; ferro does not yet reorder it ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
+| `NM_004006.3:c.76A>G/=` | recommended | `NM_004006.3:c.76=/A>G` | variant-first spelling; ferro reorders it reference-first ([#2034](https://github.com/fulcrumgenomics/ferro-hgvs/issues/2034)) |
 
 ## `general.md:95` — spaces are not permitted
 
