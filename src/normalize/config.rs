@@ -86,7 +86,9 @@ impl std::str::FromStr for ShuffleDirection {
 /// progress, workers) and has no error mode at all. The two used to share the
 /// name `NormalizeConfig`, so `NormalizeConfig::default()` resolved to
 /// whichever one a single `use` line had brought into scope.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// `Debug` is implemented by hand below rather than derived, because the dev-gated
+// `partitioner` field is a `dyn Partitioner` trait object, which is not `Debug`.
+#[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NormalizeConfig {
     /// Direction to shuffle variants. Always 3' on every shipped path.
@@ -117,6 +119,48 @@ pub struct NormalizeConfig {
     /// has no effect and is preserved only so existing callers (notably
     /// `with_overlap_prevention`) keep compiling.
     pub prevent_overlap: bool,
+
+    /// A typed override for which partitioner arm the sequence-first
+    /// canonicalization cuts with (design §8).
+    ///
+    /// `None` (the default, and the only value any shipped path uses) means
+    /// "read `FERRO_PARTITION`/the shipped default, as today" — so a stock
+    /// build is byte-identical to having no field at all. `Some(arm)` pins the
+    /// arm without an environment variable, the way an embedder or the Python
+    /// bindings would; Task 3 resolves it by the arm's stable registry name back
+    /// to a legacy [`crate::normalize::merge`] rule, keeping the exact shipped
+    /// code path.
+    ///
+    /// `Send + Sync` (not merely `Sync` as design §8 sketches) because
+    /// `Normalizer<P>` is shared across rayon threads by
+    /// [`crate::parallel::parse_and_normalize_streaming`], which requires
+    /// `NormalizeConfig: Sync`, which an `Arc<dyn … + Sync>` (without `Send`) is
+    /// not. `#[serde(skip)]` — a live arm object has no serialized form; a
+    /// deserialized config gets `None`. Dev-gated because the arm implementations it
+    /// holds come from the dev-gated arm layer (`crate::partition::arms`); the
+    /// `crate::partition` module itself is production-wired.
+    #[cfg(feature = "dev")]
+    #[serde(skip)]
+    pub partitioner: Option<std::sync::Arc<dyn crate::partition::Partitioner + Send + Sync>>,
+}
+
+impl std::fmt::Debug for NormalizeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("NormalizeConfig");
+        d.field("shuffle_direction", &self.shuffle_direction)
+            .field("cross_boundaries", &self.cross_boundaries)
+            .field("error_config", &self.error_config)
+            .field("window_size", &self.window_size)
+            .field("prevent_overlap", &self.prevent_overlap);
+        // A trait object is not `Debug`; show only the arm's name, which is all a
+        // reader wants and all it can portably give.
+        #[cfg(feature = "dev")]
+        d.field(
+            "partitioner",
+            &self.partitioner.as_ref().map(|p| p.name().to_owned()),
+        );
+        d.finish()
+    }
 }
 
 impl Default for NormalizeConfig {
@@ -129,11 +173,19 @@ impl Default for NormalizeConfig {
             error_config: ErrorConfig::lenient(),
             window_size: 100,
             prevent_overlap: true,
+            #[cfg(feature = "dev")]
+            partitioner: None,
         }
     }
 }
 
 impl PartialEq for NormalizeConfig {
+    // Deliberately compares only the normalization-shaping fields. `error_config`
+    // is omitted (an entry-point concern, not a normalization input), and the
+    // dev-only `partitioner` is a non-`Eq` trait object holding a dev knob — two
+    // configs differing only in a pinned partitioner compare equal. Do not use a
+    // `NormalizeConfig` as a cache key while relying on the partitioner to
+    // distinguish entries.
     fn eq(&self, other: &Self) -> bool {
         self.shuffle_direction == other.shuffle_direction
             && self.cross_boundaries == other.cross_boundaries
@@ -255,6 +307,22 @@ impl NormalizeConfig {
     /// Replace the entire error-handling configuration.
     pub fn with_error_config(mut self, error_config: ErrorConfig) -> Self {
         self.error_config = error_config;
+        self
+    }
+
+    /// Pin the partitioner arm the sequence-first canonicalization cuts with,
+    /// bypassing `FERRO_PARTITION` (design §8). Dev-gated, like the field.
+    ///
+    /// **Not a supported knob**, for the same reason `FERRO_PARTITION` is not: it
+    /// selects a development-only bake-off arm and is expected to be removed once
+    /// the normalization rule is settled.
+    #[cfg(feature = "dev")]
+    #[doc(hidden)]
+    pub fn with_partitioner(
+        mut self,
+        partitioner: std::sync::Arc<dyn crate::partition::Partitioner + Send + Sync>,
+    ) -> Self {
+        self.partitioner = Some(partitioner);
         self
     }
 

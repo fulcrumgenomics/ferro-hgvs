@@ -48,6 +48,11 @@
 pub mod align;
 #[cfg(not(feature = "dev"))]
 pub(crate) mod align;
+/// The paper-faithful cLCS-graph partitioner (LCS/indel metric). Dev-gated:
+/// only the (dev-gated) partitioner bake-off internals under `src/partition/`
+/// consume it.
+#[cfg(feature = "dev")]
+pub mod clcs;
 pub(crate) mod partition;
 
 /// Unchanged reference bases two runs of change must be separated by before the

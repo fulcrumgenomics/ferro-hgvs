@@ -60,9 +60,13 @@
 //! full pre-drop path:
 //!
 //! - The `the_geometry_corpus_slice_*` tests each check this over their share of
-//!   the corpus: the raw unconditional skip diverges on 742 shapes corpus-wide
-//!   (`SKIP_FLOOR` sums to a `>= 72` non-vacuity floor), and the SHIPPED gated
-//!   path closes every one (`gated_diverged` empty, strictly per row).
+//!   the corpus. With the ruled arm as the single partition authority the second
+//!   block partition is now a fixed point over the whole geometry corpus — the
+//!   raw unconditional skip diverges on ZERO rows — so each slice asserts that
+//!   redundancy exactly (`skip_diverged == 0`, native convergence: #2161's goal),
+//!   and the SHIPPED gated path closes trivially (`gated_diverged` empty, strictly
+//!   per row). Non-vacuity is carried by `EXPECTED_COMPARED` (every row produces a
+//!   drop comparison).
 //! - [`the_gate_is_correct_on_dense_member_alleles`] +
 //!   [`report_gate_fallback_on_dense_member_alleles`] — correctness and the gate's
 //!   fallback rate over a densely-spaced multi-member cis corpus (the distribution
@@ -456,13 +460,16 @@ const GEOMETRY_CORPUS_SIZE: usize = 62_824;
 //   - `compared == EXPECTED_COMPARED[k]`  — the corpus size/geometry, exact;
 //   - `converged  >= CONVERGED_FLOOR[k]`  — convergence regression floor;
 //   - `recommend_has_inv >= INV_FLOOR[k]` — non-vacuity: real inversions exist;
-//   - `skip_diverged     >= SKIP_FLOOR[k]`— non-vacuity: the gate is exercised.
+//   - `skip_diverged      == 0`           — native convergence: the second block
+//                                            partition is unconditionally redundant.
 //
-// The four non-per-row floors were whole-corpus in the former tests; here they
-// are per-slice, and `slice_floors_preserve_the_global_guarantees` (a cheap
-// test, no corpus build) asserts the pins still sum to at least the former
-// global floors — so coverage is a superset: per-slice floors additionally
-// catch a regression concentrated in one slice. Re-tune with the ignored
+// The per-slice floors (`EXPECTED_COMPARED`, `CONVERGED_FLOOR`, `INV_FLOOR`) were
+// whole-corpus in the former tests; here they are per-slice, and
+// `slice_floors_preserve_the_global_guarantees` (a cheap test, no corpus build)
+// asserts the pins still sum to at least the former global floors — so coverage
+// is a superset: per-slice floors additionally catch a regression concentrated in
+// one slice. (`skip_diverged` is now an exact `== 0` native-convergence pin, not a
+// floor.) Re-tune with the ignored
 // `report_slice_pins` diagnostic, and heed the census-pin cautions in CONTRIBUTING.md
 // ("Assert the property. Measure the count. Never let a count BE the property").
 
@@ -488,13 +495,6 @@ const CONVERGED_FLOOR: [usize; SLICE_N] = [
 const INV_FLOOR: [usize; SLICE_N] = [
     1642, 1642, 1764, 1764, 1411, 1411, 1729, 1729, 1520, 1520, 1874, 1874, 1656, 1656, 1768, 1768,
     1431, 1431, 1737, 1737, 1516, 1516, 1869, 1869,
-];
-
-/// Per-slice raw-skip divergence floor — a loose non-vacuity floor (the gate is
-/// exercised), zero where a slice's geometries produce no skip divergence at
-/// all. Sum ≥ 72, the former whole-corpus floor.
-const SKIP_FLOOR: [usize; SLICE_N] = [
-    20, 36, 0, 0, 86, 71, 7, 0, 94, 58, 0, 0, 23, 38, 0, 0, 89, 74, 2, 0, 87, 57, 0, 0,
 ];
 
 /// Build slice `k` of [`SLICE_N`] and assert its share of the corpus properties.
@@ -549,20 +549,29 @@ fn assert_geometry_slice(k: usize) {
         "slice {k}/{SLICE_N}: convergence regressed, {converged} converge, floor {}",
         CONVERGED_FLOOR[k],
     );
-    // Non-vacuity: the raw unconditional skip still diverges on the shapes the
-    // gate exists to catch, so `gated_diverged.is_empty()` below is not vacuous.
-    assert!(
-        skip_diverged >= SKIP_FLOOR[k],
-        "slice {k}/{SLICE_N}: raw skip diverged on only {skip_diverged}, floor {} — \
-         this slice's gate coverage went vacuous",
-        SKIP_FLOOR[k],
+    // Native convergence (the #2161 Path-1 payoff, completed by the ruled flip):
+    // the derivation now converges so completely that normalize's SECOND block
+    // partition is a no-op on EVERY row — the raw unconditional skip never
+    // diverges from the full path. Assert exactly that. It is strictly stronger
+    // than the former `>= SKIP_FLOOR` non-vacuity floor (which the flip drove to
+    // zero corpus-wide, so that floor could no longer be met), and it is not
+    // vacuous: `drop_compared == EXPECTED_COMPARED[k]` below proves every row
+    // produced a drop comparison, and `gated_diverged.is_empty()` proves the
+    // shipped gate moved nothing. Under one partition authority the redundancy of
+    // the second partition is a property to pin, not a coincidence to tolerate.
+    assert_eq!(
+        skip_diverged, 0,
+        "slice {k}/{SLICE_N}: the second block partition moved {skip_diverged} of \
+         {drop_compared} outputs — under one partition authority it must be \
+         unconditionally redundant",
     );
-    // Non-vacuity for the gate below: every row must have produced a drop
-    // comparison at all, or `gated_diverged.is_empty()` passes on an empty
+    // Non-vacuity for the gate below AND for the native-convergence assert above:
+    // every row must have produced a drop comparison at all, or both
+    // `skip_diverged == 0` and `gated_diverged.is_empty()` pass on an empty
     // population. This is the guarantee the deleted whole-corpus
     // `the_gated_drop_changes_no_output` carried (it pinned this count at
-    // `GEOMETRY_CORPUS_SIZE`), restored per slice — `SKIP_FLOOR` is 0 on 10 of
-    // the 24 slices, so the skip floor alone cannot stand in for it.
+    // `GEOMETRY_CORPUS_SIZE`), restored per slice — now the sole non-vacuity
+    // anchor, since the skip count is zero on every slice.
     assert_eq!(
         drop_compared, EXPECTED_COMPARED[k],
         "slice {k}/{SLICE_N}: only {drop_compared} rows produced a drop comparison, \
@@ -643,11 +652,13 @@ fn slice_floors_preserve_the_global_guarantees() {
         "inv floors sum to {}, below the former whole-corpus floor 39_760",
         sum(&INV_FLOOR),
     );
-    assert!(
-        sum(&SKIP_FLOOR) >= 72,
-        "skip floors sum to {}, below the former whole-corpus floor 72",
-        sum(&SKIP_FLOOR),
-    );
+    // The former per-slice `SKIP_FLOOR` non-vacuity floor is retired: with the
+    // ruled arm as the single partition authority the second block partition is a
+    // fixed point over the whole geometry corpus (`skip_diverged == 0` on every
+    // slice), so each slice now asserts that redundancy exactly (native
+    // convergence) rather than a floor on how often the skip diverges. The
+    // non-vacuity that floor guarded is carried by `EXPECTED_COMPARED` (every row
+    // produces a drop comparison) plus the per-row `gated_diverged.is_empty()`.
 }
 
 /// Diagnostic (ignored): print the per-slice pin arrays for [`SLICE_N`], so the
@@ -740,6 +751,10 @@ fn from_sequences_types_a_flanked_inversion_like_normalize() {
         (inv_rep, "NC_TEST.1:g.[16del;24_28inv]", "24_28inv"),
         (inv_rep, "NC_TEST.1:g.[20_24inv;30del]", "20_24inv"),
         (tandem, "NC_TEST.1:g.[15del;20_24inv]", "20_24inv"),
+        // The ruled-flip regression: the DAG cuts this block as `[insG;del;sub]`
+        // and only the 5' placement of the del makes the inv an exact window hull,
+        // so a 3'-only ruled pass must read the window's difference hull to type it.
+        (inv_rep, "NC_TEST.1:g.[43_47inv;50G>T]", "43_47inv"),
     ];
 
     for (seq, input, inv_span) in rows {
@@ -1154,10 +1169,15 @@ fn the_gate_is_correct_on_dense_member_alleles() {
         compared >= 5_000,
         "the dense-member corpus compared only {compared} alleles — generator regressed",
     );
-    assert!(
-        skip_diverged >= 1,
-        "the raw skip never diverged over {compared} dense-member alleles, so this \
-         guard is vacuous — the generator stopped producing the divergence shapes",
+    // Native convergence, as in the geometry slices: with the ruled arm as the
+    // single partition authority the second block partition is a no-op on every
+    // dense-member allele. Assert exactly that (stronger than the former
+    // `skip_diverged >= 1` non-vacuity floor, which the flip drove to zero); the
+    // `compared >= 5_000` and `gated_diverged.is_empty()` below carry non-vacuity.
+    assert_eq!(
+        skip_diverged, 0,
+        "the second block partition moved {skip_diverged} of {compared} dense-member \
+         outputs — under one partition authority it must be unconditionally redundant",
     );
     for o in gated_diverged.iter().take(20) {
         eprintln!("DENSE-GATED-DIVERGE\tfull={}\tgated={}", o.full, o.gated);
