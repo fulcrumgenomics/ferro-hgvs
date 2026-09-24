@@ -792,9 +792,9 @@ jobs:
         if: steps.soak-archive.outputs.cache-hit != 'true'
         # No `--features dev`: it pulls `web-service` (axum/tokio/tower) and
         # `benchmark` (reqwest/rusqlite/postgres) — a whole tree compiled at
-        # `opt-level = 2` for a binary that never touches it. None of the modules this
-        # package compiles is feature-gated and no consuming job selects a gated one,
-        # so the selections are feature-INDEPENDENT. Re-measure rather than trust a count:
+        # `opt-level = 2` for a binary that never touches it. The only feature the
+        # package's modules need, `conformance`, is enabled in `tests-soak/Cargo.toml`
+        # itself, so the selections are feature-INDEPENDENT. Re-measure rather than trust a count:
         #
         #   cargo nextest list -p ferro-hgvs-soak-tests -E 'test(proptest)' | wc -l
         #   cargo nextest list -p ferro-hgvs-soak-tests -E "$SWEEP_FILTER" | wc -l
@@ -1499,7 +1499,8 @@ jobs:
       #
       # `--no-run` on purpose: the claim is that the default feature set BUILDS, not that
       # these tests run again. `--lib --bins` covers every `#[cfg(test)]` module under
-      # `src/`; the integration tree is already compiled featureless by `test-build-soak`.
+      # `src/`; the integration modules the soak driver includes are compiled by
+      # `test-build-soak` with only the `conformance` feature, which that package enables.
       - name: Unit tests compile with default features
         run: cargo test --no-run --lib --bins
 

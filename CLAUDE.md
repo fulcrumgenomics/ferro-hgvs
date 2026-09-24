@@ -84,7 +84,7 @@ pre-commit run --all-files
 - `src/project/` cross-axis projection (`VariantProjector`)
 - `src/spdi/` SPDI conversion, also the applier the oracles use
 - `src/vcf/` VCF parsing and annotation
-- `src/conformance/` conformance corpora and the `CaptureLedger`
+- `src/conformance/` conformance corpora and the `CaptureLedger` (behind the `conformance` feature)
 - `src/error_handling/` strict / lenient / silent modes
 - `src/python.rs` PyO3 bindings; `python/ferro_hgvs/` package and `.pyi` stubs
 - `src/bin/ferro.rs` CLI; `benchmark.rs` and `ferro-web.rs` are feature-gated

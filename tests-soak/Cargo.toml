@@ -24,7 +24,9 @@ publish = false
 # target is an integration test.
 
 [dependencies]
-ferro-hgvs = { path = ".." }
+# `conformance` because the included `tests/it/` modules import
+# `ferro_hgvs::conformance`; it adds only `regex`, which this package needs anyway.
+ferro-hgvs = { path = "..", features = ["conformance"] }
 
 # The direct dependencies of the modules `tests/soak/main.rs` compiles and
 # of the four `tests/it/common/` helpers they reach through. Kept at the same

@@ -346,6 +346,7 @@ mod tests {
         assert!(url.contains("retmode=text"));
     }
 
+    #[cfg(feature = "conformance")]
     #[test]
     fn derive_for_real_reference_when_available() {
         // Gated: only runs against a prepared reference (repo convention).
