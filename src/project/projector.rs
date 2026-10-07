@@ -13966,6 +13966,52 @@ mod tests {
             );
         }
 
+        /// project_variant_all must select the NG_ parent's placement by the
+        /// requested build (#2134): with only a GRCh38 placement, --assembly
+        /// GRCh37 declines; with a GRCh37 placement it fans out.
+        #[test]
+        fn project_variant_all_ng_decline_follows_requested_build() {
+            // g.205 sits inside the GRCh37 placement (parent_start 200 -> NC_000001.10:g.10005).
+            let input = HgvsVariant::Genome(GenomeVariant {
+                accession: parse_accession(NG_PARENT),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    GenomeInterval::point(GenomePos::new(205)),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::T,
+                    },
+                ),
+            });
+
+            let declined = make_ng_assembly_projector(false)
+                .with_assembly(Some("GRCh37"))
+                .project_variant_all(&input);
+            match declined {
+                Err(FerroError::UnsupportedProjection { reason }) => assert!(
+                    reason.contains(NG_PARENT) && reason.contains("on GRCh37"),
+                    "expected a GRCh37 no-placement decline naming {NG_PARENT}, got: {reason}"
+                ),
+                other => panic!(
+                    "a GRCh38-only placement must not satisfy --assembly GRCh37, got {other:?}"
+                ),
+            }
+
+            let fanned_out = make_ng_assembly_projector(true)
+                .with_assembly(Some("GRCh37"))
+                .project_variant_all(&input)
+                .expect("with a GRCh37 placement the NG_ input must fan out");
+            let transcripts: Vec<&str> = fanned_out
+                .iter()
+                .map(|p| p.transcript_id.as_str())
+                .collect();
+            assert_eq!(
+                transcripts,
+                ["NM_MB_TEST.1"],
+                "the GRCh37 placement must map g.205 onto NM_MB_TEST.1"
+            );
+        }
+
         /// A build the input accession already encodes (NC_000001.11) wins over a
         /// contradictory `--assembly GRCh37`: the override only fills in for
         /// build-agnostic inputs, never reinterprets an explicit accession (#715).
