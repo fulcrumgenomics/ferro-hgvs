@@ -13968,7 +13968,8 @@ mod tests {
 
         /// project_variant_all must select the NG_ parent's placement by the
         /// requested build (#2134): with only a GRCh38 placement, --assembly
-        /// GRCh37 declines; with a GRCh37 placement it fans out.
+        /// GRCh37 declines; with a GRCh37 placement it fans out and re-frames
+        /// the genomic axis through it.
         #[test]
         fn project_variant_all_ng_decline_follows_requested_build() {
             // g.205 sits inside the GRCh37 placement (parent_start 200 -> NC_000001.10:g.10005).
@@ -14009,6 +14010,15 @@ mod tests {
                 transcripts,
                 ["NM_MB_TEST.1"],
                 "the GRCh37 placement must map g.205 onto NM_MB_TEST.1"
+            );
+            assert_eq!(
+                fanned_out[0]
+                    .genomic
+                    .as_ref()
+                    .map(|g| g.to_string())
+                    .as_deref(),
+                Some("NG_000999.1:g.205A>T"),
+                "the genomic axis must be re-framed through the GRCh37 placement"
             );
         }
 
