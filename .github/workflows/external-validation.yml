@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -103,7 +103,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload API fixtures
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: api-fixtures
           path: |
@@ -126,7 +126,7 @@ jobs:
           persist-credentials: false
 
       - name: Download API fixtures
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: api-fixtures
           path: tests/fixtures/
@@ -148,7 +148,7 @@ jobs:
       # key hit so neither could correct it. `rust-cache` keys per job by
       # default; the `key` below only adds a legible name so
       # `gh api .../actions/caches` stays diagnosable.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
           # keys per job and appends a lockfile/env hash, so every PR run that
@@ -256,7 +256,7 @@ jobs:
 
       - name: Upload validation report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: validation-report
           path: |
@@ -292,7 +292,7 @@ jobs:
       # The second half of the shared-key problem described in the job above:
       # this job installs `clippy` and builds the spec generators, and used the
       # same key. Distinct name, so the two no longer overwrite each other (#1218).
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           # Save only from `main` — see the note on the first
           # `rust-cache` block in this file.
@@ -339,7 +339,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -378,7 +378,7 @@ jobs:
         timeout-minutes: 30
 
       - name: Upload external database fixtures
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: external-db-fixtures
           path: tests/fixtures/external/
@@ -393,7 +393,7 @@ jobs:
 
     steps:
       - name: Download validation report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: validation-report
         continue-on-error: true
