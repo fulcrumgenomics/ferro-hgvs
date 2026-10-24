@@ -50,6 +50,7 @@ mod issue_1917_reversed_range_window;
 mod issue_1970_u16_cost_grid_bound;
 mod issue_1989_declined_is_indeterminate;
 mod issue_2018_past_cds_end_mode_dependent;
+mod issue_2036_long_tract_idempotent;
 mod issue_2037_cis_allele_at_transcript_start;
 mod issue_2056_edit_triples_reference_failure;
 mod issue_2075_apply_triples_reference_mismatch;
