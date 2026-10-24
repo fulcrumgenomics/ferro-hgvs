@@ -237,18 +237,30 @@ fn spec_context_transcript() -> MockProvider {
     provider
 }
 
-/// `[G>A; insTA]` at one position is `delinsATA`.
+/// `[G>A; insTA]` at one position: the ruled arm keeps the exposed tandem dup,
+/// deviating from `delins.md:86`.
 ///
-/// `DNA/delins.md:86-89`, verbatim: "The correct description of this variant is
-/// `NM_007294.3:c.2077delinsATA`", with `c.[2077G>A;2077_2078insTA]` marked
-/// invalid and this note attached — "**NOTE**: the answer was modified, i.e. the
-/// addition 'However, since the variant is likely a combination of two other
-/// variants, it is acceptable to describe it as `c.[2077G>A;2077_2078insTA]`.'
-/// was removed."
+/// `DNA/delins.md:86-89` (BRCA1, verbatim) publishes `NM_007294.3:c.2077delinsATA`
+/// as THE correct description, marks `c.[2077G>A;2077_2078insTA]` invalid, and
+/// records at `:89` that the split-permission was removed. This `NM_CTX.1` fixture
+/// is that shape on a different transcript — the non-synthetic-W43 witness of the
+/// same conflict.
 ///
-/// Mirrored at `DNA/substitution.md:93-96` and `RNA/delins.md:68-71`.
+/// Since the step-9 flip the ruled arm derives from the resulting sequence
+/// (`canonical-form-choice-when-both-legal`), which exposes a tandem dup: after the
+/// `G>A`, the inserted `TA` is a directly-3'-flanking copy of the two bases 5' of
+/// it, so `duplication.md:17` makes it a duplication and `duplication.md:18` says
+/// it **must** be kept as one. `rulings[separation-zero-dup-member-is-preserved-not-merged]`
+/// (decided) resolves the dup case that
+/// `delins-adjacent-members-when-both-consume-reference` (decided) put out of its
+/// scope: KEEP the dup, deviating from `delins.md:88` on two grounds —
+/// `duplication.md:18` requires the exposed dup be kept, and this row is
+/// base-indistinguishable from the ~2,031 real dup-beside-change rows carrying no
+/// worked example, so `:18` applies uniformly. NOT justified by provenance:
+/// `delins.md:88` does not rest on it (`delins.md:83`'s provenance was the split
+/// rationale the committee removed). Disclosed as a rule-2 deviation.
 #[test]
-fn substitution_and_abutting_insertion_merge_per_delins_md_86() {
+fn substitution_and_abutting_insertion_keeps_the_dup_deviating_from_delins_md_86() {
     let input = "NM_CTX.1:c.[13G>A;13_14insTA]";
     let variant: HgvsVariant = parse_hgvs(input).expect("parse");
     let normalizer = Normalizer::with_config(
@@ -260,10 +272,10 @@ fn substitution_and_abutting_insertion_merge_per_delins_md_86() {
         .expect("delins.md:86 shape must normalize, not be refused")
         .to_string();
     assert_eq!(
-        got, "NM_CTX.1:c.13delinsATA",
-        "\n  DNA/delins.md:86-89 gives one delins as THE correct description and marks the \
-         split form invalid;\n  the permission to keep it split was explicitly removed from \
-         the spec."
+        got, "NM_CTX.1:c.[11_12dup;13G>A]",
+        "\n  the ruled arm re-derives from the resulting sequence and exposes a tandem dup,\n  \
+         kept per DNA/duplication.md:18 and rulings[separation-zero-dup-member-is-preserved-not-merged];\n  \
+         this is a disclosed rule-2 deviation from delins.md:86-89's published delins."
     );
 }
 
