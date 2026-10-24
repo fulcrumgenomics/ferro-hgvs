@@ -33,17 +33,18 @@ use std::collections::HashMap;
 ///
 /// [`is_renderable`]: crate::partition::metrics::is_renderable
 pub(crate) fn has_coincident_collision(members: &[Member]) -> bool {
-    let mut counts: HashMap<usize, usize> = HashMap::new();
-    for m in members {
-        if m.ref_start == m.ref_end && m.kind != EditKind::Identity {
-            let n = counts.entry(m.ref_start).or_default();
-            *n += 1;
-            if *n >= 2 {
-                return true;
-            }
-        }
-    }
-    false
+    // A pairwise scan over the member list beats the per-call `HashMap` this ran on
+    // every `Cut::new`: no allocation, and it returns on the common no-collision
+    // case. It is O(n²) but n (members per block) is tiny, and it stays
+    // order-independent like the count map — it fires iff some later counted member
+    // repeats an earlier one's offset.
+    let counted = |m: &Member| m.ref_start == m.ref_end && m.kind != EditKind::Identity;
+    members.iter().enumerate().any(|(i, a)| {
+        counted(a)
+            && members[i + 1..]
+                .iter()
+                .any(|b| counted(b) && b.ref_start == a.ref_start)
+    })
 }
 
 /// Fold every interbase carrying two or more content-bearing zero-width members
@@ -122,6 +123,62 @@ mod tests {
             ref_start: p,
             ref_end: p,
             inserted: s.as_bytes().to_vec(),
+        }
+    }
+
+    /// The allocation-free `has_coincident_collision` must agree with the
+    /// `HashMap`-count reference on every shape (including reversed order and a
+    /// triple at one slot), and be complementary to `is_renderable` by construction.
+    #[test]
+    fn has_coincident_collision_matches_a_map_based_reference() {
+        fn reference(members: &[Member]) -> bool {
+            let mut counts: HashMap<usize, usize> = HashMap::new();
+            for m in members {
+                if m.ref_start == m.ref_end && m.kind != EditKind::Identity {
+                    *counts.entry(m.ref_start).or_default() += 1;
+                    if counts[&m.ref_start] >= 2 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        let span = |kind, s, e, ins: &str| Member {
+            kind,
+            ref_start: s,
+            ref_end: e,
+            inserted: ins.as_bytes().to_vec(),
+        };
+        let identity = |p: usize| Member {
+            kind: EditKind::Identity,
+            ref_start: p,
+            ref_end: p,
+            inserted: vec![],
+        };
+        let cases: Vec<Vec<Member>> = vec![
+            vec![],
+            vec![ins(2, "G")],
+            vec![ins(2, "G"), dup(2, "AC")],
+            vec![ins(2, "G"), identity(2)],
+            vec![ins(1, "G"), dup(3, "AC")],
+            vec![span(EditKind::Del, 1, 3, ""), ins(3, "A")],
+            vec![dup(5, "AC"), ins(2, "G"), ins(5, "T")],
+            vec![ins(2, "A"), ins(2, "B"), ins(2, "C")],
+        ];
+        for members in &cases {
+            assert_eq!(
+                has_coincident_collision(members),
+                reference(members),
+                "map reference mismatch for {members:?}",
+            );
+            let p = Partition {
+                members: members.clone(),
+            };
+            assert_eq!(
+                has_coincident_collision(members),
+                !is_renderable(&p),
+                "not complementary to is_renderable for {members:?}",
+            );
         }
     }
 

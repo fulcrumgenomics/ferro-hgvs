@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Reading-frame / axis context threaded into L2 (design §5.4). Derived from the
 /// projection (reference + axis), NEVER from input spelling.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FrameContext {
     /// Genomic, noncoding, or unknown — no coding frame available.
     NonCoding,
@@ -93,7 +93,7 @@ impl FrameContext {
 /// keys on `is_dna`, so a coding `r.` is still out of reach — jurisdiction, not
 /// frame). `Protein` is reserved for the residue-core interface, wired once DNA and
 /// RNA work; no bakeoff corpus emits it today.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Molecule {
     Dna,
     Rna,
