@@ -90,7 +90,7 @@ jobs:
       # throwaway directory, but here it would restore a snapshot of the
       # operator's toolchain over the live one. Dependency artifacts are what is
       # worth caching; the binaries on this box are not ours to replace.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
           # keys per job and appends a lockfile/env hash, so every PR run that
