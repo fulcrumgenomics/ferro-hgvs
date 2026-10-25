@@ -18,6 +18,7 @@
 - [Error handling](guide/error-handling.md)
 - [Comparing normalization rules](guide/comparing-rules.md)
 - [Benchmarking](guide/benchmarking.md)
+- [Why do ferro and another tool disagree?](guide/arbitrate-disagreements.md)
 
 # Reference
 
