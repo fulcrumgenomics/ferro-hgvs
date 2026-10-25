@@ -2056,6 +2056,56 @@ fn idempotency_self_check_enabled() -> bool {
     })
 }
 
+/// Whether the experimental coding-axis (`c.`) rederive path is active
+/// (issue #2155 follow-up).
+///
+/// Enabled only when `FERRO_CODING_REDERIVE` is set to an explicit opt-in value
+/// (`1` or `true`, case-insensitive; see [`coding_rederive_opted_in`]), read once
+/// and cached like the oracle gates above. **Off by default**, so the
+/// shipped coding path is unchanged: `c.` still normalizes through surface B
+/// (`canonicalize_from_sequence`), and every census/pin is untouched. With it on,
+/// [`Normalizer::sequence_first_pass`] routes a CDS-body `c.` allele through the
+/// sequence-first core instead, and the operator can evaluate the resulting form
+/// (and the representation moves it implies) before it becomes the default. It is
+/// a routing gate only — the frame-aware core it routes to is always compiled.
+fn coding_rederive_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("FERRO_CODING_REDERIVE")
+            .map(|v| coding_rederive_opted_in(&v))
+            .unwrap_or(false)
+    })
+}
+
+/// Whether a `FERRO_CODING_REDERIVE` value opts in to the coding rederive path.
+///
+/// Stricter than the `FERRO_ASSERT_*` gates above, which accept anything but
+/// `0`/empty: those are debug-only checks that cannot change output, whereas this
+/// path changes `c.` normalization in release builds. So `false`, `no`, `off` and
+/// any other stray value must leave it off; only `1` or `true` turn it on.
+fn coding_rederive_opted_in(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+#[cfg(test)]
+mod coding_rederive_flag_tests {
+    use super::coding_rederive_opted_in;
+
+    #[test]
+    fn only_an_explicit_opt_in_enables_the_coding_rederive() {
+        for off in ["", "0", "false", "False", "no", "off", "yes-please", " 1"] {
+            assert!(
+                !coding_rederive_opted_in(off),
+                "{off:?} must leave the path off"
+            );
+        }
+        for on in ["1", "true", "TRUE", "True"] {
+            assert!(coding_rederive_opted_in(on), "{on:?} must turn the path on");
+        }
+    }
+}
+
 /// Whether the opt-in re-parse self-check is active.
 ///
 /// Enabled when `FERRO_ASSERT_REPARSE` is set to anything other than
@@ -3335,6 +3385,145 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
+    /// Re-derive a coding (`c.`) variant from its resulting transcript sequence
+    /// through the sequence-first core (issue #2155 follow-up).
+    ///
+    /// The coding analogue of [`Self::sequence_normalize`]: it runs the same
+    /// window-widening round trip, but feeds the derivation the coding
+    /// [`DerivationFrame`] (payload-coincidence carve-out in the cut, codon
+    /// exception, CDS-region rendering) and hands the core the window's low
+    /// coordinate on the **c. axis** (`transcript_offset - (cds_start - 1)`), so
+    /// the codon exception (`same_codon`) and the anchor renderer reason in the
+    /// c. frame.
+    ///
+    /// Returns `Err` for anything it cannot derive on this axis — an intronic
+    /// position (`to_sequences` refuses it: SPDI carries no offset), a UTR
+    /// member (refused inside `verify_round_trip`), or a placement still resting
+    /// on a growable window edge at `MAX_PAD`, whose position depends on how much
+    /// reference was read. The caller ([`Self::sequence_first_pass`]) treats that
+    /// as "fall through to surface B", so those shapes keep the existing
+    /// per-member path unchanged.
+    ///
+    /// Coding-axis only: the caller routes nothing here unless every member is
+    /// `HV::Cds`.
+    fn rederive_coding(
+        &self,
+        variant: &HgvsVariant,
+        options: &crate::normalize::from_sequences::FromSequencesOptions,
+    ) -> Result<HgvsVariant, FerroError> {
+        use crate::normalize::from_sequences::from_coding_detailed;
+        use crate::normalize::merge::DerivationFrame;
+
+        let decline = |msg: &str| FerroError::ConversionError {
+            msg: msg.to_string(),
+        };
+
+        // The CDS frame, resolved once: the offset from the c. axis to the
+        // transcript sequence is `cds_start - 1`, and the CDS end on the c. axis
+        // is `cds_end - (cds_start - 1)` = the CDS length.
+        let accession = variant
+            .accession()
+            .ok_or_else(|| decline("coding rederive: variant has no accession"))?;
+        let tx = self
+            .provider
+            .get_transcript(accession.transcript_accession_smol().as_str())?;
+        let cds_start = i64::try_from(
+            tx.cds_start
+                .ok_or_else(|| decline("coding rederive: transcript has no CDS start"))?,
+        )
+        .map_err(|_| decline("coding rederive: CDS start out of range"))?;
+        let cds_end = i64::try_from(
+            tx.cds_end
+                .ok_or_else(|| decline("coding rederive: transcript has no CDS end"))?,
+        )
+        .map_err(|_| decline("coding rederive: CDS end out of range"))?;
+        let delta = cds_start - 1;
+        let cds_end_axis = cds_end - delta;
+        let frame = DerivationFrame::coding(Some(cds_end_axis));
+
+        // The template for `build_merged` must be a **single-member** coding
+        // variant carrying an edit (the genomic path uses `reference_template`'s
+        // `g.=` for this). The input may be a multi-member `Allele`, which has no
+        // single edit and makes `build_merged` panic, so take its first member as
+        // the template — only its axis and accession are read.
+        let template = match variant {
+            HgvsVariant::Allele(allele) => allele
+                .variants
+                .first()
+                .cloned()
+                .ok_or_else(|| decline("coding rederive: empty allele"))?,
+            other => other.clone(),
+        };
+
+        const START_PAD: u64 = crate::normalize::merge::CANONICAL_PAD as u64;
+        const MAX_PAD: u64 = crate::spdi::MAX_SHIFT_TRACT;
+
+        let mut pad = START_PAD;
+        let mut prev_bounds: Option<(u64, u64)> = None;
+        let mut deferred: Option<FerroError> = None;
+        loop {
+            // `to_sequences` produces the transcript-sequence window and a flat
+            // transcript-offset position for a CDS-body / exonic `c.` variant, and
+            // REFUSES an intronic one (SPDI carries no offset). That refusal is the
+            // intronic gate: it propagates out and the caller falls through to
+            // surface B.
+            let pair = self.to_sequences(variant, pad)?;
+            let seq_len = self.provider.get_sequence_length(&pair.accession).ok();
+            let window_start = pair.position;
+            let window_end = pair.position + pair.reference.len() as u64 - 1;
+            let five_prime_stalled =
+                window_start == 1 || prev_bounds.is_some_and(|(ps, _)| window_start >= ps);
+            let three_prime_stalled = seq_len.is_some_and(|len| window_end >= len)
+                || !pair.window_is_final
+                || prev_bounds.is_some_and(|(_, pe)| window_end <= pe);
+            let can_still_grow = !five_prime_stalled || !three_prime_stalled;
+
+            // The window's low coordinate on the c. axis.
+            let w_lo = pair.position as i64 - delta;
+
+            let derived = match from_coding_detailed(
+                &pair.accession,
+                w_lo,
+                &pair.reference,
+                &pair.alternate,
+                options,
+                frame,
+                template.clone(),
+            ) {
+                Ok(derived) => derived,
+                Err(err) => {
+                    if !can_still_grow || pad >= MAX_PAD {
+                        return Err(deferred.unwrap_or(err));
+                    }
+                    deferred.get_or_insert(err);
+                    prev_bounds = Some((window_start, window_end));
+                    pad = pad.saturating_mul(2).min(MAX_PAD);
+                    continue;
+                }
+            };
+
+            let unsettled_5prime = derived.bounded_at_start && !five_prime_stalled;
+            let unsettled_3prime = derived.bounded_at_end && !three_prime_stalled;
+            if !unsettled_5prime && !unsettled_3prime {
+                return Ok(derived.variant);
+            }
+            if pad >= MAX_PAD {
+                // Still resting on a growable edge at the widest window we will
+                // ask for: the placement depends on how much reference was read,
+                // so a second pass could move it. Refuse, as `rederive` does; the
+                // caller falls back to surface B on any error, so the refusal
+                // costs nothing and keeps this path a fixed point.
+                return Err(decline(
+                    "coding rederive: placement still rests on a growable window edge \
+                     at the maximum pad, so it depends on how much reference is read",
+                ));
+            }
+
+            prev_bounds = Some((window_start, window_end));
+            pad = pad.saturating_mul(2).min(MAX_PAD);
+        }
+    }
+
     /// An encoding-invariant SPDI key for this variant, derived from the bases it
     /// results in rather than from how it was written (#1159).
     ///
@@ -3987,6 +4176,46 @@ impl<P: ReferenceProvider> Normalizer<P> {
         matches!(edit.inner(), Some(NaEdit::Substitution { .. }))
     }
 
+    /// Whether a member is on the coding CDS axis (`c.`), the one the
+    /// experimental coding rederive path serves (issue #2155 follow-up).
+    ///
+    /// Deliberately `Cds` only: `n.`/`r.` are siblings that layer their own
+    /// axis-local rules (and diverge from each other, spec-licensed) on a raw
+    /// re-derivation, so they are out of this path's scope and keep surface B.
+    fn is_coding_axis_member(variant: &HgvsVariant) -> bool {
+        matches!(variant, HV::Cds(_))
+    }
+
+    /// Whether a coding member carries an uncertain/predicted (`(…)`) wrapper —
+    /// `to_sequences` does not carry it through the sequence round-trip (#1063),
+    /// so such a member must not take the core rederive path in
+    /// [`Self::sequence_first_pass`]; it falls through to surface B instead.
+    fn member_is_uncertain(variant: &HgvsVariant) -> bool {
+        match variant {
+            HV::Cds(c) => c.loc_edit.edit.is_uncertain(),
+            _ => false,
+        }
+    }
+
+    /// Whether a member is numbered CDS-relative (`c.`, or `r.` on a coding
+    /// transcript) on a transcript annotated `cds_start_NF` (#972), so it has no
+    /// confirmed `c.1` to number from. `normalize_cds` and `normalize_rna`
+    /// decline such a member; `normalize_allele` and
+    /// [`Self::sequence_first_pass`] use this to decline the same input rather
+    /// than merge or re-derive it. `n.` is transcript-native and never asks. A non-coding
+    /// transcript never sets the flag, and a transcript the provider cannot
+    /// serve answers `false`, matching the per-member gates, which also only
+    /// decline on a lookup that succeeds.
+    fn cds_relative_on_incomplete_cds_start(&self, member: &HgvsVariant) -> bool {
+        if !matches!(member, HV::Cds(_) | HV::Rna(_)) {
+            return false;
+        }
+        member.accession().is_some_and(|accession| {
+            self.provider
+                .get_transcript(accession.transcript_accession_smol().as_str())
+                .is_ok_and(|tx| tx.cds_start_incomplete)
+        })
+    }
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
     ///
     /// The per-member pipeline normalizes each cis-allele member in isolation,
@@ -4186,6 +4415,64 @@ impl<P: ReferenceProvider> Normalizer<P> {
         {
             return None;
         }
+        // #972: `normalize_cds`/`normalize_rna` pass a CDS-relative member on a
+        // `cds_start_NF` transcript through verbatim, because `c.1` is undefined
+        // without a confirmed ATG. Re-deriving the same input here would number a
+        // new description in the frame the per-member decline refused to trust
+        // (`c.10_14delinsTTGCA` was cut at a codon boundary into
+        // `c.[10_12delinsTTG;13_14delinsCA]`), so decline too. The members
+        // keep the W5004 the per-member pass attached, so strict mode still
+        // rejects and silent mode still accepts, exactly as for a lone member.
+        // Declines the whole allele if any member qualifies: a partition across
+        // such a member would still re-number it.
+        if members
+            .iter()
+            .any(|m| self.cds_relative_on_incomplete_cds_start(m))
+        {
+            return None;
+        }
+        // Experimental coding-axis rederive (issue #2155 follow-up), off by
+        // default (`FERRO_CODING_REDERIVE`). A CDS-body `c.` allele is re-derived
+        // through the sequence-first core, so the `c.[..]` spellings of one variant
+        // converge on the merged coding form the core produces
+        // (`c.10_17delinsAAACAAAC`) rather than surface B's member-list output.
+        // Anything the coding core cannot derive on this axis — a UTR or intronic
+        // member, a group crossing an exon/exon junction, a form naming an
+        // out-of-bounds coordinate, or a placement shifted out of the input's
+        // exon — comes back `Err`/rejected, and we FALL THROUGH to surface B
+        // below, so those shapes keep the existing per-member path unchanged. An
+        // uncertain member is skipped for the same reason: `to_sequences` drops
+        // the `(…)` wrapper (#1063), so it too keeps surface B. Every member must
+        // be `c.`: `rederive_coding` templates on the first member and renders in
+        // the coding frame, so a mixed-axis allele (`[NM_X.1:c.10C>T;NM_X.1:n.12T>A]`
+        // parses) would come back with its `n.`/`r.` members renumbered as `c.`.
+        if coding_rederive_enabled()
+            && members.iter().all(Self::is_coding_axis_member)
+            && !members.iter().any(Self::member_is_uncertain)
+            // `general.md:44`: a group straddling an exon/exon junction keeps
+            // surface B, which refuses to re-derive across it (#1450). Checked on
+            // the input, because the derived form no longer shows the crossing.
+            && !merge::cis_members_cross_exon_junction(members, &self.provider)
+        {
+            let options = crate::normalize::from_sequences::FromSequencesOptions {
+                direction: self.config.shuffle_direction,
+                ..Default::default()
+            };
+            if let Ok(rederived) = self.rederive_coding(variant, &options) {
+                // The derivation shifts within the sequence window only, so an
+                // input wholly inside one exon can still be carried across a
+                // junction (`NM_001234.1:c.11del` -> `c.33del`). Surface B clamps
+                // that shift to the enclosing exon; defer to it when the derived
+                // placement leaves the input's exon.
+                if merge::first_out_of_bounds_coordinate(&rederived, &self.provider).is_none()
+                    && !merge::rederived_leaves_input_exon(members, &rederived, &self.provider)
+                {
+                    return Some(rederived);
+                }
+            }
+            // else: fall through to surface B (the existing coding path).
+        }
+
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
@@ -5564,6 +5851,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 all_warnings.extend(member_warnings);
             }
             all_warnings.extend(raw_conflicts);
+            let mut preserved =
+                crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
+            preserved.uncertain = allele.uncertain;
+            return Ok((HgvsVariant::Allele(preserved), all_warnings));
+        }
+
+        // #972: a CDS-relative member (`c.`, or `r.` on a coding transcript) on a
+        // `cds_start_NF` transcript has no confirmed `c.1`, and `normalize_cds` /
+        // `normalize_rna` pass such a member through verbatim. The merge below
+        // would not: its codon-frame arm reads `c.[10C>T;12T>A]` as one codon and
+        // rewrites it to `c.10_12delinsTTA`, in exactly the frame the per-member
+        // decline refuses to trust. So decline for the allele too: preserve it as
+        // authored, and harvest each member's diagnostics the way the conflict
+        // branch above does, so the W5004 a lone member carries is carried here
+        // and strict mode rejects the allele as it rejects the member.
+        //
+        // Cis only: the merge and the sequence-first pass act on cis alleles, so
+        // a trans or unphased allele already keeps such a member as authored.
+        if allele.phase == AllelePhase::Cis
+            && allele
+                .variants
+                .iter()
+                .any(|m| self.cds_relative_on_incomplete_cds_start(m))
+        {
+            for member in &allele.variants {
+                let (_, member_warnings) = self.normalize_core(member, manufactured)?;
+                all_warnings.extend(member_warnings);
+            }
             let mut preserved =
                 crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
             preserved.uncertain = allele.uncertain;
