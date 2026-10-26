@@ -110,8 +110,8 @@
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! CLAUSE -> RECORD INDEX
-//! 38 records, 35 decided / 3 undecided
-//! 124 clause lines, of which 41 are named by more than one record
+//! 39 records, 36 decided / 3 undecided
+//! 125 clause lines, of which 44 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -143,6 +143,7 @@
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (governing)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //!     `cross-zone-c-positions-order-by-transcript-coordinate` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //! docs/background/refseq.md:129
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //! docs/background/standards.md:30
@@ -256,6 +257,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
@@ -263,8 +265,10 @@
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
-//! docs/recommendations/DNA/delins.md:42
+//! docs/recommendations/DNA/delins.md:42  [MULTI]
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
 //! docs/recommendations/DNA/delins.md:44
 //!     `duplication-must-ranks-the-label-not-the-partition` — decided (cited, via docs/recommendations/DNA/delins.md:44-47)
@@ -364,8 +368,9 @@
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
-//! docs/recommendations/RNA/delins.md:18
+//! docs/recommendations/RNA/delins.md:18  [MULTI]
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:41
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //! docs/recommendations/RNA/delins.md:70
@@ -395,10 +400,13 @@
 //!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:45
 //!     `bare-transcript-intronic-position` — decided (cited)
-//! docs/recommendations/general.md:22
+//! docs/recommendations/general.md:22  [MULTI]
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (governing)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:25
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/general.md:27
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //! docs/recommendations/general.md:33  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -507,6 +515,7 @@
 //!     `c-and-n-positions-are-flat-transcript-offsets` — decided (governing)
 //!     `c-description-against-an-unresolvable-cds-is-refused` — decided (cited)
 //!     `cross-zone-c-positions-order-by-transcript-coordinate` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //! docs/background/standards.md:36
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //!     `rna-axis-alignment-only-symbol-reach` — decided (cited)
@@ -542,6 +551,7 @@
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (cited)
 //!     `derivation-may-not-be-bounded-by-the-inputs-spelling` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //!     `unequal-length-block-a-placed-gap-is-not-a-separation` — decided (cited)
@@ -549,7 +559,11 @@
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:42
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — decided (governing)
@@ -612,6 +626,12 @@
 //!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!     `unchanged-is-read-over-every-minimal-alignment` — decided (cited)
 //!     `whole-span-reverse-complement-types-as-inv` — decided (cited)
+//! docs/recommendations/RNA/delins.md:18
+//!     `delins-codon-carve-out-gap-one` — decided (cited)
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (cited)
+//! docs/recommendations/general.md:22
+//!     `noncoding-axis-is-re-derived-on-its-own-reference` — decided (governing)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:33
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `coding-axis-merges-are-a-disclosed-general-34-deviation` — decided (deviates-from)
@@ -981,7 +1001,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (38, 35, 3),
+        (39, 36, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together."
     );
@@ -1144,7 +1164,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        41,
+        44,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

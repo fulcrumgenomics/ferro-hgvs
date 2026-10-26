@@ -74,15 +74,71 @@ fn parent_key_for_accession(accession: &Accession) -> Option<String> {
 /// method delegates straight to the wrapped provider so build-aware placement,
 /// sequence and protein reads, and the version/gene-selector probes keep the
 /// inner provider's behaviour verbatim.
+///
+/// A view made by [`Self::pinned_to`] additionally serves one transcript id
+/// from a record the projector already resolved, bypassing the cache — see
+/// that method for why.
 #[derive(Clone)]
 pub(crate) struct SharedTranscriptCacheProvider<P: ReferenceProvider> {
-    inner: P,
+    inner: Arc<P>,
     cache: SharedTranscriptCache,
+    pinned: Option<(String, Arc<Transcript>)>,
 }
 
 impl<P: ReferenceProvider> SharedTranscriptCacheProvider<P> {
     fn new(inner: P, cache: SharedTranscriptCache) -> Self {
-        Self { inner, cache }
+        Self {
+            inner: Arc::new(inner),
+            cache,
+            pinned: None,
+        }
+    }
+
+    /// A view of this provider that answers every fetch of `transcript_id` with
+    /// `transcript` — the record and its bases, refusing sequence reads when the
+    /// record carries none — and everything else as before.
+    ///
+    /// For normalizing a form whose accession cannot say which record it was
+    /// derived from. The re-derived `n.` axis is reframed from a build-scoped
+    /// transcript onto the bare accession, so the normalizer's own
+    /// lookup would key it `(id, None)` and read the primary build's record
+    /// even for a GRCh37 input. Pinning hands it the record the coordinates
+    /// came from. The pinned record is not written to the shared cache, so the
+    /// `(id, None)` entry other callers rely on is untouched.
+    fn pinned_to(&self, transcript_id: &str, transcript: Arc<Transcript>) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            cache: Arc::clone(&self.cache),
+            pinned: Some((transcript_id.to_string(), transcript)),
+        }
+    }
+
+    /// The pinned transcript, when `transcript_id` is the pinned id.
+    fn pinned_for(&self, transcript_id: &str) -> Option<Arc<Transcript>> {
+        self.pinned
+            .as_ref()
+            .filter(|(id, _)| id == transcript_id)
+            .map(|(_, tx)| Arc::clone(tx))
+    }
+
+    /// The pinned record's bases, when `id` is the pinned id — the sequence
+    /// reads the normalizer makes by accession must agree with the record its
+    /// coordinates came from.
+    ///
+    /// `None` means `id` is not pinned. A pinned record that carries no bases
+    /// is an error rather than a fall-through: the wrapped provider keys the
+    /// read by bare accession and can answer from another build's transcript,
+    /// which would pair the pinned coordinates with foreign bases.
+    fn pinned_bases(&self, id: &str) -> Option<Result<Arc<Transcript>, FerroError>> {
+        self.pinned_for(id).map(|tx| {
+            if tx.sequence.is_some() {
+                Ok(tx)
+            } else {
+                Err(FerroError::ReferenceNotFound {
+                    id: format!("{id} (pinned record carries no sequence)"),
+                })
+            }
+        })
     }
 
     /// Serve `key` from the shared cache, or run `fetch`, insert its result and
@@ -110,6 +166,9 @@ impl<P: ReferenceProvider> SharedTranscriptCacheProvider<P> {
 
 impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P> {
     fn get_transcript(&self, id: &str) -> Result<Arc<Transcript>, FerroError> {
+        if let Some(tx) = self.pinned_for(id) {
+            return Ok(tx);
+        }
         self.get_or_fetch((id.to_string(), None), || self.inner.get_transcript(id))
     }
 
@@ -117,6 +176,12 @@ impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P
         &self,
         variant: &HgvsVariant,
     ) -> Result<Arc<Transcript>, FerroError> {
+        if let Some(tx) = variant
+            .accession()
+            .and_then(|acc| self.pinned_for(&acc.transcript_accession()))
+        {
+            return Ok(tx);
+        }
         // Only cache when the variant names a transcript accession; otherwise
         // there is no stable key to share, so fall through to the inner probe.
         match variant.accession() {
@@ -132,6 +197,9 @@ impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P
         &self,
         accession: &Accession,
     ) -> Result<Arc<Transcript>, FerroError> {
+        if let Some(tx) = self.pinned_for(&accession.transcript_accession()) {
+            return Ok(tx);
+        }
         self.get_or_fetch(
             (
                 accession.transcript_accession(),
@@ -170,6 +238,14 @@ impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P
     }
 
     fn get_sequence(&self, id: &str, start: u64, end: u64) -> Result<String, FerroError> {
+        if let Some(tx) = self.pinned_bases(id) {
+            return tx?
+                .get_sequence(start, end)
+                .map(str::to_string)
+                .ok_or_else(|| FerroError::InvalidCoordinates {
+                    msg: format!("Position {start}-{end} out of range for {id}"),
+                });
+        }
         self.inner.get_sequence(id, start, end)
     }
 
@@ -212,7 +288,77 @@ impl<P: ReferenceProvider> ReferenceProvider for SharedTranscriptCacheProvider<P
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
+        if let Some(tx) = self.pinned_bases(id) {
+            return Ok(tx?.sequence_length());
+        }
         self.inner.get_sequence_length(id)
+    }
+}
+
+/// [`VariantProjector::normalize_or_fallback`] against an explicit normalizer,
+/// for the axis that normalizes through a pinned provider view
+/// ([`SharedTranscriptCacheProvider::pinned_to`]) rather than the projector's own.
+fn normalize_or_fallback_with<Q: ReferenceProvider>(
+    normalizer: &Normalizer<Q>,
+    frame: &str,
+    v: HgvsVariant,
+) -> HgvsVariant {
+    normalizer.normalize(&v).unwrap_or_else(|e| {
+        log::warn!(
+            "{frame}-frame renormalization failed for {v}; \
+             emitting un-normalized form: {e}"
+        );
+        v
+    })
+}
+
+/// Settle the members of an assembled `n.` allele that came back as alleles of
+/// their own — a `c.` edit the `n.` axis re-derives into several (#1712) —
+/// against the `phase` of the allele being built.
+///
+/// - **cis**: the member's edits are on the same molecule as every other
+///   member's, so they become members of the outer allele
+///   (`n.[4C>A;6C>A;8A>G]`, the shape a `g.` input's own genomic axis takes)
+///   rather than a bracket inside a bracket, which renders as
+///   `[NM_…:n.[4C>A;6C>A];NM_…:n.8A>G]`.
+/// - **trans**: each member is one haplotype, and a haplotype of several edits
+///   is exactly what a cis allele inside a trans allele denotes
+///   (`c.[296T>G;476T>C;1083A>C];[296T>G;1083A>C]`, `DNA/alleles.md:56`), so
+///   the member is kept whole: `n.[4C>A;6C>A];[8A>G]`.
+/// - **any other phase**: the flat spelling `n.[4C>A;6C>A](;)8A>G` does not
+///   parse, and the form that does read back keeps a bracket inside a bracket
+///   (`[NM_…:n.[4C>A;6C>A](;)NM_…:n.8A>G]`). Which of those the axis should
+///   emit is not settled, so the axis is refused with the reason instead.
+///
+/// The edits are not re-normalized across members, as the `c.` and `g.` allele
+/// axes are not: each member is already normalized on its own reference.
+fn fold_split_allele_members(
+    variants: Vec<HgvsVariant>,
+    phase: AllelePhase,
+) -> Result<Vec<HgvsVariant>, String> {
+    // What the `n.` derivation returns for one edit it re-derives into several.
+    let is_split = |a: &AlleleVariant| a.phase == AllelePhase::Cis && !a.uncertain;
+    match phase {
+        AllelePhase::Cis => Ok(variants
+            .into_iter()
+            .flat_map(|v| match v {
+                HgvsVariant::Allele(a) if is_split(&a) => a.variants,
+                other => vec![other],
+            })
+            .collect()),
+        AllelePhase::Trans => Ok(variants),
+        other
+            if variants
+                .iter()
+                .any(|v| matches!(v, HgvsVariant::Allele(a) if is_split(a))) =>
+        {
+            Err(format!(
+                "an allele member's n. form is several edits, which has no flat \
+                 form inside a {}-phase allele",
+                format!("{other:?}").to_lowercase()
+            ))
+        }
+        _ => Ok(variants),
     }
 }
 
@@ -1090,17 +1236,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///    primary-build fetch is the only defined answer and no divergence is
     ///    possible, so behavior is unchanged.
     ///
-    /// The [`Self::assembly_override`] (`--assembly`) is deliberately *not*
-    /// consulted here. It only `fills in` a build for a build-agnostic
-    /// `NG_`/`LRG_` parent, and such a parent's transcript bases are
-    /// build-independent: RefSeqGene/`LRG_` transcripts are served from the
-    /// build-agnostic transcript FASTA, so `predict_rna` (which reads the
-    /// transcript *sequence*) produces identical output under either build. The
-    /// override changes only the genomic *placement* (the `.genomic` re-anchor),
-    /// which the genome-pivot path handles separately via its build-resolved
-    /// `cache_variant`. Folding the override in here would stamp a build the
-    /// fetch cannot observably honor (no per-build NG transcript bases exist) —
-    /// a no-op that no test could exercise — so it is intentionally omitted.
+    /// The [`Self::assembly_override`] (`--assembly`) is not consulted here, so
+    /// an `NG_`/`LRG_` parent is returned as is and a provider resolves it on its
+    /// own default build. A record from another build than the override selected
+    /// is not interchangeable with the right one — the provider stamps it with
+    /// the build it was resolved on, and synthesizes per-build bases when the
+    /// transcript FASTA lacks the accession — so [`Self::predict_rna_transcript`]
+    /// scopes this context to the override's placement itself
+    /// ([`Self::scope_context_to_build`]) and checks the record it gets back.
     fn rna_build_context(&self, input: &HgvsVariant) -> Option<Accession> {
         let accession = input.accession()?;
         if let Some(parent) = accession.genomic_context.as_deref() {
@@ -1114,6 +1257,50 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return Some(accession.clone());
         }
         None
+    }
+
+    /// The genome build an axis read off `input`'s transcript *bases* must be
+    /// derived on: the build `input` encodes, else the [`Self::assembly_override`]
+    /// when `input` is placed on a genomic reference (a `g.` input, or a
+    /// `c.`/`n.`/`r.` input with an `NG_`/`NC_`/`LRG_` parent), else none.
+    ///
+    /// The override is consulted only for a placed input because all it ever
+    /// selects is a placement (#715). A bare `NM_` input is projected without one,
+    /// from the primary build, so no build is in play for a record to contradict.
+    fn transcript_axis_build(&self, input: &HgvsVariant) -> Option<&'static str> {
+        self.infer_input_build(input).or_else(|| {
+            let placed = input
+                .accession()
+                .is_some_and(|acc| acc.genomic_context.is_some())
+                || input.coordinate_axis() == Some(crate::hgvs::variant::CoordinateAxis::Genomic);
+            if placed {
+                self.assembly_override
+            } else {
+                None
+            }
+        })
+    }
+
+    /// `context`, or — when it is a build-agnostic genomic parent (`NG_`/`LRG_`)
+    /// and `build` is known — that parent's chromosome on `build`, so that a
+    /// transcript fetch keyed on the result resolves on `build`.
+    ///
+    /// A provider resolves a transcript keyed on an `NG_` parent on its own
+    /// default build (GRCh38 first), whatever `--assembly` selected; keying the
+    /// fetch on the parent's placed chromosome asks for the build the projection
+    /// ran on instead. When no placement on `build` is known the context is
+    /// returned unchanged, and the caller's build check
+    /// ([`Self::require_transcript_on_build`]) declines whatever comes back from
+    /// another build.
+    fn scope_context_to_build(&self, context: Accession, build: Option<&'static str>) -> Accession {
+        match build {
+            Some(b) if self.provider.infer_genome_build(&context).is_none() => self
+                .provider
+                .genomic_placement_on_build(&context, Some(b))
+                .map(|placement| placement.nc)
+                .unwrap_or(context),
+            _ => context,
+        }
     }
 
     /// Fetch the transcript for a `predict_rna` call, build-scoped by `input`
@@ -1144,9 +1331,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         input: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<Arc<Transcript>, FerroError> {
+        let build = self.transcript_axis_build(input);
         let mut accession = parse_accession(transcript_id);
-        if let Some(context) = self.rna_build_context(input) {
-            accession = accession.with_genomic_context(context);
+        // A `g.` input whose own accession names no build (`NG_:g.`, or a contig
+        // the accession does not place) gets no context above; it is placed on
+        // a genomic reference all the same, so scope it like a parent.
+        let context = self.rna_build_context(input).or_else(|| {
+            build
+                .and(input.accession())
+                .filter(|_| {
+                    input.coordinate_axis() == Some(crate::hgvs::variant::CoordinateAxis::Genomic)
+                })
+                .cloned()
+        });
+        if let Some(context) = context {
+            accession = accession.with_genomic_context(self.scope_context_to_build(context, build));
         }
         // A minimal Cds carrier: `cached_get_transcript_for_variant` only reads
         // `accession()` (for the parent key and the build-aware provider probe),
@@ -1163,20 +1362,51 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             ),
         });
         let tx = self.cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
-        if let Some(input_build) = self.infer_input_build(input) {
-            let tx_build = tx.genome_build;
-            if tx_build != crate::reference::transcript::GenomeBuild::Unknown
-                && tx_build.to_string() != input_build
-            {
-                return Err(FerroError::ReferenceNotFound {
-                    id: format!(
-                        "{transcript_id} on build {input_build}: resolved transcript is \
-                         build {tx_build} (refusing to predict r. against wrong-build bases)"
-                    ),
-                });
-            }
-        }
+        Self::require_transcript_on_build(build, &tx, transcript_id, "predict r.")?;
         Ok(tx)
+    }
+
+    /// Refuse a transcript record from another build than `build`, the build
+    /// the axis is being derived on.
+    ///
+    /// The record handed back for a build-scoped lookup is not guaranteed to be
+    /// on that build: `cached_get_transcript_for_variant` falls back to the
+    /// build-agnostic primary record when the build-keyed lookup misses, and a
+    /// provider keyed on an `NG_` parent, or on a chromosome whose build it
+    /// cannot read from the accession, resolves on its own default build. An
+    /// axis that reads the record's bases must not be derived from another
+    /// build's. Only a *definite* mismatch refuses: no expected build, or a
+    /// record whose build is `Unknown`, passes. `purpose` names what is being
+    /// refused, for the error.
+    ///
+    /// `build` is the build the projection actually ran on — from
+    /// [`Self::transcript_axis_build`], or on the genome-pivot path the build it
+    /// already resolved for its cdot lookup — not merely the one the input's
+    /// accessions encode. The latter is `None` for a build-agnostic `NG_` input
+    /// projected under `--assembly` and for a pivot onto a contig whose build
+    /// the accession does not encode, and would wave through exactly the records
+    /// this exists to refuse.
+    fn require_transcript_on_build(
+        build: Option<&'static str>,
+        tx: &Transcript,
+        transcript_id: &str,
+        purpose: &str,
+    ) -> Result<(), FerroError> {
+        let Some(build) = build else {
+            return Ok(());
+        };
+        let tx_build = tx.genome_build;
+        if tx_build != crate::reference::transcript::GenomeBuild::Unknown
+            && tx_build.to_string() != build
+        {
+            return Err(FerroError::ReferenceNotFound {
+                id: format!(
+                    "{transcript_id} on build {build}: resolved transcript is \
+                     build {tx_build} (refusing to {purpose} against wrong-build bases)"
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Reject parentless c./n./r. fan-out inputs up front.
@@ -2038,9 +2268,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// its `genomic_context` and whose synthesized gene-symbol selector is
     /// cleared. Used to frame a transcript-relative description under its
     /// `NG_`/`LRG_` parent (#480).
+    ///
+    /// An allele is framed member by member: it renders its accession prefix
+    /// from its first member, and the re-derived `n.` axis can be a split
+    /// allele (#1712), so every member must carry the parent.
     fn relabel_under_parent(variant: &HgvsVariant, parent: &Accession) -> HgvsVariant {
         let mut v = variant.clone();
         match &mut v {
+            HgvsVariant::Allele(a) => {
+                for member in &mut a.variants {
+                    *member = Self::relabel_under_parent(member, parent);
+                }
+            }
             HgvsVariant::Cds(c) => {
                 c.accession = c.accession.clone().with_genomic_context(parent.clone());
                 c.gene_symbol = None;
@@ -2065,11 +2304,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Set `variant`'s top-level accession to `acc` with no `genomic_context`
     /// (bare rendering), clearing any synthesized gene symbol. Used by #860 to
     /// echo the input's LRG namespace (`LRG_<n>t<k>`/`LRG_<n>p<k>`) on a fan-out
-    /// projection without the `LRG_<n>(inner)` genomic-context wrapper. Only the
-    /// single-variant arms are handled (an allele rna axis is out of scope).
+    /// projection without the `LRG_<n>(inner)` genomic-context wrapper. An
+    /// allele (the split `n.` axis, #1712) is renamed member by member.
     fn set_bare_accession(variant: &mut HgvsVariant, acc: Accession) {
         let acc = acc.without_genomic_context();
         match variant {
+            HgvsVariant::Allele(a) => {
+                for member in &mut a.variants {
+                    Self::set_bare_accession(member, acc.clone());
+                }
+            }
             HgvsVariant::Cds(c) => {
                 c.accession = acc;
                 c.gene_symbol = None;
@@ -2394,17 +2638,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// discoverable without enabling `trace` logs — this now backs the default
     /// `normalize=True` surface, so a silent non-canonical fallback would
     /// otherwise be invisible in production). Shared by
-    /// [`Self::reanchor_and_normalize_genomic`] and
-    /// [`Self::project_to_genomic_normalized`] so the fallback/log semantics stay
-    /// identical between the two call sites.
-    fn normalize_or_fallback(&self, v: HgvsVariant) -> HgvsVariant {
-        self.normalizer.normalize(&v).unwrap_or_else(|e| {
-            log::warn!(
-                "genomic-frame renormalization failed for {v}; \
-                 emitting un-normalized form: {e}"
-            );
-            v
-        })
+    /// [`Self::reanchor_and_normalize_genomic`],
+    /// [`Self::project_to_genomic_normalized`] and
+    /// [`Self::noncoding_axis_with_reason`] so the fallback/log semantics stay
+    /// identical across every axis the projector re-derives on its own
+    /// reference.
+    ///
+    /// `frame` names the axis for the log line only. It is passed rather than
+    /// derived from `v` because the interesting thing on a failure is *which
+    /// derivation* produced the variant, and a re-anchored genomic pivot and a
+    /// reframed `n.` axis can both print as forms whose prefix does not say
+    /// which projector step wrote them.
+    fn normalize_or_fallback(&self, frame: &str, v: HgvsVariant) -> HgvsVariant {
+        normalize_or_fallback_with(&self.normalizer, frame, v)
     }
 
     /// Re-anchor an NC-frame pivot into its parent frame, then re-normalize in the
@@ -2427,7 +2673,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         build: Option<&str>,
     ) -> Result<HgvsVariant, FerroError> {
         let reanchored = self.reanchor_genome_output(gv, build)?;
-        Ok(self.normalize_or_fallback(reanchored))
+        Ok(self.normalize_or_fallback("genomic", reanchored))
     }
 
     /// Project a transcript-coordinate (`c.`/`n.`/`r.`) variant onto its genomic
@@ -2455,7 +2701,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
     ) -> Result<HgvsVariant, FerroError> {
         let projected = self.project_to_genomic(variant)?;
-        Ok(self.normalize_or_fallback(projected))
+        Ok(self.normalize_or_fallback("genomic", projected))
     }
 
     /// Project a `c.pter`/`c.qter` (telomere-flank marker) coding input onto its
@@ -4151,12 +4397,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Build the n. (transcript-relative) allele the same all-or-nothing way:
         // only when EVERY member carries an n. form (mirrors the coding rule).
+        // A member's n. form can itself be an allele, re-derived from one `c.`
+        // edit (#1712); `fold_split_allele_members` settles where its edits go.
         let noncoding_variants: Option<Vec<HgvsVariant>> = inner_projections
             .iter()
             .map(|p| p.noncoding.clone())
             .collect();
-        let noncoding = noncoding_variants
-            .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+        let (noncoding, split_member_decline) = match noncoding_variants
+            .map(|variants| fold_split_allele_members(variants, allele.phase))
+        {
+            Some(Ok(variants)) => (
+                Some(HgvsVariant::Allele(AlleleVariant::new(
+                    variants,
+                    allele.phase,
+                ))),
+                None,
+            ),
+            Some(Err(reason)) => (None, Some(reason)),
+            None => (None, None),
+        };
 
         // #1198: because the rule above is all-or-nothing, an absent allele `n.`
         // axis means at least one member's was absent — and that member may have
@@ -4168,10 +4427,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // recorded cause is reported, because one true cause is more use than
         // none and picking a "primary" among them would be invention.
         let noncoding_decline = if noncoding.is_none() {
-            inner_projections
-                .iter()
-                .find_map(|p| p.axis_decline_reasons.noncoding.as_deref())
-                .map(|reason| format!("an allele member has no n. form: {reason}"))
+            split_member_decline.or_else(|| {
+                inner_projections
+                    .iter()
+                    .find_map(|p| p.axis_decline_reasons.noncoding.as_deref())
+                    .map(|reason| format!("an allele member has no n. form: {reason}"))
+            })
         } else {
             None
         };
@@ -5059,32 +5320,56 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Returns `(axis, decline_reason)`; the reason is `None` whenever the axis
     /// is `Some`.
     ///
-    /// # The axis is NOT re-normalized on its own reference (#1712)
+    /// # The axis IS re-derived on its own reference (#1712)
     ///
-    /// The coordinates reframe and the `c.` form's edit is cloned verbatim, so
-    /// the `n.` axis inherits whatever canonical form the *coding* frame settled
-    /// on — including forms the coding frame chose because it has a reading
-    /// frame and `n.` does not. Bare normalization of the resulting `n.` string
-    /// therefore rewrites 61 of the 681 projected axes measured against the
-    /// prepared GRCh38 reference (`c.3305_3306del` -> `n.3709_3710del`, which
-    /// normalizes on to `n.3708_3710T[1]`).
+    /// `noncoding_from_coding` reframes the coordinates and clones the `c.`
+    /// form's edit verbatim, so on its own the `n.` axis would inherit whatever
+    /// canonical form the *coding* frame settled on — including forms the coding
+    /// frame chose **because** it declares a reading frame, which `n.` does not.
+    /// The reframed form is therefore normalized here, on the `n.` axis's own
+    /// reference, exactly as the genomic axis is
+    /// ([`Self::normalize_or_fallback`], #737).
     ///
-    /// Read that 61 off `NONCODING_NON_IDEMPOTENT` rather than from here — it
-    /// tracks the shipped `FERRO_PARTITION` default, and #1835 moved it from 21
-    /// to 62 by making `canonical-coalesced` that default; this branch takes it
-    /// to 61.
+    /// **Decided by `rulings[noncoding-axis-is-re-derived-on-its-own-reference]`**
+    /// (operator ruling, 2026-08-13), which closes the half its predecessor
+    /// `projection-codon-exception-is-decided-by-the-rendered-axis` deliberately
+    /// parked — that record's scope paragraph names this axis and rules only on
+    /// the genomic one. In one line: `general.md:22`/`:27` make the `n.` prefix
+    /// a mandatory claim that the reference is a *non-coding* DNA sequence, and
+    /// `DNA/delins.md:42`'s antecedent — "together affecting one amino acid" —
+    /// is not statable against such a reference, so a frame-derived merge
+    /// rendered under `n.` contradicts its own prefix. Read the record, not this
+    /// comment.
     ///
-    /// Adding a `normalize` here closes all 61 and is the obvious symmetry with
-    /// the genomic axis ([`Self::normalize_or_fallback`], #737) — but it is
-    /// **not** a free correction. Which of the projector and the normalizer is
-    /// the wrong side of the `n.`-versus-`c.` disagreement is a question the
-    /// decided record `projection-codon-exception-is-decided-by-the-rendered-axis`
-    /// declines to reach: its scope paragraph names the `n.` axis and rules only
-    /// on the genomic one. See the residue pinned by `axis_noncoding_idempotent`
-    /// and #1712.
+    /// Without the normalize, bare normalization rewrote 61 of the 681 projected
+    /// `n.` axes measured against the prepared GRCh38 reference on the shipped
+    /// partition default (`c.3305_3306del` -> `n.3709_3710del`, which normalizes
+    /// on to `n.3708_3710T[1]`); with it the residue is 0, pinned by
+    /// `axis_noncoding_idempotent`.
+    ///
+    /// **Accepted cost, stated rather than discovered later:** `r.` merges on
+    /// `RNA/delins.md:18`'s own authority, so one change now spells differently
+    /// on `n.` and `r.`. That divergence is spec-licensed — the same shape as
+    /// the `g.`/`c.` divergence the parked record already accepts — not a
+    /// defect.
+    ///
+    /// The normalizer reads through the projector's shared transcript cache
+    /// (#1860), so this costs at most one extra transcript fetch per projector,
+    /// not one per variant — and none when the projector's lookup was
+    /// build-scoped, because the `n.` form is then normalized against the
+    /// transcript that lookup returned;
+    /// `projection::transcript_cache_collapses_repeat_lookups` pins that.
+    ///
+    /// `build` is the build the projection ran on (see
+    /// [`Self::require_transcript_on_build`] for why it is passed in rather than
+    /// read off `normalized`). When the record the lookup returns is from
+    /// another build, the axis is withheld rather than normalized against
+    /// foreign bases.
+    #[allow(clippy::too_many_arguments)]
     fn noncoding_axis_with_reason(
         &self,
         normalized: &HgvsVariant,
+        build: Option<&'static str>,
         transcript_id: &str,
         cds_start: &CdsPos,
         cds_end: &CdsPos,
@@ -5098,6 +5383,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 return (None, None);
             }
         };
+        // The `n.` axis is normalized against `tx`'s bases below, so a
+        // wrong-build fallback record is withheld rather than shifted along.
+        if let Err(e) = Self::require_transcript_on_build(build, &tx, transcript_id, "normalize n.")
+        {
+            log::trace!("c→n derivation withheld: {e}");
+            return (None, None);
+        }
         match crate::project::transcript_axis::noncoding_from_coding(
             cds_start,
             cds_end,
@@ -5106,6 +5398,37 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             transcript_id,
             gene_symbol,
         ) {
+            // Re-derive on the `n.` reference rather than shipping the reframed
+            // `c.` form — see the ruling in this function's doc comment. The
+            // fallback is the un-normalized reframed form, so a normalize error
+            // costs canonicality and never the axis.
+            //
+            // Only a form that reads back is re-derived. The normalizer's
+            // contract (`FERRO_ASSERT_REPARSE`) is that it is never handed an
+            // input it cannot re-parse outside a closed list of deliberate
+            // shapes, and the reframe can build ones outside it: an edit-less
+            // range the spec harvests (`c.3675-45_3692` reframes to an
+            // `n.3925-45_3942` the parser refuses), or an accession the parser
+            // does not accept. Those are emitted exactly as before this ruling,
+            // un-normalized; re-deriving what cannot be read back would only
+            // move the defect into the normalizer.
+            //
+            // The reframed form is bare, so the normalizer's own lookup would
+            // key it `(id, None)` and read the primary build's transcript. When
+            // `tx` came from a build-scoped lookup, normalize against `tx`
+            // itself, so a GRCh37 axis is not shifted along GRCh38 bases.
+            Ok(v) if crate::hgvs::parser::parse_hgvs(&v.to_string()).is_ok() => {
+                let normalized_axis = if Self::parent_key_for(normalized).is_some() {
+                    let pinned = Normalizer::with_config(
+                        self.normalizer.provider().pinned_to(transcript_id, tx),
+                        self.normalizer.config().clone(),
+                    );
+                    normalize_or_fallback_with(&pinned, "non-coding", v)
+                } else {
+                    self.normalize_or_fallback("non-coding", v)
+                };
+                (Some(normalized_axis), None)
+            }
             Ok(v) => (Some(v), None),
             Err(e) => {
                 log::trace!("c→n derivation failed for {transcript_id}: {e}");
@@ -5284,6 +5607,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // (#1198) instead of being computed and dropped.
         let (noncoding, noncoding_decline) = self.noncoding_axis_with_reason(
             normalized,
+            self.transcript_axis_build(normalized),
             transcript_id,
             &cds_start,
             &cds_end,
@@ -6015,7 +6339,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     // via the same `normalize_or_fallback` helper (warn-logs the
                     // dropped error) that `reanchor_and_normalize_genomic` uses.
                     let raw = result?;
-                    let genomic = self.normalize_or_fallback(raw);
+                    let genomic = self.normalize_or_fallback("genomic", raw);
                     return Ok(self.terminus_multiaxis_projection(
                         normalized,
                         transcript_id,
@@ -6327,23 +6651,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //      `RefProteinBundle` are built against the correct
         //      alignment.
         // The returned `coding` field is unaffected (#389 follow-up).
-        let cache_variant = if is_coding {
-            HgvsVariant::Cds(CdsVariant {
-                accession: parse_accession(transcript_id)
-                    .with_genomic_context(genome_variant.accession.clone()),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(CdsInterval::new(cds_start, cds_end), c_edit.clone()),
-            })
+        let carrier = |context: Accession| {
+            if is_coding {
+                HgvsVariant::Cds(CdsVariant {
+                    accession: parse_accession(transcript_id).with_genomic_context(context),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::new(CdsInterval::new(cds_start, cds_end), c_edit.clone()),
+                })
+            } else {
+                HgvsVariant::Tx(TxVariant {
+                    accession: parse_accession(transcript_id).with_genomic_context(context),
+                    gene_symbol: gene_symbol.clone(),
+                    loc_edit: LocEdit::new(
+                        TxInterval::new(TxPos::new(cds_start.base), TxPos::new(cds_end.base)),
+                        c_edit.clone(),
+                    ),
+                })
+            }
+        };
+        let cache_variant = carrier(genome_variant.accession.clone());
+        // The `n.` and `r.` axes read the transcript's *bases*, so their fetch
+        // must resolve on the build this projection ran on (`build_hint`). The
+        // pivot carries the input's own parent accession, and for a
+        // build-agnostic `NG_`/`LRG_` parent a provider resolves that on its
+        // default build whatever `--assembly` chose, so key the fetch on the
+        // parent's chromosome for `build_hint` instead. Any other context is
+        // kept, so this carrier is `cache_variant` unless a build is known for a
+        // pivot on an `NG_`/`LRG_` parent, which only `--assembly` supplies.
+        let axis_context =
+            self.scope_context_to_build(genome_variant.accession.clone(), build_hint);
+        let axis_carrier = if axis_context == genome_variant.accession {
+            cache_variant.clone()
         } else {
-            HgvsVariant::Tx(TxVariant {
-                accession: parse_accession(transcript_id)
-                    .with_genomic_context(genome_variant.accession.clone()),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(
-                    TxInterval::new(TxPos::new(cds_start.base), TxPos::new(cds_end.base)),
-                    c_edit.clone(),
-                ),
-            })
+            carrier(axis_context)
         };
 
         // Derive per-position flags from MappingInfo.
@@ -6378,7 +6718,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // reached, but carries the correct semantics for when it is).
         let (noncoding, noncoding_decline) = if is_coding {
             self.noncoding_axis_with_reason(
-                &cache_variant,
+                &axis_carrier,
+                build_hint,
                 transcript_id,
                 &cds_start,
                 &cds_end,
@@ -6414,10 +6755,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         // Predicted RNA consequence (#485): derived best-effort from the c. form
-        // and the transcript sequence; `None` when not representable.
+        // and the transcript sequence; `None` when not representable, or when
+        // the record the lookup returns is from another build than this
+        // projection ran on (the same check the `n.` axis makes above).
         let rna = self
-            .cached_get_transcript_for_variant(&cache_variant, transcript_id)
+            .cached_get_transcript_for_variant(&axis_carrier, transcript_id)
             .ok()
+            .filter(|tx| {
+                Self::require_transcript_on_build(build_hint, tx, transcript_id, "predict r.")
+                    .map_err(|e| log::trace!("predicted r. withheld: {e}"))
+                    .is_ok()
+            })
             .and_then(|tx| crate::project::rna::predict_rna(&coding, &tx));
         // `coding` carries the bare transcript accession plus a synthesized gene
         // symbol; re-frame the predicted `r.` under the input's parent (the
@@ -8190,6 +8538,126 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The same fan-out with an edit the `n.` axis splits (#1712): codon 2 is
+    /// `CGC`, and `c.4_6delinsAGA` changes its first and third bases. `c.`
+    /// keeps the one-codon merge, while `n.` is re-derived on its frameless
+    /// reference into a two-member allele. Every member of that allele must be
+    /// framed under the requested `NG_` parent, like the `c.` axis beside it.
+    #[test]
+    fn project_variant_all_frames_a_split_noncoding_axis_under_ng_context() {
+        let (projector, mut provider) = make_nc_two_transcript_setup();
+        provider.add_genomic_placement(
+            "NG_900.1",
+            crate::reference::GenomicPlacement {
+                nc: Accession::new("NC", "000001", Some(11)),
+                parent_start: 1,
+                nc_start: 1000,
+                nc_end: 1008,
+                strand: crate::reference::Strand::Plus,
+                gaps: Vec::new(),
+            },
+        );
+        let vp = VariantProjector::new(projector, provider);
+
+        let v = crate::hgvs::parser::parse_hgvs("NG_900.1(NM_TX1.1):c.4_6delinsAGA")
+            .expect("input parses");
+        let results = vp
+            .project_variant_all(&v)
+            .expect("project_all should succeed for a c. input with NG_ context");
+        let tx1 = results
+            .iter()
+            .find(|r| r.transcript_id == "NM_TX1.1")
+            .expect("NM_TX1.1 enumerated");
+
+        assert_eq!(
+            tx1.coding.as_ref().map(|c| c.to_string()).as_deref(),
+            Some("NG_900.1(NM_TX1.1):c.4_6delinsAGA"),
+            "the c. axis keeps the one-codon merge, framed under the NG_ parent"
+        );
+        assert_eq!(
+            tx1.noncoding.as_ref().map(|n| n.to_string()).as_deref(),
+            Some("NG_900.1(NM_TX1.1):n.[4C>A;6C>A]"),
+            "the split n. axis is framed under the NG_ parent on every member"
+        );
+    }
+
+    /// An allele member whose `n.` axis is re-derived into several edits (#1712)
+    /// must not leave a bracket inside the allele's bracket. Codon 2 is `CGC`,
+    /// so `c.4_6delinsAGA` re-derives to `n.[4C>A;6C>A]`; beside `c.8A>G` in cis
+    /// the three edits are on one molecule and form one flat allele, the shape a
+    /// `g.` input's own genomic axis already takes. Unfolded it rendered
+    /// `[NC_000001.11(NM_TX1.1):n.[4C>A;6C>A];NC_000001.11(NM_TX1.1):n.8A>G]`.
+    #[test]
+    fn a_split_member_folds_into_its_cis_allele_on_the_noncoding_axis() {
+        let (projector, provider) = make_nc_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+        let expected = "NC_000001.11(NM_TX1.1):n.[4C>A;6C>A;8A>G]";
+        for input in [
+            "NC_000001.11(NM_TX1.1):c.[4_6delinsAGA;8A>G]",
+            "NC_000001.11:g.[1003_1005delinsAGA;1007A>G]",
+        ] {
+            let v = crate::hgvs::parser::parse_hgvs(input).expect("input parses");
+            let noncoding = vp
+                .project_variant(&v, "NM_TX1.1")
+                .expect("the allele projects")
+                .noncoding
+                .expect("every member carries an n. form")
+                .to_string();
+            assert_eq!(noncoding, expected, "{input}");
+            assert_eq!(
+                crate::hgvs::parser::parse_hgvs(&noncoding)
+                    .expect("the folded allele reads back")
+                    .to_string(),
+                expected
+            );
+        }
+    }
+
+    /// In trans the members are separate haplotypes, and a haplotype of two
+    /// edits is exactly what a cis allele nested in a trans allele denotes
+    /// (`DNA/alleles.md`), so the split member is kept whole.
+    #[test]
+    fn a_split_member_stays_one_haplotype_in_a_trans_allele_on_the_noncoding_axis() {
+        let (projector, provider) = make_nc_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+        let v = crate::hgvs::parser::parse_hgvs("NC_000001.11(NM_TX1.1):c.[4_6delinsAGA];[8A>G]")
+            .expect("input parses");
+        assert_eq!(
+            vp.project_variant(&v, "NM_TX1.1")
+                .expect("the allele projects")
+                .noncoding
+                .expect("every member carries an n. form")
+                .to_string(),
+            "NC_000001.11(NM_TX1.1):n.[4C>A;6C>A];[8A>G]"
+        );
+    }
+
+    /// Under any other phase a member of several edits has no flat form —
+    /// `n.[4C>A;6C>A](;)8A>G` does not parse, and what does read back nests one
+    /// allele in another — so the `n.` axis is declined with that reason. The
+    /// `c.` axis is unaffected.
+    #[test]
+    fn a_split_member_declines_the_noncoding_axis_of_a_phase_unknown_allele() {
+        let (projector, provider) = make_nc_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+        let v = crate::hgvs::parser::parse_hgvs("NC_000001.11(NM_TX1.1):c.[4_6delinsAGA(;)8A>G]")
+            .expect("input parses");
+        let projection = vp
+            .project_variant(&v, "NM_TX1.1")
+            .expect("the allele projects");
+        assert!(projection.coding.is_some(), "the c. axis is unaffected");
+        assert!(
+            projection.noncoding.is_none(),
+            "got {:?}",
+            projection.noncoding.as_ref().map(|n| n.to_string())
+        );
+        let reason = projection
+            .axis_decline_reasons
+            .noncoding
+            .expect("the decline carries its reason");
+        assert!(reason.contains("several edits"), "reason: {reason}");
     }
 
     /// Coexistence of the #646 cross-isoform enumeration with the #655 graceful
@@ -11322,6 +11790,89 @@ mod tests {
             );
         }
 
+        /// #1712: re-deriving the `n.` axis on its own reference can split one
+        /// edit into a cis allele (`c.145_147delinsTGG` -> `n.[389C>T;391C>G]`),
+        /// and an allele renders its accession prefix from its first member. So
+        /// framing under an `NG_`/`LRG_` parent must reach every member, as
+        /// [`VariantProjector::apply_rna_framing`] already does for `r.`;
+        /// otherwise the split axis keeps the bare accession it was derived on
+        /// while the `c.` axis beside it is framed under the requested parent.
+        #[test]
+        fn frame_projection_owned_frames_every_member_of_a_split_noncoding_axis() {
+            fn tx(id: &str, sequence: &str) -> Transcript {
+                Transcript {
+                    id: id.to_string(),
+                    sequence: Some(sequence.to_string()),
+                    cds_start: Some(1),
+                    cds_end: Some(sequence.len() as u64),
+                    exons: vec![Exon::new(1, 1, sequence.len() as u64)],
+                    ..Default::default()
+                }
+            }
+            fn member(pos: i64, reference: Base, alternative: Base) -> HgvsVariant {
+                HgvsVariant::Tx(TxVariant {
+                    accession: parse_accession("NM_001114101.3"),
+                    gene_symbol: None,
+                    loc_edit: LocEdit::new(
+                        TxInterval::point(TxPos::new(pos)),
+                        NaEdit::Substitution {
+                            reference,
+                            alternative,
+                        },
+                    ),
+                })
+            }
+            fn framed_noncoding(parent: &str, lrg: Transcript) -> String {
+                let mut cdot = CdotMapper::new();
+                cdot.insert_lrg_mapping("LRG_24t1".to_string(), "NM_001114101.1".to_string());
+                let mut provider = MockProvider::new();
+                provider.add_transcript(tx("NM_001114101.3", "ACGTACGTACGT"));
+                provider.add_transcript(lrg);
+                let vp = VariantProjector::new(Projector::new(cdot), provider);
+
+                let noncoding = HgvsVariant::Allele(AlleleVariant::new(
+                    vec![member(5, Base::A, Base::G), member(7, Base::G, Base::T)],
+                    AllelePhase::Cis,
+                ));
+                let proj = VariantProjection {
+                    normalization_warnings: Vec::new(),
+                    axis_decline_reasons: AxisDeclineReasons::default(),
+                    genomic: None,
+                    coding: None,
+                    noncoding: Some(noncoding),
+                    protein: None,
+                    rna: None,
+                    transcript_id: "NM_001114101.3".to_string(),
+                    gene_symbol: None,
+                    is_frameshift: false,
+                    is_intronic: false,
+                    is_utr: false,
+                    affects_init: false,
+                };
+                vp.frame_projection_owned(proj, &parse_accession(parent), None)
+                    .noncoding
+                    .expect("noncoding axis retained")
+                    .to_string()
+            }
+
+            assert_eq!(
+                framed_noncoding("NG_012232.1", tx("LRG_24t1", "ACGTACGTACGT")),
+                "NG_012232.1(NM_001114101.3):n.[5A>G;7G>T]",
+                "every member of a split n. axis is framed under the NG_ parent"
+            );
+            assert_eq!(
+                framed_noncoding("LRG_24", tx("LRG_24t1", "ACGTACGTACGT")),
+                "LRG_24t1:n.[5A>G;7G>T]",
+                "the #860 LRG namespace echo renames every member when the frames match"
+            );
+            assert_eq!(
+                framed_noncoding("LRG_24", tx("LRG_24t1", "TTTTTTTTACGTACGTACGT")),
+                "LRG_24(NM_001114101.3):n.[5A>G;7G>T]",
+                "with differing frames every member keeps its resolved accession, \
+                 framed under the LRG parent"
+            );
+        }
+
         /// `reanchor_genome_to_parent` declines an endpoint with no single
         /// resolved position (a compound `(a_b)` `UncertainBoundary::Range`)
         /// with `InvalidCoordinates` rather than stamping the parent accession
@@ -13565,7 +14116,7 @@ mod tests {
         /// `NC_000001.11` [20000,20030) GRCh38), so a `g.` input's build is
         /// inferred from its `NC_*` version.
         fn make_rna_divergence_projector() -> VariantProjector<MockProvider> {
-            make_rna_divergence_projector_inner(true)
+            make_rna_divergence_projector_inner("NM_RNA_DIV.1", true)
         }
 
         /// Variant of [`make_rna_divergence_projector`] that omits the GRCh37
@@ -13575,10 +14126,11 @@ mod tests {
         /// for the partial setup), modeling a transcript whose sequence is present
         /// only in the primary build's data.
         fn make_rna_divergence_projector_grch38_keyed_only() -> VariantProjector<MockProvider> {
-            make_rna_divergence_projector_inner(false)
+            make_rna_divergence_projector_inner("NM_RNA_DIV.1", false)
         }
 
         fn make_rna_divergence_projector_inner(
+            tx_id: &str,
             register_grch37_keyed: bool,
         ) -> VariantProjector<MockProvider> {
             use crate::reference::transcript::{
@@ -13590,7 +14142,7 @@ mod tests {
             let cdot_json = r#"
             {
                 "transcripts": {
-                    "NM_RNA_DIV.1": {
+                    "TX_ID": {
                         "gene_name": "RNADIV",
                         "genome_builds": {
                             "GRCh37": {
@@ -13609,7 +14161,8 @@ mod tests {
                     }
                 }
             }
-            "#;
+            "#
+            .replace("TX_ID", tx_id);
             // c.:  1 2 3 4 5 6 7 8 9 ...                      (1-based)
             // 37:  G G C G A A A C T ...   poly-A c.5..7, C at c.8
             // 38:  G G C G A A A A A C ... poly-A c.5..9, C at c.10
@@ -13629,7 +14182,7 @@ mod tests {
             let mut provider = MockProvider::new();
             let mk = |build: RefGenomeBuild, seq: &str, chrom: &str, gstart: u64| RefTranscript {
                 cds_start_incomplete: false,
-                id: "NM_RNA_DIV.1".to_string(),
+                id: tx_id.to_string(),
                 gene_symbol: Some("RNADIV".to_string()),
                 strand: TxStrand::Plus,
                 sequence: Some(seq.to_string()),
@@ -13828,6 +14381,169 @@ mod tests {
                 r38, "NM_RNA_DIV.1:r.9del",
                 "GRCh38 allele must 3'-shift to its own run end (r.9del); the build guard \
                  must not decline a matching-build transcript"
+            );
+        }
+
+        /// The re-derived `n.` axis must normalize against the *input's build*
+        /// transcript, the same requirement #843 placed on the predicted `r.`.
+        /// The `n.` form is reframed from the build-scoped transcript onto the
+        /// bare accession, so normalizing it looked the transcript up as
+        /// `(id, None)` — the primary (GRCh38) record — and a GRCh37 deletion
+        /// 3'-shifted along the GRCh38 run to `n.9del`. Pinning only the record
+        /// is not enough: the partition and render steps read bases by
+        /// accession, and against the GRCh38 bases they produced `n.30del`.
+        ///
+        /// Uses a parseable accession: the `n.` re-derivation only normalizes a
+        /// form that reads back (`noncoding_axis_with_reason`), and the fixture's
+        /// default `NM_RNA_DIV.1` does not parse.
+        #[test]
+        fn noncoding_axis_normalizes_on_the_input_build() {
+            const TX: &str = "NM_908430.1";
+            let vp = make_rna_divergence_projector_inner(TX, true);
+            let g_del = |version: u32, pos: u64| {
+                HgvsVariant::Genome(GenomeVariant {
+                    accession: nc_chr1(version),
+                    gene_symbol: None,
+                    loc_edit: LocEdit::new(
+                        GenomeInterval::point(GenomePos::new(pos)),
+                        NaEdit::Deletion {
+                            sequence: None,
+                            length: None,
+                        },
+                    ),
+                })
+            };
+            let noncoding = |v: &HgvsVariant| {
+                vp.project_normalized(v, TX)
+                    .expect("g. deletion must project")
+                    .noncoding
+                    .expect("a coding transcript must carry an n. axis")
+                    .to_string()
+            };
+
+            assert_eq!(
+                noncoding(&g_del(10, 10005)),
+                "NC_000001.10(NM_908430.1):n.7del",
+                "GRCh37 n. must 3'-shift to its own run end; n.9del means the \
+                 normalizer read the GRCh38 primary transcript"
+            );
+            assert_eq!(
+                noncoding(&g_del(11, 20005)),
+                "NC_000001.11(NM_908430.1):n.9del",
+                "GRCh38 n. must 3'-shift to its own run end"
+            );
+        }
+
+        /// With only the GRCh38 transcript build-keyed (plus the primary), a
+        /// GRCh37 deletion's build-scoped lookup misses and
+        /// `cached_get_transcript_for_variant` falls back to the primary GRCh38
+        /// record. Normalizing the `n.` axis against that record would shift a
+        /// GRCh37 deletion along GRCh38 bases, so the axis is withheld, as
+        /// `allele_predicted_rna_does_not_fall_back_to_primary_on_build_miss`
+        /// withholds the predicted `r.`. The `c.` form does not read transcript
+        /// bases and still projects; the matching GRCh38 input keeps its `n.`.
+        #[test]
+        fn noncoding_axis_is_withheld_on_a_wrong_build_fallback() {
+            const TX: &str = "NM_908430.1";
+            let vp = make_rna_divergence_projector_inner(TX, false);
+            let g_del = |version: u32, pos: u64| {
+                HgvsVariant::Genome(GenomeVariant {
+                    accession: nc_chr1(version),
+                    gene_symbol: None,
+                    loc_edit: LocEdit::new(
+                        GenomeInterval::point(GenomePos::new(pos)),
+                        NaEdit::Deletion {
+                            sequence: None,
+                            length: None,
+                        },
+                    ),
+                })
+            };
+
+            let p37 = vp
+                .project_normalized(&g_del(10, 10005), TX)
+                .expect("GRCh37 g. deletion must still project");
+            assert!(
+                p37.coding.is_some(),
+                "the c. form reads no transcript bases and must still project"
+            );
+            assert!(
+                p37.noncoding.is_none(),
+                "a GRCh37 n. normalized against the GRCh38 fallback record must be \
+                 withheld, got {:?}",
+                p37.noncoding.as_ref().map(|n| n.to_string())
+            );
+
+            let p38 = vp
+                .project_normalized(&g_del(11, 20005), TX)
+                .expect("GRCh38 g. deletion must project");
+            assert_eq!(
+                p38.noncoding
+                    .expect("the matching-build record must keep its n. axis")
+                    .to_string(),
+                "NC_000001.11(NM_908430.1):n.9del"
+            );
+        }
+
+        /// A pinned record that carries no bases must not let a sequence read
+        /// fall through to the wrapped provider: that provider keys the read by
+        /// bare accession and can answer from another build's transcript, so
+        /// the pinned view would quietly mix the pinned record's coordinates
+        /// with foreign bases. The read is refused instead.
+        #[test]
+        fn a_pinned_transcript_without_bases_refuses_sequence_reads() {
+            use crate::reference::transcript::{
+                Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
+                Transcript as RefTranscript,
+            };
+            use std::sync::OnceLock;
+
+            const TX: &str = "NM_908431.1";
+            let record = |sequence: Option<&str>, build: RefGenomeBuild| RefTranscript {
+                cds_start_incomplete: false,
+                id: TX.to_string(),
+                gene_symbol: None,
+                strand: TxStrand::Plus,
+                sequence: sequence.map(str::to_string),
+                cds_start: Some(1),
+                cds_end: Some(9),
+                exons: vec![Exon::new(1, 1, 12)],
+                chromosome: None,
+                genomic_start: None,
+                genomic_end: None,
+                genome_build: build,
+                mane_status: ManeStatus::default(),
+                refseq_match: None,
+                ensembl_match: None,
+                protein_id: None,
+                exon_cigars: Vec::new(),
+                cached_introns: OnceLock::new(),
+            };
+            let mut inner = MockProvider::new();
+            inner.add_transcript(record(Some("ATGAAATTTTAG"), RefGenomeBuild::GRCh38));
+            let provider =
+                SharedTranscriptCacheProvider::new(inner, Arc::new(RwLock::new(HashMap::new())));
+            assert_eq!(
+                provider.get_sequence(TX, 0, 3).expect("unpinned read"),
+                "ATG",
+                "sanity: the wrapped provider serves the accession's bases"
+            );
+
+            let pinned = provider.pinned_to(TX, Arc::new(record(None, RefGenomeBuild::GRCh37)));
+            assert!(
+                matches!(
+                    pinned.get_sequence(TX, 0, 3),
+                    Err(FerroError::ReferenceNotFound { .. })
+                ),
+                "a sequence-less pinned record must refuse the read, not serve \
+                 the wrapped provider's (possibly other-build) bases"
+            );
+            assert!(
+                matches!(
+                    pinned.get_sequence_length(TX),
+                    Err(FerroError::ReferenceNotFound { .. })
+                ),
+                "a sequence-less pinned record must refuse the length read too"
             );
         }
 

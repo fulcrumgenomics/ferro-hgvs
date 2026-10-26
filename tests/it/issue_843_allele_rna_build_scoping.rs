@@ -23,6 +23,12 @@
 //! for `predict_rna`, so the GRCh37 allele did NOT emit its own `r.1193del`
 //! (it degraded to no/primary-build prediction) — a genuine, reproducible
 //! red→green on the real reference, not just a hermetic mock.
+//!
+//! `noncoding_axis_is_build_scoped_on_real_reference` asks the same question of
+//! the re-derived `n.` axis (#1712), on the same locus. Before that axis was
+//! normalized against the build-scoped transcript, both builds rendered the
+//! GRCh38 shift (`n.1267del`). Its hermetic sibling is
+//! `multi_build_projection_tests::noncoding_axis_normalizes_on_the_input_build`.
 
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::reference::transcript::Transcript;
@@ -250,5 +256,59 @@ fn g_allele_predict_rna_is_build_scoped_on_real_reference() {
     assert_ne!(
         g37, g38,
         "GRCh37 and GRCh38 g. alleles must predict build-distinct r."
+    );
+}
+
+/// The leading integer of a rendered edit body (`1193del` → `1193`).
+fn leading_position(body: &str) -> Option<i64> {
+    body.split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The re-derived `n.` axis is the same build-scoping question one axis over
+/// (#1712): it is reframed from the build-scoped transcript onto the bare
+/// accession, so a bare-keyed normalization would read the GRCh38 primary for a
+/// GRCh37 input. On the divergent locus above, the predicted `r.` is the
+/// build-correct witness (#843 fixed it), so the `n.` axis must shift across
+/// the two builds by exactly as much as the `r.` does — `n.` and `r.` number
+/// the same transcript from the same origin.
+#[test]
+fn noncoding_axis_is_build_scoped_on_real_reference() {
+    let Some(vp) = manifest_projector() else {
+        crate::common::manifest::absent("issue_843_allele_rna_build_scoping");
+        return;
+    };
+    let Some(o) = oracle(&vp) else {
+        eprintln!("issue_843: skipping — parented-c oracle unavailable (data drift)");
+        return;
+    };
+    let n_body = |nc: &str| -> String {
+        let v = parse_hgvs(&format!("{nc}({TX}):c.1191del")).expect("parse");
+        let n = vp
+            .project_variant(&v, TX)
+            .expect("parented c. must project")
+            .noncoding
+            .expect("a coding transcript must carry an n. axis")
+            .to_string();
+        n.split(":n.").nth(1).unwrap_or(&n).to_string()
+    };
+    let (n37, n38) = (n_body("NC_000015.9"), n_body("NC_000015.10"));
+    let shift = |a: &str, b: &str| Some(leading_position(a)? - leading_position(b)?);
+
+    let r_shift = shift(&o.c37_body, &o.c38_body).expect("r. bodies carry a position");
+    assert_ne!(
+        r_shift, 0,
+        "test premise broken: the r. no longer diverges across builds"
+    );
+    assert_eq!(
+        shift(&n37, &n38),
+        Some(r_shift),
+        "n. must diverge across builds exactly as the build-correct r. does \
+         (n. 37={n37} 38={n38}; r. 37={} 38={}); equal n. bodies mean the GRCh37 \
+         axis was normalized against the GRCh38 primary transcript",
+        o.c37_body,
+        o.c38_body
     );
 }

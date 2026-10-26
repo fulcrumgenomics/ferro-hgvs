@@ -1496,6 +1496,55 @@
       "summary": "The rule that a duplication must be labelled 'dup' ranks the label of each piece ferro derives, not the partition; the one exception is a net-longer tandem copy of a multi-base motif, where the derivation is cut to expose the dup rather than merged into a delins."
     },
     {
+      "id": "noncoding-axis-is-re-derived-on-its-own-reference",
+      "question": "When a coding description merges — or maximizes a repeat — under a rule conditioned on its reading frame, does the derived `n.` axis inherit that form?",
+      "status": "decided",
+      "guard": {
+        "tests": [
+          "tests/it/projection.rs::every_projected_noncoding_axis_is_a_fixed_point",
+          "tests/it/lenient_overlap_and_projection_split.rs::the_codon_delins_merges_only_on_an_axis_that_declares_a_frame",
+          "tests/it/lenient_overlap_and_projection_split.rs::the_same_codon_delins_renders_alike_whichever_axis_it_is_authored_on"
+        ]
+      },
+      "governing": "docs/recommendations/general.md:22",
+      "applies_to": [
+        "LRG_199t1:c.145_147delinsTGG",
+        "LRG_199t1:c.235_237delinsTAT"
+      ],
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:22",
+          "quote": "a **letter prefix** is mandatory to indicate the type of reference sequence used"
+        },
+        {
+          "clause": "docs/recommendations/general.md:27",
+          "quote": "`n` for a non-coding DNA reference sequence"
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:17",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:42",
+          "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\", so the description"
+        },
+        {
+          "clause": "docs/recommendations/RNA/delins.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\" (e.g., `r.142_144delinsugg` `p.(Arg48Trp)`)"
+        },
+        {
+          "clause": "docs/background/numbering.md:52",
+          "quote": "from the first to the last nucleotide of the reference sequence"
+        }
+      ],
+      "rationale": "OPERATOR RULING, 2026-08-13 - DECIDED. THE PROJECTOR IS WRONG. The `n.` axis must be RE-DERIVED on its own reference, symmetric with what the genomic axis already does via `normalize_or_fallback` (#737), rather than inheriting the form the `c.` frame chose and reframing it by CDS-offset arithmetic. This SETTLES THE HALF that `projection-codon-exception-is-decided-by-the-rendered-axis` deliberately parked - that record's scope paragraph names the `n.` axis and says of this exact disagreement \"Which side of that is wrong is an open question, deliberately left open\". It is now closed, in the same direction that record took for `g.`.\n\nTHE GROUNDS. All three are the parked record's own, applied to `n.` rather than re-derived. (1) That record declined the merge on `g.` because `DNA/delins.md:42`'s antecedent - \"together affecting one amino acid\" - IS NOT STATABLE on an axis that declares no reading frame, so the conditional is unsatisfied rather than merely weaker, and `:17` governs there unopposed. `n.` declares a non-coding DNA reference and carries no frame. The antecedent fails there for the identical reason. (2) `general.md:22` makes the prefix MANDATORY and makes it a claim about the TYPE OF REFERENCE SEQUENCE; `:27` assigns `n` to \"a non-coding DNA reference sequence\". Rendering a frame-derived merge under `n.` contradicts the claim its own prefix is making. (3) The parked record's ground (5) is that a merged string is NOT RE-DERIVABLE FROM ITS OWN REFERENCE. The same holds on `n.`: nothing in `LRG_199t1:n.389_391delinsTGG` recovers the codon that justified the merge - and normalizing it directly already yields `n.[389C>T;391C>G]`, as that record itself measured. `docs/background/numbering.md:52` is the supporting authority for what an `n.` number is stated against: the reference sequence's own nucleotides, a count with no term for a frame or an annotation.\n\nWHY THE OTHER DIRECTION WAS REFUSED. The alternative was to make the NORMALIZER treat `n.` on a coding transcript as frame-aware. That re-opens #1241, whose fix set `codon_frame_aware` false for `Tx` precisely so the `n.` and `r.` spellings of one non-coding change would not settle on two strings. It also makes `n.` output depend on which transcript annotation happened to be loaded, which is the non-re-derivability failure that ground (5) refused for `g.`.\n\nCOST ACCEPTED, AND STATED RATHER THAN DISCOVERED LATER. `r.` merges on `RNA/delins.md:18`'s OWN authority, with its own worked example `r.142_144delinsugg`. So under this ruling one change spells differently on `n.` and on `r.`. THAT DIVERGENCE IS SPEC-LICENSED, not a defect: it is the same shape as the `g.`/`c.` divergence the parked record already accepts, and it follows from the spec assigning the two axes different reference types at `general.md:27` and `:30` and then stating the carve-out separately per document. Do not file an `n.`/`r.` disagreement of this shape as a confluence bug.\n\nSCOPE. The ruling is about WHERE the `n.` axis's form is decided - on its own reference - and not about any single clause's content, which is why it is not scoped to `delins`. Both measured shapes follow from it: the repeat-form rows, where the `c.` frame's codon gate suppressed a tract maximization `n.` has no reason to suppress, and the member rows, where the `c.` frame merged under `:18`/`:42`. The `c.`, `r.` and `p.` axes are untouched. The genomic axis is untouched - it already re-derived, and this ruling is that symmetry being completed rather than extended.\n\nCOST MEASURED, AND IT IS A REAL MOVEMENT. Against the prepared GRCh38 reference on the shipped partition default, `axis_noncoding_idempotent` reads 681 `n.` axes tested with a non-idempotency residue of 61 before and 0 after; the genomic control is 214 tested / 0 on the same run, which is what isolates the movement to the non-coding path. Every moved row is a projected `n.` axis, so the change is on a projector OUTPUT and not on any normalization of a user's input. The number is partition-sensitive (it read 20 on the pre-#1835 live arm); the grounds above are not - they concern what an axis prefix claims about its reference, not how blocks are cut.\n\nFETCH COST. The normalizer reads through the projector's shared transcript cache (#1860), so re-deriving the axis costs one extra transcript fetch per projector rather than one per variant, pinned by `projection::transcript_cache_collapses_repeat_lookups`.",
+      "summary": "A projected n. axis is re-derived by normalizing it on its own non-coding reference, as the genomic axis is, rather than inheriting a form the coding axis chose because it declares a reading frame."
+    },
+    {
       "id": "c-description-against-an-unresolvable-cds-is-refused",
       "question": "The reference serves a transcript's bases but resolves no CDS start. A `c.` description against it is conformant as a string, but ferro has no origin to number from. Does it normalize silently — returning the input as its own output — or is it refused?",
       "status": "decided",
