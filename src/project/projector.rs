@@ -1241,9 +1241,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// own default build. A record from another build than the override selected
     /// is not interchangeable with the right one — the provider stamps it with
     /// the build it was resolved on, and synthesizes per-build bases when the
-    /// transcript FASTA lacks the accession — so [`Self::predict_rna_transcript`]
-    /// scopes this context to the override's placement itself
-    /// ([`Self::scope_context_to_build`]) and checks the record it gets back.
+    /// transcript FASTA lacks the accession — so [`Self::build_scoped_carrier`]
+    /// scopes this context to the override's placement
+    /// ([`Self::scope_context_to_build`]), and its callers (the predicted `r.`
+    /// and the cis allele's combined `p.`) check the record they get back.
     fn rna_build_context(&self, input: &HgvsVariant) -> Option<Accession> {
         let accession = input.accession()?;
         if let Some(parent) = accession.genomic_context.as_deref() {
@@ -1331,6 +1332,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         input: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<Arc<Transcript>, FerroError> {
+        let (cache_variant, build) = self.build_scoped_carrier(input, transcript_id);
+        let tx = self.cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
+        Self::require_transcript_on_build(build, &tx, transcript_id, "predict r.")?;
+        Ok(tx)
+    }
+
+    /// A minimal carrier for a fetch of `transcript_id` that must resolve on the
+    /// build `input` is projected on, paired with that build
+    /// ([`Self::transcript_axis_build`]).
+    ///
+    /// The carrier's `genomic_context` is the build-bearing context of `input`
+    /// ([`Self::rna_build_context`]), or `input`'s own accession for a placed
+    /// `g.` input, scoped to the build ([`Self::scope_context_to_build`]) so an
+    /// `NG_`/`LRG_` parent is keyed on its chromosome for that build rather than
+    /// resolved on the provider's default build. Shared by every whole-input
+    /// transcript fetch that reads bases — the predicted `r.`
+    /// ([`Self::predict_rna_transcript`]) and the cis allele's combined `p.`
+    /// ([`Self::project_cis_flag_and_protein`], #2269) — so they key the same
+    /// cache entry. The record a fetch returns is not guaranteed to be on the
+    /// build, so callers still check it ([`Self::require_transcript_on_build`]).
+    fn build_scoped_carrier(
+        &self,
+        input: &HgvsVariant,
+        transcript_id: &str,
+    ) -> (HgvsVariant, Option<&'static str>) {
         let build = self.transcript_axis_build(input);
         let mut accession = parse_accession(transcript_id);
         // A `g.` input whose own accession names no build (`NG_:g.`, or a contig
@@ -1361,9 +1387,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 },
             ),
         });
-        let tx = self.cached_get_transcript_for_variant(&cache_variant, transcript_id)?;
-        Self::require_transcript_on_build(build, &tx, transcript_id, "predict r.")?;
-        Ok(tx)
+        (cache_variant, build)
     }
 
     /// Refuse a transcript record from another build than `build`, the build
@@ -4641,31 +4665,23 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // fetch-failure can only use `any()` — the net%3 base flag needs the
         // bundle that just failed to load.
         //
-        // Key the caches on a build-aware carrier (mirroring
+        // Key the caches on a build-aware carrier (shared with
         // `predict_rna_transcript`), NOT the raw `original` allele: a bare `g.`
         // allele is unparented, so keying on it would insert a parentless
         // `(id, None)` transcript-cache entry and read the primary build (#843).
-        // Stamping the input's build context reuses the build-scoped key each
-        // member's genome pivot already created.
-        let cache_variant = {
-            let mut accession = parse_accession(transcript_id);
-            if let Some(context) = self.rna_build_context(original) {
-                accession = accession.with_genomic_context(context);
-            }
-            HgvsVariant::Cds(CdsVariant {
-                accession,
-                gene_symbol: None,
-                loc_edit: LocEdit::new(
-                    CdsInterval::point(CdsPos::new(1)),
-                    NaEdit::Substitution {
-                        reference: crate::hgvs::edit::Base::A,
-                        alternative: crate::hgvs::edit::Base::G,
-                    },
-                ),
-            })
-        };
+        // The carrier is scoped to the build the allele is projected on, so an
+        // `NG_`/`LRG_`-parented allele under `--assembly` is not translated from
+        // the record its parent resolves on by default (#2269), and a record
+        // from another build is treated as unavailable: the combined product is
+        // translated from these bases, so a wrong-build record would describe a
+        // protein the projected build does not encode.
+        let (cache_variant, build) = self.build_scoped_carrier(original, transcript_id);
         let fetched = self
             .cached_get_transcript_for_variant(&cache_variant, transcript_id)
+            .and_then(|tx| {
+                Self::require_transcript_on_build(build, &tx, transcript_id, "translate p.")
+                    .map(|()| tx)
+            })
             .and_then(|tx| {
                 self.cached_ref_translation(&cache_variant, transcript_id, &tx)
                     .map(|bundle| (tx, bundle))
@@ -4979,6 +4995,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///
     /// `cds_start`/`cds_end` are 1-based CDS positions; `cache_variant` keys
     /// the per-(transcript, parent) sequence and ref-translation caches.
+    ///
+    /// `build` is the build the projection ran on (see
+    /// [`Self::require_transcript_on_build`]). Every prediction below translates
+    /// the fetched record's CDS bases, so a record from another build withholds
+    /// the consequence (`Ok(None)`) rather than describing a protein that build
+    /// does not encode (#2269). The record is fetched once and every arm reads
+    /// that one checked record, so no arm can translate an unchecked one.
     #[allow(clippy::too_many_arguments)]
     fn predict_protein_consequence(
         &self,
@@ -4991,6 +5014,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         cds_start: &CdsPos,
         cds_end: &CdsPos,
         cache_variant: &HgvsVariant,
+        build: Option<&'static str>,
     ) -> Result<Option<HgvsVariant>, FerroError> {
         // An edit whose span reaches the translation initiation codon (CDS
         // 1–3) has an unpredictable protein consequence, reported as
@@ -5087,15 +5111,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // only act on a CDS we could read whose start is not `ATG`. Read just
         // the start codon (not the whole 1–10 kbp CDS) since that is all the
         // guard inspects.
-        let tx_for_cds_check =
-            self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+        let tx = self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
+        if let Err(e) = Self::require_transcript_on_build(build, &tx, transcript_id, "translate p.")
+        {
+            log::trace!("protein prediction withheld: {e}");
+            return Ok(None);
+        }
         // Read the start codon once; it drives two independent decisions below,
         // with deliberately *different* defaults when the CDS is unreadable
         // (missing sequence / degenerate coords): the strict ATG form-choice
         // defaults conservative (`false` → `p.?`), the downstream decline gate
         // defaults permissive (`true` → translate). Each default is documented at
         // its assignment.
-        let start_codon = read_cds_start_codon(&tx_for_cds_check);
+        let start_codon = read_cds_start_codon(&tx);
         // Strict `ATG`: drives the initiation-codon-unknown form choice (#771) —
         // an init-codon edit yields `p.(Met1?)` on an `ATG` start, `p.?` on a
         // non-AUG start (residue 1 is not `Met`). A CUG-start init-codon variant
@@ -5129,12 +5157,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // plain whole-protein unknown `p.?` (residue 1 is not `Met`, so the
         // `Met1?` form would be wrong) — #771.
         if affects_init {
-            let tx_for_codon =
-                self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
             let prot = if start_is_atg {
-                build_initiator_unknown(&prot_acc, &tx_for_codon)
+                build_initiator_unknown(&prot_acc, &tx)
             } else {
-                build_whole_protein_unknown(&prot_acc, &tx_for_codon)
+                build_whole_protein_unknown(&prot_acc, &tx)
             };
             return Ok(Some(prot));
         }
@@ -5163,10 +5189,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let mut protein = None;
         match c_edit {
             NaEdit::Substitution { .. } => {
-                let tx_for_codon =
-                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
                 protein = Some(predict_substitution_protein(
-                    &tx_for_codon,
+                    &tx,
                     cds_start.base,
                     c_edit,
                     &prot_acc,
@@ -5177,13 +5201,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // exonic deletion of that span (#498).
             NaEdit::Deletion { .. } if whole_exon.is_some() => {
                 let (lo, hi) = whole_exon.expect("checked is_some");
-                let tx_for_codon =
-                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
                 let ref_bundle =
-                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx)?;
                 let exonic_del = NaEdit::Deletion { sequence: None, length: None };
                 match predict_indel_protein(
-                    &tx_for_codon,
+                    &tx,
                     &ref_bundle,
                     lo,
                     hi,
@@ -5209,12 +5231,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     && cds_start.offset.is_none()
                     && cds_end.offset.is_none() =>
             {
-                let tx_for_codon =
-                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
                 let ref_bundle =
-                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx)?;
                 match predict_stop_region_extension(
-                    &tx_for_codon,
+                    &tx,
                     &ref_bundle,
                     cds_start.base,
                     cds_end.base,
@@ -5247,12 +5267,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     && !cds_start.utr3
                     && !cds_end.utr3 =>
             {
-                let tx_for_codon =
-                    self.cached_get_transcript_for_variant(cache_variant, transcript_id)?;
                 let ref_bundle =
-                    self.cached_ref_translation(cache_variant, transcript_id, &tx_for_codon)?;
+                    self.cached_ref_translation(cache_variant, transcript_id, &tx)?;
                 match predict_indel_protein(
-                    &tx_for_codon,
+                    &tx,
                     &ref_bundle,
                     cds_start.base,
                     cds_end.base,
@@ -5593,6 +5611,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             &cds_start,
             &cds_end,
             normalized,
+            self.transcript_axis_build(normalized),
         )?;
 
         let frameshift = frameshift_flag_from_consequence(&protein, normalized);
@@ -6021,6 +6040,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             &cds_start,
             &cds_end,
             normalized,
+            self.transcript_axis_build(normalized),
         )?;
 
         // Build the c. (coding) form from the resolved CDS positions and the
@@ -6670,7 +6690,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         };
         let cache_variant = carrier(genome_variant.accession.clone());
-        // The `n.` and `r.` axes read the transcript's *bases*, so their fetch
+        // The `n.`, `r.` and `p.` axes read the transcript's *bases*, so their fetch
         // must resolve on the build this projection ran on (`build_hint`). The
         // pivot carries the input's own parent accession, and for a
         // build-agnostic `NG_`/`LRG_` parent a provider resolves that on its
@@ -6693,7 +6713,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Predict protein consequence for CDS variants. Shared with the
         // direct bare-NM_ c.→p. path (`project_coding_direct`) so both entry
-        // points use identical CDS→protein logic (#498).
+        // points use identical CDS→protein logic (#498). It translates the
+        // transcript's bases, so it is fetched on `axis_carrier` and checked
+        // against `build_hint`, exactly as the `n.` and `r.` axes are (#2269).
         let protein = self.predict_protein_consequence(
             transcript_id,
             cdot_protein,
@@ -6703,7 +6725,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             &c_edit,
             &cds_start,
             &cds_end,
-            &cache_variant,
+            &axis_carrier,
+            build_hint,
         )?;
 
         let frameshift = frameshift_flag_from_consequence(&protein, &coding);
@@ -13661,6 +13684,25 @@ mod tests {
         /// `project_single_inner` can fetch the transcript without
         /// hitting `ReferenceNotFound`.
         fn make_multi_build_projector(primary: &str) -> VariantProjector<MockProvider> {
+            make_multi_build_projector_inner(primary, false)
+        }
+
+        /// [`make_multi_build_projector`] whose provider also holds a GRCh37
+        /// record, build-keyed, as a real reference does for a transcript
+        /// placed on both builds. Without it a GRCh37 lookup is served the
+        /// GRCh38 primary, and every axis that reads the record's bases — the
+        /// `n.`, the `r.` and the `p.` (#2269) — is withheld for a GRCh37
+        /// input rather than derived from another build's record.
+        fn make_multi_build_projector_with_grch37_record(
+            primary: &str,
+        ) -> VariantProjector<MockProvider> {
+            make_multi_build_projector_inner(primary, true)
+        }
+
+        fn make_multi_build_projector_inner(
+            primary: &str,
+            grch37_record: bool,
+        ) -> VariantProjector<MockProvider> {
             use crate::reference::transcript::{
                 Exon, GenomeBuild as RefGenomeBuild, ManeStatus, Strand as TxStrand,
                 Transcript as RefTranscript,
@@ -13672,7 +13714,7 @@ mod tests {
                     .expect("multi-build cdot JSON should parse");
             let projector = Projector::new(cdot);
             let mut provider = MockProvider::new();
-            provider.add_transcript(RefTranscript {
+            let record = |build: RefGenomeBuild, chromosome: &str, start: u64| RefTranscript {
                 cds_start_incomplete: false,
                 id: "NM_MB_TEST.1".to_string(),
                 gene_symbol: Some("MBTEST".to_string()),
@@ -13681,17 +13723,24 @@ mod tests {
                 cds_start: Some(1),
                 cds_end: Some(10),
                 exons: vec![Exon::new(1, 1, 10)],
-                chromosome: Some("NC_000001.11".to_string()),
-                genomic_start: Some(20000),
-                genomic_end: Some(20009),
-                genome_build: RefGenomeBuild::GRCh38,
+                chromosome: Some(chromosome.to_string()),
+                genomic_start: Some(start),
+                genomic_end: Some(start + 9),
+                genome_build: build,
                 mane_status: ManeStatus::default(),
                 refseq_match: None,
                 ensembl_match: None,
                 protein_id: None,
                 exon_cigars: Vec::new(),
                 cached_introns: OnceLock::new(),
-            });
+            };
+            provider.add_transcript(record(RefGenomeBuild::GRCh38, "NC_000001.11", 20000));
+            if grch37_record {
+                provider.add_transcript_on_build(
+                    "GRCh37",
+                    record(RefGenomeBuild::GRCh37, "NC_000001.10", 10000),
+                );
+            }
             VariantProjector::new(projector, provider)
         }
 
@@ -13899,9 +13948,14 @@ mod tests {
         /// of the protein-prediction dispatch
         /// (`cached_get_transcript_for_variant` + `cached_ref_translation`)
         /// execute.
+        ///
+        /// The provider holds a GRCh37 record (#2269): the protein prediction
+        /// that populates `ref_protein_cache` translates the record's bases, so
+        /// a GRCh37 projection served only the GRCh38 primary withholds its
+        /// `p.` and never builds a GRCh37 bundle.
         #[test]
         fn caches_partition_by_genome_build_for_nc_inputs() {
-            let vp = make_multi_build_projector("GRCh38");
+            let vp = make_multi_build_projector_with_grch37_record("GRCh38");
 
             // c.5del on GRCh37 (g.10005del on NC_000001.10).
             let g37 = GenomeVariant {
