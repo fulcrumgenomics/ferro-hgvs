@@ -332,34 +332,67 @@ fn normalize_or_fallback_with<Q: ReferenceProvider>(
 ///
 /// The edits are not re-normalized across members, as the `c.` and `g.` allele
 /// axes are not: each member is already normalized on its own reference.
+///
+/// The genomic axis has the same split (#2270) and folds its cis case through
+/// [`flatten_split_cis_members`], the cis arm here; see that function for why
+/// it does not take the other-phase arm.
 fn fold_split_allele_members(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
 ) -> Result<Vec<HgvsVariant>, String> {
-    // What the `n.` derivation returns for one edit it re-derives into several.
-    let is_split = |a: &AlleleVariant| a.phase == AllelePhase::Cis && !a.uncertain;
     match phase {
-        AllelePhase::Cis => Ok(variants
-            .into_iter()
-            .flat_map(|v| match v {
-                HgvsVariant::Allele(a) if is_split(&a) => a.variants,
-                other => vec![other],
-            })
-            .collect()),
+        AllelePhase::Cis => Ok(flatten_split_cis_members(variants)),
         AllelePhase::Trans => Ok(variants),
-        other
-            if variants
-                .iter()
-                .any(|v| matches!(v, HgvsVariant::Allele(a) if is_split(a))) =>
-        {
-            Err(format!(
-                "an allele member's n. form is several edits, which has no flat \
+        other if variants.iter().any(is_split_allele_member) => Err(format!(
+            "an allele member's n. form is several edits, which has no flat \
                  form inside a {}-phase allele",
-                format!("{other:?}").to_lowercase()
-            ))
-        }
+            format!("{other:?}").to_lowercase()
+        )),
         _ => Ok(variants),
     }
+}
+
+/// What an axis derivation returns for one edit it re-derives into several: a
+/// certain cis allele standing as a single member of the allele being built.
+fn is_split_allele_member(member: &HgvsVariant) -> bool {
+    matches!(member, HgvsVariant::Allele(a) if is_split_allele(a))
+}
+
+/// [`is_split_allele_member`] for a member already known to be an allele.
+fn is_split_allele(allele: &AlleleVariant) -> bool {
+    allele.phase == AllelePhase::Cis && !allele.uncertain
+}
+
+/// Lift the edits of every split member ([`is_split_allele_member`]) into the
+/// cis allele being built, so a cis allele never carries a cis bracket inside
+/// its own. Every other member is kept as it is, in place.
+///
+/// Shared by the `n.` axis ([`fold_split_allele_members`], #1712) and the
+/// genomic axis (#2270). Each member's genomic form is normalized on its own,
+/// and the genome has no reading frame, so a `c.` delins inside one codon
+/// re-derives to several `g.` edits from the resulting sequence
+/// (`c.4_6delinsAGA` -> `g.[1003C>A;1005C>A]`). Unfolded, beside `c.8A>G` in
+/// cis, that rendered `[NC_000001.11:g.1007A>G;NC_000001.11:g.[1003C>A;1005C>A]]`:
+/// a bracket inside a bracket, and out of genomic order because
+/// [`sort_genomic_allele_members`] keys a non-`Genome` member last. Folded and
+/// then sorted it is `g.[1003C>A;1005C>A;1007A>G]`, one bracket for the one
+/// chromosome in genomic order (`DNA/alleles.md:118`), and the same string
+/// [`VariantProjector::project_to_genomic_normalized`] gives.
+///
+/// The genomic axis folds only in cis. Trans keeps each member whole as one
+/// haplotype, which is what the `n.` axis does too. Under any other phase the
+/// `n.` axis is withheld, but the genomic axis is left as it was: there the
+/// nested form is exactly what ferro's normalizer emits for the same `g.`
+/// allele, and it reads back. Whether `g.` should be withheld as well is an
+/// open question on #2270, not something to settle here.
+fn flatten_split_cis_members(variants: Vec<HgvsVariant>) -> Vec<HgvsVariant> {
+    variants
+        .into_iter()
+        .flat_map(|v| match v {
+            HgvsVariant::Allele(a) if is_split_allele(&a) => a.variants,
+            other => vec![other],
+        })
+        .collect()
 }
 
 /// Build a bare whole-protein-unknown `p.?` variant for an in-cis frameshift
@@ -4535,7 +4568,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // descending genomic order; cis alleles must be listed genomic-ascending
             // (alleles.md:118). Trans alleles encode haplotype assignment by member order
             // and must NOT reorder — same cis-only guard as the raw path.
+            //
+            // A member's genomic form can itself be an allele, re-derived from one
+            // `c.` edit (#2270); it is folded into the cis allele first, so the sort
+            // orders its edits among the others instead of keying it last.
             if allele.phase == AllelePhase::Cis {
+                genomic_variants = flatten_split_cis_members(genomic_variants);
                 sort_genomic_allele_members(&mut genomic_variants);
             }
             Some(HgvsVariant::Allele(AlleleVariant::new(
@@ -8658,6 +8696,197 @@ mod tests {
             .noncoding
             .expect("the decline carries its reason");
         assert!(reason.contains("several edits"), "reason: {reason}");
+    }
+
+    /// [`make_nc_two_transcript_setup`]'s 9-bp transcript placed on the MINUS
+    /// strand at the same span, so `NC_000001.11:1000-1008` reads `TTAGCGCAT`
+    /// and `c.1` is `g.1008`. Used where member order on the genome is the
+    /// property under test: a minus-strand transcript projects members in
+    /// descending genomic order.
+    fn make_nc_minus_transcript_setup() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_TXM.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("GENEM".to_string()),
+                contig: "NC_000001.11".to_string(),
+                strand: ProvStrand::Minus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_TXM.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "NM_TXM.1".to_string(),
+            gene_symbol: Some("GENEM".to_string()),
+            strand: TxStrand::Minus,
+            sequence: Some("ATGCGCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(9),
+            exons: vec![Exon::new(1, 1, 9)],
+            chromosome: Some("NC_000001.11".to_string()),
+            genomic_start: Some(1000),
+            genomic_end: Some(1008),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        provider.add_genomic_sequence(
+            "NC_000001.11",
+            format!("{}TTAGCGCAT{}", "N".repeat(999), "N".repeat(100)),
+        );
+        (Projector::new(cdot), provider)
+    }
+
+    /// The genomic twin of the `n.` fold above (#2270). Each member's `g.`
+    /// form is normalized on its own, and the genome has no reading frame, so
+    /// `c.4_6delinsAGA` re-derives to `g.[1003C>A;1005C>A]` (minus strand:
+    /// `g.[1003G>T;1005G>T]`). Beside a second member in cis that used to
+    /// render as a bracket inside a bracket, with the split member sorted last
+    /// whatever its position: `[NC_000001.11:g.1007A>G;NC_000001.11:g.[1003C>A;1005C>A]]`.
+    /// The axis is one flat allele in ascending genomic order
+    /// (`DNA/alleles.md:118`), and equals the raw pivot normalized
+    /// ([`VariantProjector::project_to_genomic_normalized`]), as #894 made it
+    /// for member order. Both member orders and both strands, so neither the
+    /// input's spelling nor the transcript's direction picks the order.
+    #[test]
+    fn a_split_member_folds_into_its_cis_allele_on_the_genomic_axis() {
+        let cases: [(_, &str, [&str; 3], &str); 3] = [
+            (
+                make_nc_two_transcript_setup as fn() -> (Projector, MockProvider),
+                "NM_TX1.1",
+                [
+                    "NC_000001.11(NM_TX1.1):c.[4_6delinsAGA;8A>G]",
+                    "NC_000001.11(NM_TX1.1):c.[8A>G;4_6delinsAGA]",
+                    "NC_000001.11:g.[1003_1005delinsAGA;1007A>G]",
+                ],
+                "NC_000001.11:g.[1003C>A;1005C>A;1007A>G]",
+            ),
+            (
+                make_nc_minus_transcript_setup,
+                "NM_TXM.1",
+                [
+                    "NC_000001.11(NM_TXM.1):c.[4_6delinsAGA;8A>G]",
+                    "NC_000001.11(NM_TXM.1):c.[8A>G;4_6delinsAGA]",
+                    "NC_000001.11:g.[1001T>C;1003_1005delinsTCT]",
+                ],
+                "NC_000001.11:g.[1001T>C;1003G>T;1005G>T]",
+            ),
+            // Here the split member is FIRST on the genome (`g.1000`, `g.1002`),
+            // so the `u64::MAX` key put it on the wrong side of `g.1005G>T`:
+            // `[NC_000001.11:g.1005G>T;NC_000001.11:g.[1000T>C;1002A>T]]`.
+            (
+                make_nc_minus_transcript_setup,
+                "NM_TXM.1",
+                [
+                    "NC_000001.11(NM_TXM.1):c.[4_7delinsAGCA;9A>G]",
+                    "NC_000001.11(NM_TXM.1):c.[9A>G;4_7delinsAGCA]",
+                    "NC_000001.11:g.[1000T>C;1002_1005delinsTGCT]",
+                ],
+                "NC_000001.11:g.[1000T>C;1002A>T;1005G>T]",
+            ),
+        ];
+        for (setup, tx, inputs, expected) in cases {
+            let (projector, provider) = setup();
+            let vp = VariantProjector::new(projector, provider);
+            for input in inputs {
+                let v = crate::hgvs::parser::parse_hgvs(input).expect("input parses");
+                let genomic = vp
+                    .project_variant(&v, tx)
+                    .expect("the allele projects")
+                    .genomic
+                    .expect("every member carries a g. form")
+                    .to_string();
+                assert_eq!(genomic, expected, "{input}");
+                assert_eq!(
+                    vp.project_to_genomic_normalized(&v)
+                        .expect("the raw pivot projects")
+                        .to_string(),
+                    expected,
+                    "the raw pivot agrees: {input}"
+                );
+                assert_eq!(
+                    crate::hgvs::parser::parse_hgvs(&genomic)
+                        .expect("the folded allele reads back")
+                        .to_string(),
+                    expected
+                );
+            }
+        }
+    }
+
+    /// In trans each member is one haplotype, so a split member stays whole
+    /// as one bracket and the members keep their order — reordering would
+    /// swap haplotypes. Unchanged by #2270, pinned so the cis fold cannot widen
+    /// into it.
+    #[test]
+    fn a_split_member_stays_one_haplotype_in_a_trans_allele_on_the_genomic_axis() {
+        for (setup, tx, expected) in [
+            (
+                make_nc_two_transcript_setup as fn() -> (Projector, MockProvider),
+                "NM_TX1.1",
+                "NC_000001.11:g.[1003C>A;1005C>A];[1007A>G]",
+            ),
+            (
+                make_nc_minus_transcript_setup,
+                "NM_TXM.1",
+                "NC_000001.11:g.[1003G>T;1005G>T];[1001T>C]",
+            ),
+        ] {
+            let (projector, provider) = setup();
+            let vp = VariantProjector::new(projector, provider);
+            let input = format!("NC_000001.11({tx}):c.[4_6delinsAGA];[8A>G]");
+            let v = crate::hgvs::parser::parse_hgvs(&input).expect("input parses");
+            assert_eq!(
+                vp.project_variant(&v, tx)
+                    .expect("the allele projects")
+                    .genomic
+                    .expect("every member carries a g. form")
+                    .to_string(),
+                expected,
+                "{input}"
+            );
+        }
+    }
+
+    /// Phase unknown is left as it was by #2270, deliberately. Unlike the `n.`
+    /// axis, the genomic axis here is exactly what ferro's own normalizer
+    /// emits for the same allele ([`VariantProjector::project_to_genomic_normalized`]
+    /// gives the same string) and it reads back; the spec's compact form
+    /// `g.[1003C>A;1005C>A](;)1007A>G` (`DNA/alleles.md:78`) does not parse
+    /// in ferro. Whether to follow the `n.` axis and withhold is left open on
+    /// #2270 rather than decided as a side effect.
+    #[test]
+    fn a_split_member_is_unchanged_on_the_genomic_axis_of_a_phase_unknown_allele() {
+        let (projector, provider) = make_nc_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+        let v = crate::hgvs::parser::parse_hgvs("NC_000001.11(NM_TX1.1):c.[4_6delinsAGA(;)8A>G]")
+            .expect("input parses");
+        let expected = "[NC_000001.11:g.[1003C>A;1005C>A](;)NC_000001.11:g.1007A>G]";
+        assert_eq!(
+            vp.project_variant(&v, "NM_TX1.1")
+                .expect("the allele projects")
+                .genomic
+                .expect("every member carries a g. form")
+                .to_string(),
+            expected
+        );
+        assert_eq!(
+            vp.project_to_genomic_normalized(&v)
+                .expect("the raw pivot projects")
+                .to_string(),
+            expected
+        );
     }
 
     /// Coexistence of the #646 cross-isoform enumeration with the #655 graceful
