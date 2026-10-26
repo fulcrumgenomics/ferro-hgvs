@@ -574,13 +574,51 @@ const BP_SEQ38: &str = "GGCGAAAAACTTTTTTTTTTTTTTTTTTTT";
 /// well as build-keyed, as on a real reference, and the GRCh37 record is
 /// build-keyed. [`BP_NG`] is placed on both builds.
 fn build_provenance_fixture(grch37_contig: &str) -> VariantProjector<MockProvider> {
+    build_provenance_fixture_with(grch37_contig, BP_SEQ37, BP_SEQ38)
+}
+
+/// [`build_provenance_fixture`] over caller-chosen GRCh37 and GRCh38 transcript
+/// bases, for an axis that needs more of the record than a poly-A run (a
+/// translatable CDS, for `p.`).
+fn build_provenance_fixture_with(
+    grch37_contig: &str,
+    seq37: &str,
+    seq38: &str,
+) -> VariantProjector<MockProvider> {
+    build_provenance_fixture_for(BP_TX, BP_NG, grch37_contig, seq37, seq38)
+}
+
+/// [`build_provenance_fixture_with`] for a caller-chosen transcript and
+/// genomic parent, so a bare `LRG_<n>t<k>` transcript can be placed through its
+/// structural `LRG_<n>` parent.
+fn build_provenance_fixture_for(
+    tx: &str,
+    parent: &str,
+    grch37_contig: &str,
+    seq37: &str,
+    seq38: &str,
+) -> VariantProjector<MockProvider> {
+    build_provenance_fixture_with_cds(tx, parent, grch37_contig, (seq37, 1), (seq38, 1))
+}
+
+/// [`build_provenance_fixture_for`] with a caller-chosen CDS start on each
+/// build's record, given as `(bases, cds_start)` pairs (the CDS always ends at
+/// the record's last base), so the two records can disagree on where the CDS
+/// begins and therefore on the `n.`↔`c.` offset.
+fn build_provenance_fixture_with_cds(
+    tx: &str,
+    parent: &str,
+    grch37_contig: &str,
+    (seq37, cds37): (&str, u64),
+    (seq38, cds38): (&str, u64),
+) -> VariantProjector<MockProvider> {
     use ferro_hgvs::reference::transcript::GenomeBuild;
     use ferro_hgvs::reference::GenomicPlacement;
 
     let cdot_json = format!(
         r#"{{
             "transcripts": {{
-                "{BP_TX}": {{
+                "{tx}": {{
                     "gene_name": "BPTEST",
                     "genome_builds": {{
                         "GRCh37": {{
@@ -602,13 +640,13 @@ fn build_provenance_fixture(grch37_contig: &str) -> VariantProjector<MockProvide
     );
     let cdot = CdotMapper::from_reader_with_build(cdot_json.as_bytes(), "GRCh38")
         .expect("two-build cdot JSON parses");
-    let record = |build: GenomeBuild, seq: &str, contig: &str, start: u64| {
+    let record = |build: GenomeBuild, seq: &str, cds_start: u64, contig: &str, start: u64| {
         Transcript::new(
-            BP_TX.to_string(),
+            tx.to_string(),
             Some("BPTEST".to_string()),
             TxStrand::Plus,
             seq.to_string(),
-            Some(1),
+            Some(cds_start),
             Some(30),
             vec![Exon::new(1, 1, 30)],
             Some(contig.to_string()),
@@ -621,14 +659,30 @@ fn build_provenance_fixture(grch37_contig: &str) -> VariantProjector<MockProvide
         )
     };
     let mut provider = MockProvider::new();
-    provider.add_transcript(record(GenomeBuild::GRCh38, BP_SEQ38, "NC_000001.11", 20000));
+    provider.add_transcript(record(
+        GenomeBuild::GRCh38,
+        seq38,
+        cds38,
+        "NC_000001.11",
+        20000,
+    ));
     provider.add_transcript_on_build(
         "GRCh38",
-        record(GenomeBuild::GRCh38, BP_SEQ38, "NC_000001.11", 20000),
+        record(GenomeBuild::GRCh38, seq38, cds38, "NC_000001.11", 20000),
     );
     provider.add_transcript_on_build(
         "GRCh37",
-        record(GenomeBuild::GRCh37, BP_SEQ37, grch37_contig, 10000),
+        record(GenomeBuild::GRCh37, seq37, cds37, grch37_contig, 10000),
+    );
+    // Each build's chromosome carries that build's transcript bases, so a `g.`
+    // input on either build normalizes against the same bases its record holds.
+    provider.add_genomic_sequence(
+        "NC_000001.11",
+        format!("{}{seq38}{}", "N".repeat(20000), "N".repeat(100)),
+    );
+    provider.add_genomic_sequence(
+        grch37_contig,
+        format!("{}{seq37}{}", "N".repeat(10000), "N".repeat(100)),
     );
     let placement = |nc: &str, parent_start: u64, nc_start: u64| GenomicPlacement {
         nc: ferro_hgvs::hgvs::parser::accession::parse_accession(nc)
@@ -640,8 +694,8 @@ fn build_provenance_fixture(grch37_contig: &str) -> VariantProjector<MockProvide
         strand: Strand::Plus,
         gaps: Vec::new(),
     };
-    provider.add_genomic_placement(BP_NG, placement("NC_000001.11", 100, 20001));
-    provider.add_genomic_placement(BP_NG, placement(grch37_contig, 200, 10001));
+    provider.add_genomic_placement(parent, placement("NC_000001.11", 100, 20001));
+    provider.add_genomic_placement(parent, placement(grch37_contig, 200, 10001));
     VariantProjector::new(projector_from(cdot), provider)
 }
 
@@ -789,4 +843,281 @@ fn allele_predicted_rna_follows_the_assembly_override() {
          withheld, got {:?}",
         proj.rna.as_ref().map(|r| r.to_string())
     );
+}
+
+// ---------------------------------------------------------------------------
+// The build the `p.` axis is translated on (#2269)
+//
+// The protein consequence is translated from a transcript record's CDS bases,
+// so it has the same build-provenance requirement as the `n.` and `r.` axes
+// above: under `--assembly GRCh37`, an `NG_`-parented input's `p.` must be read
+// off the GRCh37 record, or withheld when only another build's record is
+// reachable. Keyed on the `NG_` parent, the lookup resolves on the provider's
+// default build (GRCh38) whatever `--assembly` selected.
+// ---------------------------------------------------------------------------
+
+/// The GRCh37 transcript for the protein tests: `ATG GAA ACT TTT … TAA`
+/// (Met-Glu-Thr-Phe…), poly-A over c.5..7.
+const BP_PROT37: &str = "ATGGAAACTTTTTTTTTTTTTTTTTTTTAA";
+/// The GRCh38 transcript: `ATG GAA AAA CTT … TAA` (Met-Glu-Lys-Leu…), the run
+/// two bases longer (c.5..9). `c.5del` 3'-shifts to `c.7del` on GRCh37 and to
+/// `c.9del` on GRCh38, so the frameshift starts at a different residue on each:
+/// `p.(Thr3LeufsTer?)` against `p.(Lys3AsnfsTer?)`.
+const BP_PROT38: &str = "ATGGAAAAACTTTTTTTTTTTTTTTTTTAA";
+
+fn bp_protein(vp: &VariantProjector<MockProvider>, input: &str) -> Option<String> {
+    vp.project_normalized(&bp_parse(input), BP_TX)
+        .unwrap_or_else(|e| panic!("{input} projects: {e}"))
+        .protein
+        .map(|p| p.to_string())
+}
+
+fn bp_fanned_out_protein(vp: &VariantProjector<MockProvider>, input: &str) -> Option<String> {
+    vp.project_normalized_all(&bp_parse(input))
+        .unwrap_or_else(|e| panic!("{input} fans out: {e}"))
+        .into_iter()
+        .find(|r| r.transcript_id == BP_TX)
+        .expect("the transcript is enumerated")
+        .protein
+        .map(|p| p.to_string())
+}
+
+/// The anchor for the two tests below: what each build's own bases translate
+/// to, from `g.` inputs whose accession names the build. If these stopped
+/// differing, the tests below would be quantifying over nothing.
+#[test]
+fn protein_fixture_translates_differently_on_each_build() {
+    let vp = build_provenance_fixture_with("NC_000001.10", BP_PROT37, BP_PROT38);
+    assert_eq!(
+        bp_protein(&vp, "NC_000001.10:g.10005del").as_deref(),
+        Some("NM_908432.1:p.(Thr3LeufsTer?)"),
+    );
+    assert_eq!(
+        bp_protein(&vp, "NC_000001.11:g.20005del").as_deref(),
+        Some("NM_908432.1:p.(Lys3AsnfsTer?)"),
+    );
+}
+
+/// An `NG_` input under `--assembly GRCh37` is translated on GRCh37, as the
+/// same deletion's `n.` and `r.` axes are. Reading the record keyed on the `NG_`
+/// parent gave the GRCh38 consequence `p.(Lys3AsnfsTer?)` beside a GRCh37
+/// `n.7del`. Under `--assembly GRCh38` the GRCh38 consequence is kept, so the
+/// override is what moves it, not the input.
+#[test]
+fn protein_axis_follows_the_assembly_override() {
+    let input = format!("{BP_NG}({BP_TX}):c.5del");
+    for (build, expected) in [
+        ("GRCh37", "NM_908432.1:p.(Thr3LeufsTer?)"),
+        ("GRCh38", "NM_908432.1:p.(Lys3AsnfsTer?)"),
+    ] {
+        let vp = build_provenance_fixture_with("NC_000001.10", BP_PROT37, BP_PROT38)
+            .with_assembly(Some(build));
+        assert_eq!(
+            bp_protein(&vp, &input).as_deref(),
+            Some(expected),
+            "--assembly {build}"
+        );
+        assert_eq!(
+            bp_fanned_out_protein(&vp, &input).as_deref(),
+            Some(expected),
+            "--assembly {build}, fan-out"
+        );
+    }
+}
+
+/// The cis-allele route translates the combined product from one fetch for the
+/// whole allele (`project_cis_flag_and_protein`), which must be made on the
+/// override's build too.
+#[test]
+fn allele_protein_axis_follows_the_assembly_override() {
+    let input = format!("{BP_NG}({BP_TX}):c.[5del;12T>A]");
+    for (build, expected) in [
+        ("GRCh37", "NM_908432.1:p.(Thr3LeufsTer?)"),
+        ("GRCh38", "NM_908432.1:p.(Lys3AsnfsTer?)"),
+    ] {
+        let vp = build_provenance_fixture_with("NC_000001.10", BP_PROT37, BP_PROT38)
+            .with_assembly(Some(build));
+        assert_eq!(
+            bp_protein(&vp, &input).as_deref(),
+            Some(expected),
+            "--assembly {build}"
+        );
+        assert_eq!(
+            bp_fanned_out_protein(&vp, &input).as_deref(),
+            Some(expected),
+            "--assembly {build}, fan-out"
+        );
+    }
+}
+
+/// With the GRCh37 placement on a contig whose build the accession does not
+/// encode, no GRCh37 record is reachable and the lookup is served the GRCh38
+/// primary. A GRCh38 translation of a GRCh37 projection is withheld, single and
+/// allele alike, as the `n.` and `r.` axes are; the `c.` axis still projects.
+#[test]
+fn protein_axis_is_withheld_when_assembly_and_record_builds_differ() {
+    let vp = build_provenance_fixture_with("NC_000001.99", BP_PROT37, BP_PROT38)
+        .with_assembly(Some("GRCh37"));
+    for input in [
+        format!("{BP_NG}({BP_TX}):c.5del"),
+        format!("{BP_NG}({BP_TX}):c.[5del;12T>A]"),
+    ] {
+        let proj = vp
+            .project_normalized(&bp_parse(&input), BP_TX)
+            .expect("the NG_ input projects on its GRCh37 placement");
+        assert!(proj.coding.is_some(), "{input}: the c. axis still projects");
+        assert_eq!(
+            proj.protein.as_ref().map(|p| p.to_string()),
+            None,
+            "{input}: a p. translated from the GRCh38 record of a GRCh37 \
+             projection must be withheld"
+        );
+        assert_eq!(bp_fanned_out_protein(&vp, &input), None, "{input}, fan-out");
+    }
+}
+
+/// A bare `LRG_<n>t<k>` carries no `genomic_context`, but its genomic parent
+/// is structural (`LRG_<n>`), and the direct path places its genomic axis
+/// through that parent on the `--assembly` build. Its `n.` and `p.` axes read
+/// transcript bases, so they must be read on that same build. Before, both read
+/// the provider's default (GRCh38) record beside a GRCh37 genomic axis: under
+/// `--assembly GRCh37`, `LRG_777t1:c.5del` gave `LRG_777:g.204del` with
+/// `n.9del` and `p.(Lys3AsnfsTer?)`, which are GRCh38's answers.
+#[test]
+fn bare_lrg_transcript_axes_follow_the_assembly_override() {
+    for (build, genomic, noncoding, protein, rna) in [
+        (
+            "GRCh37",
+            "LRG_777:g.204del",
+            "LRG_777t1:n.7del",
+            "LRG_777p1:p.(Thr3LeufsTer?)",
+            "LRG_777t1:r.(7del)",
+        ),
+        (
+            "GRCh38",
+            "LRG_777:g.104del",
+            "LRG_777t1:n.9del",
+            "LRG_777p1:p.(Lys3AsnfsTer?)",
+            "LRG_777t1:r.(9del)",
+        ),
+    ] {
+        let vp = build_provenance_fixture_for(
+            "LRG_777t1",
+            "LRG_777",
+            "NC_000001.10",
+            BP_PROT37,
+            BP_PROT38,
+        )
+        .with_assembly(Some(build));
+        let proj = vp
+            .project_normalized(&bp_parse("LRG_777t1:c.5del"), "LRG_777t1")
+            .unwrap_or_else(|e| panic!("--assembly {build}: the LRG input projects: {e}"));
+        let s = |v: Option<ferro_hgvs::HgvsVariant>| v.map(|v| v.to_string());
+        assert_eq!(
+            s(proj.genomic).as_deref(),
+            Some(genomic),
+            "--assembly {build}: g."
+        );
+        assert_eq!(
+            s(proj.noncoding).as_deref(),
+            Some(noncoding),
+            "--assembly {build}: n."
+        );
+        assert_eq!(
+            s(proj.protein).as_deref(),
+            Some(protein),
+            "--assembly {build}: p."
+        );
+        assert_eq!(s(proj.rna).as_deref(), Some(rna), "--assembly {build}: r.");
+    }
+}
+
+/// The GRCh37 record for the CDS-offset tests: a 3-base 5'UTR (`GGC`), then
+/// `ATG GAA ACT TTT TTT … TAA` from n.4, so `c.N` is `n.(N+3)`.
+const BP_UTR37: &str = "GGCATGGAAACTTTTTTTTTTTTTTTTTAA";
+
+/// A bare `LRG_<n>t<k>` fixture whose two build records disagree on the CDS
+/// start: GRCh37 at n.4 ([`BP_UTR37`]), GRCh38 at n.1 ([`BP_PROT38`]). Both carry
+/// a `T` at n.15, so `n.15T>A` is valid on either build and lands on a
+/// different `c.` position on each: `c.12T>A` (`TTT`→`TTA`, `p.(Phe4Leu)`) on
+/// GRCh37 against `c.15T>A` (`p.(Phe5Leu)`) on GRCh38.
+fn bare_lrg_cds_offset_fixture(grch37_contig: &str) -> VariantProjector<MockProvider> {
+    build_provenance_fixture_with_cds(
+        "LRG_777t1",
+        "LRG_777",
+        grch37_contig,
+        (BP_UTR37, 4),
+        (BP_PROT38, 1),
+    )
+}
+
+/// A bare `LRG_<n>t<k>` `n.`/`r.` input is converted to `c.` through the
+/// record's CDS start. Under `--assembly GRCh37` that record must be the
+/// GRCh37 one, the build the genomic axis and the `p.` are placed on. Before,
+/// the conversion read the provider's default (GRCh38) record: under GRCh37,
+/// `LRG_777t1:n.15T>A` gave GRCh38's `c.15T>A` and `p.(Phe5Leu)`, and
+/// `LRG_777t1:r.12u>a` was rebased onto GRCh38's `n.12T>A`.
+#[test]
+fn bare_lrg_noncoding_input_converts_on_the_assembly_build() {
+    for (build, n_input, noncoding, coding, protein, rna) in [
+        (
+            "GRCh37",
+            "LRG_777t1:n.15T>A",
+            "LRG_777t1:n.15T>A",
+            "LRG_777t1:c.12T>A",
+            "LRG_777p1:p.(Phe4Leu)",
+            "LRG_777t1:r.(12u>a)",
+        ),
+        (
+            "GRCh38",
+            "LRG_777t1:n.15T>A",
+            "LRG_777t1:n.15T>A",
+            "LRG_777t1:c.15T>A",
+            "LRG_777p1:p.(Phe5Leu)",
+            "LRG_777t1:r.(15u>a)",
+        ),
+        (
+            "GRCh37",
+            "LRG_777t1:r.12u>a",
+            "LRG_777t1:n.15T>A",
+            "LRG_777t1:c.12T>A",
+            "LRG_777p1:p.(Phe4Leu)",
+            "LRG_777t1:r.(12u>a)",
+        ),
+    ] {
+        let vp = bare_lrg_cds_offset_fixture("NC_000001.10").with_assembly(Some(build));
+        let proj = vp
+            .project_normalized(&bp_parse(n_input), "LRG_777t1")
+            .unwrap_or_else(|e| panic!("--assembly {build}: {n_input} projects: {e}"));
+        let s = |v: Option<ferro_hgvs::HgvsVariant>| v.map(|v| v.to_string());
+        let ctx = format!("--assembly {build}, {n_input}");
+        assert_eq!(s(proj.noncoding).as_deref(), Some(noncoding), "{ctx}: n.");
+        assert_eq!(s(proj.coding).as_deref(), Some(coding), "{ctx}: c.");
+        assert_eq!(s(proj.protein).as_deref(), Some(protein), "{ctx}: p.");
+        assert_eq!(s(proj.rna).as_deref(), Some(rna), "{ctx}: r.");
+    }
+}
+
+/// With the GRCh37 placement on a contig whose build the accession does not
+/// encode, no GRCh37 record is reachable and the lookup is served the GRCh38
+/// primary. Its CDS start is not GRCh37's, so every axis derived through it
+/// (`c.`, `p.`, the predicted `r.`) is withheld rather than converted on the
+/// wrong build. An `n.` input's own `n.` axis needs no record and is kept; an
+/// `r.` input's needs the CDS start to be rebased, so it is withheld too.
+#[test]
+fn bare_lrg_noncoding_input_withholds_axes_when_assembly_and_record_builds_differ() {
+    let vp = bare_lrg_cds_offset_fixture("NC_000001.99").with_assembly(Some("GRCh37"));
+    for (input, noncoding) in [
+        ("LRG_777t1:n.15T>A", Some("LRG_777t1:n.15T>A")),
+        ("LRG_777t1:r.12u>a", None),
+    ] {
+        let proj = vp
+            .project_normalized(&bp_parse(input), "LRG_777t1")
+            .unwrap_or_else(|e| panic!("{input} projects: {e}"));
+        let s = |v: Option<ferro_hgvs::HgvsVariant>| v.map(|v| v.to_string());
+        assert_eq!(s(proj.noncoding).as_deref(), noncoding, "{input}: n.");
+        assert_eq!(s(proj.coding), None, "{input}: c.");
+        assert_eq!(s(proj.protein), None, "{input}: p.");
+        assert_eq!(s(proj.rna), None, "{input}: r.");
+    }
 }
