@@ -790,3 +790,129 @@ fn allele_predicted_rna_follows_the_assembly_override() {
         proj.rna.as_ref().map(|r| r.to_string())
     );
 }
+
+/// One 9-bp transcript (`ATGCGCTAA`) on `NC_000001.11:1000-1008`, on either
+/// strand. On the minus strand the genome reads the reverse complement
+/// (`TTAGCGCAT`), so `c.1` sits at `g.1008`.
+fn cis_genomic_fixture(
+    tx: &str,
+    cdot_strand: Strand,
+    strand: TxStrand,
+    genome: &str,
+) -> VariantProjector<MockProvider> {
+    let mut cdot = CdotMapper::new();
+    cdot.add_transcript(
+        tx.to_string(),
+        CdotTranscript {
+            cds_start_incomplete: false,
+            gene_name: Some("GENE1".to_string()),
+            contig: "NC_000001.11".to_string(),
+            strand: cdot_strand,
+            exons: vec![[1000, 1009, 0, 9]],
+            cds_start: Some(0),
+            cds_end: Some(9),
+            gene_id: None,
+            protein: None,
+            exon_cigars: Vec::new(),
+        },
+    );
+    let mut provider = MockProvider::new();
+    provider.add_transcript(Transcript::new(
+        tx.to_string(),
+        Some("GENE1".to_string()),
+        strand,
+        "ATGCGCTAA".to_string(),
+        Some(1),
+        Some(9),
+        vec![Exon::new(1, 1, 9)],
+        Some("NC_000001.11".to_string()),
+        Some(1000),
+        Some(1008),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    ));
+    provider.add_genomic_sequence(
+        "NC_000001.11",
+        format!("{}{genome}{}", "N".repeat(999), "N".repeat(100)),
+    );
+    VariantProjector::new(Projector::new(cdot), provider)
+}
+
+/// #2270, through the public API. A cis allele member that re-derives to
+/// several `g.` edits (`c.4_6delinsAGA` → `g.[1003C>A;1005C>A]`) is folded
+/// into ONE flat allele in ascending genomic order (`DNA/alleles.md:118`), not
+/// rendered as a bracket inside a bracket with the split member sorted last.
+/// Both member orders, both strands, and the case where the split member is
+/// first on the genome, so neither the input's spelling nor the transcript's
+/// direction decides the order. The axis must also equal the raw pivot
+/// normalized, which is what normalizing the equivalent `g.` input gives.
+/// `(transcript, cdot strand, transcript strand, genome bases, inputs, expected g. axis)`.
+type CisGenomicCase = (
+    &'static str,
+    Strand,
+    TxStrand,
+    &'static str,
+    [&'static str; 2],
+    &'static str,
+);
+
+#[test]
+fn cis_allele_genomic_axis_folds_a_split_member_flat_and_ordered() {
+    let cases: [CisGenomicCase; 3] = [
+        (
+            "NM_TX1.1",
+            Strand::Plus,
+            TxStrand::Plus,
+            "ATGCGCTAA",
+            [
+                "NC_000001.11(NM_TX1.1):c.[4_6delinsAGA;8A>G]",
+                "NC_000001.11(NM_TX1.1):c.[8A>G;4_6delinsAGA]",
+            ],
+            "NC_000001.11:g.[1003C>A;1005C>A;1007A>G]",
+        ),
+        (
+            "NM_TXM.1",
+            Strand::Minus,
+            TxStrand::Minus,
+            "TTAGCGCAT",
+            [
+                "NC_000001.11(NM_TXM.1):c.[4_6delinsAGA;8A>G]",
+                "NC_000001.11(NM_TXM.1):c.[8A>G;4_6delinsAGA]",
+            ],
+            "NC_000001.11:g.[1001T>C;1003G>T;1005G>T]",
+        ),
+        (
+            "NM_TXM.1",
+            Strand::Minus,
+            TxStrand::Minus,
+            "TTAGCGCAT",
+            [
+                "NC_000001.11(NM_TXM.1):c.[4_7delinsAGCA;9A>G]",
+                "NC_000001.11(NM_TXM.1):c.[9A>G;4_7delinsAGCA]",
+            ],
+            "NC_000001.11:g.[1000T>C;1002A>T;1005G>T]",
+        ),
+    ];
+    for (tx, cdot_strand, strand, genome, inputs, expected) in cases {
+        let vp = cis_genomic_fixture(tx, cdot_strand, strand, genome);
+        for input in inputs {
+            let v = ferro_hgvs::parse_hgvs(input).expect("input parses");
+            let genomic = vp
+                .project_variant(&v, tx)
+                .expect("the allele projects")
+                .genomic
+                .expect("every member carries a g. form")
+                .to_string();
+            assert_eq!(genomic, expected, "{input}");
+            assert_eq!(
+                vp.project_to_genomic_normalized(&v)
+                    .expect("the raw pivot projects")
+                    .to_string(),
+                expected,
+                "the raw pivot agrees: {input}"
+            );
+        }
+    }
+}
