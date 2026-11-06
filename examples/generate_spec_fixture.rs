@@ -319,6 +319,14 @@ mod overrides {
         // Required on a `decided` record; see `validate_ruling_shape`.
         #[serde(default)]
         pub summary: Option<String>,
+        /// A note on the gap between the decided ruling and what ferro ships
+        /// today, present only where a gap exists. Rendered as its own column in
+        /// `docs/NORMALIZATION_CONTRACT.md`. Required to be a verbatim substring
+        /// of [`Self::rationale`] so it can never drift from the reasoning it
+        /// points into — enforced by `validate_ruling_shape` here and by the
+        /// `tests/it/common/rulings.rs` loader the tests read.
+        #[serde(default)]
+        pub implemented_note: Option<String>,
         /// Row inputs the ruling bears on. Every one must exist as a row.
         #[serde(default)]
         pub applies_to: Vec<String>,
@@ -1176,6 +1184,34 @@ mod decisions {
                  leave `summary` unset"
             );
         }
+        // `implemented_note` is a pointer INTO the rationale, not a second copy:
+        // it must quote the rationale verbatim, so editing the rationale forces
+        // the note to be re-derived in the same change instead of drifting into a
+        // stale third statement of the same fact. Only a decided ruling can carry
+        // one — an undecided record has no ruling whose implementation could lag.
+        // Refused here and at `tests/it/common/rulings.rs`'s parse boundary.
+        if let Some(note) = ruling.implemented_note.as_deref() {
+            if note.trim().is_empty() {
+                anyhow::bail!(
+                    "{owner}: a blank `implemented_note`; omit the field where the ruling ships \
+                     in full rather than carrying an empty marker"
+                );
+            }
+            if ruling.status != overrides::RulingStatus::Decided {
+                anyhow::bail!(
+                    "{owner}: an `implemented_note` on a non-`decided` ruling — an undecided \
+                     record has no ruling whose implementation could lag"
+                );
+            }
+            if !ruling.rationale.contains(note) {
+                anyhow::bail!(
+                    "{owner}: `implemented_note` is not a verbatim substring of `rationale`. The \
+                     note is a pointer into the rationale, not a second copy; keeping it a \
+                     substring is what stops the two drifting apart. Quote the rationale exactly, \
+                     or update the rationale in the same change"
+                );
+            }
+        }
         validate_guard_shape(owner, ruling.guard.as_ref())?;
         Ok(())
     }
@@ -1542,6 +1578,7 @@ mod decisions {
                     }
                     overrides::RulingStatus::Undecided => None,
                 },
+                implemented_note: None,
                 applies_to: Vec::new(),
                 equivalence_classes: Vec::new(),
                 guard: Some(guard_citing(&[
@@ -1655,6 +1692,44 @@ mod decisions {
             assert!(
                 validate_ruling_shape("r", &open_with_summary).is_err(),
                 "an undecided record carrying a summary must be refused"
+            );
+        }
+
+        /// An `implemented_note` must quote the rationale verbatim, may not be
+        /// blank, and may only sit on a decided record. The verbatim rule is the
+        /// anti-drift invariant: a note free to say something the rationale does
+        /// not is a second copy that rots.
+        #[test]
+        fn an_implemented_note_must_quote_the_rationale() {
+            use overrides::RulingStatus::{Decided, Undecided};
+
+            // The `ruling` helper's rationale is "because", so a substring of it
+            // is a valid note and anything else is not.
+            let mut decided = ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+            decided.implemented_note = Some("because".to_string());
+            assert!(
+                validate_ruling_shape("r", &decided).is_ok(),
+                "a note that quotes the rationale verbatim must be accepted"
+            );
+
+            decided.implemented_note = Some("a claim absent from the rationale".to_string());
+            assert!(
+                validate_ruling_shape("r", &decided).is_err(),
+                "a note that is not a substring of the rationale must be refused — it can drift"
+            );
+
+            decided.implemented_note = Some("   ".to_string());
+            assert!(
+                validate_ruling_shape("r", &decided).is_err(),
+                "a blank note is a marker that states nothing and must be refused"
+            );
+
+            // An undecided record has no ruling whose implementation could lag.
+            let mut open = ruling(Undecided, &["a.md:1", "b.md:2"], None, &[]);
+            open.implemented_note = Some("because".to_string());
+            assert!(
+                validate_ruling_shape("r", &open).is_err(),
+                "an implemented_note on an undecided record must be refused"
             );
         }
 

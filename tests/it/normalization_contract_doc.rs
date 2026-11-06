@@ -268,7 +268,8 @@ fn render() -> String {
         out,
         "Every ruling record on one screen: its status, the clause that governs it where one \
          applies (a decided record names its governing clause or, as a house choice, cites none; \
-         an open record names no authority), and a one-sentence statement of the ruling. Read the \
+         an open record names no authority), a one-sentence statement of the ruling, and — where \
+         ferro's shipped output lags the decision — a note on what is implemented. Read the \
          ruling, not the id \
          — an id states the record's *question*, and at least one of the questions below is \
          answered in the negative. An `open` record names a conflict ferro has **not** settled; \
@@ -333,8 +334,9 @@ The HGVS recommendations are, in places, silent, ambiguous, or self-contradictor
 normalizer still has to emit one string. Where ferro has had to decide such a question, the
 decision is recorded as a **ruling record**, and this document is an index of every one of
 those records: its status, the clause that governs it where one applies (a decided record names
-its governing clause or, as a house choice, cites none; an open record names no authority), and
-the record's own one-sentence statement of the ruling.
+its governing clause or, as a house choice, cites none; an open record names no authority), the
+record's own one-sentence statement of the ruling, and — where ferro's shipped output lags the
+decision — a note on what is implemented.
 
 It is generated, not written. Each ruling summary is the record's own `summary` field, copied
 verbatim from
@@ -375,6 +377,12 @@ rather than to whatever the site currently shows.
   turns the decision into an output; this index shows neither. Read it to scan every ruling,
   and open the ledger record before *acting* on one. A summary that reads like a complete rule
   may still be narrower, or more conditional, than it looks.
+- **The Implementation column names a KNOWN GAP between the ruling and shipped output**, in
+  the record's own words, where one exists — a decision implemented for only one shape, one
+  axis, or only under a candidate partition arm. A dash means no such gap is recorded, which
+  is not a guarantee the ruling ships in full: the ruling is the decision, and its shipped
+  status is the ledger record's to state. The note is a verbatim quote of the record's
+  reasoning, so it cannot drift from it.
 
 ## Which build this describes
 
@@ -397,24 +405,41 @@ for the knob and its traps.
 
 /// The index table: one row per record, open records first, then decided,
 /// each already sorted by id. The columns are the record's id, its status, the
-/// clause that governs it, and a one-sentence statement of the ruling.
+/// clause that governs it, a one-sentence statement of the ruling, and — where
+/// shipped output lags the decision — a note on what is implemented.
 fn render_index(open: &[&Record], decided: &[&Record]) -> String {
     let commit = pinned_spec_commit();
     let mut out = String::new();
-    let _ = writeln!(out, "| Record | Status | Governing clause | Ruling |");
-    let _ = writeln!(out, "|---|---|---|---|");
+    let _ = writeln!(
+        out,
+        "| Record | Status | Governing clause | Ruling | Implementation |"
+    );
+    let _ = writeln!(out, "|---|---|---|---|---|");
     for record in open.iter().chain(decided.iter()) {
         let _ = writeln!(
             out,
-            "| `{}` | {} | {} | {} |",
+            "| `{}` | {} | {} | {} | {} |",
             record.id,
             record.status,
             governing_cell(record, &commit),
             ruling_cell(record),
+            implementation_cell(record),
         );
     }
     let _ = writeln!(out);
     out
+}
+
+/// The implementation cell. Present only where a decided ruling's shipped output
+/// lags its decision, and then rendered as the record's own note — a verbatim
+/// substring of its rationale (see [`Record::implemented_note`]), so nothing here
+/// is paraphrase. An em dash where the record notes no gap; that is the absence
+/// of a *noted* gap, not a guarantee the ruling ships in full.
+fn implementation_cell(record: &Record) -> String {
+    match record.implemented_note.as_deref() {
+        Some(note) => cell(note),
+        None => "—".to_string(),
+    }
 }
 
 /// The governing-clause cell. A decided record either names a governing clause
@@ -661,10 +686,11 @@ fn the_index_carries_every_decided_summary() {
             .as_deref()
             .unwrap_or_else(|| panic!("decided record {} has no summary", record.id));
         let row = format!(
-            "| `{}` | decided | {} | {} |",
+            "| `{}` | decided | {} | {} | {} |",
             record.id,
             governing_cell(record, &pinned_spec_commit()),
-            cell(summary)
+            cell(summary),
+            implementation_cell(record),
         );
         assert!(
             rendered.contains(&row),
@@ -672,6 +698,40 @@ fn the_index_carries_every_decided_summary() {
             record.id
         );
     }
+}
+
+/// Every record carrying an `implemented_note` publishes it, and the column it
+/// renders into exists. The note is the record's own text (a verbatim substring
+/// of its rationale), so a reader scanning the table sees the shipped-status gap
+/// without opening the ledger.
+///
+/// Non-vacuous by assertion: if no record carries a note the column proves
+/// nothing, and the guard says so rather than passing over an empty set — the
+/// same discipline as `the_index_is_not_vacuous`.
+#[test]
+fn the_index_publishes_every_implementation_note() {
+    let rendered = render();
+    assert!(
+        rendered.contains("| Record | Status | Governing clause | Ruling | Implementation |"),
+        "the index has no Implementation column header"
+    );
+    let mut noted = 0usize;
+    for record in records() {
+        if let Some(note) = record.implemented_note.as_deref() {
+            noted += 1;
+            assert!(
+                rendered.contains(&cell(note)),
+                "record {} carries an `implemented_note` that is not published in the index",
+                record.id
+            );
+        }
+    }
+    assert!(
+        noted > 0,
+        "no record carries an `implemented_note`, so this guard and the Implementation column \
+         prove nothing — either the field has fallen out of use (drop the column) or the ledger \
+         regressed"
+    );
 }
 
 /// The preamble points at the ruleset page and does not restate it.
