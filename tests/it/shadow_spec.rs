@@ -625,6 +625,55 @@ fn normalize_str<P: ferro_hgvs::ReferenceProvider>(
         .map(|o| o.to_string())
 }
 
+/// The first protein accession `input` names that `provider` cannot resolve, if any. Walks
+/// allele members, so `p.[Trp3del];[Ser68Arg]` is checked member by member.
+///
+/// The full-reference cross-check needs this because protein normalization passes a `p.`
+/// description through unchanged when the protein reference is unavailable for its accession
+/// (`Normalizer::normalize_protein`'s `has_protein_data()` / per-accession fetch guards). On a
+/// prepared reference with no protein FASTA every protein example therefore comes back as its
+/// own input, which is not drift but an unanswerable comparison (#2265). Resolvability is probed
+/// with a one-residue fetch, the same call the normalizer's own guard makes.
+///
+/// Only `ProteinReferenceNotAvailable` means "unresolvable". Any other fetch error (an indexed
+/// protein FASTA that cannot be read, say) is a broken reference, not a missing one, and is
+/// returned as `Err` so the caller reports it instead of silently skipping the example.
+fn unresolved_protein_accession<P: ferro_hgvs::ReferenceProvider>(
+    provider: &P,
+    input: &str,
+) -> Result<Option<String>, String> {
+    fn walk<P: ferro_hgvs::ReferenceProvider>(
+        provider: &P,
+        v: &ferro_hgvs::HgvsVariant,
+    ) -> Result<Option<String>, String> {
+        match v {
+            ferro_hgvs::HgvsVariant::Protein(p) => {
+                let acc = p.accession.transcript_accession();
+                match provider.get_protein_sequence(&acc, 0, 1) {
+                    Ok(_) => Ok(None),
+                    Err(ferro_hgvs::FerroError::ProteinReferenceNotAvailable { .. }) => {
+                        Ok(Some(acc))
+                    }
+                    Err(e) => Err(format!("protein fetch for {acc} failed: {e}")),
+                }
+            }
+            ferro_hgvs::HgvsVariant::Allele(a) => {
+                for m in &a.variants {
+                    if let Some(acc) = walk(provider, m)? {
+                        return Ok(Some(acc));
+                    }
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+    match parse_hgvs(input) {
+        Ok(v) => walk(provider, &v),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Resolve a cross-ref basename to a spec-relative path by walking up from the citing page's
 /// spec directory to the spec root; the nearest ancestor holding the file wins. Same-dir
 /// siblings resolve immediately; shared pages like `general.md` resolve at `recommendations/`.
@@ -717,6 +766,11 @@ fn shadow_spec_pages_are_current() {
     let mut anchors_total = 0usize;
     let mut norm_checked = 0usize;
     let mut norm_crosschecked = 0usize;
+    // Examples the cross-check tier skipped because the full reference cannot resolve the protein
+    // they name (#2265), counted per accession. Reported beside `norm_crosschecked` so a skip is
+    // never silent; one line per accession rather than per example, since a reference without
+    // protein FASTAs skips every protein example on every page.
+    let mut norm_cross_unresolved: BTreeMap<String, usize> = BTreeMap::new();
     // The single shadow-spec example corpus: one JSONL row per example, in page order. It is
     // the ONLY thing built from these pages and is committed + blessed (BLESS_SHADOW_CORPUS=1).
     // Every example yields exactly one row, so the ledger below has no drops — it is here to
@@ -882,19 +936,32 @@ fn shadow_spec_pages_are_current() {
                             ex.spelling
                         )),
                     }
-                    // cross-check: the full live reference, when present
+                    // cross-check: the full live reference, when present. An example naming a
+                    // protein the full reference cannot resolve is skipped and counted rather
+                    // than compared: normalization passes it through unchanged, so a mismatch
+                    // would say nothing about drift (#2265).
                     if let Some(n) = &manifest_normalizer {
-                        norm_crosschecked += 1;
-                        match normalize_str(n, &ex.spelling) {
-                            Some(g) if &g == expected => {}
-                            Some(g) => errors.push(format!(
-                                "{loc}: '{}' normalizes to '{g}' on the full reference, page says '{expected}' — slice drift from current hg38",
+                        let probe = unresolved_protein_accession(n.provider(), &ex.spelling);
+                        if let Err(e) = &probe {
+                            errors.push(format!(
+                                "{loc}: '{}' could not be cross-checked on the full reference: {e}",
                                 ex.spelling
-                            )),
-                            None => errors.push(format!(
-                                "{loc}: '{}' could not be normalized against the full reference",
-                                ex.spelling
-                            )),
+                            ));
+                        } else if let Ok(Some(acc)) = probe {
+                            *norm_cross_unresolved.entry(acc).or_insert(0) += 1;
+                        } else {
+                            norm_crosschecked += 1;
+                            match normalize_str(n, &ex.spelling) {
+                                Some(g) if &g == expected => {}
+                                Some(g) => errors.push(format!(
+                                    "{loc}: '{}' normalizes to '{g}' on the full reference, page says '{expected}' — slice drift from current hg38",
+                                    ex.spelling
+                                )),
+                                None => errors.push(format!(
+                                    "{loc}: '{}' could not be normalized against the full reference",
+                                    ex.spelling
+                                )),
+                            }
                         }
                     }
                 }
@@ -958,8 +1025,14 @@ fn shadow_spec_pages_are_current() {
         pages.len()
     );
     eprintln!(
-        "shadow-spec: normalization checked={norm_checked} (committed slice), cross-checked={norm_crosschecked} (full reference)"
+        "shadow-spec: normalization checked={norm_checked} (committed slice), cross-checked={norm_crosschecked} (full reference), not cross-checked={} (protein the full reference cannot resolve)",
+        norm_cross_unresolved.values().sum::<usize>()
     );
+    for (acc, n) in &norm_cross_unresolved {
+        eprintln!(
+            "shadow-spec: {n} example(s) naming {acc} not cross-checked — the full reference cannot resolve that protein"
+        );
+    }
     if require_manifest && manifest_normalizer.is_none() {
         errors.push(
             "FERRO_REQUIRE_MANIFEST is set but FERRO_MANIFEST is absent — the cross-check tier could not run".into(),
@@ -1076,5 +1149,85 @@ mod alignment_render_tests {
         assert_eq!(s(&v, "note"), "50 nt · 3 changed"); // counts the elided change too
         assert_eq!(v["editStart"], 2); // 2-base left flank
         assert_eq!(v["editEnd"], 2 + 15 + 3 + 15); // head + " … " + tail
+    }
+}
+
+/// The cross-check skip (#2265) must fire only for a protein the provider cannot resolve. The
+/// committed slice derives `NP_003997.1`, so it must NOT be skipped there (the check stays at
+/// full strength for a resolvable accession); an empty provider stands in for a prepared
+/// reference with no protein FASTA, and must report the accession, including from inside an
+/// allele. A nucleotide example is never skipped, resolvable or not.
+#[test]
+fn cross_check_skips_only_unresolvable_proteins() {
+    let slice = MockProvider::from_json(&repo_root().join(SLICE))
+        .unwrap_or_else(|e| panic!("load committed slice {SLICE}: {e}"));
+    let empty = MockProvider::new();
+
+    assert_eq!(
+        unresolved_protein_accession(&slice, "NP_003997.1:p.Trp3del"),
+        Ok(None)
+    );
+    assert_eq!(
+        unresolved_protein_accession(&slice, "NP_003997.1:p.[Trp3del];[Ser68Arg]"),
+        Ok(None)
+    );
+    assert_eq!(
+        unresolved_protein_accession(&empty, "NP_003997.1:p.Trp3del"),
+        Ok(Some("NP_003997.1".to_string()))
+    );
+    assert_eq!(
+        unresolved_protein_accession(&empty, "NP_003997.1:p.[Trp3del];[Ser68Arg]"),
+        Ok(Some("NP_003997.1".to_string()))
+    );
+    assert_eq!(
+        unresolved_protein_accession(&empty, "NM_004006.3:c.7_9del"),
+        Ok(None)
+    );
+}
+
+/// A protein fetch that fails for any reason other than "not available" (an unreadable protein
+/// FASTA, say) is a broken reference, not a missing one. The probe must surface it as an error
+/// rather than skip the example, or a corrupt reference would read as a quiet, smaller
+/// cross-check.
+#[test]
+fn cross_check_reports_an_unreadable_protein_reference() {
+    struct UnreadableProteins;
+    impl ReferenceProvider for UnreadableProteins {
+        fn get_transcript(
+            &self,
+            id: &str,
+        ) -> Result<std::sync::Arc<ferro_hgvs::reference::Transcript>, ferro_hgvs::FerroError>
+        {
+            Err(ferro_hgvs::FerroError::ReferenceNotFound { id: id.to_string() })
+        }
+        fn get_sequence(
+            &self,
+            id: &str,
+            _start: u64,
+            _end: u64,
+        ) -> Result<String, ferro_hgvs::FerroError> {
+            Err(ferro_hgvs::FerroError::ReferenceNotFound { id: id.to_string() })
+        }
+        fn get_protein_sequence(
+            &self,
+            _accession: &str,
+            _start: u64,
+            _end: u64,
+        ) -> Result<String, ferro_hgvs::FerroError> {
+            Err(ferro_hgvs::FerroError::Io {
+                msg: "protein FASTA unreadable".to_string(),
+            })
+        }
+    }
+
+    for input in [
+        "NP_003997.1:p.Trp3del",
+        "NP_003997.1:p.[Trp3del];[Ser68Arg]",
+    ] {
+        let got = unresolved_protein_accession(&UnreadableProteins, input);
+        assert!(
+            matches!(&got, Err(e) if e.contains("NP_003997.1") && e.contains("unreadable")),
+            "{input}: an unreadable protein reference must be reported, got {got:?}"
+        );
     }
 }
