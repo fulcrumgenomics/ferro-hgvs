@@ -6,10 +6,6 @@ on:
     - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
-      skip_api_fetch:
-        description: 'Skip API fetching (use existing fixtures)'
-        required: false
-        default: 'false'
       limit_variants:
         description: 'Limit variants per API (for faster testing)'
         required: false
@@ -36,19 +32,14 @@ env:
 #
 #   90  run-standard-tests: compiles Rust AND fetches bulk fixtures over the
 #       network; peaks at 1044s (17.4m), whose 5x already exceeds the 60 tier.
-#   60  fetch-api-data (711s, network to Mutalyzer/VariantValidator/NCBI) and
+#   60  fetch-api-data (711s, network to VariantValidator/NCBI) and
 #       run-comparison-tests (compiles Rust, so a cold cache is on the table).
-#  120  fetch-external-databases: its three network fetches (LOVD, MaveDB,
-#       CIViC) EACH already carry a step-level `timeout-minutes: 30`, so the job
-#       bound must exceed their combined 90-minute budget or it would kill a run
-#       the steps consider legitimate. Job wall clock is 33s in practice.
 #   15  summary (6s), which only downloads a report and posts it.
 jobs:
   fetch-api-data:
     name: Fetch External API Data
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -63,17 +54,25 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install requests civicpy
+          pip install requests
 
-      - name: Fetch Mutalyzer API data
-        run: |
-          python scripts/fetch_mutalyzer_normalized.py \
-            --output tests/fixtures/normalization/mutalyzer_api.json \
-            ${LIMIT:+--limit $LIMIT}
-        env:
-          LIMIT: ${{ github.event.inputs.limit_variants }}
-        continue-on-error: true
+      # The NCBI fetch writes over the committed, curated `ncbi_variation.json`.
+      # Remove every file the fetches write first, so a failed fetch uploads
+      # nothing rather than a committed file passing for live data.
+      # (`variantvalidator_api.json` is not committed today; `-f` keeps this
+      # correct if it ever is.)
+      - name: Remove committed copies of the fetched fixtures
+        run: rm -f tests/fixtures/validation/ncbi_variation.json tests/fixtures/validation/variantvalidator_api.json
 
+      # No `continue-on-error` on these fetches. Both scripts record an HTTP or
+      # connection error per variant inside their output and exit 0, so an API
+      # that answers with errors does not fail the step; a non-zero exit means the
+      # script broke (or met a response it does not handle), and a hung API is
+      # bounded by the job timeout. Masking a failed step is how a Mutalyzer step
+      # and three database fetches ran scripts that did not exist, every week,
+      # reporting success (#2257). Without its fetch, test_variantvalidator_comparison
+      # found no file and passed having checked nothing, and spdi_tests read the
+      # committed fixture instead of NCBI's live answers.
       - name: Fetch VariantValidator API data
         run: |
           python scripts/fetch_variantvalidator.py \
@@ -81,36 +80,27 @@ jobs:
             ${LIMIT:+--limit $LIMIT}
         env:
           LIMIT: ${{ github.event.inputs.limit_variants }}
-        continue-on-error: true
 
+      # `!cancelled()`: a VariantValidator failure must not also skip this fetch.
       - name: Fetch NCBI Variation Services data
+        if: ${{ !cancelled() }}
         run: |
           python scripts/fetch_ncbi_variation.py \
             --output tests/fixtures/validation/ncbi_variation.json \
             ${LIMIT:+--limit $LIMIT}
         env:
           LIMIT: ${{ github.event.inputs.limit_variants }}
-        continue-on-error: true
 
-      - name: Extract Mutalyzer GitHub patterns
-        run: |
-          if [ -d "external-repos/mutalyzer-hgvs-parser" ]; then
-            python scripts/extract_mutalyzer_github.py \
-              --output tests/fixtures/grammar/mutalyzer_github.json
-          else
-            echo "Mutalyzer repo not cloned, skipping"
-          fi
-        continue-on-error: true
-
+      # `!cancelled()`: if one fetch fails, still publish what the other wrote,
+      # so the comparison job's failure names the fetch that actually broke.
       - name: Upload API fixtures
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: api-fixtures
           path: |
-            tests/fixtures/normalization/mutalyzer_api.json
             tests/fixtures/validation/variantvalidator_api.json
             tests/fixtures/validation/ncbi_variation.json
-            tests/fixtures/grammar/mutalyzer_github.json
           retention-days: 30
 
   run-comparison-tests:
@@ -125,12 +115,30 @@ jobs:
         with:
           persist-credentials: false
 
+      # As in the fetch job: a committed copy must not survive to stand in for a
+      # fetch that did not arrive.
+      - name: Remove committed copies of the fetched fixtures
+        run: rm -f tests/fixtures/validation/ncbi_variation.json tests/fixtures/validation/variantvalidator_api.json
+
+      # The artifact's root is the deepest directory common to the uploaded paths,
+      # which is now `tests/fixtures/validation/`, so extract it there. (It was
+      # `tests/fixtures/` while Mutalyzer paths outside `validation/` were in the
+      # list; #2257.) No `continue-on-error`: without the fetched files the tests
+      # below would fail anyway, less clearly.
       - name: Download API fixtures
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: api-fixtures
-          path: tests/fixtures/
-        continue-on-error: true
+          path: tests/fixtures/validation/
+
+      - name: Require both fetched fixtures
+        run: |
+          for fixture in variantvalidator_api.json ncbi_variation.json; do
+            if [ ! -s "tests/fixtures/validation/$fixture" ]; then
+              echo "::error::$fixture was not fetched; see the Fetch External API Data job"
+              exit 1
+            fi
+          done
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -193,8 +201,9 @@ jobs:
         shell: bash
         run: |
           source .github/scripts/run_validation.sh
-          # All three api_comparison_tests are #[ignore]d: they are the
-          # network-fixture suite, run here and not in the standard job.
+          # The api_comparison_tests test is #[ignore]d: it reads the
+          # VariantValidator fetch above, so it runs here and not in the
+          # standard job.
           run_validation api_comparison_tests api_comparison_results.txt --ignored
 
       # `!cancelled()` on the second and third suites, because dropping
@@ -213,8 +222,8 @@ jobs:
         env:
           # Tells spdi_tests it must be reading the live NCBI fetch, not the
           # committed fixture: without it a fetch that never wrote its file would
-          # pass on curated data. Unset when the fetch is skipped (#2256).
-          FERRO_SPDI_LIVE_FIXTURE: ${{ github.event.inputs.skip_api_fetch != 'true' && '1' || '' }}
+          # pass on curated data (#2256). The fetch always runs, so always set.
+          FERRO_SPDI_LIVE_FIXTURE: '1'
         run: |
           source .github/scripts/run_validation.sh
           # No `--ignored`: spdi_tests carries no #[ignore] any more.
@@ -325,65 +334,6 @@ jobs:
       - name: Run clippy
         run: cargo clippy --features dev --all-targets -- -D warnings
 
-  fetch-external-databases:
-    name: Fetch External Database Data
-    runs-on: ubuntu-latest
-    # 120, not 30: the three fetch steps below each carry `timeout-minutes: 30`,
-    # so the job must be able to outlast their combined 90-minute step budget.
-    timeout-minutes: 120
-    if: ${{ github.event.inputs.skip_api_fetch != 'true' }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install Python dependencies
-        run: |
-          pip install requests
-
-      - name: Fetch LOVD data
-        run: |
-          python scripts/fetch_lovd_hgvs.py \
-            --format json \
-            --output tests/fixtures/external/lovd_variants.json \
-            --limit 100
-        continue-on-error: true
-        timeout-minutes: 30
-
-      - name: Fetch MaveDB data
-        run: |
-          python scripts/fetch_mavedb_hgvs.py \
-            --format json \
-            --output tests/fixtures/external/mavedb_variants.json \
-            --limit 20 \
-            --variants-per-set 50
-        continue-on-error: true
-        timeout-minutes: 30
-
-      # Note: CIViC requires civicpy which may need special setup
-      - name: Fetch CIViC data (optional)
-        run: |
-          pip install civicpy || true
-          python scripts/fetch_civic_hgvs.py \
-            --format json \
-            --output tests/fixtures/external/civic_variants.json || true
-        continue-on-error: true
-        timeout-minutes: 30
-
-      - name: Upload external database fixtures
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: external-db-fixtures
-          path: tests/fixtures/external/
-          retention-days: 30
-
   summary:
     name: Generate Summary
     runs-on: ubuntu-latest
@@ -409,7 +359,9 @@ jobs:
           fi
 
   report-failure:
-    needs: [run-comparison-tests, run-standard-tests]
+    # `fetch-api-data` too: a broken fetch script must reach the tracking issue,
+    # not only fail a job nobody watches.
+    needs: [fetch-api-data, run-comparison-tests, run-standard-tests]
     if: failure()
     uses: ./.github/workflows/report-failure.yml
     permissions:
@@ -420,4 +372,4 @@ jobs:
       summary: >-
         The scheduled external-API validation run failed.
       hint: |
-          This talks to third-party services (mutalyzer, VariantValidator), so a failure may be an upstream outage rather than a ferro defect. Check the run log before assuming a regression.
+          This talks to third-party services (VariantValidator, NCBI Variation Services), so a failure may be an upstream outage rather than a ferro defect. Check the run log before assuming a regression.
