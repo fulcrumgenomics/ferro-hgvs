@@ -649,7 +649,7 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 /// every row parses; what the normalizer declines is a `c.` description against
 /// a transcript whose CDS this reference cannot resolve, which the decided
 /// `rulings[c-description-against-an-unresolvable-cds-is-refused]` refuses in
-/// every mode. The six are named below. **90 unwindowed** are rows whose members
+/// every mode. The six are named below. **89 unwindowed** are rows whose members
 /// do not all resolve to SPDI triples on one sequence, or whose span is wider
 /// than [`MAX_WINDOW`]; they are counted rather than skipped so
 /// `sequence_changed: 0` cannot quietly mean "nothing was checked".
@@ -674,6 +674,25 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>)
 ///
 /// `respellable` and `respelling_converged` are unchanged at 461/401 and
 /// [`CONVERGED_ROWS`] is untouched, so no row that used to converge stopped.
+///
+/// # 90 -> 89 unwindowed, by #1967 (#2267)
+///
+/// #1967 taught `hgvs_to_spdi` to resolve a bracketed compound insert, and
+/// [`triples_of`] reaches its triples through SPDI, so a row whose members
+/// include one could not be windowed before and can be now. Printing every row
+/// that reaches an `unwindowed` increment at #1967 and at its parent, the two
+/// lists differ by exactly this one row:
+///
+/// ```text
+/// LRG_501:g.[83418_83419insN;83419_83420ins[TAGCTTTGCTAGGTGTTAAATAGTAATGTAATTATATTTCCTATAATACAGCAATATA;84466_84575];83423_83424insAT]
+/// ```
+///
+/// Nothing else moves. It does not land in `sequence_changed`, which stays 0, so
+/// once windowed its input and its normalized output apply to the same bases. It
+/// is not `respellable` either, which stays 461, because no spanning respelling
+/// can be built for it. So this is one more row being checked rather than a
+/// regression. #1967 could not see it: the census runs only against a prepared
+/// reference, which PR CI does not provision.
 ///
 /// The two numbers worth arguing about are the last pair: of **461** rows whose
 /// spanning-`delins` respelling can be built at all, **395 (86%)** normalize to
@@ -792,7 +811,9 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     declined: 6,
     not_idempotent: 0,
     // #1870: 96 -> 90, the same six rows.
-    unwindowed: 90,
+    // #1967: 90 -> 89, one `LRG_501` row with a bracketed compound insert that
+    // SPDI now resolves. See the "90 -> 89 unwindowed" section above.
+    unwindowed: 89,
     sequence_changed: 0,
     respellable: 461,
     // #1835: see the section above — six rows started converging, none stopped.
