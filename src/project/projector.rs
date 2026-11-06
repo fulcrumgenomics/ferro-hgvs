@@ -2998,6 +2998,173 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
     }
 
+    /// Pivot a transcript-coordinate variant into its NC chromosome frame via
+    /// cdot, WITHOUT re-anchoring to an NG/LRG parent. Unlike
+    /// [`Self::project_to_genomic`], this works on a bare `NM_:c.`/`n.` input
+    /// (no explicit `genomic_context` needed) and yields an `NC_`-frame
+    /// variant. Used by arbitration's frame resolution, which compares edited
+    /// sequences (roll-invariant) so the raw NC pivot suffices.
+    ///
+    /// [`Self::project_to_genomic_nc`] stamps the input's `genomic_context`
+    /// (its parent accession) onto the NC-scale coordinates it computes from
+    /// cdot. That is correct only when the parent *is* the chromosome (`NC_`):
+    /// for an `NG_`/`LRG_`-parent intronic input (the notation Mutalyzer
+    /// emits, e.g. `NG_007107.2(NM_004992.3):c.378-17del`) it would stamp the
+    /// `NG_`/`LRG_` accession onto chromosome coordinates — a broken hybrid
+    /// that overflows the short `NG_`/`LRG_` sequence and yields
+    /// `Verdict::Inconclusive`. A bare `NM_` with no `genomic_context` would
+    /// likewise be declined by `project_to_genomic_nc` (#327).
+    ///
+    /// So this wrapper first REPLACES the pivot's `genomic_context` with the
+    /// transcript's *true* chromosome (`NC_`) accession (via
+    /// [`Self::nc_pivot_context`]) for every parent class — bare `NM_`,
+    /// `NG_`-parent, `LRG_`-parent, `NC_`-parent — and only then delegates to
+    /// [`Self::project_to_genomic_nc`], which runs completely unmodified. The
+    /// transcript's `c.`/`n.` offset is transcript-relative regardless of the
+    /// annotated parent, so re-anchoring to the `NC_` contig via cdot yields
+    /// the correct chromosome coordinate for all parent forms. When no genomic
+    /// `NC_` chromosome can be resolved the wrapper declines (`Err`) rather
+    /// than emit a wrong coordinate; Tier-1 turns that into an honest
+    /// `Inconclusive`. It declines the same way for an insertion whose
+    /// transcript anchors straddle an intron, as [`Self::project_to_genomic`]
+    /// does (#1264), and reports a bare transcript absent from cdot as
+    /// `ReferenceNotFound`.
+    pub fn project_to_nc_frame(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+        use crate::hgvs::variant::{CdsVariant, RnaVariant, TxVariant};
+
+        let accession = match variant {
+            HgvsVariant::Cds(v) => &v.accession,
+            HgvsVariant::Tx(v) => &v.accession,
+            HgvsVariant::Rna(v) => &v.accession,
+            // Non-transcript inputs carry no transcript to pivot; hand straight
+            // to `project_to_genomic_nc` (which echoes/rejects them per kind).
+            _ => return self.project_to_genomic_nc(variant),
+        };
+
+        // The transcript is absent from cdot on the build the input implies:
+        // leave the input untouched so `project_to_genomic_nc` reports the
+        // canonical `ReferenceNotFound` (rather than this wrapper's own "no NC_
+        // chromosome" decline). Resolved through the same build-aware lookup
+        // `nc_pivot_context` uses, so the two can never disagree on presence.
+        //
+        // An input with no parent at all (a bare `NM_`/`NR_`; an `LRG_` transcript
+        // names its own) would instead be declined by `project_to_genomic_nc`'s
+        // step 3 for lacking an NG/NC parent, before its step-4 lookup can name
+        // the missing transcript. That is the miss arbitration hits on a bare
+        // input, so report it directly. An explicit parent keeps the delegation:
+        // its build comes from the parent's placement, which this lookup does not
+        // consult.
+        let transcript_id = accession.transcript_accession();
+        if self
+            .cdot_transcript_on_hinted_build(variant, &transcript_id)
+            .is_none()
+        {
+            if accession.genomic_context.is_none() && Self::lrg_genomic_parent(accession).is_none()
+            {
+                return Err(FerroError::ReferenceNotFound {
+                    id: transcript_id.to_string(),
+                });
+            }
+            return self.project_to_genomic_nc(variant);
+        }
+
+        // Force the transcript's true chromosome (`NC_`) accession as the
+        // pivot's `genomic_context`, REPLACING any existing `NG_`/`LRG_`/`NC_`
+        // context. Decline cleanly when none can be resolved.
+        let nc = self.nc_pivot_context(variant, accession).ok_or_else(|| {
+            FerroError::UnsupportedProjection {
+                reason: format!(
+                    "cannot resolve a genomic NC_ chromosome for transcript {transcript_id} to \
+                     pivot into the arbitration NC frame"
+                ),
+            }
+        })?;
+
+        let variant = match variant {
+            HgvsVariant::Cds(v) => {
+                let mut v: CdsVariant = v.clone();
+                v.accession = v.accession.with_genomic_context(nc);
+                HgvsVariant::Cds(v)
+            }
+            HgvsVariant::Tx(v) => {
+                let mut v: TxVariant = v.clone();
+                v.accession = v.accession.with_genomic_context(nc);
+                HgvsVariant::Tx(v)
+            }
+            HgvsVariant::Rna(v) => {
+                let mut v: RnaVariant = v.clone();
+                v.accession = v.accession.with_genomic_context(nc);
+                HgvsVariant::Rna(v)
+            }
+            _ => unreachable!("filtered to Cds/Tx/Rna above"),
+        };
+        let pivot = self.project_to_genomic_nc(&variant)?;
+        // Same adjacency check `project_to_genomic` applies to its pivot (#1264):
+        // an insertion whose transcript anchors straddle an intron has no genomic
+        // spelling, so the oracle must not be handed one to compare.
+        if let Some(reason) = non_flanking_insertion_reason(&pivot) {
+            return Err(FerroError::UnsupportedProjection { reason });
+        }
+        Ok(pivot)
+    }
+
+    /// Resolve the transcript's authoritative chromosome (`NC_`) accession for
+    /// the internal arbitration NC pivot. Returns `None` when no genomic `NC_`
+    /// chromosome can be determined (the caller then declines).
+    ///
+    /// Assumes `accession`'s transcript is present in cdot (the caller checks).
+    ///
+    /// The pivot must be **build-consistent** across the parent classes so
+    /// that the same variant spelled two ways (e.g. bare `NM_004992.3:c.…` vs
+    /// `NG_007107.2(NM_004992.3):c.…`) reduces to the *same* chromosome frame.
+    /// The bare-`NM_` path has no build information and defaults to cdot's
+    /// primary build, so every parent class is anchored to **cdot's own contig
+    /// on the variant's build hint** — the same build `project_to_genomic_nc`
+    /// maps the coordinates on. Deliberately NOT the `NG_`/`LRG_` parent's
+    /// `GenomicPlacement::nc`: a parent version can be placed on a *different*
+    /// build than cdot's primary (e.g. `NG_007107.2` is only placed on GRCh37
+    /// / `NC_000023.10`, while cdot maps `NM_004992.3` on GRCh38 /
+    /// `NC_000023.11`), which would split the two spellings across assemblies
+    /// and yield a spurious `BasisMismatch`. cdot stores versioned `NC_`
+    /// contigs (e.g. `NC_000023.11`) in the prepared reference; the reviewer's
+    /// `chr`-style-alias concern is handled by the `NC_`-validity guard below,
+    /// which declines (→ honest `Inconclusive`) rather than emit a wrong
+    /// coordinate under a non-`NC_` accession.
+    fn nc_pivot_context(&self, variant: &HgvsVariant, accession: &Accession) -> Option<Accession> {
+        // An explicit `NC_` parent is already the canonical chromosome frame
+        // and encodes the caller's intended build — keep it verbatim.
+        if let Some(ctx) = accession.genomic_context.as_deref() {
+            if ctx.prefix.as_ref() == "NC" {
+                return Some(ctx.clone());
+            }
+        }
+        // Bare `NM_`, or an `NG_`/`LRG_` parent: anchor to cdot's own contig on
+        // the build the input implies (primary build when the input is
+        // build-agnostic), matching `project_to_genomic_nc`'s own mapping build.
+        // Accept it only when it is itself a genomic `NC_` accession; a
+        // `chr`-style alias cannot be stamped as a valid NC frame, so decline.
+        let transcript_id = accession.transcript_accession();
+        let cdot_tx = self.cdot_transcript_on_hinted_build(variant, &transcript_id)?;
+        let contig = crate::project::accession::parse_accession(&cdot_tx.contig);
+        (contig.prefix.as_ref() == "NC").then_some(contig)
+    }
+
+    /// cdot's record for `transcript_id` on the build `variant` implies (its
+    /// encoded build, else the `--assembly` override), falling back to cdot's
+    /// primary build when the input is build-agnostic. The one lookup the
+    /// arbitration NC pivot uses for both its presence check and its contig.
+    fn cdot_transcript_on_hinted_build(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Option<&crate::data::cdot::CdotTranscript> {
+        let cdot = self.projector.mapper().cdot();
+        match self.build_hint_for_variant(variant) {
+            Some(build) => cdot.get_transcript_on_build(transcript_id, build),
+            None => cdot.get_transcript(transcript_id),
+        }
+    }
+
     fn project_to_genomic_nc(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::GenomeInterval;
@@ -13150,6 +13317,176 @@ mod tests {
 
         fn ng_parent(num: &str, version: u32) -> Accession {
             Accession::new("NG", num, Some(version))
+        }
+
+        /// The arbitration NC pivot must look the transcript up on the build
+        /// the input implies, not on cdot's primary build alone. Here the
+        /// transcript exists only on GRCh37 while GRCh38 is primary, and the
+        /// `NG_`-parented input takes its build from `--assembly GRCh37`. A
+        /// primary-build-only presence check reports it absent and hands the
+        /// unmodified `NG_` input to `project_to_genomic_nc`, which is exactly
+        /// the `NG_`-on-chromosome-coordinates defect this wrapper exists to
+        /// prevent; the build-aware lookup pivots it onto `NC_000001.10`.
+        #[test]
+        fn nc_frame_pivot_resolves_a_transcript_present_only_on_the_hinted_build() {
+            let json = r#"
+            {
+                "transcripts": {
+                    "NM_ONLY37.1": {
+                        "gene_name": "ONLY37",
+                        "genome_builds": {
+                            "GRCh37": {
+                                "contig": "NC_000001.10",
+                                "strand": "+",
+                                "exons": [[10000, 10010, 1, 0, 10, "M10"]]
+                            }
+                        },
+                        "start_codon": 0,
+                        "stop_codon": 10
+                    }
+                }
+            }
+            "#;
+            let cdot = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38")
+                .expect("single-build cdot JSON should parse");
+            assert!(
+                cdot.get_transcript("NM_ONLY37.1").is_none(),
+                "precondition: absent from the primary (GRCh38) table"
+            );
+            assert!(
+                cdot.get_transcript_on_build("NM_ONLY37.1", "GRCh37")
+                    .is_some(),
+                "precondition: present on GRCh37"
+            );
+            let vp = VariantProjector::new(Projector::new(cdot), MockProvider::new())
+                .with_assembly(Some("GRCh37"));
+            let input = HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "ONLY37", Some(1))
+                    .with_genomic_context(ng_parent("000001", 1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::T,
+                    },
+                ),
+            });
+            let out = vp
+                .project_to_nc_frame(&input)
+                .expect("the hinted build carries the transcript, so the pivot must resolve");
+            let HgvsVariant::Genome(g) = &out else {
+                panic!("expected a genomic projection, got {out}");
+            };
+            assert_eq!(
+                g.accession,
+                nc_chr1(10),
+                "pivoted onto the GRCh37 chromosome: {out}"
+            );
+        }
+
+        /// A bare transcript input absent from cdot has no parent to name, so
+        /// the arbitration NC pivot must report the missing *transcript*.
+        /// Delegating to `project_to_genomic_nc` would instead decline on the
+        /// absent `genomic_context` ("requires an explicit NG/NC parent"), whose
+        /// step 3 runs before the step-4 cdot lookup that names the transcript.
+        #[test]
+        fn nc_frame_pivot_reports_a_missing_bare_transcript_as_not_found() {
+            let cdot =
+                CdotMapper::from_reader_with_build(multi_build_cdot_json().as_bytes(), "GRCh38")
+                    .expect("multi-build JSON must parse");
+            let vp = VariantProjector::new(Projector::new(cdot), MockProvider::new());
+            let input = HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "ABSENT", Some(1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(5)),
+                    NaEdit::Substitution {
+                        reference: Base::C,
+                        alternative: Base::T,
+                    },
+                ),
+            });
+            let err = vp
+                .project_to_nc_frame(&input)
+                .expect_err("an absent transcript cannot be pivoted");
+            assert!(
+                matches!(&err, FerroError::ReferenceNotFound { id } if id == "NM_ABSENT.1"),
+                "expected ReferenceNotFound for the transcript, got {err:?}"
+            );
+        }
+
+        /// Two exons, `[1000, 1030)` and `[1200, 1230)` on `NC_000001.11`, so
+        /// transcript positions 30 and 31 are adjacent but map 171 bases apart.
+        fn two_exon_cdot() -> CdotMapper {
+            let json = r#"
+            {
+                "transcripts": {
+                    "NM_TWOEXON.1": {
+                        "gene_name": "TWOEXON",
+                        "genome_builds": {
+                            "GRCh38": {
+                                "contig": "NC_000001.11",
+                                "strand": "+",
+                                "exons": [
+                                    [1000, 1030, 1, 0, 30, "M30"],
+                                    [1200, 1230, 2, 30, 60, "M30"]
+                                ]
+                            }
+                        },
+                        "start_codon": 0,
+                        "stop_codon": 60
+                    }
+                }
+            }
+            "#;
+            CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38")
+                .expect("two-exon cdot JSON should parse")
+        }
+
+        fn two_exon_insertion(start: i64, end: i64) -> HgvsVariant {
+            HgvsVariant::Cds(CdsVariant {
+                accession: Accession::new("NM", "TWOEXON", Some(1)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(CdsPos::new(start), CdsPos::new(end)),
+                    NaEdit::Insertion {
+                        sequence: crate::hgvs::edit::InsertedSequence::Literal(
+                            "A".parse().expect("valid insertion sequence"),
+                        ),
+                    },
+                ),
+            })
+        }
+
+        /// An insertion whose transcript anchors straddle an intron has no
+        /// genomic spelling (`DNA/insertion.md:15`), so the arbitration pivot
+        /// must decline it exactly as `project_to_genomic` does (#1264) rather
+        /// than hand the oracle a non-flanking genomic insertion.
+        #[test]
+        fn nc_frame_pivot_declines_an_insertion_straddling_an_intron() {
+            let vp = VariantProjector::new(Projector::new(two_exon_cdot()), MockProvider::new());
+            let err = vp
+                .project_to_nc_frame(&two_exon_insertion(30, 31))
+                .expect_err("a junction-straddling insertion has no genomic spelling");
+            assert!(
+                matches!(&err, FerroError::UnsupportedProjection { reason } if reason.contains("straddle an intron")),
+                "expected the non-flanking-insertion decline, got {err:?}"
+            );
+        }
+
+        /// Control for the test above: an intra-exonic insertion keeps flanking
+        /// genomic anchors and must still pivot, so the decline is not vacuous.
+        #[test]
+        fn nc_frame_pivot_keeps_an_intra_exonic_insertion() {
+            let vp = VariantProjector::new(Projector::new(two_exon_cdot()), MockProvider::new());
+            let out = vp
+                .project_to_nc_frame(&two_exon_insertion(10, 11))
+                .expect("an intra-exonic insertion has flanking genomic anchors");
+            assert!(
+                matches!(&out, HgvsVariant::Genome(_)),
+                "expected a genomic pivot, got {out}"
+            );
         }
 
         /// Smoke test the JSON parses into a usable multi-build mapper —

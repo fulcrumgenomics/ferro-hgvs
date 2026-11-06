@@ -39,9 +39,25 @@ authoritative options of any one — this page is a map, not a substitute.
 | `effect` | Predict the protein effect of a variant. |
 | `backtranslate` | Backtranslate a protein variant to possible DNA variants. |
 
+## Diagnosing disagreements
+
+| Command | What it does |
+|---|---|
+| `arbitrate` | Explain why ferro and another tool disagree on a variant, and which spelling the spec supports. See [Why do ferro and another tool disagree?](../guide/arbitrate-disagreements.md). |
+| `bug-report` | Build a prefilled GitHub issue form from an arbitration result. |
+
 ## Common options
 
 Most commands accept `-i/--input <file>` (one description per line) and `-o/--output <file>`. The
 output format is set with `-f/--format`, and the accepted values depend on the command: `text|json`
 for `parse` and `project`, `text|json|tsv` for `normalize`, and `text|json|markdown` for `explain`.
 Commands that normalize also accept `--reference <dir>` and `--error-mode <strict|lenient|silent>`.
+
+## Exit status
+
+Every command exits 0 on success, 1 on any error (the reason goes to stderr), and 2 on a usage
+error. `arbitrate` adds two: 3 when the result is **Inconclusive** and 4 when it is
+**FerroParseError**. In both, ferro delivered no verdict, so a script must not treat the run as a
+finished comparison; the result is still printed in full before the exit. Every other verdict,
+`OtherUnparseable` included, exits 0 and is read from the output. See
+[Scripting `arbitrate`](../guide/arbitrate-disagreements.md#scripting-arbitrate).

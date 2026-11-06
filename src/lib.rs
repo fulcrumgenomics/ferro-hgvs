@@ -22,6 +22,7 @@
 //! println!("Normalized: {}", normalized);
 //! ```
 
+pub mod arbitrate;
 pub mod backtranslate;
 pub mod batch;
 #[cfg(feature = "benchmark")]
@@ -47,6 +48,7 @@ pub mod hgvs;
 pub mod legacy;
 pub mod liftover;
 pub mod mave;
+pub mod mutalyzer;
 pub mod normalize;
 pub mod parallel;
 /// Performance-comparison table types + rendering (used by the
