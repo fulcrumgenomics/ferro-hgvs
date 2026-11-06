@@ -1013,7 +1013,13 @@ impl ExtendedBody {
     }
 
     /// Fold one endpoint onto the extended body axis, leaving every other region
-    /// alone so a member outside the CDS/3'UTR pair is refused exactly as before.
+    /// alone so a member outside the CDS/UTR span is refused exactly as before.
+    ///
+    /// The extended axis is the flat transcript offset relative to `cds_start`,
+    /// so `c.1` is `1`, the 3'UTR `c.*N` continues upward past `cds_len`, and the
+    /// 5'UTR `c.-N` continues downward through `c.-1 = 0` (`#1816`,
+    /// `cross-zone-c-positions-order-by-transcript-coordinate`).
+    /// [`unfold_extended_body`] is its inverse.
     fn fold(self, endpoint: (Region, i64), body: Region) -> Option<(Region, i64)> {
         // `OFF` must be a pass-through, **not** a refusal, and writing it as
         // `self.0?` instead cost a debugging session: it made `cis_axis_parts`
@@ -1027,14 +1033,22 @@ impl ExtendedBody {
             return Some(endpoint);
         };
         let (region, pos) = endpoint;
-        if region != Region::ThreePrimeUtr {
-            return Some(endpoint);
+        match region {
+            // `*N` is 1-based from the base after the stop codon, so `*1` is
+            // `cds_len + 1`. A non-positive `N` never reaches here —
+            // `simple_cds_pos` refuses it — but the checked add is what keeps an
+            // authored `c.*<huge>` from wrapping into the CDS instead of failing
+            // the width test (#1487).
+            Region::ThreePrimeUtr => Some((body, cds_end_axis.checked_add(pos)?)),
+            // `c.-N` is signed (`simple_cds_pos` yields `pos = -N`), and the axis
+            // skips `c.0`, so `c.-1` sits at flat `0` immediately below `c.1`: the
+            // fold is `pos + 1` (`c.-1 -> 0`, `c.-2 -> -1`). `cds_end_axis` is not
+            // read — only its presence, which gates the fold to a coding
+            // transcript — so the mirror of the 3'UTR arm needs no CDS length.
+            // Checked for the same #1487 reason (`c.-<huge>` cannot wrap upward).
+            Region::FivePrimeUtr => Some((body, pos.checked_add(1)?)),
+            _ => Some(endpoint),
         }
-        // `*N` is 1-based from the base after the stop codon, so `*1` is
-        // `cds_len + 1`. A non-positive `N` never reaches here — `simple_cds_pos`
-        // refuses it — but the checked add is what keeps an authored `c.*<huge>`
-        // from wrapping into the CDS instead of failing the width test (#1487).
-        Some((body, cds_end_axis.checked_add(pos)?))
     }
 }
 
@@ -1074,6 +1088,12 @@ fn cis_axis_parts_on(
 fn unfold_extended_body(pos: i64, body: Region, cds_end_axis: Option<i64>) -> (Region, i64) {
     match cds_end_axis {
         Some(end) if pos > end => (Region::ThreePrimeUtr, pos - end),
+        // Flat `0` is `c.-1` and the axis skips `c.0`, so a non-positive extended
+        // position is the 5'UTR, named `pos - 1` (`0 -> -1`, `-1 -> -2`) — the
+        // inverse of `fold`'s `pos + 1`. Gated on `Some` so a non-coding axis (no
+        // `cds_end_axis`) keeps the identity `_ => (body, pos)` and is never
+        // reclassified as UTR.
+        Some(_) if pos <= 0 => (Region::FivePrimeUtr, pos - 1),
         _ => (body, pos),
     }
 }
@@ -1842,6 +1862,17 @@ fn lookup_codon_middle_ref<P: ReferenceProvider>(
     Base::from_char(byte as char)
 }
 
+/// The 5'→3' order of the zones a straddling anchor can name: upstream (5'UTR /
+/// `n.-N`), then the body, then downstream (3'UTR / `n.*N`). `g.`/`m.` have one
+/// zone and rank with the body, so they never compare as reversed.
+fn zone_rank(region: Region) -> u8 {
+    match region {
+        Region::FivePrimeUtr | Region::TxUpstream => 0,
+        Region::ThreePrimeUtr | Region::TxDownstream => 2,
+        Region::Genome | Region::Cds | Region::Rna | Region::Tx => 1,
+    }
+}
+
 fn build_naedit<P>(
     merged: Anchor,
     mut to_pos: impl FnMut(Region, i64) -> P,
@@ -1855,6 +1886,13 @@ fn build_naedit<P>(
     // payload, a `del`); it is never a one-nucleotide substitution and never a
     // boundary insertion, both of which sit within a single zone.
     let straddles = merged.region != merged.end_region;
+    // The one straddling shape that is NOT a span: a pure insertion resting on
+    // the seam itself (`c.-1_1insG`, `c.<cds_end>_*1insG`). On the extended body
+    // an insertion anchor is `start = end + 1`, so unfolding puts its `start` in
+    // the 3'-ward zone and its `end` in the 5'-ward one — the zones are in
+    // reverse order, which no span can produce. It is rendered as the ordered
+    // cross-zone insertion, endpoints swapped (#2187 review).
+    let seam_insertion = straddles && zone_rank(merged.region) > zone_rank(merged.end_region);
     // A duplication is decided by the *builder*, from the reference, not by the
     // two span lengths below — `dup` and the `ins` of the same bases have the
     // same lengths and `duplication.md:18` says only one of them is allowed.
@@ -1867,10 +1905,9 @@ fn build_naedit<P>(
             length: None,
             uncertain_extent: None,
         }
-    } else if !straddles && merged.start > merged.end {
-        debug_assert_eq!(
-            merged.start,
-            merged.end + 1,
+    } else if seam_insertion || (!straddles && merged.start > merged.end) {
+        debug_assert!(
+            seam_insertion || merged.start == merged.end + 1,
             "invariant: insertion anchor span = 1 nt"
         );
         if merged.alt.is_empty() {
@@ -1933,7 +1970,12 @@ fn build_naedit<P>(
     // scramble `c.13_*4` into `c.*4_13`. Every single-zone member keeps the
     // existing min/max ordering, which also carries the insertion encoding
     // (`start > end`).
-    let interval = if straddles {
+    let interval = if seam_insertion {
+        Interval::new(
+            to_pos(merged.end_region, merged.end),
+            to_pos(merged.region, merged.start),
+        )
+    } else if straddles {
         Interval::new(
             to_pos(merged.region, merged.start),
             to_pos(merged.end_region, merged.end),
@@ -3723,22 +3765,32 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // the pad itself must not be able to wrap (#1487).
     //
     // Saturating is exact here, not merely safe: `w_lo` is clamped to `1` on
-    // the same line, and a saturated `w_hi` can only make the width larger, so
-    // both saturations land on the refusal the width test already gives an
-    // over-wide window. A debug build panicked; a release build wrapped `w_hi`
-    // negative and derived against a nonsense window, which is the worse half.
+    // the same line for every path but the 5'UTR straddle (where the pad is `0`,
+    // so nothing saturates), and a saturated `w_hi` can only make the width
+    // larger, so both saturations land on the refusal the width test already
+    // gives an over-wide window. A debug build panicked; a release build wrapped
+    // `w_hi` negative and derived against a nonsense window, which is the worse
+    // half.
     //
-    // The extension reaches a group whose footprint **crosses** `cds_end`, and no
-    // other. A group sitting wholly in the 3'UTR keeps the refusal it has always
-    // had, which is not a scope decision made for tidiness — measured, admitting
-    // it regresses `issue_1284`'s `c.[*10dup;*11dup]` from `c.*10_*11A[4]` to
-    // `c.[*11dup;*11dup]`, two members claiming one base. That is #1281's shape,
-    // it round-trips through the sequence check (two `dup`s at one anchor insert
-    // the same two bases), and the per-member pipeline — which owns those rows
-    // today and answers them correctly — is the right place for them. #1650 is
-    // about a span the boundary *cuts*; nothing here is owed to a span it does
-    // not touch.
-    if uses_extension && !cds_end_axis.is_some_and(|end| c_lo <= end && end < c_hi) {
+    // The extension reaches a group whose footprint **crosses** a CDS boundary,
+    // and no other. A group sitting wholly in either UTR keeps the refusal it has
+    // always had, which is not a scope decision made for tidiness — measured,
+    // admitting the 3'UTR-only case regresses `issue_1284`'s `c.[*10dup;*11dup]`
+    // from `c.*10_*11A[4]` to `c.[*11dup;*11dup]`, two members claiming one base.
+    // That is #1281's shape, it round-trips through the sequence check (two `dup`s
+    // at one anchor insert the same two bases), and the per-member pipeline —
+    // which owns those rows today and answers them correctly — is the right place
+    // for them. #1650 is about a span the boundary *cuts*; nothing here is owed to
+    // a span it does not touch.
+    //
+    // The 3'UTR seam is `cds_end_axis | cds_end_axis + 1`; the 5'UTR seam (#1816)
+    // is `0 | 1` (`c.-1 | c.1`), so a group crosses it exactly when it holds a
+    // 5'UTR endpoint (`c_lo <= 0`) and a CDS-or-beyond endpoint (`c_hi >= 1`).
+    // Both are gated on a resolved CDS (`cds_end_axis`), the same guard the fold
+    // uses; a group that straddles both seams satisfies both and is admitted once.
+    let crosses_3prime = cds_end_axis.is_some_and(|end| c_lo <= end && end < c_hi);
+    let crosses_5prime = cds_end_axis.is_some() && c_lo <= 0 && c_hi >= 1;
+    if uses_extension && !(crosses_3prime || crosses_5prime) {
         return None;
     }
     // For the groups that do cross, the pad goes to zero — see the note at the top
@@ -3749,9 +3801,23 @@ fn canonicalize_from_sequence_with_rule<P: ReferenceProvider>(
     // `duplication_anchor`'s 5' lookback, which is a capability they have today
     // only in the sense that they are refused outright.
     let pad = if uses_extension { 0 } else { CANONICAL_PAD };
-    let mut w_lo = c_lo.saturating_sub(pad).max(1);
+    // A 5'UTR straddle is the one shape whose window reaches below `c.1`; every
+    // other path keeps `.max(1)` pinning it inside the positive body. Its true 5'
+    // floor is the transcript start, enforced by the `start0 < 0` guard below (and
+    // by `enclosing_exon`), not by this clamp.
+    let lo_floor = if crosses_5prime { i64::MIN } else { 1 };
+    let mut w_lo = c_lo.saturating_sub(pad).max(lo_floor);
     let mut w_hi = c_hi.saturating_add(pad);
-    if w_hi - w_lo + 1 > MAX_CANONICAL_WINDOW {
+    // The width itself must be computed with checked arithmetic. On every path
+    // but the 5'UTR straddle `w_lo` is clamped to `1`, so `w_hi - w_lo` cannot
+    // wrap; but that straddle sets `lo_floor` to `i64::MIN`, so `w_lo` can be a
+    // large-negative authored `c.-N` and `w_hi - w_lo` overflows *before* the
+    // width test can refuse it — a debug panic, and in release a wrapped
+    // nonsense window derived against silently (#2187, the same failure mode
+    // #1487 fixed for the padding additions). Overflow declines the derivation,
+    // which is exactly what an over-wide window already does.
+    let width = w_hi.checked_sub(w_lo).and_then(|w| w.checked_add(1))?;
+    if width > MAX_CANONICAL_WINDOW {
         return None;
     }
 
@@ -10565,6 +10631,15 @@ fn apply_coding_codon_exception(
     // guarded. It is kept because `same_codon` is `(a - 1) / 3` and so answers
     // for a codon that does not exist, silently, the moment some later change
     // makes the line reachable — the wrong direction to fail in.
+    //
+    // That change has since arrived for `same_codon`'s **lower**-bound guard (its
+    // `< 1` early return), though not for `within_cds` here. #1816's 5'UTR fold
+    // makes a substitution-triplet reachable at the CDS-*start* seam
+    // (`triplet_start == 0`, measured), and `same_codon(0, 2)`'s `< 1` guard is
+    // now demonstrated load-bearing by
+    // `a_pair_whose_triplet_straddles_the_cds_start_stays_two_members`: with it
+    // removed the pair wrongly merges to `c.-2_1delinsGTA`. `within_cds` (this
+    // line, the 3' upper bound) is still only defensive.
     let within_cds = |last: i64| cds_end_axis.is_none_or(|end| last <= end);
     // A single changed reference base replaced by a single alt base — the
     // `Substitution` the spec's "two variants" are.
@@ -11665,11 +11740,13 @@ pub(crate) fn denoted_bases(
 /// [`Region`] for each — `region` for the start, `end_region` for the end — so
 /// such a member is *built* rather than declined: each endpoint keeps the zone
 /// [`unfold_extended_body`] names for it, and [`build_naedit`] renders `c.13_*4`
-/// with a `*` on the end alone. This is the `c.` half of the convergence the
-/// `g.` axis already has (`#1816`; the spelling is a rendering of one flat
-/// transcript span, `cross-zone-c-positions-order-by-transcript-coordinate`).
-/// Only the `c.` axis has a CDS/3'UTR seam to straddle — `cds_end_axis` is
-/// `Some` for `CisKind::Cds` alone (`n.` numbering is flat, with no `*` zone).
+/// with a `*` on the end alone, or the 5'UTR mirror `c.-N_M` with the `-N` on the
+/// start alone. This is the `c.` half of the convergence the `g.` axis already
+/// has (`#1816`; the spelling is a rendering of one flat transcript span,
+/// `cross-zone-c-positions-order-by-transcript-coordinate`). Only the `c.` axis
+/// has UTR seams to straddle — CDS/5'UTR at `cds_start` and CDS/3'UTR at
+/// `cds_end` — and both are gated on `cds_end_axis` being `Some`, which holds for
+/// `CisKind::Cds` alone (`n.` numbering is flat, with no `-`/`*` zones).
 ///
 /// The endpoints are read independently rather than through an ordering test for
 /// two reasons that now compound: [`Anchor`]'s insertion shape is `start > end`
