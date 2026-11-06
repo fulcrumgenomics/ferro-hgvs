@@ -2600,6 +2600,146 @@ impl PyNormalizeResultWithWarnings {
     }
 }
 
+/// A diagnostic attached to a `MutalyzerResult`: ferro's warning `code` plus a
+/// human-readable `message`.
+///
+/// Distinct from `NormalizationWarning`, whose codes are the stable SVA set:
+/// besides the normalization diagnostics, a `MutalyzerResult` carries one
+/// `<axis>_axis_declined` entry per axis that could not be derived, explaining
+/// why that axis is `None`, and a `normalized_declined` entry when the
+/// normalized form could not be computed.
+#[pyclass(name = "MutalyzerWarning", from_py_object)]
+#[derive(Clone)]
+pub struct PyMutalyzerWarning {
+    /// ferro's warning code: an SVA code such as `"REFSEQ_MISMATCH"`,
+    /// `"<axis>_axis_declined"` (e.g. `"genomic_axis_declined"`), or
+    /// `"normalized_declined"`.
+    #[pyo3(get)]
+    pub code: String,
+    /// Human-readable message.
+    #[pyo3(get)]
+    pub message: String,
+}
+
+#[pymethods]
+impl PyMutalyzerWarning {
+    fn __repr__(&self) -> String {
+        format!("MutalyzerWarning({}: {})", self.code, self.message)
+    }
+}
+
+/// A Mutalyzer-style, multi-axis view of a variant, computed by ferro.
+///
+/// Returned by `VariantProjector.mutalyzer`. Bundles the input's normalized
+/// form and its g./c./n./r./p. axes into one object, in a shape familiar to
+/// Mutalyzer users. Each axis attribute is the rendered HGVS string, or `None`
+/// when that axis is not derivable from the input and reference.
+///
+/// Interface-compatible, not output-compatible: the values are ferro's own
+/// spec-grounded normalization and projection, so they can differ from what
+/// Mutalyzer would emit — that is expected, not a bug.
+#[pyclass(name = "MutalyzerResult")]
+pub struct PyMutalyzerResult {
+    inner: crate::project::MutalyzerResult,
+}
+
+#[pymethods]
+impl PyMutalyzerResult {
+    /// The input description, echoed verbatim.
+    #[getter]
+    fn input(&self) -> String {
+        self.inner.input.clone()
+    }
+
+    /// The input normalized on its own coordinate axis, or `None`.
+    #[getter]
+    fn normalized(&self) -> Option<String> {
+        self.inner.normalized.clone()
+    }
+
+    /// The genomic (`g.`) description, or `None`.
+    #[getter]
+    fn genomic(&self) -> Option<String> {
+        self.inner.genomic.clone()
+    }
+
+    /// The coding (`c.`) description, or `None`.
+    #[getter]
+    fn coding(&self) -> Option<String> {
+        self.inner.coding.clone()
+    }
+
+    /// The non-coding transcript (`n.`) description, or `None`.
+    #[getter]
+    fn noncoding(&self) -> Option<String> {
+        self.inner.noncoding.clone()
+    }
+
+    /// The predicted RNA consequence (`r.`), or `None`.
+    #[getter]
+    fn rna(&self) -> Option<String> {
+        self.inner.rna.clone()
+    }
+
+    /// The predicted protein consequence (`p.`), or `None`.
+    #[getter]
+    fn protein(&self) -> Option<String> {
+        self.inner.protein.clone()
+    }
+
+    /// The gene symbol, or `None`.
+    #[getter]
+    fn gene_symbol(&self) -> Option<String> {
+        self.inner.gene_symbol.clone()
+    }
+
+    /// The transcript the axes were resolved against.
+    #[getter]
+    fn transcript_id(&self) -> String {
+        self.inner.transcript_id.clone()
+    }
+
+    /// Diagnostics for this result, each carrying ferro's warning `code` and a
+    /// human-readable `message`: the normalization diagnostics, then one
+    /// `<axis>_axis_declined` entry per axis that could not be derived, and a
+    /// `normalized_declined` entry when the normalized form could not be
+    /// computed. Empty when the input normalized cleanly and every axis was
+    /// derived.
+    #[getter]
+    fn warnings(&self) -> Vec<PyMutalyzerWarning> {
+        self.inner
+            .warnings
+            .iter()
+            .map(|w| PyMutalyzerWarning {
+                code: w.code.clone(),
+                message: w.message.clone(),
+            })
+            .collect()
+    }
+
+    /// True if any warnings were emitted for this result.
+    fn has_warnings(&self) -> bool {
+        !self.inner.warnings.is_empty()
+    }
+
+    /// A plain, aligned, Mutalyzer-familiar text block. Absent axes show as `-`.
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MutalyzerResult(input={:?}, normalized={:?}, genomic={:?}, coding={:?}, protein={:?}, transcript={:?})",
+            self.inner.input,
+            self.inner.normalized,
+            self.inner.genomic,
+            self.inner.coding,
+            self.inner.protein,
+            self.inner.transcript_id
+        )
+    }
+}
+
 // ============================================================================
 // VariantProjector
 // ============================================================================
@@ -2908,6 +3048,41 @@ impl PyVariantProjector {
                 inner,
                 render_style: self.render_style,
             })
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
+    }
+
+    /// Produce a Mutalyzer-style, multi-axis view of a variant.
+    ///
+    /// Bundles the input's normalized form and its g./c./n./r./p. axes into one
+    /// `MutalyzerResult`, in a shape familiar to Mutalyzer users. Unlike
+    /// `project` (which selects an axis via the caller), this returns every
+    /// derivable axis at once.
+    ///
+    /// Interface-compatible, not output-compatible: the values are ferro's own
+    /// spec-grounded normalization and projection and can differ from
+    /// Mutalyzer's — that is expected.
+    ///
+    /// Args:
+    ///     hgvs_string: The variant description to view.
+    ///     transcript: The transcript to resolve the axes against.
+    fn mutalyzer(
+        &self,
+        py: Python<'_>,
+        hgvs_string: &str,
+        transcript: &str,
+    ) -> PyResult<PyMutalyzerResult> {
+        let hgvs_string = hgvs_string.to_string();
+        let transcript = transcript.to_string();
+        // Render the p. axis in this projector's configured style (#1050), so a
+        // projector built with `protein_stop`/`amino_acid_code` gets the styled
+        // protein here too — not the default Ter/three-letter form.
+        let render_style = self.render_style;
+        let result = py.detach(|| {
+            self.inner
+                .mutalyzer(&hgvs_string, &transcript, render_style)
+        });
+        result
+            .map(|inner| PyMutalyzerResult { inner })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
@@ -7683,6 +7858,8 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Variant projection classes
     m.add_class::<PyVariantProjector>()?;
     m.add_class::<PyVariantProjection>()?;
+    m.add_class::<PyMutalyzerWarning>()?;
+    m.add_class::<PyMutalyzerResult>()?;
 
     // The typed exception hierarchy (FerroError + ParseError / NormalizationError
     // / ReferenceDataError / ProjectionError) is defined in

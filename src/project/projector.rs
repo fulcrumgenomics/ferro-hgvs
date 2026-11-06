@@ -1570,6 +1570,45 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_variant(&variant, transcript_id)
     }
 
+    /// Parse, normalize, and project an HGVS string into a Mutalyzer-style
+    /// [`MutalyzerResult`](super::MutalyzerResult): the normalized description
+    /// plus the equivalent `g.`/`c.`/`n.`/`r.`/`p.` axes and any warnings, in one
+    /// object.
+    ///
+    /// Interface-compatible with Mutalyzer's `/normalize`, **not**
+    /// output-compatible: the values are ferro's own conformant normalization and
+    /// projection, so they can differ from what Mutalyzer would emit — Mutalyzer
+    /// is not a spec oracle for ferro. `normalized` is the input normalized on its
+    /// own coordinate axis.
+    ///
+    /// `protein_style` controls how the `p.` axis is spelled (`protein_stop` /
+    /// `amino_acid_code`); pass [`ProteinRenderStyle::default`] for the CLI's
+    /// Ter/three-letter default.
+    pub fn mutalyzer(
+        &self,
+        hgvs_string: &str,
+        transcript_id: &str,
+        protein_style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> Result<super::MutalyzerResult, FerroError> {
+        let variant = crate::parse_hgvs(hgvs_string)?;
+        let (projection, normalized) =
+            self.project_variant_keeping_normalized(&variant, transcript_id)?;
+        let result =
+            super::MutalyzerResult::from_projection(hgvs_string, &projection, protein_style);
+        // Reuse the normalization the projection already ran. Only the bare
+        // `NG_`/`LRG_` parent path (#879) normalizes a de-anchored copy rather
+        // than `variant` itself, so it hands nothing back and is normalized here.
+        // A failure there is reported as a `normalized_declined` warning rather
+        // than dropped, so the absent field carries its reason.
+        Ok(match normalized {
+            Some(normalized) => result.with_normalized(Some(normalized.to_string())),
+            None => match self.normalizer.normalize(&variant) {
+                Ok(normalized) => result.with_normalized(Some(normalized.to_string())),
+                Err(error) => result.with_normalized_declined(error.to_string()),
+            },
+        })
+    }
+
     /// #879: project a bare `NG_`/`LRG_` genomic input onto a single requested
     /// transcript by de-anchoring it into the `NC_` chromosome frame — so the
     /// overlap guard and cdot see matching coordinates — then re-framing the
@@ -1630,6 +1669,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
+        self.project_variant_keeping_normalized(variant, transcript_id)
+            .map(|(projection, _)| projection)
+    }
+
+    /// [`Self::project_variant`], also returning the normalized input it
+    /// projected from, so a caller that renders it need not normalize twice.
+    ///
+    /// The normalized variant is `None` on the bare `NG_`/`LRG_` parent path
+    /// (#879), which normalizes a de-anchored copy of the input rather than the
+    /// input itself.
+    fn project_variant_keeping_normalized(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<(VariantProjection, Option<HgvsVariant>), FerroError> {
         self.warn_assembly_conflict(variant);
         // 0. A bare `NG_`/`LRG_` genomic input carries parent-relative coordinates
         //    that the overlap guard (NC_-frame) cannot compare against; de-anchor,
@@ -1637,7 +1691,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    placement-backed bare-genomic parent input takes this branch; every
         //    other input falls through to the normal path below.
         if let Some(r) = self.project_bare_genomic_parent(variant, transcript_id) {
-            return r;
+            return r.map(|projection| (projection, None));
         }
         // 1. Normalize the genomic variant. The normalizer is built once at
         // construction time so we don't clone the (potentially heavy) provider
@@ -1658,7 +1712,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
         let mut projection = self.project_variant_inner(&normalized, &target)?;
         projection.normalization_warnings = warnings;
-        Ok(projection)
+        Ok((projection, Some(normalized)))
     }
 
     /// Reconcile a self-projection target with a selector/context that
@@ -11584,6 +11638,38 @@ mod tests {
             let v = crate::parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
             let proj = vp.project_variant(&v, "NM_TEST.1").unwrap();
             assert!(proj.genomic.is_none());
+        }
+
+        #[test]
+        fn mutalyzer_bundles_the_normalized_form_and_axes() {
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let result = vp
+                .mutalyzer(
+                    "NM_TEST.1:c.4C>A",
+                    "NM_TEST.1",
+                    crate::hgvs::location::ProteinRenderStyle::default(),
+                )
+                .expect("mutalyzer should succeed on a valid coding input");
+            assert_eq!(result.input, "NM_TEST.1:c.4C>A");
+            // Interface shape: the input's own-axis normalized form and the coding
+            // axis are populated; genomic is None for this bare NM_ input (no LRG
+            // parent). The values are ferro's own.
+            assert!(result.normalized.is_some(), "normalized form should be set");
+            assert!(result.coding.is_some(), "coding axis should be populated");
+            assert!(
+                result.genomic.is_none(),
+                "a bare NM_ input has no genomic axis"
+            );
+            // The Display block is the Mutalyzer-familiar layout, and it renders
+            // the actual coding value (not just the label).
+            let rendered = result.to_string();
+            assert!(rendered.contains("Input:       NM_TEST.1:c.4C>A"));
+            let coding = result.coding.as_deref().expect("coding axis populated");
+            assert!(
+                rendered.contains(&format!("Coding:      {coding}")),
+                "Display should render the coding value, got:\n{rendered}"
+            );
         }
 
         // -- 9: protein input → unsupported ------------------------------------
