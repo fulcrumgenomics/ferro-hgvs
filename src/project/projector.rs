@@ -7,6 +7,7 @@ use crate::error::FerroError;
 use crate::hgvs::edit::{NaEdit, ProteinEdit};
 use crate::hgvs::interval::{CdsInterval, TxInterval};
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
+use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
     is_frameshift, Accession, AllelePhase, AlleleVariant, CdsVariant, HgvsVariant, LocEdit,
     TxVariant,
@@ -4014,8 +4015,6 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
         transcript_id: &str,
     ) -> Option<VariantProjection> {
-        use crate::hgvs::uncertainty::Mu;
-
         let HgvsVariant::Rna(rna) = variant else {
             return None;
         };
@@ -5088,7 +5087,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         transcript_id: &str,
         cds_start: &CdsPos,
         cds_end: &CdsPos,
-        c_edit: &NaEdit,
+        c_edit: &Mu<NaEdit>,
         gene_symbol: Option<String>,
     ) -> (Option<HgvsVariant>, Option<String>) {
         let tx = match self.cached_get_transcript_for_variant(normalized, transcript_id) {
@@ -5287,7 +5286,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             transcript_id,
             &cds_start,
             &cds_end,
-            &edit,
+            // The input's `Mu`, not the bare `edit` above: a predicted `c.(…)`
+            // stays predicted on `n.` (#2276).
+            &cds.loc_edit.edit,
             cds.gene_symbol.clone(),
         );
 
@@ -6289,6 +6290,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Transform the edit for the transcript strand.
         let c_edit = transform_edit_for_strand(&edit, strand);
+        // The same edit under the pivot's own certainty, for the two transcript
+        // axes. `edit` above was taken out of its `Mu` with `.inner()`, and
+        // rebuilding the axes from it with `LocEdit::new` made every one of
+        // them certain: a predicted `g.(1004G>T)` or `NC_(NM_):c.(5G>T)` came
+        // back as an observed `c.5G>T` / `n.5G>T` beside a `g.(1004G>T)` that
+        // kept its wrapper (#2276). `project_to_genomic_nc` already carries the
+        // input's `Mu` onto the pivot, so reusing it here is what makes the
+        // axes agree.
+        let c_edit_mu = genome_variant.loc_edit.edit.clone().map(|_| c_edit.clone());
 
         // Build the c./n. HGVS variant returned in `VariantProjection.coding`.
         // Built bare-accession (no NC_* wrapper) here; the caller-visible
@@ -6301,7 +6311,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Cds(CdsVariant {
                 accession: parse_accession(transcript_id),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(interval, c_edit.clone()),
+                loc_edit: LocEdit::with_uncertainty(interval, c_edit_mu.clone()),
             })
         } else {
             let tx_start = TxPos::new(cds_start.base);
@@ -6309,7 +6319,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Tx(TxVariant {
                 accession: parse_accession(transcript_id),
                 gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new(TxInterval::new(tx_start, tx_end), c_edit.clone()),
+                loc_edit: LocEdit::with_uncertainty(
+                    TxInterval::new(tx_start, tx_end),
+                    c_edit_mu.clone(),
+                ),
             })
         };
 
@@ -6382,7 +6395,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 transcript_id,
                 &cds_start,
                 &cds_end,
-                &c_edit,
+                &c_edit_mu,
                 gene_symbol.clone(),
             )
         } else {

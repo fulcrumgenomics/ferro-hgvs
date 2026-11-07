@@ -30,6 +30,7 @@ use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
 use crate::hgvs::interval::TxInterval;
 use crate::hgvs::location::CdsPos;
+use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{HgvsVariant, LocEdit, TxVariant};
 use crate::project::accession::parse_accession;
 use crate::reference::transcript::Transcript;
@@ -41,11 +42,18 @@ use crate::reference::transcript::Transcript;
 /// coordinate frame reframes from CDS-relative to transcript-relative, via the
 /// flat sequence-axis [`CoordinateMapper::cds_to_tx`]. Intronic offsets and the
 /// 3'UTR (`c.*N` → a plain positive `n.`, not `n.*N`) are handled by the mapper.
+///
+/// "Identical" includes its certainty: the edit is taken as a [`Mu`] so a
+/// predicted `c.(5G>T)` reframes to `n.(5G>T)`, not to the observed `n.5G>T`.
+/// Until #2276 this took a bare [`NaEdit`] and rebuilt the location-edit with
+/// [`LocEdit::new`], which is always certain — so the `n.` axis erased the
+/// wrapper on every path since it was introduced (#592), while the `g.` axis of
+/// the same projection kept it.
 pub(crate) fn noncoding_from_coding(
     cds_start: &CdsPos,
     cds_end: &CdsPos,
     transcript: &Transcript,
-    c_edit: &NaEdit,
+    c_edit: &Mu<NaEdit>,
     transcript_id: &str,
     gene_symbol: Option<String>,
 ) -> Result<HgvsVariant, FerroError> {
@@ -77,7 +85,7 @@ pub(crate) fn noncoding_from_coding(
     Ok(HgvsVariant::Tx(TxVariant {
         accession: parse_accession(transcript_id),
         gene_symbol,
-        loc_edit: LocEdit::new(TxInterval::new(n_start, n_end), c_edit.clone()),
+        loc_edit: LocEdit::with_uncertainty(TxInterval::new(n_start, n_end), c_edit.clone()),
     }))
 }
 
@@ -114,13 +122,13 @@ mod tests {
         }
     }
 
-    fn sub_a_g() -> NaEdit {
+    fn sub_a_g() -> Mu<NaEdit> {
         // A>G substitution; exact bases are irrelevant to coordinate reframing.
         // `Base` is an enum (src/hgvs/edit.rs) — construct variants directly.
-        NaEdit::Substitution {
+        Mu::Certain(NaEdit::Substitution {
             reference: Base::A,
             alternative: Base::G,
-        }
+        })
     }
 
     /// Render the `n.` form of a single-position coding variant for assertions.
@@ -245,6 +253,25 @@ mod tests {
             matches!(v, HgvsVariant::Tx(_)),
             "expected an n. (Tx) variant"
         );
+    }
+
+    /// #2276: the reframe carries the edit's certainty. A predicted `c.(1A>G)`
+    /// is `n.(6A>G)`; rebuilding it certain would assert an observed change the
+    /// input never claimed.
+    #[test]
+    fn a_predicted_edit_stays_predicted() {
+        let tx = make_test_transcript();
+        let predicted = Mu::Uncertain(sub_a_g().into_inner().unwrap());
+        let v = noncoding_from_coding(
+            &CdsPos::new(1),
+            &CdsPos::new(1),
+            &tx,
+            &predicted,
+            "NM_TEST.1",
+            None,
+        )
+        .unwrap();
+        assert_eq!(v.to_string(), "NM_TEST.1:n.(6A>G)");
     }
 
     #[test]
