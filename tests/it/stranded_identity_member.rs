@@ -57,11 +57,18 @@
 //!
 //! | identity members in… | outputs with **≥ 2** members | outputs with **exactly 2** — what the pinning test visits |
 //! |---|---|---|
-//! | total | 3,352 | **132** |
-//! | of those, **self-cancels** (the input member is a no-op on its own) | 3,220 | **0** |
+//! | total | 3,348 | **132** |
+//! | of those, **self-cancels** (the input member is a no-op on its own) | 3,216 | **0** |
 //! | of those, absorbed and *overlapping* a sibling (the rule fires) | 0 | 0 |
 //! | of those, absorbed and **disjoint** — this defect | **132** | **132** |
 //! | ... non-confluent with the surviving sibling spelled alone | 132 of 132 | **132 of 132** |
+//!
+//! Both left-hand figures were four higher before #2281. The four were
+//! `g.[10_11insAT;11_12inv;12_13insA]` and `…;12_13insAA]` in both directions: the
+//! palindromic `11_12inv` cancelled to `11_12=` and the first insertion shifted
+//! into it, so the output denoted no sequence. #2281 drops an identity with an
+//! insertion strictly inside it, and those rows now come out as one insertion
+//! (`g.12_13insATA`, `g.12_13insATAA`). The stranded rows are untouched.
 //!
 //! The stranded split is 65 in the 5' direction and 67 in the 3', so this is
 //! **not** a direction disagreement: both directions produce it, and both
@@ -505,7 +512,7 @@ fn every_stranded_identity_is_non_confluent_with_its_surviving_member() {
     assert_eq!(
         c.self_cancels, 0,
         "no self-cancel survives the two-member gate on this corpus; the \
-         header's 3,220 belongs to the ≥2-member column and must not be chained \
+         header's 3,216 belongs to the ≥2-member column and must not be chained \
          onto this one"
     );
     assert_eq!(
@@ -544,17 +551,17 @@ fn every_stranded_identity_is_non_confluent_with_its_surviving_member() {
 ///
 /// It is deliberately a **separate** test rather than more assertions on the
 /// one above: the two columns come from two traversals with two different
-/// gates, and keeping them apart is what stops the next reader chaining "3,352
-/// … of those 3,220 … of those 132" through a population the pinning test
+/// gates, and keeping them apart is what stops the next reader chaining "3,348
+/// … of those 3,216 … of those 132" through a population the pinning test
 /// never visits.
 #[test]
 fn the_wider_multi_member_census_is_what_the_header_says() {
     let c = census(&sweep_inputs(), |members| members >= 2);
     assert_eq!(
-        c.identity_members, 3_352,
+        c.identity_members, 3_348,
         "identity members, ≥2-member outputs"
     );
-    assert_eq!(c.self_cancels, 3_220, "self-cancels, ≥2-member outputs");
+    assert_eq!(c.self_cancels, 3_216, "self-cancels, ≥2-member outputs");
     assert_eq!(c.absorbed_overlapping, 0, "absorbed and overlapping");
     assert_eq!(
         c.stranded.len(),

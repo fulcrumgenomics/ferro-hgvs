@@ -65,6 +65,7 @@ mod issue_2174_contiguous_run_delins;
 mod issue_2175_dup_abutting_change;
 mod issue_2193_dup_anchored_outside_changed_span;
 mod issue_2201_rederive_roundtrip_collision;
+mod issue_2281_insertion_inside_identity;
 mod recommended_form_pins;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
