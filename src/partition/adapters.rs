@@ -26,9 +26,8 @@
 //! ```ignore
 //! fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
 //!     let mut pieces = cut_to_pieces(cut);
-//!     let before = pieces.clone();
 //!     merge::<the pass>(&mut pieces, ctx.reference);   // the SHIPPING pass, executed
-//!     if pieces == before {
+//!     if pieces_match_cut(&pieces, cut) {
 //!         return None;                                 // no-op: rule did not fire
 //!     }
 //!     // A Coarsen lifts through `lift_coarsen`; a Recut through `lift_recut`.
@@ -36,8 +35,12 @@
 //! }
 //! ```
 //!
-//! The `before == after` guard reproduces the pass's own no-op case as a declining
-//! rule. **Most** adapters here are **Coarsen**s that only ever *reduce* the run count
+//! The no-op guard reproduces the pass's own no-op case as a declining rule.
+//! [`bridge::pieces_match_cut`] answers "did the pass leave the cut's geometry
+//! untouched" — i.e. `pieces == cut_to_pieces(cut)` — without the
+//! `let before = pieces.clone()` snapshot the pattern once carried.
+//!
+//! **Most** adapters here are **Coarsen**s that only ever *reduce* the run count
 //! when they fire, so a firing application strictly decreases `Φ = (unlocked, total)`;
 //! they lift through [`bridge::lift_coarsen`], which additionally REFUSES to fire when
 //! the pass would absorb a locked `Dup`/`Inv` — the lock guard for the label-blind
@@ -53,7 +56,7 @@
 use crate::normalize::merge;
 use crate::partition::block_ctx::{BlockCtx, FrameContext};
 use crate::partition::bridge::{
-    cut_to_pieces, lift, lift_coarsen, lift_recut, lift_relabel, preserve_only,
+    cut_to_pieces, lift, lift_coarsen, lift_recut, lift_relabel, pieces_match_cut, preserve_only,
 };
 use crate::partition::ruled::{
     Authority, Cut, DirectionScope, FrameScope, Label, MoleculeScope, Rule, RuleKind, Scope,
@@ -181,9 +184,8 @@ impl Rule for PayloadCoincidence {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         merge::coalesce_payload_alignment_split(&mut pieces, ctx.reference);
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             // The pass declined this block; the rule does not fire.
             return None;
         }
@@ -230,9 +232,8 @@ impl Rule for CompensatingGaps {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         merge::coalesce_compensating_gap_split(&mut pieces, ctx.reference);
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         lift_coarsen(ctx, cut, pieces)
@@ -424,7 +425,6 @@ impl Rule for CodonFrameSeparation {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         let reading_frame = ctx.frame.grid_phase().is_some();
         let length_changing = ctx.reference.len() != ctx.resulting.len();
         merge::coalesce_coding_frame_separation(
@@ -434,7 +434,7 @@ impl Rule for CodonFrameSeparation {
             cds_axis_origin(ctx.frame),
             ctx.reference,
         );
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         lift_relabel(ctx, cut, pieces, preserve_only)
@@ -479,7 +479,6 @@ impl Rule for CodonException {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         let reading_frame = ctx.frame.grid_phase().is_some();
         let w_lo = cds_axis_origin(ctx.frame);
         // The CDS end on the same axis as `w_lo + offset`: the coordinate of the last
@@ -498,7 +497,7 @@ impl Rule for CodonException {
             ctx.reference,
             cds_end_axis,
         );
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         lift_coarsen(ctx, cut, pieces)
@@ -559,12 +558,11 @@ impl Rule for TandemDupRun {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         merge::coalesce_by_run(&mut pieces, ctx.reference, |run, reference| {
             merge::peel_tandem_dup_beside_change(run, reference, merge::PeelReach::PlusK);
             merge::coalesce_solid_run(run, reference);
         });
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         // The peel's per-run source-corruption gate (`peel_tandem_dup_beside_change`
@@ -649,8 +647,9 @@ impl Rule for TandemDupRun {
         // dup is real in both, but is reachable only via `PlusK`'s wider reach,
         // or not at all in W43's separation-zero case), the veto does not fire
         // and the shape-gate match stands.
-        if ctx.frame.grid_phase().is_some() && before.len() == 1 {
-            let d = &before[0];
+        let runs = cut.runs();
+        if ctx.frame.grid_phase().is_some() && runs.len() == 1 {
+            let d = &runs[0];
             let w_lo = cds_axis_origin(ctx.frame);
             let span_one = d.ref_end - d.ref_start == 1;
             let long_enough = d.alt.len() >= 3;
@@ -670,7 +669,7 @@ impl Rule for TandemDupRun {
                     .is_some_and(|&b| d.alt[d.alt.len() - 2] == b)
                 && merge::same_codon(w_lo + d.ref_start as i64 - 1, w_lo + d.ref_start as i64);
             if h1_ins_unchanged_ins || h2_sub_unchanged_ins || h3_ins_unchanged_sub {
-                let mut tract_only = before.clone();
+                let mut tract_only = cut_to_pieces(cut);
                 merge::coalesce_by_run(&mut tract_only, ctx.reference, |run, reference| {
                     merge::peel_tandem_dup_beside_change(
                         run,
@@ -679,7 +678,7 @@ impl Rule for TandemDupRun {
                     );
                     merge::coalesce_solid_run(run, reference);
                 });
-                if tract_only == before {
+                if pieces_match_cut(&tract_only, cut) {
                     return None;
                 }
             }
@@ -748,7 +747,6 @@ impl Rule for RunInv {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         // The ctx is the padded canonical WINDOW (design §12 R1), so the block the
         // pass types is re-derived with the pipeline's own trim. The pipeline calls
         // it `(pieces, &ref_bytes, lo, &ref_bytes[lo..hi_ref], &result[lo..hi_alt])`;
@@ -762,7 +760,7 @@ impl Rule for RunInv {
             &ctx.reference[lo..hi_ref],
             &ctx.resulting[lo..hi_alt],
         );
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         // Type each inversion run with the render stage's own recogniser and LOCK
@@ -841,7 +839,6 @@ impl Rule for SplitConcealed {
 
     fn apply(&self, cut: &Cut, ctx: &BlockCtx) -> Option<Cut> {
         let mut pieces = cut_to_pieces(cut);
-        let before = pieces.clone();
         let reading_frame = ctx.frame.grid_phase().is_some();
         let length_changing = ctx.reference.len() != ctx.resulting.len();
         merge::split_concealed_separations(
@@ -851,7 +848,7 @@ impl Rule for SplitConcealed {
             cds_axis_origin(ctx.frame),
             ctx.reference,
         );
-        if pieces == before {
+        if pieces_match_cut(&pieces, cut) {
             return None;
         }
         lift_relabel(ctx, cut, pieces, preserve_only)
