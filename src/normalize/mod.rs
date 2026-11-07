@@ -6284,16 +6284,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // pre-existing singleton alleles must round-trip with the Allele
         // wrapper intact for programmatic callers (Display already renders
         // singletons in bare form regardless).
-        // Never unwrap a predicted/uncertain cis allele (`[(a;b)]`): even if
-        // the members merge down to one, the `uncertain` flag and the `[(...)]`
-        // notation must be preserved.  Dropping the wrapper would silently
-        // change semantics and break round-trip fidelity.
-        let result = if allele.phase == crate::hgvs::variant::AllelePhase::Cis
-            && !allele.uncertain
-            && original_len > 1
-            && normalized.len() == 1
-        {
+        //
+        // A predicted cis allele (`[(a;b)]`) whose members merge down to one
+        // moves its marker onto that member instead (#2277): `[(4C>A;6C>A)]` on
+        // a `CGC` codon is the predicted `c.(4_6delinsAGA)`. Keeping the
+        // one-member allele, as this branch used to, did not preserve the
+        // wrapper at all — `AlleleVariant`'s `Display` renders any singleton
+        // bare, so the output read `c.4_6delinsAGA`, an observed change, on
+        // every axis (`g.[(1003C>A;1004G>T)]` came out `g.1003_1004delinsAT`).
+        // Moving the marker also makes the allele spelling settle on the same
+        // string as the single-edit spelling of the same predicted change.
+        // A lone member with no single edit to mark (a nested allele) keeps
+        // the enclosing allele, as before.
+        let is_cis = allele.phase == crate::hgvs::variant::AllelePhase::Cis;
+        let collapsed = is_cis && original_len > 1 && normalized.len() == 1;
+        let result = if collapsed && !allele.uncertain {
             normalized.pop().unwrap()
+        } else if collapsed && has_single_edit(&normalized[0]) {
+            let mut only = normalized.pop().unwrap();
+            mark_edit_uncertain(&mut only);
+            only
         } else {
             let mut rebuilt = crate::hgvs::variant::AlleleVariant::new(normalized, allele.phase);
             // Preserve the uncertainty wrapper `(...)` (e.g. the and/or
@@ -15514,16 +15524,62 @@ fn is_transcript_accession(id: &str) -> bool {
 /// a single predicted/uncertain edit that canonically decomposes into a
 /// multi-member allele carries its `(...)` wrapper onto the whole allele
 /// (`g.[(200C>T;202C>G)]`), never onto the individual members — members
-/// built by `build_variant_at` are always `Mu::Certain`. Ignored when the
-/// split doesn't fire (single-element `variants`).
+/// built by `build_variant_at` are always `Mu::Certain`.
+///
+/// A single-element `variants` is not always the input handed back untouched
+/// (#2277). The split can *rebuild* one member: on the coding axis a codon
+/// triplet `[Sub; Identity; Sub]` re-merges into a single 3-base `delins`
+/// (`general.md:34`), so `c.(4_6delinsAGA)` on `ATGCGCTAA` comes back as one
+/// freshly built, certain `c.4_6delinsAGA`. Returning that bare asserted an
+/// observed change where the input stated a predicted one, while the same
+/// change on `n.`/`g.` — which has no codon frame, so splits into two members —
+/// kept its wrapper as `[(4C>A;6C>A)]`. So a lone member of an uncertain input
+/// is re-marked uncertain here; one already carrying the input's certainty is
+/// unchanged, and a certain input never gains a wrapper.
 fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>, uncertain: bool) -> HgvsVariant {
     debug_assert!(!variants.is_empty(), "wrap_allele_if_split: empty input");
     if variants.len() == 1 {
-        variants.pop().unwrap()
+        let mut only = variants.pop().unwrap();
+        if uncertain {
+            mark_edit_uncertain(&mut only);
+        }
+        only
     } else if uncertain {
         HgvsVariant::Allele(AlleleVariant::new_uncertain(variants, AllelePhase::Cis))
     } else {
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Cis))
+    }
+}
+
+/// Whether `variant` carries a single `loc_edit` whose certainty
+/// [`mark_edit_uncertain`] can set — false for alleles, fusions and rings.
+fn has_single_edit(variant: &HgvsVariant) -> bool {
+    matches!(
+        variant,
+        HV::Genome(_) | HV::Cds(_) | HV::Tx(_) | HV::Rna(_) | HV::Mt(_) | HV::Protein(_)
+    )
+}
+
+/// Re-mark a single variant's edit `Mu::Uncertain` — the `(...)` predicted
+/// wrapper — when it is `Mu::Certain`. `Mu::Unknown` is left alone, and so is
+/// every variant kind without a single `loc_edit` (alleles, fusions, rings),
+/// which `wrap_allele_if_split` never receives as a lone split member.
+fn mark_edit_uncertain(variant: &mut HgvsVariant) {
+    fn mark<E>(edit: &mut Mu<E>) {
+        if let Mu::Certain(_) = edit {
+            if let Mu::Certain(inner) = std::mem::replace(edit, Mu::Unknown) {
+                *edit = Mu::Uncertain(inner);
+            }
+        }
+    }
+    match variant {
+        HV::Genome(v) => mark(&mut v.loc_edit.edit),
+        HV::Cds(v) => mark(&mut v.loc_edit.edit),
+        HV::Tx(v) => mark(&mut v.loc_edit.edit),
+        HV::Rna(v) => mark(&mut v.loc_edit.edit),
+        HV::Mt(v) => mark(&mut v.loc_edit.edit),
+        HV::Protein(v) => mark(&mut v.loc_edit.edit),
+        _ => {}
     }
 }
 
