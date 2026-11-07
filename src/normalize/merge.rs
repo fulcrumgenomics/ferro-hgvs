@@ -14559,8 +14559,8 @@ fn translate_junction_member<P: ReferenceProvider>(
 /// ```
 ///
 /// Only the identity member is dropped, and only when a sibling's span *overlaps*
-/// it under [`blocks_sibling_shift`] — a sibling that merely adds sequence at a
-/// junction inside it contradicts nothing.
+/// it under [`blocks_sibling_shift`], or an insertion's junction lies strictly
+/// inside it (below).
 ///
 /// **Overlap, not containment** (#1416). The rule this enforces is "two members
 /// must not claim one base", and a partial overlap breaks it exactly as a
@@ -14598,6 +14598,37 @@ fn translate_junction_member<P: ReferenceProvider>(
 /// Insertions stay out of it under either predicate, and must: an insertion's
 /// span *is* the gap it occupies, so `g.264_265insA` nominally covers position
 /// 264 while changing nothing there.
+///
+/// **An insertion strictly inside the identity is a contradiction too** (#2281).
+/// An insertion whose junction lies between two bases the identity names
+/// (identity start ≤ junction < identity end) splits a stretch the identity
+/// says is unchanged and contiguous. The applier declines such an allele, so it
+/// has no resulting sequence, and `FERRO_ASSERT_SEQUENCE` fires on it. This
+/// pass used to say such an insertion "contradicts nothing"; that was wrong.
+/// The shape arises when an insertion at the identity's 5' edge 3'-shifts into
+/// it, and the identity is often derived from a palindromic `inv`:
+///
+/// ```text
+/// g.[375_376insCA;376_381inv]  ->  g.[376_377insAC;376_381=]   (before)
+///                              ->  g.376_377insAC              (after)
+///   over `…T CCGCGG T…`, where `CCGCGG` is its own reverse complement
+/// ```
+///
+/// Dropping the identity is what a sequence-first derivation gives as well,
+/// and it matches a duplication landing inside an identity: `g.[375_376insC;
+/// 376_381=]` already becomes `g.377dup`. An insertion at either **edge**
+/// leaves the identity alone, because its junction is outside the run of bases
+/// the identity names. `g.[259=;259_260insG]` (#1321) and `g.[376=;
+/// 376_377insAC]` keep their `=`.
+///
+/// One input family that already conflicts moves too. `g.[11_12inv;11_12insCC]`
+/// over a palindromic `11_12` writes inside the inversion's span, so strict mode
+/// still refuses it (W5002). In lenient mode it used to come back verbatim,
+/// because the surviving pair `[11_12=;11_12insCC]` was plural, and
+/// `normalize_allele` hands back the input when a plural output has lost a
+/// conflict the input had (#1406). With the identity dropped, one insertion is
+/// left, which is the single-member composition that gate lets through, the
+/// same way #1423 resolves `g.[11_12inv;11_12insAA]` to `g.10_11A[4]`.
 pub(crate) fn drop_identity_members_covered_by_siblings<P: ReferenceProvider>(
     members: &mut Vec<HgvsVariant>,
     phase: AllelePhase,
@@ -14660,6 +14691,17 @@ pub(crate) fn drop_identity_members_covered_by_siblings<P: ReferenceProvider>(
                         && span.start <= span.end
                         && s.start <= span.end
                         && s.end >= span.start
+                }) || spans[j].as_ref().is_some_and(|s| {
+                    // An insertion strictly inside the identity (#2281): its
+                    // junction is 3' of one named base and 5' of another.
+                    // Restricted to `Insertion`, which is the only junction
+                    // writer that does not already block shift, so a `dup`
+                    // stays under the overlap test above.
+                    !s.blocks_shift
+                        && s.accession == span.accession
+                        && span.start <= span.end
+                        && s.junction
+                            .is_some_and(|junction| span.start <= junction && junction < span.end)
                 })
             })
         })

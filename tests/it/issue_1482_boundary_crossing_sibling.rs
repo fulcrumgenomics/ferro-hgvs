@@ -276,6 +276,15 @@ fn the_inversion_form_no_longer_overlaps_its_sibling() {
 /// visible, and the thing to rule out is that it also moved the spans that were
 /// visible all along — so both values were measured on the pre-fix revision as
 /// well as this one, and are identical there.
+///
+/// The `inv` row has moved since under the 3' rule, for a reason unrelated to
+/// #1482. `c.11_12` is `CG`, its own reverse complement, so the inversion
+/// cancels to `c.11_12=`, and the `CC` insertion stays at 11|12, inside it. That
+/// pair used to be plural, so the input came back verbatim (#1406). #2281 drops
+/// an identity with an insertion inside it, which leaves the single insertion.
+/// Under the 5' rule the insertion shifts to 10|11, the identity's 5' edge, so
+/// the identity stays, the pair stays plural, and the input still comes back
+/// verbatim.
 #[test]
 fn an_in_region_pair_keeps_the_spelling_it_already_had() {
     let provider = provider(CORE, 1, 15);
@@ -284,9 +293,15 @@ fn an_in_region_pair_keeps_the_spelling_it_already_had() {
             normalize(&provider, "NM_TEST.1:c.[11_12del;11_12insCC]", direction),
             "NM_TEST.1:c.12G>C"
         );
+        let expected = if direction == ShuffleDirection::ThreePrime {
+            "NM_TEST.1:c.11_12insCC"
+        } else {
+            "NM_TEST.1:c.[11_12inv;11_12insCC]"
+        };
         assert_eq!(
             normalize(&provider, "NM_TEST.1:c.[11_12inv;11_12insCC]", direction),
-            "NM_TEST.1:c.[11_12inv;11_12insCC]"
+            expected,
+            "{direction:?}"
         );
     }
 }
