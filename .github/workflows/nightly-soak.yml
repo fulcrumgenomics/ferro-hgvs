@@ -109,7 +109,7 @@ jobs:
       # the binaries removes it at the source instead, so the ordering below is
       # no longer what protects correctness (it is kept only because it costs
       # nothing).
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
           # keys per job and appends a lockfile/env hash, so every PR run that
@@ -148,7 +148,7 @@ jobs:
         run: |
           cargo nextest archive --cargo-profile soak -p ferro-hgvs-soak-tests \
             --archive-file nextest-soak.tar.zst
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nextest-archive-soak
           path: nextest-soak.tar.zst
@@ -181,7 +181,7 @@ jobs:
           # 149 MB fetched eight times a night for files nothing here opens.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: nextest-archive-soak
       - name: Soak 125k unseeded cases
@@ -222,7 +222,7 @@ jobs:
           echo "::group::seed files this run modified"
           git status --porcelain tests/proptest-regressions/ || true
           echo "::endgroup::"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: failure()
         with:
           name: proptest-regressions-shard-${{ matrix.shard }}
