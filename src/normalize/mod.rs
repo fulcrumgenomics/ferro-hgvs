@@ -4172,6 +4172,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
         matches!(edit.inner(), Some(NaEdit::Substitution { .. }))
     }
 
+    /// Whether a member is numbered CDS-relative (`c.`, or `r.` on a coding
+    /// transcript) on a transcript annotated `cds_start_NF` (#972), so it has no
+    /// confirmed `c.1` to number from. `normalize_cds` and `normalize_rna`
+    /// decline such a member; `normalize_allele` and
+    /// [`Self::sequence_first_pass`] use this to decline the same input rather
+    /// than merge or re-derive it. `n.` is transcript-native and never asks. A non-coding
+    /// transcript never sets the flag, and a transcript the provider cannot
+    /// serve answers `false`, matching the per-member gates, which also only
+    /// decline on a lookup that succeeds.
+    fn cds_relative_on_incomplete_cds_start(&self, member: &HgvsVariant) -> bool {
+        if !matches!(member, HV::Cds(_) | HV::Rna(_)) {
+            return false;
+        }
+        member.accession().is_some_and(|accession| {
+            self.provider
+                .get_transcript(accession.transcript_accession_smol().as_str())
+                .is_ok_and(|tx| tx.cds_start_incomplete)
+        })
+    }
+
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
     ///
     /// The per-member pipeline normalizes each cis-allele member in isolation,
@@ -4368,6 +4388,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
             && crate::normalize::overlap::detect_overlap_conflicts(members, AllelePhase::Cis)
                 .iter()
                 .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
+        {
+            return None;
+        }
+        // #972: `normalize_cds`/`normalize_rna` pass a CDS-relative member on a
+        // `cds_start_NF` transcript through verbatim, because `c.1` is undefined
+        // without a confirmed ATG. Re-deriving the same input here would number a
+        // new description in the frame the per-member decline refused to trust
+        // (`c.10_14delinsTTGCA` was cut at a codon boundary into
+        // `c.[10_12delinsTTG;13_14delinsCA]`), so decline too. The members
+        // keep the W5004 the per-member pass attached, so strict mode still
+        // rejects and silent mode still accepts, exactly as for a lone member.
+        // Declines the whole allele if any member qualifies: a partition across
+        // such a member would still re-number it.
+        if members
+            .iter()
+            .any(|m| self.cds_relative_on_incomplete_cds_start(m))
         {
             return None;
         }
@@ -5758,6 +5794,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 all_warnings.extend(member_warnings);
             }
             all_warnings.extend(raw_conflicts);
+            let mut preserved =
+                crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
+            preserved.uncertain = allele.uncertain;
+            return Ok((HgvsVariant::Allele(preserved), all_warnings));
+        }
+
+        // #972: a CDS-relative member (`c.`, or `r.` on a coding transcript) on a
+        // `cds_start_NF` transcript has no confirmed `c.1`, and `normalize_cds` /
+        // `normalize_rna` pass such a member through verbatim. The merge below
+        // would not: its codon-frame arm reads `c.[10C>T;12T>A]` as one codon and
+        // rewrites it to `c.10_12delinsTTA`, in exactly the frame the per-member
+        // decline refuses to trust. So decline for the allele too: preserve it as
+        // authored, and harvest each member's diagnostics the way the conflict
+        // branch above does, so the W5004 a lone member carries is carried here
+        // and strict mode rejects the allele as it rejects the member.
+        //
+        // Cis only: the merge and the sequence-first pass act on cis alleles, so
+        // a trans or unphased allele already keeps such a member as authored.
+        if allele.phase == AllelePhase::Cis
+            && allele
+                .variants
+                .iter()
+                .any(|m| self.cds_relative_on_incomplete_cds_start(m))
+        {
+            for member in &allele.variants {
+                let (_, member_warnings) = self.normalize_core(member, manufactured)?;
+                all_warnings.extend(member_warnings);
+            }
             let mut preserved =
                 crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
             preserved.uncertain = allele.uncertain;
