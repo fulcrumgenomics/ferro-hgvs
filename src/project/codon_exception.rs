@@ -53,6 +53,52 @@ pub(crate) fn member_count(variant: &HgvsVariant) -> usize {
     }
 }
 
+/// The certain spelling of a predicted cis allele `[(a;b)]`, so the codon
+/// exception can be asked about its partition (#2280).
+///
+/// `None` for anything else, which the caller tests unchanged. The wrapper is
+/// the whole allele's statement that the change is predicted; it says nothing
+/// about how the change is partitioned, so the predicted and observed forms of
+/// one change take the same partition and differ only in the wrapper. That is
+/// also where normalization lands: `NM_:c.[(4C>A;6C>A)]` normalizes to the
+/// predicted `c.(4_6delinsAGA)` (#2277). A member's own uncertain edit is a
+/// different statement and is still left alone by [`coding_codon_pairs`].
+pub(crate) fn certain_spelling_of_predicted_allele(coding: &HgvsVariant) -> Option<HgvsVariant> {
+    let HgvsVariant::Allele(allele) = coding else {
+        return None;
+    };
+    if !allele.uncertain || allele.phase != AllelePhase::Cis {
+        return None;
+    }
+    let mut certain = allele.clone();
+    certain.uncertain = false;
+    Some(HgvsVariant::Allele(certain))
+}
+
+/// Mark the merge of a predicted allele's certain spelling as predicted again:
+/// a remaining allele takes the wrapper, and a single `c.` variant takes it on
+/// its edit, `c.(4_6delinsAGA)`.
+///
+/// `None` when there is nowhere to put it — a shape the merge of a `c.` allele
+/// does not produce — so the caller keeps the unmerged predicted allele rather
+/// than report an observed change.
+pub(crate) fn mark_merge_predicted(merged: HgvsVariant) -> Option<HgvsVariant> {
+    match merged {
+        HgvsVariant::Allele(mut allele) if allele.phase == AllelePhase::Cis => {
+            allele.uncertain = true;
+            Some(HgvsVariant::Allele(allele))
+        }
+        HgvsVariant::Cds(mut cds) => {
+            let Mu::Certain(edit) = cds.loc_edit.edit else {
+                return None;
+            };
+            cds.loc_edit.edit = Mu::Uncertain(edit);
+            Some(HgvsVariant::Cds(cds))
+        }
+        _ => None,
+    }
+}
+
 /// Carry the parts of the pre-merge projection that the re-projection must not
 /// re-derive onto `reprojected` — and **only** those parts.
 ///
@@ -571,5 +617,39 @@ mod tests {
             coding_codon_pairs(&make_edits_uncertain(&certain)),
             no_pairs()
         );
+    }
+
+    /// #2280: only a predicted cis allele has a certain spelling to test; an
+    /// observed allele and a single variant are tested as they stand.
+    #[test]
+    fn only_a_predicted_cis_allele_is_tested_in_its_certain_spelling() {
+        let predicted = parse_hgvs("NM_000000.1:c.[(4C>A;6G>A)]").expect("parses");
+        let certain = certain_spelling_of_predicted_allele(&predicted).expect("predicted");
+        assert_eq!(certain.to_string(), "NM_000000.1:c.[4C>A;6G>A]");
+        assert_eq!(coding_codon_pairs(&predicted), no_pairs());
+        assert_eq!(coding_codon_pairs(&certain), vec![(4, 6)]);
+        for observed in ["NM_000000.1:c.[4C>A;6G>A]", "NM_000000.1:c.(4C>A)"] {
+            let observed = parse_hgvs(observed).expect("parses");
+            assert!(certain_spelling_of_predicted_allele(&observed).is_none());
+        }
+    }
+
+    /// #2280: the merge is marked predicted where it can carry the marker — on
+    /// a remaining allele, or on a single `c.` variant's edit.
+    #[test]
+    fn a_merge_is_marked_predicted_on_the_allele_or_on_its_one_edit() {
+        let mark =
+            |s: &str| mark_merge_predicted(parse_hgvs(s).expect("parses")).map(|v| v.to_string());
+        assert_eq!(
+            mark("NM_000000.1:c.4_6delinsAGA").as_deref(),
+            Some("NM_000000.1:c.(4_6delinsAGA)")
+        );
+        assert_eq!(
+            mark("NM_000000.1:c.[4_6delinsAGA;8A>C]").as_deref(),
+            Some("NM_000000.1:c.[(4_6delinsAGA;8A>C)]")
+        );
+        // Already uncertain, or not a `c.` variant: nowhere to put it.
+        assert_eq!(mark("NM_000000.1:c.(4_6delinsAGA)"), None);
+        assert_eq!(mark("NC_000001.11:g.1003_1005delinsAGA"), None);
     }
 }

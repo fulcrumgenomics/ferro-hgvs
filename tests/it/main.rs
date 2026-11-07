@@ -575,6 +575,7 @@ mod issue_1832_reanchor_empty_alternate;
 mod issue_2000_nextest_stall_phase;
 mod issue_2034_mosaic_chimeric_reference_first;
 mod issue_2276_predicted_wrapper_on_transcript_axes;
+mod issue_2280_projected_predicted_allele_wrapper;
 mod report_failure_degrades;
 mod report_failure_provenance;
 mod reported_confluence_pairs;

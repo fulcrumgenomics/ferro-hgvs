@@ -3837,6 +3837,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // `apply_coding_codon_exception` fires there — which keeps exactly one
         // implementation of the rule in the tree.
         if let Some(coding) = projection.coding.clone() {
+            // A predicted allele is tested, and merged, in its certain spelling
+            // and marked predicted again afterwards (#2280). Its wrapper says the
+            // change is predicted, not how it is partitioned, so it takes the
+            // same partition as the observed form. Before #2280 the wrapper never
+            // reached this point — `project_allele_inner` dropped it — and
+            // `coding_codon_pairs` declines an uncertain allele, so carrying the
+            // wrapper without this would have left `c.[(4C>A;6C>A)]` where the
+            // observed form merges to `c.4_6delinsAGA`.
+            let predicted = codon::certain_spelling_of_predicted_allele(&coding);
+            let is_predicted = predicted.is_some();
+            let coding = predicted.unwrap_or(coding);
             // The transcript is fetched only once a candidate pair exists, so a
             // projection this rule never touches pays no extra lookup.
             let pairs = codon::coding_codon_pairs(&coding);
@@ -3862,6 +3873,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     if codon::member_count(&merged) < codon::member_count(&coding)
                         && self.merged_members_stay_within_one_exon(transcript_id, &coding, &merged)
                     {
+                        // A predicted allele's merge is marked predicted again.
+                        // With nowhere to put the wrapper, keep the unmerged
+                        // predicted allele rather than report an observed change.
+                        let merged = if is_predicted {
+                            let Some(marked) = codon::mark_merge_predicted(merged) else {
+                                return Ok(projection);
+                            };
+                            marked
+                        } else {
+                            merged
+                        };
                         // Terminates: `merged` has strictly fewer members, so
                         // the re-projection's coding axis cannot re-enter here.
                         //
@@ -4142,11 +4164,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // gene_symbol from any projection that has one.
         let gene_symbol = inner_projections.iter().find_map(|p| p.gene_symbol.clone());
 
+        // Every axis allele reassembled below takes the input's phase AND its
+        // predicted marker. `AlleleVariant::new` is always certain, so building
+        // with it alone turned a predicted `g.[(1003C>A;1007T>C)]` into the
+        // observed `c.[4C>A;8T>C]`, `n.[4C>A;8T>C]` and `g.[1003C>A;1007T>C]`
+        // beside an `r.[(4c>a;8u>c)]` that kept it (#2280). The members cannot
+        // carry it instead: the wrapper is the whole allele's, and each member's
+        // own `Mu` already rides through its projection (#2276).
+        // `project_to_genomic` copies the flag the same way.
+        let reassemble = |variants: Vec<HgvsVariant>| {
+            let mut axis = AlleleVariant::new(variants, allele.phase);
+            axis.uncertain = allele.uncertain;
+            HgvsVariant::Allele(axis)
+        };
+
         // Build the coding allele from inner c./n. variants.
         let coding_variants: Option<Vec<HgvsVariant>> =
             inner_projections.iter().map(|p| p.coding.clone()).collect();
-        let coding = coding_variants
-            .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+        let coding = coding_variants.map(reassemble);
 
         // Build the n. (transcript-relative) allele the same all-or-nothing way:
         // only when EVERY member carries an n. form (mirrors the coding rule).
@@ -4154,8 +4189,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .iter()
             .map(|p| p.noncoding.clone())
             .collect();
-        let noncoding = noncoding_variants
-            .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+        let noncoding = noncoding_variants.map(reassemble);
 
         // #1198: because the rule above is all-or-nothing, an absent allele `n.`
         // axis means at least one member's was absent — and that member may have
@@ -4276,10 +4310,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             if allele.phase == AllelePhase::Cis {
                 sort_genomic_allele_members(&mut genomic_variants);
             }
-            Some(HgvsVariant::Allele(AlleleVariant::new(
-                genomic_variants,
-                allele.phase,
-            )))
+            Some(reassemble(genomic_variants))
         } else {
             None
         };
@@ -13729,14 +13760,16 @@ mod tests {
             // The two builds 3'-shift the deletion to different positions because
             // their poly-A run lengths differ. Pre-fix r37 == r38 (both GRCh38).
             // Assert the FULL rendered string (exact, not a `contains` substring
-            // match that would also accept e.g. `17del`/`19del`).
+            // match that would also accept e.g. `17del`/`19del`). The `( )` is the
+            // predicted `r.`'s own wrapper, which a one-member allele dropped until
+            // #2280.
             assert_eq!(
-                r37, "NM_RNA_DIV.1:r.7del",
-                "GRCh37 allele r. must 3'-shift to its own run end (r.7del)"
+                r37, "NM_RNA_DIV.1:r.(7del)",
+                "GRCh37 allele r. must 3'-shift to its own run end (r.(7del))"
             );
             assert_eq!(
-                r38, "NM_RNA_DIV.1:r.9del",
-                "GRCh38 allele r. must 3'-shift to its own run end (r.9del)"
+                r38, "NM_RNA_DIV.1:r.(9del)",
+                "GRCh38 allele r. must 3'-shift to its own run end (r.(9del))"
             );
             assert_ne!(
                 r37, r38,
@@ -13838,8 +13871,8 @@ mod tests {
                 .expect("GRCh38 allele must still predict an r. (build-keyed record present)")
                 .to_string();
             assert_eq!(
-                r38, "NM_RNA_DIV.1:r.9del",
-                "GRCh38 allele must 3'-shift to its own run end (r.9del); the build guard \
+                r38, "NM_RNA_DIV.1:r.(9del)",
+                "GRCh38 allele must 3'-shift to its own run end (r.(9del)); the build guard \
                  must not decline a matching-build transcript"
             );
         }
