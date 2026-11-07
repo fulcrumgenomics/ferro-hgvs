@@ -1028,3 +1028,138 @@ fn vps13d_strict_mode_rejects_bare_coding_input() {
         other => panic!("expected FerroError::InvalidCoordinates (W5004), got {other:?}"),
     }
 }
+
+// =============================================================================
+// Normalization side: the sequence-first pass must decline too.
+// =============================================================================
+
+/// A coding transcript over `ATGCCCGGGCTTAGTTAGGCCAATTCCGGAT` (CDS `c.1`-`c.30`),
+/// with `cds_start_incomplete` set per `incomplete`.
+fn nf_normalizer(
+    incomplete: bool,
+    config: ferro_hgvs::NormalizeConfig,
+) -> ferro_hgvs::Normalizer<MockProvider> {
+    let mut provider = crate::common::synthetic::SyntheticBuilder::cds(
+        "ATGCCCGGGCTTAGTTAGGCCAATTCCGGAT",
+        1,
+        30,
+        TxStrand::Plus,
+    )
+    .build();
+    let mut transcript = (*provider
+        .get_transcript("NM_TEST.1")
+        .expect("fixture transcript"))
+    .clone();
+    transcript.cds_start_incomplete = incomplete;
+    provider.add_transcript(transcript);
+    ferro_hgvs::Normalizer::with_config(provider, config)
+}
+
+/// Inputs the sequence-first pass re-derives when the CDS start is complete:
+/// cis alleles of substitutions and of insertions, and the `r.` twin of the substitution allele (`r.` numbering is CDS-relative on a
+/// coding transcript, so `normalize_rna` declines on `cds_start_NF` too).
+const RE_DERIVED_INPUTS: &[(&str, &str)] = &[
+    ("NM_TEST.1:c.[10C>T;12T>A]", "NM_TEST.1:c.10_12delinsTTA"),
+    (
+        "NM_TEST.1:c.[11_12insGG;12_13insGG]",
+        "NM_TEST.1:c.12delinsGGTGG",
+    ),
+    ("NM_TEST.1:r.[10c>u;12u>a]", "NM_TEST.1:r.10_12delinsuua"),
+];
+
+/// #972: `normalize_cds` passes a `c.` variant on a `cds_start_NF` transcript
+/// through verbatim, because `c.1` is the `A` of the `ATG`
+/// (`background/numbering.md:21`) and is undefined without a confirmed one. The
+/// sequence-first pass that runs after it must not then re-derive the same
+/// input: it used to merge `c.[10C>T;12T>A]` into `c.10_12delinsTTA`, numbering
+/// a new description in the very frame the per-member decline refused to trust.
+/// The input passes through, carrying W5004 as a lone member would.
+#[test]
+fn a_cds_start_nf_allele_passes_through_the_sequence_first_pass() {
+    let normalizer = nf_normalizer(true, ferro_hgvs::NormalizeConfig::lenient());
+    let mut failures = Vec::new();
+    for (input, _) in RE_DERIVED_INPUTS {
+        let variant = parse_hgvs(input).expect("input parses");
+        let result = normalizer
+            .normalize_with_diagnostics(&variant)
+            .expect("lenient normalization succeeds");
+        if result.result.to_string() != *input {
+            failures.push(format!("{input} -> {}", result.result));
+        }
+        assert!(
+            result.warnings.iter().any(|w| matches!(
+                w,
+                ferro_hgvs::normalize::NormalizationWarning::IncompleteCdsStartReference { .. }
+            )),
+            "{input} must carry W5004, got {:?}",
+            result.warnings
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "must pass through unchanged: {failures:#?}"
+    );
+}
+
+/// Control for the test above: with the CDS start complete, the same inputs are
+/// re-derived — so the pass-through is the `cds_start_NF` decline, not a fixture
+/// the pass never reaches.
+#[test]
+fn a_complete_cds_start_allele_is_still_re_derived() {
+    let normalizer = nf_normalizer(false, ferro_hgvs::NormalizeConfig::lenient());
+    for (input, expected) in RE_DERIVED_INPUTS {
+        let variant = parse_hgvs(input).expect("input parses");
+        let result = normalizer
+            .normalize(&variant)
+            .expect("normalization succeeds");
+        assert_eq!(result.to_string(), *expected, "{input}");
+    }
+}
+
+/// Strict mode promotes W5004 to a rejection for an allele exactly as it does for
+/// a lone member. This held before the pass-through too (each member's
+/// `normalize_cds` decline already emits W5004); it guards that declining the
+/// sequence-first pass does not drop the warning the rejection keys on.
+#[test]
+fn strict_mode_rejects_a_cds_start_nf_allele() {
+    let normalizer = nf_normalizer(true, ferro_hgvs::NormalizeConfig::strict());
+    for (input, _) in RE_DERIVED_INPUTS {
+        let variant = parse_hgvs(input).expect("input parses");
+        let err = normalizer
+            .normalize(&variant)
+            .expect_err("strict mode must reject a cds_start_NF allele");
+        match err {
+            ferro_hgvs::FerroError::InvalidCoordinates { msg } => assert!(
+                msg.contains("W5004"),
+                "{input}: expected W5004 in the rejection message, got {msg:?}"
+            ),
+            other => {
+                panic!("{input}: expected FerroError::InvalidCoordinates (W5004), got {other:?}")
+            }
+        }
+    }
+}
+
+/// A lone member is re-derived by the sequence-first pass too, after
+/// `normalize_cds`/`normalize_rna` has passed it through: on a `cds_start_NF`
+/// transcript that pass used to cut `c.10_14delinsTTGCA` at a codon boundary it
+/// has no frame for (`c.[10_12delinsTTG;13_14delinsCA]`). On a complete
+/// transcript the same input stays whole, so the split was the pass reasoning in
+/// the undefined frame, not a canonical form being reached.
+#[test]
+fn a_cds_start_nf_delins_is_not_split_at_a_codon_boundary() {
+    for incomplete in [true, false] {
+        let normalizer = nf_normalizer(incomplete, ferro_hgvs::NormalizeConfig::lenient());
+        for input in [
+            "NM_TEST.1:c.10_14delinsTTGCA",
+            "NM_TEST.1:c.10_15delinsTTGCAA",
+            "NM_TEST.1:r.10_14delinsuugca",
+        ] {
+            let variant = parse_hgvs(input).expect("input parses");
+            let result = normalizer
+                .normalize(&variant)
+                .expect("normalization succeeds");
+            assert_eq!(result.to_string(), input, "incomplete={incomplete}");
+        }
+    }
+}
