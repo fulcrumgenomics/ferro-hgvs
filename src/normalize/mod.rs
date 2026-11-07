@@ -64,11 +64,43 @@ pub mod validate;
 #[cfg(feature = "dev")]
 pub use merge::dev_partitioners;
 
+// The legacy side of Task 3's byte-identity gate: the four legacy rules'
+// partitions, relabeled as typed `Member`s through the Direction-1 adapter.
+// Dev-only, re-exported only so `tests/it/partition_registry_equivalence.rs` can
+// drive the raw dispatch without touching the cached `FERRO_PARTITION` read.
+#[cfg(feature = "dev")]
+pub use merge::legacy_partition_members;
+
+// The four legacy-rule arms as `Monolithic`/`Partitioner` handles, their type, and
+// the ruled arm registered beside them.
+// Dev-only, re-exported so the bake-off harness and its examples can name the
+// shared arms (the retired `bakeoff::ferro_rules` bridge's replacement) without
+// reaching into the `pub(crate)` `merge` module. See `merge::legacy_rule_arms`.
+#[cfg(feature = "dev")]
+pub use merge::{legacy_rule_arms, LegacyRuleArm, RuledArm};
+
+// Task 4's Direction-2 kind-directed adapter surface: render a typed `Member` (or a
+// whole `Partition`, or a named bake-off arm's partition of a block) into HGVS,
+// HONORING the arm's declared `EditKind` rather than re-deriving it. Dev-only,
+// re-exported for `tests/it/partition_adapter_kind_directed.rs` and any bake-off
+// driver; not reachable from a release build.
+#[cfg(feature = "dev")]
+pub use merge::{
+    normalize_block_via_arm, render_member_via_adapter, render_partition_via_adapter,
+    MemberRenderError,
+};
+
 // How often a sequence-first partitioner declined and `partition_block` answered
 // under its name. Not gated on `dev`: a bake-off is run from whatever build the
 // measurement uses, and a census that exists only in some builds is one a run can
 // forget to read. See `PartitionDeclineCounts`.
 pub use merge::{partition_decline_counts, PartitionDeclineCounts};
+// The ruled arm's census (design §10 step 1). Dev-only: `RuledCounts` and this
+// `ruled_counts` accessor exist only under the `dev` feature. The `ruled` arm and the
+// `crate::partition` driver themselves are production-wired (the flip); only this
+// census is dev-gated.
+#[cfg(feature = "dev")]
+pub use merge::{ruled_counts, RuledCounts};
 
 // The denominator beside that census: blocks cut on EVERY arm, `Live` included.
 //
@@ -96,6 +128,8 @@ pub use merge::MAX_CANONICAL_BLOCK;
 // `canonicalize_from_sequence` -- it is infallible -- so the refusal is offered
 // to entry points that can return a failure.
 pub use merge::partition_switch_startup_error;
+#[cfg(feature = "dev")]
+pub use merge::set_bakeoff_arm_override;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
@@ -2404,7 +2438,11 @@ const NA_EDIT_REFERENCE_CAP: usize = 4096;
 /// block partition ([`crate::normalize::merge::canonicalize_from_sequence`], the
 /// ~38% `AlignmentDag` rebuild inside the final normalization).
 ///
-/// `true` ships the drop. It is a single switch on purpose: the derivation
+/// `true` enables the drop, which since the ruled default applies only when a
+/// non-`ruled` arm is selected by name: under `ruled`,
+/// [`Normalizer::normalize_for_recommended_form`] always runs the full
+/// re-partition (T4), so the shipped release build takes no drop and does not get
+/// the ~38% saving. It is a single switch on purpose: the derivation
 /// surface already produces the canonical partition (the convergence increments),
 /// so the second partition is a no-op on [`Normalizer::normalize_core`]'s output,
 /// and skipping it changes no output — proven byte-for-byte by the guard in
@@ -2420,8 +2458,8 @@ pub(crate) enum RepartitionMode {
     /// re-type. The pre-drop behavior, and what public `normalize()` and the
     /// projector always use.
     Full,
-    /// Skip it entirely — the raw, unconditional drop (test/`dev` only, never the
-    /// shipped path; that is `Gated` below). `normalize_core`'s output is taken as
+    /// Skip it entirely — the raw, unconditional drop (test/`dev` only, never a
+    /// shipped path; the gated drop is `Gated` below). `normalize_core`'s output is taken as
     /// the canonical form, on the premise the derivation surface already produced it.
     ///
     /// Only ever *constructed* by `normalize_skipping_repartition`, which is
@@ -2432,7 +2470,8 @@ pub(crate) enum RepartitionMode {
     #[cfg_attr(not(any(test, feature = "dev")), allow(dead_code))]
     Skip,
     /// Skip the re-partition **unless** a cheap structural check
-    /// ([`repartition_gate`]) says it might change the output — the shipped Drop.
+    /// ([`repartition_gate`]) says it might change the output — the Drop, taken only
+    /// when a non-`ruled` arm is selected by name (the ruled default runs `Full`, T4).
     /// The Drop's only divergence shapes are an inversion or `delins` member, so
     /// an output of only sub/del/ins/dup members skips (the fast path) and
     /// anything carrying an inv/delins runs the full re-partition (correct).
@@ -3617,7 +3656,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// so the #2161 Path 1 drop — skipping the second block partition
     /// ([`crate::normalize::merge::canonicalize_from_sequence`], the ~38% DAG
     /// rebuild) — is a single switch, [`REDERIVE_SKIPS_REPARTITION`], applied at
-    /// one seam. With the switch `false` this is exactly [`Self::normalize`].
+    /// one seam. With the switch `false` this is exactly [`Self::normalize`]. The
+    /// switch applies only when a non-`ruled` arm is selected by name; under the
+    /// shipped `ruled` default this always runs the full re-partition (T4, below).
     ///
     /// The drop is sound because the derivation surface already produces the
     /// canonical partition on its own (the inversion / decompose / … convergence
@@ -3630,7 +3671,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<HgvsVariant, FerroError> {
-        let mode = if REDERIVE_SKIPS_REPARTITION {
+        // T4 (design §T4): under the ruled arm the second block partition is the
+        // ruled driver, whose move-set `repartition_gate`'s "sub/del/ins/dup is a
+        // fixed point" premise was never measured against — that premise was
+        // established for the `CanonicalCoalesced` pair. So bypass the gate and
+        // run the full re-partition under Ruled. `ruled_arm_active` is `true`
+        // whenever `Ruled` is the arm — the shipped default — so the release build
+        // takes the `Full` branch here; `REDERIVE_SKIPS_REPARTITION` gating applies
+        // only when a different arm is selected by name.
+        let mode = if merge::ruled_arm_active() {
+            RepartitionMode::Full
+        } else if REDERIVE_SKIPS_REPARTITION {
             RepartitionMode::Gated
         } else {
             RepartitionMode::Full
@@ -3653,9 +3704,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             .0)
     }
 
-    /// [`Self::normalize`] on the shipped Drop's gated path — skip the second
-    /// block partition unless [`repartition_gate`] says it could move the output.
-    /// This is what `rederive(recommended_form = true)` runs; exposed so the
+    /// [`Self::normalize`] on the Drop's gated path — skip the second block
+    /// partition unless [`repartition_gate`] says it could move the output. This
+    /// is what `rederive(recommended_form = true)` runs under a non-`ruled` arm
+    /// (the ruled default runs the full path); exposed so the
     /// convergence guard can pin it byte-identical against the full path. Test/`dev`
     /// only.
     #[cfg(any(test, feature = "dev"))]
@@ -3668,8 +3720,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
             .0)
     }
 
-    /// Whether the shipped Drop's gate would run the full re-partition for this
-    /// (already `normalize_core`-shaped) variant — the fallback decision, exposed
+    /// Whether the Drop's gate (taken under a non-`ruled` arm) would run the full
+    /// re-partition for this (already `normalize_core`-shaped) variant — the fallback decision, exposed
     /// so the #2161 measurement can report the true fallback rate. Test/`dev` only.
     #[cfg(any(test, feature = "dev"))]
     pub fn repartition_gate_fires(&self, variant: &HgvsVariant) -> bool {
@@ -5242,9 +5294,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         self.assert_reparseable(variant, normalized);
         // `assert_idempotent` re-normalizes `normalized` to check `norm(norm(x))
         // == norm(x)`; it must re-run the SAME path that produced `normalized`, so
-        // the shipped `rederive` drop path (`RepartitionMode::Gated`, what
-        // `normalize_for_recommended_form` selects) is checked for idempotency of
-        // the drop form, not against the full re-partition.
+        // the `rederive` drop path (`RepartitionMode::Gated`, what
+        // `normalize_for_recommended_form` selects under a non-`ruled` arm) is
+        // checked for idempotency of the drop form, not against the full
+        // re-partition.
         #[cfg(debug_assertions)]
         self.assert_idempotent(variant, normalized, mode);
         #[cfg(debug_assertions)]
@@ -5905,6 +5958,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 current.clone(),
                 allele.phase,
                 &self.provider,
+                self.config.shuffle_direction,
             );
             let merged_raw =
                 merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);

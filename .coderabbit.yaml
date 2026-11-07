@@ -327,9 +327,13 @@ reviews:
       instructions: >-
         The integration suite lives in `tests/it/` behind a single harness
         binary; new integration tests belong there and must be registered in its
-        module tree (two standalone binaries remain —
-        `tests/conformance_reference_snapshot_tests.rs` and
-        `tests/issue_500_legacy_gene_selector.rs` — do not add more). Generate
+        module tree (three standalone binaries remain —
+        `tests/conformance_reference_snapshot_tests.rs`,
+        `tests/issue_500_legacy_gene_selector.rs`, and
+        `tests/release_dup_preservation.rs`, which is the featureless release-path
+        guard: it must build with the DEFAULT feature set, while every CI job
+        compiles the `it` harness with `--features dev`, so inside the harness it
+        would share the very gate it exists to catch — do not add more). Generate
         test data programmatically; do not add a NEW committed fixture. Three
         families already under `tests/fixtures/` are deliberate and must not be
         flagged: the offline cross-tool oracle snapshots under

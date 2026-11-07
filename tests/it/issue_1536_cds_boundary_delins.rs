@@ -994,3 +994,23 @@ fn a_reference_mismatch_survives_the_recursion_and_strict_mode_still_refuses() {
          not match the reference"
     );
 }
+
+/// `codon-exception-reaches-the-termination-codon`, end to end on the shipped
+/// default. A 12-base CDS `ATG GCC AAA TAA` (tx 4..=15, so `c.10_12` is the `TAA`
+/// stop codon) between a 3-base 5'UTR and a 6-base 3'UTR. Two substitutions
+/// inside the stop codon with one unchanged base between them, `c.[10T>C;12A>G]`
+/// (`TAA` -> `CAG`, a stop-loss), affect one described residue position (`Ter`),
+/// so `delins.md:18`'s exception applies as at any other codon and the pair is
+/// written as one `delins` over the codon. Both shuffle directions, so the merge
+/// does not depend on which way the members would roll.
+#[test]
+fn a_pair_inside_the_stop_codon_is_one_delins() {
+    let provider = transcript_provider("GCCATGGCCAAATAACTGCAG", 4, 15);
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        assert_eq!(
+            normalize(&provider, "NM_TEST.1:c.[10T>C;12A>G]", direction),
+            "NM_TEST.1:c.10_12delinsCAG",
+            "two changes inside the termination codon are one delins ({direction:?})",
+        );
+    }
+}
