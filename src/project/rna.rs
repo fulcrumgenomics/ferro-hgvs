@@ -198,13 +198,25 @@ pub(crate) fn predict_rna(coding: &HgvsVariant, transcript: &Transcript) -> Opti
     // `r.[(a;b)]` — one inside-bracket wrapper from the allele's `uncertain` flag —
     // not `r.[((a);(b))]`. (mutalyzer emits the non-spec outside-bracket `r.([a;b])`;
     // ferro intentionally diverges per recommendations/RNA/alleles.md.)
+    //
+    // A one-member allele keeps its member's wrapper (#2280). `AlleleVariant`
+    // renders a singleton as its bare member, so the allele's `[( )]` never
+    // appears and stripping the member left nothing marking it predicted:
+    // `g.[1003C>A]` and `g.[(1003C>A)]` both gave `r.4c>a`, where the same change
+    // written as one variant, `g.1003C>A`, gives `r.(4c>a)` — and the predicted
+    // one kept its wrapper on `c.`, `n.` and `g.`.
     if let HgvsVariant::Allele(allele) = coding {
+        let strip = allele.variants.len() > 1;
         let mut rna_members = Vec::with_capacity(allele.variants.len());
         for member in &allele.variants {
             let predicted = predict_rna(member, transcript)?;
             let HgvsVariant::Rna(r) = predicted else {
                 return None;
             };
+            if !strip {
+                rna_members.push(HgvsVariant::Rna(r));
+                continue;
+            }
             let certain = RnaVariant {
                 accession: r.accession,
                 gene_symbol: r.gene_symbol,
