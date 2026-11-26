@@ -88,7 +88,6 @@ pyo3 = { version = "0.28", features = ["abi3-py310"], optional = true }
 memmap2 = "0.9"
 memchr = "2.7"
 ureq = { version = "2.9", optional = true }
-atty = "0.2"
 log = "0.4"
 # Core dependencies for prepare/check/commands (now part of main binary)
 indicatif = "0.17"

@@ -23,7 +23,7 @@ use flate2::read::MultiGzDecoder;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3574,7 +3574,7 @@ fn run_explain(
     format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Determine if terminal supports color
-    let use_color = atty::is(atty::Stream::Stdout);
+    let use_color = io::stdout().is_terminal();
 
     if list {
         // List codes
